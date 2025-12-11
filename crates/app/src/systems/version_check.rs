@@ -66,9 +66,11 @@ pub async fn get_latest_version_cached(cache_duration: Duration) -> Result<Optio
     // Update cache
     if let Some(ref version) = version {
         if let Some(parent) = cache_file.parent() {
-            starbase_utils::fs::create_dir_all(parent)?;
+            starbase_utils::fs::create_dir_all(parent)
+                .map_err(|e| miette!("Failed to create cache directory: {}", e))?;
         }
-        starbase_utils::fs::write_file(&cache_file, version)?;
+        starbase_utils::fs::write_file(&cache_file, version)
+            .map_err(|e| miette!("Failed to write version cache: {}", e))?;
     }
 
     Ok(version)

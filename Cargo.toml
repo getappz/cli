@@ -14,6 +14,34 @@ members = [
 ]
 resolver = "2"
 
+[package]
+name = "appz"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[[bin]]
+name = "appz"
+path = "crates/cli/src/main.rs"
+
+[dependencies]
+app = { path = "crates/app", features = ["self_update"] }
+ui = { path = "crates/ui" }
+env_var = { path = "crates/env_var" }
+clap = { workspace = true }
+miette = { workspace = true }
+starbase = "0.10"
+starbase_styles = "0.6"
+starbase_utils = { workspace = true }
+tokio = { workspace = true }
+tracing = "0.1"
+
+[features]
+default = ["self_update"]
+self_update = []
+
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
@@ -25,7 +53,7 @@ authors = ["Appz Contributors"]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9"
-miette = { version = "5.0", features = ["fancy"] }
+miette = { version = "7.0", features = ["fancy"] }
 thiserror = "1.0"
 tokio = { version = "1.0", features = ["full"] }
 tokio-util = { version = "0.7", features = ["full"] }
@@ -44,7 +72,7 @@ which = "6.0"
 regex = "1.10"
 rustc-hash = "1.1"
 chrono = { version = "0.4", features = ["serde"] }
-starbase_utils = "0.10"
+starbase_utils = { version = "0.10", features = ["json"] }
 starbase_archive = "0.10"
 tempfile = "3.10"
 tokio-retry = "0.3"
@@ -65,7 +93,7 @@ tokio-tungstenite = "0.24"
 extism = "1.0"
 
 # SSH
-ssh = { package = "ssh-rs", version = "0.12" }
+ssh = { package = "ssh-rs", version = "0.5.0" }
 
 # Concurrency
 scc = "2.1"

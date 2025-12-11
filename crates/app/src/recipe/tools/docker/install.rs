@@ -178,7 +178,7 @@ fn setup_docker_alias() -> miette::Result<()> {
                 let _ = writeln!(file, "\n# Docker alias for Podman (added by appz)");
                 let _ = writeln!(file, "{}", alias_line);
                 info(&format!("Added docker alias to Podman in {}", config_file));
-                info("Please restart your shell or run: source {}", config_file);
+                info(&format!("Please restart your shell or run: source {}", config_file));
             }
         }
     }

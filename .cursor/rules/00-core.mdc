@@ -1,0 +1,64 @@
+# Core Engineering Standards
+
+## Overview
+This document defines the fundamental engineering standards and practices for the saasctl project.
+
+## Code Quality
+
+### Error Handling
+- **Always use `miette::Result<T>`** for error types in public APIs
+- Use `miette::miette!()` macro for creating errors with context
+- Prefer `thiserror` for library error types when needed
+- Never use `unwrap()` or `expect()` in production code - use proper error handling
+- Use `?` operator for error propagation
+
+### Logging and Diagnostics
+- Use `tracing` crate for structured logging
+- Use appropriate log levels: `error!`, `warn!`, `info!`, `debug!`, `trace!`
+- Include context in log messages
+- Use `tracing::instrument` macro for function-level tracing
+
+### Dependencies
+- Prefer workspace dependencies (`workspace = true`) when available
+- Use `starbase_utils` for filesystem and JSON operations
+- Keep dependencies minimal and well-justified
+- Document why non-standard dependencies are needed
+
+## Filesystem and JSON Operations
+
+### Mandatory Use of `starbase_utils`
+- **Always use `starbase_utils::fs`** for filesystem operations instead of `std::fs`
+- **Always use `starbase_utils::json`** for JSON file operations instead of `serde_json` directly
+- Common mappings:
+  - `std::fs::read_to_string` → `starbase_utils::fs::read_file`
+  - `std::fs::write` → `starbase_utils::fs::write_file`
+  - `serde_json::from_str` → `starbase_utils::json::read_file<T>()`
+  - `serde_json::to_string_pretty` + `std::fs::write` → `starbase_utils::json::write_file`
+  - `std::fs::create_dir_all` → `starbase_utils::fs::create_dir_all`
+  - `std::fs::remove_file` → `starbase_utils::fs::remove_file`
+
+### Rationale
+- `starbase_utils` provides better error messages and consistent error handling
+- It includes proper path handling and normalization
+- JSON operations are optimized and provide better diagnostics
+
+## Testing
+
+- Write unit tests for all non-trivial functions
+- Use `#[cfg(test)]` modules for test code
+- Test error cases, not just happy paths
+- Use descriptive test names that explain what is being tested
+
+## Documentation
+
+- Document all public APIs with doc comments
+- Use `///` for public items, `//!` for module-level docs
+- Include examples in documentation when helpful
+- Keep README files up to date
+
+## Performance
+
+- Avoid premature optimization
+- Use `cargo bench` for performance-critical code
+- Profile before optimizing
+- Consider async/await for I/O-bound operations

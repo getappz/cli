@@ -1,0 +1,90 @@
+# AI-Powered Fix Guidelines
+
+## Common Issues and Fixes
+
+### 1. Filesystem and JSON Operations
+
+**Issue**: Direct use of `std::fs` or `serde_json` for file operations
+
+**Fix**: Replace with `starbase_utils` equivalents:
+- `std::fs::read_to_string(path)` → `starbase_utils::fs::read_file(path)`
+- `std::fs::write(path, content)` → `starbase_utils::fs::write_file(path, content)`
+- `serde_json::from_str(&content)` → `starbase_utils::json::read_file::<T>(path)` (reads file directly)
+- `serde_json::to_string_pretty(&value)` + `std::fs::write` → `starbase_utils::json::write_file(path, &value)`
+- `std::fs::create_dir_all(path)` → `starbase_utils::fs::create_dir_all(path)`
+- `std::fs::remove_file(path)` → `starbase_utils::fs::remove_file(path)`
+
+**In async contexts**: Wrap `starbase_utils` calls in `tokio::task::spawn_blocking`:
+```rust
+let result = tokio::task::spawn_blocking(move || {
+    starbase_utils::fs::read_file(&path)
+})
+.await
+.map_err(|e| miette!("Task join error: {}", e))??;
+```
+
+### 2. Error Handling
+
+**Issue**: Using `unwrap()` or `expect()` in production code
+
+**Fix**: Replace with proper error handling:
+- `unwrap()` → `?` operator or `ok_or_else(|| miette!("..."))?`
+- `expect("...")` → `ok_or_else(|| miette!("..."))?`
+
+### 3. Type Mismatches
+
+**Issue**: Type mismatches (`Option<String>` vs `Option<&str>`, `String` vs `&str`)
+
+**Fix**: Use appropriate conversions:
+- `Option<&str>` → `Option<String>`: `.map(|s| s.to_string())`
+- `&str` → `String`: `.to_string()` or `.into()`
+- `String` → `&str`: `.as_str()` or `&*s`
+
+### 4. Lifetime Issues
+
+**Issue**: Lifetime errors (`E0310`, `E0597`)
+
+**Fix**: 
+- Add `+ 'static` to trait bounds when needed
+- Clone values before moving into closures
+- Use `Arc<T>` for shared ownership across lifetimes
+
+### 5. Async/Blocking Issues
+
+**Issue**: Blocking operations in async contexts causing runtime panics
+
+**Fix**: Wrap blocking operations in `tokio::task::spawn_blocking`:
+```rust
+let result = tokio::task::spawn_blocking(move || {
+    // blocking operation here
+})
+.await
+.map_err(|e| miette!("Task join error: {}", e))??;
+```
+
+### 6. Generic Type Issues
+
+**Issue**: Generic argument count mismatches (`E0107`)
+
+**Fix**: Remove explicit type parameters when type inference can determine them, or add all required type parameters
+
+### 7. Missing Type Annotations
+
+**Issue**: Type annotations needed (`E0282`)
+
+**Fix**: Add explicit type annotations:
+```rust
+let value: Type = ...;
+// or
+Ok::<Type, Error>(value)
+```
+
+## Detection Patterns
+
+When reviewing code, look for:
+- Direct `std::fs::*` calls
+- Direct `serde_json::from_str` or `serde_json::to_string` for file operations
+- `unwrap()` or `expect()` calls
+- Blocking operations in async functions without `spawn_blocking`
+- Type mismatches in assignments
+- Missing error handling

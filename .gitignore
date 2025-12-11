@@ -1,0 +1,58 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+/dist/
+*.log
+*.profraw
+*.lcov
+flamegraph.svg
+cargo-flamegraph.trace
+
+# Test artifacts
+testResults.xml
+**/snapshots/*.snap.new
+
+# Environment
+.env
+.env.local
+*.local
+
+# Temporary files
+*.tmp
+*.bak
+*.cache
+
+# Package managers
+node_modules/
+package-lock.json
+yarn.lock
+
+# Project specific
+.mise/
+megalinter-reports/
+.dev/
+comment.md
+.claude/settings.local.json
+
+# Snapcraft
+*.snap
+
+# Alpine
+.ash_history
+.abuild
+/aports
+

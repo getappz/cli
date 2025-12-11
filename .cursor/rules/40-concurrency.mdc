@@ -1,0 +1,60 @@
+# Concurrency and Async Guidelines
+
+## Async/Await Patterns
+
+### File I/O in Async Contexts
+- **Always wrap blocking file operations in `tokio::task::spawn_blocking`**
+- Use `starbase_utils::fs` wrapped in `spawn_blocking` for file I/O in async functions
+- Example:
+  ```rust
+  let result = tokio::task::spawn_blocking(move || {
+      starbase_utils::fs::read_file(&path)
+  })
+  .await
+  .map_err(|e| miette!("Task join error: {}", e))??;
+  ```
+
+### JSON Operations in Async Contexts
+- Use `starbase_utils::json::read_file<T>()` wrapped in `spawn_blocking` for async contexts
+- Example:
+  ```rust
+  let config: Config = tokio::task::spawn_blocking(move || {
+      starbase_utils::json::read_file(&config_path)
+  })
+  .await
+  .map_err(|e| miette!("Task join error: {}", e))??;
+  ```
+
+## Task Spawning
+
+### When to Use `tokio::spawn`
+- For independent async tasks that don't need to block
+- For concurrent execution of async operations
+- Tasks that can run independently of the caller
+
+### When to Use `tokio::task::spawn_blocking`
+- For blocking I/O operations (file system, network)
+- For CPU-intensive computations
+- For operations that would block the async runtime
+- Always use this for `std::fs` operations in async contexts
+
+## Error Handling in Async Contexts
+
+- Always handle `JoinError` from `spawn_blocking` or `spawn`
+- Convert `JoinError` to `miette::Error` using `miette::miette!()`
+- Propagate errors from spawned tasks properly
+
+## Shared State
+
+- Use `Arc<T>` for shared immutable state
+- Use `Arc<Mutex<T>>` or `Arc<RwLock<T>>` for shared mutable state
+- Prefer `tokio::sync::Mutex` over `std::sync::Mutex` in async contexts
+- Use channels for communication between tasks instead of shared state when possible
+
+## Best Practices
+
+- Avoid blocking the async runtime
+- Use `tokio::time::sleep` instead of `std::thread::sleep` in async code
+- Prefer `tokio::fs` for async file operations when available, but wrap `starbase_utils` calls in `spawn_blocking` for consistency
+- Keep spawned tasks focused and short-lived
+- Handle task cancellation gracefully

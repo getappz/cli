@@ -1,0 +1,6 @@
+# This is a placeholder zipsign public key file
+# Replace this with your actual zipsign public key
+# To generate: zipsign gen-key <private_key> <public_key>
+# The actual key should be binary, but this placeholder allows the code to compile
+# Update this file with the real public key before signing releases
+

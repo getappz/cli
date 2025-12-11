@@ -1,0 +1,62 @@
+# Rust Architecture Guidelines
+
+## Module Organization
+
+- Organize code into logical modules
+- Keep modules focused and cohesive
+- Use `mod.rs` or `mod/mod.rs` for module organization
+- Prefer flat module structures when possible
+
+## Error Handling
+
+### Result Types
+- Use `miette::Result<T>` for application-level errors
+- Use `thiserror::Error` for library error types
+- Never use `unwrap()` or `expect()` in production code
+
+### Error Context
+- Add context to errors using `miette::miette!()` with format strings
+- Use `.context()` or `.with_context()` for adding context to existing errors
+- Include relevant information in error messages
+
+## Serialization
+
+### JSON Operations
+- **Always use `starbase_utils::json::read_file<T>()`** for reading JSON files
+- **Always use `starbase_utils::json::write_file()`** for writing JSON files
+- Never use `serde_json::from_str` or `serde_json::to_string` directly for file operations
+- Use `serde_json` directly only for in-memory serialization/deserialization
+
+### Serde Configuration
+- Use `#[serde(default)]` for optional fields
+- Use `#[serde(rename = "...")]` for field name mapping
+- Prefer `#[derive(Serialize, Deserialize)]` over manual implementations
+
+## Async Programming
+
+- Use `tokio` for async runtime
+- Prefer `async fn` for I/O-bound operations
+- Use `tokio::task::spawn_blocking` for CPU-intensive or blocking operations
+- Avoid blocking the async runtime
+- Use `futures` utilities when needed
+
+## Type Safety
+
+- Prefer strong types over `String` or `&str` when appropriate
+- Use `Option<T>` for nullable values
+- Use `Result<T, E>` for fallible operations
+- Avoid `unwrap()` - handle errors properly
+
+## Memory Management
+
+- Prefer borrowing (`&T`) over owned values (`T`) when possible
+- Use `Arc<T>` for shared ownership across threads
+- Use `Rc<T>` for shared ownership within a single thread
+- Consider `Cow<T>` for potentially owned or borrowed data
+
+## Concurrency
+
+- Use `tokio::spawn` for concurrent async tasks
+- Use `tokio::task::spawn_blocking` for blocking operations
+- Use channels (`tokio::sync::mpsc`) for communication between tasks
+- Prefer message passing over shared mutable state

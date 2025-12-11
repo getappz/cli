@@ -1,0 +1,764 @@
+[
+  {
+    "name": "Blitz.js (Legacy)",
+    "slug": "blitzjs",
+    "demo": "https://blitz-template.vercel.app",
+    "logo": "https://api-frameworks.vercel.sh/framework-logos/blitz.svg",
+    "tagline": "Blitz.js: The Fullstack React Framework",
+    "description": "A brand new Blitz.js app - the result of running `npx blitz@0.45.4 new`.",
+    "website": "https://blitzjs.com",
+    "sort": null,
+    "envPrefix": "NEXT_PUBLIC_",
+    "useRuntime": {
+      "src": "package.json",
+      "use": "@vercel/next"
+    },
+    "ignoreRuntimes": null,
+    "detectors": {
+      "every": null,
+      "some": [
+        {
+          "path": "blitz.config.js"
+        },
+        {
+          "path": "blitz.config.ts"
+        }
+      ]
+    },
+    "settings": {
+      "installCommand": {
+        "placeholder": "`yarn install`, `pnpm install`, `npm install`, or `bun install`",
+        "value": null
+      },
+      "buildCommand": {
+        "placeholder": "`npm run build` or `blitz build`",
+        "value": "blitz build"
+      },
+      "devCommand": {
+        "placeholder": null,
+        "value": "blitz start"
+      },
+      "outputDirectory": {
+        "placeholder": "Next.js default",
+        "value": null
+      }
+    },
+    "recommendedIntegrations": null,
+    "dependency": null,
+    "supersedes": null,
+    "cachePattern": null
+  },
+  {
+    "name": "Next.js",
+    "slug": "nextjs",
+    "demo": "https://nextjs-template.vercel.app",
+    "logo": "https://api-frameworks.vercel.sh/framework-logos/next.svg",
+    "darkModeLogo": "https://api-frameworks.vercel.sh/framework-logos/next-dark.svg",
+    "screenshot": "https://assets.vercel.com/image/upload/v1701461207/front/import/nextjs.png",
+    "tagline": "Next.js makes you productive with React instantly — whether you want to build static or dynamic sites.",
+    "description": "A Next.js app and a Serverless Function API.",
+    "website": "https://nextjs.org",
+    "sort": 1,
+    "envPrefix": "NEXT_PUBLIC_",
+    "useRuntime": {
+      "src": "package.json",
+      "use": "@vercel/next"
+    },
+    "ignoreRuntimes": null,
+    "detectors": {
+      "every": [
+        {
+          "matchPackage": "next"
+        }
+      ],
+      "some": null
+    },
+    "settings": {
+      "installCommand": {
+        "placeholder": "`yarn install`, `pnpm install`, `npm install`, or `bun install`",
+        "value": null
+      },
+      "buildCommand": {
+        "placeholder": "`npm run build` or `next build`",
+        "value": "next build"
+      },
+      "devCommand": {
+        "placeholder": "next",
+        "value": "next dev --port $PORT"
+      },
+      "outputDirectory": {
+        "placeholder": "Next.js default",
+        "value": null
+      }
+    },
+    "recommendedIntegrations": [
+      {
+        "id": "oac_5lUsiANun1DEzgLg0NZx5Es3",
+        "dependencies": ["next-plugin-sentry", "next-sentry-source-maps"]
+      }
+    ],
+    "dependency": null,
+    "supersedes": null,
+    "cachePattern": ".next/cache/**"
+  },
+  {
+    "name": "Gatsby.js",
+    "slug": "gatsby",
+    "demo": "https://gatsby.vercel.app",
+    "logo": "https://api-frameworks.vercel.sh/framework-logos/gatsby.svg",
+    "tagline": "Gatsby helps developers build blazing fast websites and apps with React.",
+    "description": "A Gatsby starter app with an API Route.",
+    "website": "https://gatsbyjs.org",
+    "sort": 5,
+    "envPrefix": "GATSBY_",
+    "useRuntime": null,
+    "ignoreRuntimes": null,
+    "detectors": {
+      "every": [
+        {
+          "matchPackage": "gatsby"
+        }
+      ],
+      "some": null
+    },
+    "settings": {
+      "installCommand": {
+        "placeholder": "`yarn install`, `pnpm install`, `npm install`, or `bun install`",
+        "value": null
+      },
+      "buildCommand": {
+        "placeholder": "`npm run build` or `gatsby build`",
+        "value": "gatsby build"
+      },
+      "devCommand": {
+        "placeholder": "gatsby develop",
+        "value": "gatsby develop --port $PORT"
+      },
+      "outputDirectory": {
+        "placeholder": null,
+        "value": "public"
+      }
+    },
+    "recommendedIntegrations": null,
+    "dependency": "gatsby",
+    "supersedes": null,
+    "cachePattern": "{.cache,public}/**"
+  },
+  {
+    "name": "Remix",
+    "slug": "remix",
+    "demo": "https://remix-run-template.vercel.app",
+    "logo": "https://api-frameworks.vercel.sh/framework-logos/remix-no-shadow.svg",
+    "tagline": "Build Better Websites",
+    "description": "A new Remix app — the result of running `npx create-remix`.",
+    "website": "https://remix.run",
+    "sort": 6,
+    "envPrefix": null,
+    "useRuntime": {
+      "src": "package.json",
+      "use": "@vercel/remix-builder"
+    },
+    "ignoreRuntimes": ["@vercel/node"],
+    "detectors": {
+      "every": null,
+      "some": [
+        {
+          "matchPackage": "@remix-run/dev"
+        },
+        {
+          "path": "remix.config.js"
+        },
+        {
+          "path": "remix.config.mjs"
+        }
+      ]
+    },
+    "settings": {
+      "installCommand": {
+        "placeholder": "`yarn install`, `pnpm install`, `npm install`, or `bun install`",
+        "value": null
+      },
+      "buildCommand": {
+        "placeholder": "`npm run build` or `remix build`",
+        "value": "remix build"
+      },
+      "devCommand": {
+        "placeholder": "remix dev",
+        "value": "remix dev"
+      },
+      "outputDirectory": {
+        "placeholder": null,
+        "value": "public"
+      }
+    },
+    "recommendedIntegrations": null,
+    "dependency": null,
+    "supersedes": ["hydrogen", "vite"],
+    "cachePattern": null
+  },
+  {
+    "name": "Astro",
+    "slug": "astro",
+    "demo": "https://astro-template.vercel.app",
+    "logo": "https://api-frameworks.vercel.sh/framework-logos/astro.svg",
+    "tagline": "The web framework for content-driven websites",
+    "description": "Astro is a modern static site builder optimized for content-driven websites.",
+    "website": "https://astro.build",
+    "sort": 2,
+    "envPrefix": "PUBLIC_",
+    "useRuntime": null,
+    "ignoreRuntimes": null,
+    "detectors": {
+      "every": null,
+      "some": [
+        {
+          "matchPackage": "astro"
+        },
+        {
+          "path": "astro.config.js"
+        },
+        {
+          "path": "astro.config.mjs"
+        },
+        {
+          "path": "astro.config.ts"
+        }
+      ]
+    },
+    "settings": {
+      "installCommand": {
+        "placeholder": "`yarn install`, `pnpm install`, `npm install`, or `bun install`",
+        "value": null
+      },
+      "buildCommand": {
+        "placeholder": "`npm run build` or `astro build`",
+        "value": "astro build"
+      },
+      "devCommand": {
+        "placeholder": "astro dev",
+        "value": "astro dev --port $PORT"
+      },
+      "outputDirectory": {
+        "placeholder": null,
+        "value": "dist"
+      }
+    },
+    "recommendedIntegrations": null,
+    "dependency": "astro",
+    "supersedes": null,
+    "cachePattern": ".astro/**"
+  },
+  {
+    "name": "Hugo",
+    "slug": "hugo",
+    "demo": "https://gohugo.io",
+    "logo": "https://api-frameworks.vercel.sh/framework-logos/hugo.svg",
+    "tagline": "The world's fastest framework for building websites",
+    "description": "Hugo is one of the most popular open-source static site generators.",
+    "website": "https://gohugo.io",
+    "sort": 7,
+    "envPrefix": null,
+    "useRuntime": null,
+    "ignoreRuntimes": null,
+    "detectors": {
+      "every": null,
+      "some": [
+        {
+          "path": "config.yaml"
+        },
+        {
+          "path": "config.yml"
+        },
+        {
+          "path": "config.toml"
+        },
+        {
+          "path": "config.json"
+        },
+        {
+          "path": "hugo.toml"
+        },
+        {
+          "path": "hugo.yaml"
+        },
+        {
+          "path": "hugo.yml"
+        }
+      ]
+    },
+    "settings": {
+      "installCommand": {
+        "placeholder": null,
+        "value": null
+      },
+      "buildCommand": {
+        "placeholder": "`hugo` or `hugo --minify`",
+        "value": "hugo"
+      },
+      "devCommand": {
+        "placeholder": "hugo server",
+        "value": "hugo server --port $PORT"
+      },
+      "outputDirectory": {
+        "placeholder": null,
+        "value": "public"
+      }
+    },
+    "recommendedIntegrations": null,
+    "dependency": null,
+    "supersedes": null,
+    "cachePattern": null
+  },
+  {
+    "name": "Jekyll",
+    "slug": "jekyll",
+    "demo": "https://jekyllrb.com",
+    "logo": "https://api-frameworks.vercel.sh/framework-logos/jekyll.svg",
+    "tagline": "Transform your plain text into static websites and blogs",
+    "description": "Jekyll is a simple, blog-aware, static site generator.",
+    "website": "https://jekyllrb.com",
+    "sort": 8,
+    "envPrefix": null,
+    "useRuntime": null,
+    "ignoreRuntimes": null,
+    "detectors": {
+      "every": null,
+      "some": [
+        {
+          "path": "_config.yml"
+        },
+        {
+          "path": "_config.yaml"
+        },
+        {
+          "path": "Gemfile"
+        },
+        {
+          "path": "_posts"
+        }
+      ]
+    },
+    "settings": {
+      "installCommand": {
+        "placeholder": "`bundle install`",
+        "value": null
+      },
+      "buildCommand": {
+        "placeholder": "`bundle exec jekyll build` or `jekyll build`",
+        "value": "jekyll build"
+      },
+      "devCommand": {
+        "placeholder": "bundle exec jekyll serve",
+        "value": "bundle exec jekyll serve --port $PORT"
+      },
+      "outputDirectory": {
+        "placeholder": null,
+        "value": "_site"
+      }
+    },
+    "recommendedIntegrations": null,
+    "dependency": null,
+    "supersedes": null,
+    "cachePattern": null
+  },
+  {
+    "name": "Nuxt",
+    "slug": "nuxt",
+    "demo": "https://nuxt.com",
+    "logo": "https://api-frameworks.vercel.sh/framework-logos/nuxt.svg",
+    "tagline": "The Intuitive Vue Framework",
+    "description": "Build your next Vue.js application with confidence using Nuxt.",
+    "website": "https://nuxt.com",
+    "sort": 9,
+    "envPrefix": null,
+    "useRuntime": null,
+    "ignoreRuntimes": null,
+    "detectors": {
+      "every": null,
+      "some": [
+        {
+          "matchPackage": "nuxt"
+        },
+        {
+          "matchPackage": "nuxt3"
+        },
+        {
+          "path": "nuxt.config.js"
+        },
+        {
+          "path": "nuxt.config.ts"
+        },
+        {
+          "path": "nuxt.config.mjs"
+        }
+      ]
+    },
+    "settings": {
+      "installCommand": {
+        "placeholder": "`yarn install`, `pnpm install`, `npm install`, or `bun install`",
+        "value": null
+      },
+      "buildCommand": {
+        "placeholder": "`npm run build` or `nuxt build`",
+        "value": "nuxt build"
+      },
+      "devCommand": {
+        "placeholder": "nuxt dev",
+        "value": "nuxt dev --port $PORT"
+      },
+      "outputDirectory": {
+        "placeholder": null,
+        "value": ".output/public"
+      }
+    },
+    "recommendedIntegrations": null,
+    "dependency": "nuxt",
+    "supersedes": null,
+    "cachePattern": ".nuxt/**"
+  },
+  {
+    "name": "SvelteKit",
+    "slug": "sveltekit",
+    "demo": "https://kit.svelte.dev",
+    "logo": "https://api-frameworks.vercel.sh/framework-logos/sveltekit.svg",
+    "tagline": "The fastest way to build Svelte apps",
+    "description": "SvelteKit is a framework for building web applications of all sizes.",
+    "website": "https://kit.svelte.dev",
+    "sort": 10,
+    "envPrefix": "PUBLIC_",
+    "useRuntime": null,
+    "ignoreRuntimes": null,
+    "detectors": {
+      "every": null,
+      "some": [
+        {
+          "matchPackage": "@sveltejs/kit"
+        },
+        {
+          "path": "svelte.config.js"
+        },
+        {
+          "path": "svelte.config.mjs"
+        },
+        {
+          "path": "svelte.config.ts"
+        }
+      ]
+    },
+    "settings": {
+      "installCommand": {
+        "placeholder": "`yarn install`, `pnpm install`, `npm install`, or `bun install`",
+        "value": null
+      },
+      "buildCommand": {
+        "placeholder": "`npm run build` or `vite build`",
+        "value": "vite build"
+      },
+      "devCommand": {
+        "placeholder": "vite dev",
+        "value": "vite dev --port $PORT"
+      },
+      "outputDirectory": {
+        "placeholder": null,
+        "value": "build"
+      }
+    },
+    "recommendedIntegrations": null,
+    "dependency": "@sveltejs/kit",
+    "supersedes": null,
+    "cachePattern": ".svelte-kit/**"
+  },
+  {
+    "name": "Eleventy",
+    "slug": "eleventy",
+    "demo": "https://www.11ty.dev",
+    "logo": "https://api-frameworks.vercel.sh/framework-logos/eleventy.svg",
+    "tagline": "A simpler static site generator",
+    "description": "Eleventy is a simpler static site generator written in JavaScript.",
+    "website": "https://www.11ty.dev",
+    "sort": 11,
+    "envPrefix": null,
+    "useRuntime": null,
+    "ignoreRuntimes": null,
+    "detectors": {
+      "every": null,
+      "some": [
+        {
+          "matchPackage": "@11ty/eleventy"
+        },
+        {
+          "path": ".eleventy.js"
+        },
+        {
+          "path": "eleventy.config.js"
+        },
+        {
+          "path": ".eleventy.json"
+        }
+      ]
+    },
+    "settings": {
+      "installCommand": {
+        "placeholder": "`yarn install`, `pnpm install`, `npm install`, or `bun install`",
+        "value": null
+      },
+      "buildCommand": {
+        "placeholder": "`npm run build` or `eleventy`",
+        "value": "eleventy"
+      },
+      "devCommand": {
+        "placeholder": "eleventy --serve",
+        "value": "eleventy --serve --port $PORT"
+      },
+      "outputDirectory": {
+        "placeholder": null,
+        "value": "_site"
+      }
+    },
+    "recommendedIntegrations": null,
+    "dependency": "@11ty/eleventy",
+    "supersedes": null,
+    "cachePattern": null
+  },
+  {
+    "name": "Vite",
+    "slug": "vite",
+    "demo": "https://vitejs.dev",
+    "logo": "https://api-frameworks.vercel.sh/framework-logos/vite.svg",
+    "tagline": "Next Generation Frontend Tooling",
+    "description": "Vite is a build tool that provides a fast development experience.",
+    "website": "https://vitejs.dev",
+    "sort": 12,
+    "envPrefix": "VITE_",
+    "useRuntime": null,
+    "ignoreRuntimes": null,
+    "detectors": {
+      "every": null,
+      "some": [
+        {
+          "matchPackage": "vite"
+        },
+        {
+          "path": "vite.config.js"
+        },
+        {
+          "path": "vite.config.ts"
+        },
+        {
+          "path": "vite.config.mjs"
+        }
+      ]
+    },
+    "settings": {
+      "installCommand": {
+        "placeholder": "`yarn install`, `pnpm install`, `npm install`, or `bun install`",
+        "value": null
+      },
+      "buildCommand": {
+        "placeholder": "`npm run build` or `vite build`",
+        "value": "vite build"
+      },
+      "devCommand": {
+        "placeholder": "vite",
+        "value": "vite --port $PORT"
+      },
+      "outputDirectory": {
+        "placeholder": null,
+        "value": "dist"
+      }
+    },
+    "recommendedIntegrations": null,
+    "dependency": "vite",
+    "supersedes": null,
+    "cachePattern": "dist/**"
+  },
+  {
+    "name": "Docusaurus",
+    "slug": "docusaurus",
+    "demo": "https://docusaurus.io",
+    "logo": "https://api-frameworks.vercel.sh/framework-logos/docusaurus.svg",
+    "tagline": "Build optimized websites quickly, focus on your content",
+    "description": "Docusaurus is a static site generator optimized for documentation websites.",
+    "website": "https://docusaurus.io",
+    "sort": 13,
+    "envPrefix": null,
+    "useRuntime": null,
+    "ignoreRuntimes": null,
+    "detectors": {
+      "every": null,
+      "some": [
+        {
+          "matchPackage": "@docusaurus/core"
+        },
+        {
+          "path": "docusaurus.config.js"
+        },
+        {
+          "path": "docusaurus.config.ts"
+        }
+      ]
+    },
+    "settings": {
+      "installCommand": {
+        "placeholder": "`yarn install`, `pnpm install`, `npm install`, or `bun install`",
+        "value": null
+      },
+      "buildCommand": {
+        "placeholder": "`npm run build` or `docusaurus build`",
+        "value": "docusaurus build"
+      },
+      "devCommand": {
+        "placeholder": "docusaurus start",
+        "value": "docusaurus start --port $PORT"
+      },
+      "outputDirectory": {
+        "placeholder": null,
+        "value": "build"
+      }
+    },
+    "recommendedIntegrations": null,
+    "dependency": "@docusaurus/core",
+    "supersedes": null,
+    "cachePattern": ".docusaurus/**"
+  },
+  {
+    "name": "VitePress",
+    "slug": "vitepress",
+    "demo": "https://vitepress.dev",
+    "logo": "https://api-frameworks.vercel.sh/framework-logos/vitepress.svg",
+    "tagline": "Vite & Vue Powered Static Site Generator",
+    "description": "VitePress is a Vite and Vue powered static site generator.",
+    "website": "https://vitepress.dev",
+    "sort": 14,
+    "envPrefix": null,
+    "useRuntime": null,
+    "ignoreRuntimes": null,
+    "detectors": {
+      "every": null,
+      "some": [
+        {
+          "matchPackage": "vitepress"
+        },
+        {
+          "path": ".vitepress/config.js"
+        },
+        {
+          "path": ".vitepress/config.ts"
+        }
+      ]
+    },
+    "settings": {
+      "installCommand": {
+        "placeholder": "`yarn install`, `pnpm install`, `npm install`, or `bun install`",
+        "value": null
+      },
+      "buildCommand": {
+        "placeholder": "`npm run build` or `vitepress build`",
+        "value": "vitepress build"
+      },
+      "devCommand": {
+        "placeholder": "vitepress dev",
+        "value": "vitepress dev --port $PORT"
+      },
+      "outputDirectory": {
+        "placeholder": null,
+        "value": ".vitepress/dist"
+      }
+    },
+    "recommendedIntegrations": null,
+    "dependency": "vitepress",
+    "supersedes": null,
+    "cachePattern": ".vitepress/cache/**"
+  },
+  {
+    "name": "Nextra",
+    "slug": "nextra",
+    "demo": "https://nextra.site",
+    "logo": null,
+    "tagline": "Simple, powerful and flexible site generation framework",
+    "description": "Nextra is a simple, powerful and flexible site generation framework built on top of Next.js.",
+    "website": "https://nextra.site",
+    "sort": 15,
+    "envPrefix": "NEXT_PUBLIC_",
+    "useRuntime": {
+      "src": "package.json",
+      "use": "@vercel/next"
+    },
+    "ignoreRuntimes": null,
+    "detectors": {
+      "every": null,
+      "some": [
+        {
+          "matchPackage": "nextra"
+        },
+        {
+          "path": "nextra.config.js"
+        },
+        {
+          "path": "nextra.config.ts"
+        }
+      ]
+    },
+    "settings": {
+      "installCommand": {
+        "placeholder": "`yarn install`, `pnpm install`, `npm install`, or `bun install`",
+        "value": null
+      },
+      "buildCommand": {
+        "placeholder": "`npm run build` or `next build`",
+        "value": "next build"
+      },
+      "devCommand": {
+        "placeholder": "next dev",
+        "value": "next dev --port $PORT"
+      },
+      "outputDirectory": {
+        "placeholder": "Next.js default",
+        "value": null
+      }
+    },
+    "recommendedIntegrations": null,
+    "dependency": "nextra",
+    "supersedes": null,
+    "cachePattern": ".next/cache/**"
+  },
+  {
+    "name": "Other",
+    "slug": null,
+    "logo": "https://api-frameworks.vercel.sh/framework-logos/other.svg",
+    "demo": null,
+    "screenshot": null,
+    "tagline": null,
+    "description": "No framework or an unoptimized framework.",
+    "website": null,
+    "sort": null,
+    "envPrefix": null,
+    "useRuntime": null,
+    "ignoreRuntimes": null,
+    "detectors": null,
+    "settings": {
+      "installCommand": {
+        "placeholder": "`yarn install`, `pnpm install`, `npm install`, or `bun install`",
+        "value": null
+      },
+      "buildCommand": {
+        "placeholder": "`npm run vercel-build` or `npm run build`",
+        "value": null
+      },
+      "devCommand": {
+        "placeholder": "None",
+        "value": null
+      },
+      "outputDirectory": {
+        "placeholder": "`public` if it exists, or `.`",
+        "value": null
+      }
+    },
+    "recommendedIntegrations": null,
+    "dependency": null,
+    "supersedes": null,
+    "cachePattern": null
+  }
+]
+
+

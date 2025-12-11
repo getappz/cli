@@ -1,0 +1,27 @@
+name: snapcraft-publish
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  publish-snapcraft:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - uses: snapcore/action-build@v1
+        with:
+          snapcraft-channel: stable
+        id: snapbuild
+
+      - uses: snapcore/action-publish@v1
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        with:
+          snap: ${{ steps.snapbuild.outputs.snap }}
+          release: stable
+

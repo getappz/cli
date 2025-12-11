@@ -1,0 +1,60 @@
+config:
+  # Netlify site ID (optional, can be auto-detected from netlify.toml)
+  site_id: ""
+  # Build command (defaults to framework detection)
+  build_command: "npm run build"
+  # Publish directory (defaults to framework detection)
+  publish_dir: "dist"
+  # Netlify access token (set via NETLIFY_AUTH_TOKEN env var or config)
+  netlify_token: ""
+
+tools:
+  netlify-cli: "latest"
+
+tasks:
+  build:
+    - desc: "Build the project"
+      run_locally: "{{build_command}}"
+
+  deploy:
+    - desc: "Deploy to Netlify"
+      run_locally: "netlify deploy --prod --dir={{publish_dir}}"
+
+  deploy:preview:
+    - desc: "Deploy preview to Netlify"
+      run_locally: "netlify deploy --dir={{publish_dir}}"
+
+  deploy:production:
+    - desc: "Deploy to production on Netlify"
+      run_locally: "netlify deploy --prod --dir={{publish_dir}}"
+
+before:
+  deploy:
+    - build
+  deploy:production:
+    - build
+
+  preview:
+    - desc: "Preview deployment locally"
+      run_locally: "netlify dev"
+
+  netlify:env:list:
+    - desc: "List environment variables"
+      run_locally: "netlify env:list"
+
+  netlify:env:set:
+    - desc: "Set environment variable (set NETLIFY_ENV_KEY and NETLIFY_ENV_VALUE)"
+      run_locally: "netlify env:set {{NETLIFY_ENV_KEY}} {{NETLIFY_ENV_VALUE}}"
+
+  netlify:functions:deploy:
+    - desc: "Deploy Netlify Functions"
+      run_locally: "netlify functions:deploy"
+
+  netlify:status:
+    - desc: "Check deployment status"
+      run_locally: "netlify status"
+
+  netlify:open:
+    - desc: "Open site in browser"
+      run_locally: "netlify open"
+

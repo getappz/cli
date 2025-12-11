@@ -1,0 +1,23 @@
+[package]
+name = "api"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+miette = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+thiserror = { workspace = true }
+tracing = "0.1"
+reqwest = { version = "0.12", features = ["json"] }
+reqwest-middleware = "0.4"
+reqwest-retry = "0.4"
+anyhow = "1.0"
+async-trait = "0.1"
+http = "1.1"
+url = "2.5"
+urlencoding = "2.1"
+

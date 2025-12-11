@@ -1,0 +1,251 @@
+[
+  {
+    "name": "WordPress",
+    "slug": "wordpress",
+    "demo": "https://wordpress.org",
+    "logo": "https://s.w.org/style/images/wp-header-logo.png",
+    "tagline": "WordPress is open source software you can use to create a beautiful website, blog, or app.",
+    "description": "WordPress is a free and open-source content management system written in PHP.",
+    "website": "https://wordpress.org",
+    "sort": 1,
+    "envPrefix": null,
+    "useRuntime": null,
+    "ignoreRuntimes": null,
+    "detectors": {
+      "every": null,
+      "some": [
+        {
+          "path": "wp-config.php"
+        },
+        {
+          "path": "wp-content"
+        },
+        {
+          "path": "wp-includes"
+        },
+        {
+          "matchComposerPackage": "wordpress/wordpress"
+        }
+      ]
+    },
+    "settings": {
+      "installCommand": {
+        "placeholder": "`composer install`",
+        "value": null
+      },
+      "buildCommand": {
+        "placeholder": "`composer install --no-dev --optimize-autoloader`",
+        "value": null
+      },
+      "devCommand": {
+        "placeholder": "`php -S localhost:8000` or `wp server`",
+        "value": "php -S localhost:8000"
+      },
+      "outputDirectory": {
+        "placeholder": "WordPress root directory",
+        "value": null
+      }
+    },
+    "recommendedIntegrations": null,
+    "dependency": null,
+    "supersedes": null,
+    "cachePattern": null
+  },
+  {
+    "name": "Sculpin",
+    "slug": "sculpin",
+    "demo": "https://sculpin.io",
+    "logo": null,
+    "tagline": "A PHP static site generator",
+    "description": "Sculpin is a static site generator written in PHP. It converts Markdown files, Twig templates, and standard HTML into a static HTML site that can be easily deployed.",
+    "website": "https://sculpin.io",
+    "sort": 2,
+    "envPrefix": null,
+    "useRuntime": null,
+    "ignoreRuntimes": null,
+    "detectors": {
+      "every": null,
+      "some": [
+        {
+          "matchComposerPackage": "sculpin/sculpin"
+        },
+        {
+          "path": "sculpin.json"
+        },
+        {
+          "path": "sculpin.yml"
+        }
+      ]
+    },
+    "settings": {
+      "installCommand": {
+        "placeholder": "`composer install`",
+        "value": null
+      },
+      "buildCommand": {
+        "placeholder": "`vendor/bin/sculpin generate`",
+        "value": "vendor/bin/sculpin generate"
+      },
+      "devCommand": {
+        "placeholder": "`vendor/bin/sculpin generate --watch --server`",
+        "value": "vendor/bin/sculpin generate --watch --server"
+      },
+      "outputDirectory": {
+        "placeholder": null,
+        "value": "output_prod"
+      }
+    },
+    "recommendedIntegrations": null,
+    "dependency": "sculpin/sculpin",
+    "supersedes": null,
+    "cachePattern": null
+  },
+  {
+    "name": "Spress",
+    "slug": "spress",
+    "demo": "https://spress.yosymfony.com",
+    "logo": null,
+    "tagline": "A static site generator for PHP",
+    "description": "Spress is a static site generator written in PHP. It transforms Markdown files and Twig templates into a static HTML site.",
+    "website": "https://spress.yosymfony.com",
+    "sort": 3,
+    "envPrefix": null,
+    "useRuntime": null,
+    "ignoreRuntimes": null,
+    "detectors": {
+      "every": null,
+      "some": [
+        {
+          "matchComposerPackage": "spress/spress"
+        },
+        {
+          "path": "spress.yml"
+        },
+        {
+          "path": "spress.yaml"
+        }
+      ]
+    },
+    "settings": {
+      "installCommand": {
+        "placeholder": "`composer install`",
+        "value": null
+      },
+      "buildCommand": {
+        "placeholder": "`vendor/bin/spress site:build`",
+        "value": "vendor/bin/spress site:build"
+      },
+      "devCommand": {
+        "placeholder": "`vendor/bin/spress site:build --server`",
+        "value": "vendor/bin/spress site:build --server"
+      },
+      "outputDirectory": {
+        "placeholder": null,
+        "value": "build"
+      }
+    },
+    "recommendedIntegrations": null,
+    "dependency": "spress/spress",
+    "supersedes": null,
+    "cachePattern": null
+  },
+  {
+    "name": "Kirby",
+    "slug": "kirby",
+    "demo": "https://getkirby.com",
+    "logo": null,
+    "tagline": "The CMS that adapts to you",
+    "description": "Kirby is a file-based CMS that adapts to your projects like no other system.",
+    "website": "https://getkirby.com",
+    "sort": 4,
+    "envPrefix": null,
+    "useRuntime": null,
+    "ignoreRuntimes": null,
+    "detectors": {
+      "every": null,
+      "some": [
+        {
+          "matchComposerPackage": "getkirby/cms"
+        },
+        {
+          "path": "kirby"
+        },
+        {
+          "path": "site"
+        }
+      ]
+    },
+    "settings": {
+      "installCommand": {
+        "placeholder": "`composer install`",
+        "value": null
+      },
+      "buildCommand": {
+        "placeholder": "`composer install --no-dev --optimize-autoloader`",
+        "value": null
+      },
+      "devCommand": {
+        "placeholder": "`php -S localhost:8000`",
+        "value": "php -S localhost:8000"
+      },
+      "outputDirectory": {
+        "placeholder": "Kirby root directory",
+        "value": null
+      }
+    },
+    "recommendedIntegrations": null,
+    "dependency": "getkirby/cms",
+    "supersedes": null,
+    "cachePattern": null
+  },
+  {
+    "name": "Statamic",
+    "slug": "statamic",
+    "demo": "https://statamic.com",
+    "logo": null,
+    "tagline": "The Laravel-powered CMS",
+    "description": "Statamic is a flat-file, Laravel-powered CMS designed for building beautiful, easy-to-manage websites.",
+    "website": "https://statamic.com",
+    "sort": 5,
+    "envPrefix": null,
+    "useRuntime": null,
+    "ignoreRuntimes": null,
+    "detectors": {
+      "every": null,
+      "some": [
+        {
+          "matchComposerPackage": "statamic/cms"
+        },
+        {
+          "path": "statamic"
+        },
+        {
+          "path": "content"
+        }
+      ]
+    },
+    "settings": {
+      "installCommand": {
+        "placeholder": "`composer install`",
+        "value": null
+      },
+      "buildCommand": {
+        "placeholder": "`php please static:warm` or `php please build`",
+        "value": null
+      },
+      "devCommand": {
+        "placeholder": "`php please serve` or `php artisan serve`",
+        "value": "php please serve"
+      },
+      "outputDirectory": {
+        "placeholder": null,
+        "value": "public"
+      }
+    },
+    "recommendedIntegrations": null,
+    "dependency": "statamic/cms",
+    "supersedes": null,
+    "cachePattern": null
+  }
+]
+

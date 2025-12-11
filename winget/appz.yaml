@@ -1,0 +1,36 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.schema.2.0
+PackageIdentifier: Appz.appz
+PackageVersion: 0.1.0
+PackageName: appz
+Publisher: Appz
+License: MIT
+LicenseUrl: https://opensource.org/licenses/MIT
+Copyright: Copyright (c) 2024
+CopyrightUrl: https://github.com/getappz/cli
+Moniker: appz
+Tags:
+  - cli
+  - devtools
+  - task-runner
+ShortDescription: A Rust task runner CLI with Deployer-like recipes and ergonomics
+Description: A Rust task runner CLI with Deployer-like recipes and ergonomics. Task runner for managing deployments and development workflows.
+ReleaseNotes: https://github.com/getappz/cli/releases
+ReleaseNotesUrl: https://github.com/getappz/cli/releases
+Installers:
+  - Architecture: x64
+    InstallerType: zip
+    InstallerUrl: https://github.com/getappz/cli/releases/download/v0.1.0/appz-0.1.0-windows-x64.zip
+    InstallerSha256: PLACEHOLDER_SHA256
+    InstallerLocale: en-US
+    Scope: user
+    InstallMode: user
+  - Architecture: arm64
+    InstallerType: zip
+    InstallerUrl: https://github.com/getappz/cli/releases/download/v0.1.0/appz-0.1.0-windows-arm64.zip
+    InstallerSha256: PLACEHOLDER_SHA256_ARM64
+    InstallerLocale: en-US
+    Scope: user
+    InstallMode: user
+ManifestType: version
+ManifestVersion: 1.5.0
+

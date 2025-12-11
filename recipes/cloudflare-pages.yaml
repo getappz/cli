@@ -1,0 +1,62 @@
+config:
+  # Cloudflare account ID (required)
+  account_id: ""
+  # Project name (required)
+  project_name: ""
+  # Build command (defaults to framework detection)
+  build_command: "npm run build"
+  # Build output directory (defaults to framework detection)
+  build_output_dir: "dist"
+  # Production branch (default: main)
+  production_branch: "main"
+
+tools:
+  wrangler: "latest"
+
+tasks:
+  build:
+    - desc: "Build the project"
+      run_locally: "{{build_command}}"
+
+  deploy:
+    - desc: "Deploy to Cloudflare Pages"
+      run_locally: "wrangler pages deploy {{build_output_dir}} --project-name={{project_name}}"
+
+  deploy:preview:
+    - desc: "Deploy preview to Cloudflare Pages"
+      run_locally: "wrangler pages deploy {{build_output_dir}} --project-name={{project_name}} --branch=preview"
+
+  deploy:production:
+    - desc: "Deploy to production on Cloudflare Pages"
+      run_locally: "wrangler pages deploy {{build_output_dir}} --project-name={{project_name}} --branch={{production_branch}}"
+
+before:
+  deploy:
+    - build
+  deploy:production:
+    - build
+
+  preview:
+    - desc: "Preview deployment locally"
+      run_locally: "wrangler pages dev {{build_output_dir}}"
+
+  cloudflare:env:list:
+    - desc: "List environment variables"
+      run_locally: "wrangler pages project list"
+
+  cloudflare:env:set:
+    - desc: "Set environment variable (set CLOUDFLARE_ENV_KEY and CLOUDFLARE_ENV_VALUE)"
+      run_locally: "wrangler pages secret put {{CLOUDFLARE_ENV_KEY}} --project-name={{project_name}}"
+
+  cloudflare:domains:list:
+    - desc: "List custom domains"
+      run_locally: "wrangler pages domain list --project-name={{project_name}}"
+
+  cloudflare:domains:add:
+    - desc: "Add custom domain (set CLOUDFLARE_DOMAIN)"
+      run_locally: "wrangler pages domain add {{CLOUDFLARE_DOMAIN}} --project-name={{project_name}}"
+
+  cloudflare:worker:deploy:
+    - desc: "Deploy Cloudflare Worker (if using Workers)"
+      run_locally: "wrangler deploy"
+

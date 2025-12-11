@@ -1,0 +1,64 @@
+config:
+  # Vercel project name (optional, will use directory name if not set)
+  project_name: ""
+  # Vercel team/organization (optional)
+  team: ""
+  # Build output directory (framework-specific, e.g., "dist", "build", ".next")
+  build_output: "dist"
+  # Build command (framework-specific, e.g., "npm run build", "next build")
+  build_command: "npm run build"
+  # Environment (production, preview, development)
+  environment: "production"
+  # Vercel token (set via VERCEL_TOKEN env var or config)
+  vercel_token: ""
+
+tools:
+  vercel: "latest"
+
+tasks:
+  build:
+    - desc: "Build the project"
+      run_locally: "{{build_command}}"
+
+  deploy:
+    - desc: "Deploy to Vercel"
+      run_locally: "vercel deploy --prod"
+
+  deploy:preview:
+    - desc: "Deploy preview to Vercel"
+      run_locally: "vercel deploy"
+
+  deploy:production:
+    - desc: "Deploy to production on Vercel"
+      run_locally: "vercel deploy --prod"
+
+  preview:
+    - desc: "Preview deployment locally"
+      run_locally: "vercel dev"
+
+  vercel:env:list:
+    - desc: "List environment variables"
+      run_locally: "vercel env ls"
+
+  vercel:env:add:
+    - desc: "Add environment variable (set VERCEL_ENV_KEY and VERCEL_ENV_VALUE)"
+      run_locally: "vercel env add {{VERCEL_ENV_KEY}}"
+
+  vercel:domains:list:
+    - desc: "List domains"
+      run_locally: "vercel domains ls"
+
+  vercel:domains:add:
+    - desc: "Add domain (set VERCEL_DOMAIN)"
+      run_locally: "vercel domains add {{VERCEL_DOMAIN}}"
+
+  vercel:logs:
+    - desc: "View deployment logs"
+      run_locally: "vercel logs"
+
+before:
+  deploy:
+    - build
+  deploy:production:
+    - build
+

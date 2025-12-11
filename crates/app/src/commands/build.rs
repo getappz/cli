@@ -1,0 +1,310 @@
+use crate::detectors::{detect_framework_record, DetectFrameworkRecordOptions, StdFilesystem};
+use crate::session::AppzSession;
+use crate::shell::{is_shell_script, run_local_with, RunOptions};
+use frameworks::frameworks;
+use miette::Result;
+use starbase::AppResult;
+use std::path::PathBuf;
+use std::sync::Arc;
+use task::{Context, Runner, TaskRegistry};
+use tokio_util::sync::CancellationToken;
+use tracing::instrument;
+
+/// Get default install command based on package manager
+fn get_default_install_command(
+    package_manager: &Option<crate::detectors::PackageManagerInfo>,
+) -> String {
+    if let Some(ref pm) = package_manager {
+        match pm.manager.as_str() {
+            "yarn" => "yarn install".to_string(),
+            "pnpm" => "pnpm install".to_string(),
+            "bun" => "bun install".to_string(),
+            _ => "npm install".to_string(), // Default to npm
+        }
+    } else {
+        "npm install".to_string() // Default fallback
+    }
+}
+
+/// Execute a recipe task with cancellation support
+async fn run_recipe_task(
+    registry: &TaskRegistry,
+    task_name: &str,
+    working_path: PathBuf,
+    verbose: bool,
+) -> Result<()> {
+    let mut ctx = Context::new();
+    ctx.set_working_path(working_path);
+    let mut runner = if verbose {
+        Runner::new_verbose(registry)
+    } else {
+        Runner::new(registry)
+    };
+
+    // Create cancellation token for graceful shutdown on Ctrl+C
+    let cancellation_token = CancellationToken::new();
+
+    // Spawn task to listen for Ctrl+C and cancel execution
+    let cancellation_token_clone = cancellation_token.clone();
+    let verbose_clone = verbose;
+    tokio::spawn(async move {
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            eprintln!("Failed to listen for Ctrl+C: {}", e);
+            return;
+        }
+        if verbose_clone {
+            eprintln!("\nReceived Ctrl+C, cancelling tasks...");
+        }
+        cancellation_token_clone.cancel();
+    });
+
+    let res = runner
+        .invoke_async(
+            task_name,
+            &mut ctx,
+            Some(cancellation_token.clone()),
+            false,
+            false,
+        )
+        .await;
+
+    // If cancelled via Ctrl+C, exit cleanly with code 130
+    if cancellation_token.is_cancelled() {
+        eprintln!("Cancelled.");
+        std::process::exit(130);
+    }
+
+    res.map_err(|e| miette::miette!("{} failed: {}", task_name, e))
+}
+
+/// Handle shell script fallback on Windows for framework commands
+async fn handle_shell_script_fallback(
+    result: Result<()>,
+    is_shell_script: bool,
+    has_user_script: bool,
+    framework_cmd: Option<&String>,
+    default_cmd: Option<String>,
+    ctx: &Context,
+    opts: &RunOptions,
+) -> Result<()> {
+    if result.is_ok() {
+        return Ok(());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if has_user_script && is_shell_script {
+            eprintln!("⚠️  Warning: Shell script detected. Falling back to framework command.");
+            if let Some(framework_cmd) = framework_cmd {
+                println!("✓ Using framework command");
+                run_local_with(ctx, framework_cmd, opts.clone()).await?;
+            } else if let Some(ref default_cmd) = default_cmd {
+                println!("✓ Using default command");
+                run_local_with(ctx, default_cmd, opts.clone()).await?;
+            } else {
+                result?; // No fallback available, return error
+            }
+            Ok(())
+        } else {
+            result // Not a shell script issue, return error
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        result // On Unix, just return the error
+    }
+}
+
+/// Build the project.
+///
+/// Detects the framework, installs dependencies, and runs the build command.
+#[instrument(skip_all)]
+pub async fn build(session: AppzSession) -> AppResult {
+    // Use the working directory from session (already respects --cwd)
+    let project_path = session.working_dir.clone();
+
+    // Check if path exists
+    if !project_path.exists() {
+        return Err(miette::miette!(
+            "Path does not exist: {}",
+            project_path.display()
+        ));
+    }
+
+    if !project_path.is_dir() {
+        return Err(miette::miette!(
+            "Path is not a directory: {}",
+            project_path.display()
+        ));
+    }
+
+    // Get task registry for checking recipe tasks
+    let registry = session.get_task_registry();
+
+    // Create filesystem detector
+    let fs = Arc::new(StdFilesystem::new(Some(project_path.clone())));
+
+    // Get all available frameworks
+    let framework_list: Vec<_> = frameworks().to_vec();
+
+    // Detect framework
+    let options = DetectFrameworkRecordOptions { fs, framework_list };
+
+    match detect_framework_record(options).await {
+        Ok(Some((framework, _version, package_manager))) => {
+            // Get scripts from package_manager (already extracted by detect_framework_record)
+            let user_install_script = package_manager
+                .as_ref()
+                .and_then(|pm| pm.install_script.clone());
+            let user_build_script = package_manager
+                .as_ref()
+                .and_then(|pm| pm.build_script.clone());
+
+            // Get framework install command (fallback)
+            let framework_install_cmd = framework
+                .settings
+                .as_ref()
+                .and_then(|s| s.install_command.as_ref())
+                .and_then(|c| c.value)
+                .map(|s| s.to_string());
+
+            // Get framework build command (fallback)
+            let framework_build_cmd = framework
+                .settings
+                .as_ref()
+                .and_then(|s| s.build_command.as_ref())
+                .and_then(|c| c.value)
+                .map(|s| s.to_string())
+                .ok_or_else(|| {
+                    miette::miette!(
+                        "No build command configured for framework: {}",
+                        framework.name
+                    )
+                })?;
+
+            // Determine install command (priority: user script > framework command > package manager default)
+            let install_cmd = if let Some(ref user_install) = user_install_script {
+                user_install.clone()
+            } else if let Some(ref framework_install) = framework_install_cmd {
+                framework_install.clone()
+            } else {
+                get_default_install_command(&package_manager)
+            };
+
+            // Determine build command (priority: user script > framework command)
+            let build_cmd = if let Some(ref user_build) = user_build_script {
+                user_build.clone()
+            } else {
+                framework_build_cmd.clone()
+            };
+
+            println!("✓ Detected framework: {}", framework.name);
+
+            // Display which install command is being used
+            if user_install_script.is_some() {
+                println!("✓ Using user-defined install script from package.json");
+            } else if framework_install_cmd.is_some() {
+                println!("✓ Using framework install command");
+            } else {
+                println!("✓ Using package manager default install command");
+            }
+
+            // Display which build command is being used
+            if user_build_script.is_some() {
+                println!("✓ Using user-defined build script from package.json");
+            } else {
+                println!("✓ Using framework build command");
+            }
+
+            // Create a minimal context for running the commands
+            let mut ctx = Context::new();
+            ctx.set_working_path(project_path.clone());
+            let opts = RunOptions {
+                cwd: Some(project_path.clone()),
+                env: None,
+                show_output: true,
+                package_manager: package_manager.clone(),
+            };
+
+            // Execute install step: check for appz:install recipe task first
+            let using_appz_install = registry.get("appz:install").is_some();
+
+            if using_appz_install {
+                println!("✓ Found appz:install recipe task, using recipe install...");
+                println!("\n📦 Running install command...");
+                run_recipe_task(
+                    &registry,
+                    "appz:install",
+                    project_path.clone(),
+                    session.cli.verbose,
+                )
+                .await?;
+            } else {
+                // Execute framework install command
+                println!("\n📦 Running install command...");
+                let install_result = run_local_with(&ctx, &install_cmd, opts.clone()).await;
+
+                // Handle shell script fallback on Windows
+                handle_shell_script_fallback(
+                    install_result,
+                    is_shell_script(&install_cmd),
+                    user_install_script.is_some(),
+                    framework_install_cmd.as_ref(),
+                    Some(get_default_install_command(&package_manager)),
+                    &ctx,
+                    &opts,
+                )
+                .await?;
+            }
+
+            // Execute build step: check for appz:build recipe task first
+            let using_appz_build = registry.get("appz:build").is_some();
+
+            if using_appz_build {
+                println!("✓ Found appz:build recipe task, using recipe build...");
+                println!("\n🔨 Running build command...");
+                run_recipe_task(
+                    &registry,
+                    "appz:build",
+                    project_path.clone(),
+                    session.cli.verbose,
+                )
+                .await?;
+            } else {
+                // Execute framework build command
+                println!("\n🔨 Running build command...");
+                let build_result = run_local_with(&ctx, &build_cmd, opts.clone()).await;
+
+                // Handle shell script fallback on Windows
+                handle_shell_script_fallback(
+                    build_result,
+                    is_shell_script(&build_cmd),
+                    user_build_script.is_some(),
+                    Some(&framework_build_cmd),
+                    None,
+                    &ctx,
+                    &opts,
+                )
+                .await?;
+            }
+
+            println!("\n✓ Build completed successfully!");
+        }
+        Ok(None) => {
+            println!("✗ No framework detected in {}", project_path.display());
+            println!("\nSupported frameworks:");
+            for fw in frameworks() {
+                if let Some(slug) = fw.slug {
+                    println!("  - {} ({})", fw.name, slug);
+                } else {
+                    println!("  - {}", fw.name);
+                }
+            }
+        }
+        Err(e) => {
+            return Err(miette::miette!("Error detecting framework: {}", e));
+        }
+    }
+
+    Ok(None)
+}

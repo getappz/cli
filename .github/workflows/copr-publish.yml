@@ -1,0 +1,99 @@
+name: copr-publish
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      chroots:
+        description: "COPR chroots to target (space-separated)"
+        required: false
+        default: "fedora-rawhide-aarch64 fedora-rawhide-x86_64 fedora-42-aarch64 fedora-42-x86_64 fedora-41-aarch64 fedora-41-x86_64 epel-10-aarch64 epel-10-x86_64 epel-9-aarch64 epel-9-x86_64"
+        type: string
+
+env:
+  PACKAGE_NAME: appz
+
+jobs:
+  publish-copr:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    container:
+      image: fedora:latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up environment variables
+        run: |
+          VERSION=$(./scripts/get-version.sh | sed 's/^v//')
+
+          if [ "${{ github.event_name }}" = "release" ]; then
+            CHROOTS="fedora-rawhide-aarch64 fedora-rawhide-x86_64 fedora-42-aarch64 fedora-42-x86_64 fedora-41-aarch64 fedora-41-x86_64 epel-10-aarch64 epel-10-x86_64 epel-9-aarch64 epel-9-x86_64"
+          else
+            CHROOTS="${{ inputs.chroots }}"
+          fi
+
+          {
+            echo "VERSION=${VERSION}"
+            echo "CHROOTS=${CHROOTS}"
+            echo "PACKAGE_NAME=${PACKAGE_NAME}"
+            echo "MAINTAINER_NAME=${{ vars.COPR_MAINTAINER_NAME || 'appz Release Bot' }}"
+            echo "MAINTAINER_EMAIL=${{ vars.COPR_MAINTAINER_EMAIL || 'noreply@example.com' }}"
+            echo "COPR_OWNER=${{ vars.COPR_OWNER || 'yourusername' }}"
+            echo "COPR_PROJECT=${{ vars.COPR_PROJECT || 'appz' }}"
+          } >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: |
+          dnf install -y git rpm-build copr-cli curl
+
+      - name: Build and submit to COPR
+        run: |
+          # Create spec file
+          cat > appz.spec << EOF
+          Name:           ${PACKAGE_NAME}
+          Version:        ${VERSION}
+          Release:        1%{?dist}
+          Summary:        A Rust task runner CLI
+          License:        MIT
+          URL:            https://github.com/yourusername/appz
+          Source0:        https://github.com/yourusername/appz/archive/v%{version}.tar.gz
+
+          BuildRequires:  rust cargo
+          BuildRequires:  libssl-devel
+          BuildRequires:  pkgconfig
+
+          %description
+          A Rust task runner CLI with Deployer-like recipes and ergonomics.
+          Task runner for managing deployments and development workflows.
+
+          %prep
+          %setup -q
+
+          %build
+          cargo build --release --bin appz
+
+          %install
+          mkdir -p %{buildroot}%{_bindir}
+          install -m 755 target/release/appz %{buildroot}%{_bindir}/appz
+
+          %files
+          %{_bindir}/appz
+
+          %changelog
+          * $(date '+%a %b %d %Y') ${MAINTAINER_NAME} <${MAINTAINER_EMAIL}> - ${VERSION}-1
+          - Initial release
+          EOF
+
+          # Submit to COPR
+          copr-cli build ${COPR_OWNER}/${COPR_PROJECT} \
+            --chroot $CHROOTS \
+            appz.spec
+        env:
+          COPR_API_LOGIN: ${{ secrets.COPR_API_LOGIN }}
+          COPR_API_TOKEN: ${{ secrets.COPR_API_TOKEN }}
+

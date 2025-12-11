@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>appz</id>
+    <version>0.1.0</version>
+    <title>appz</title>
+    <authors>Appz</authors>
+    <owners>Appz</owners>
+    <projectUrl>https://github.com/getappz/cli</projectUrl>
+    <iconUrl>https://raw.githubusercontent.com/getappz/cli/main/icon.png</iconUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <license type="expression">MIT</license>
+    <summary>A Rust task runner CLI with Deployer-like recipes and ergonomics</summary>
+    <description>A Rust task runner CLI with Deployer-like recipes and ergonomics. Task runner for managing deployments and development workflows.</description>
+    <releaseNotes>https://github.com/getappz/cli/releases</releaseNotes>
+    <tags>cli devtools task-runner deployment</tags>
+    <packageSourceUrl>https://github.com/getappz/cli</packageSourceUrl>
+  </metadata>
+  <files>
+    <file src="tools\**" target="tools" />
+  </files>
+</package>
+

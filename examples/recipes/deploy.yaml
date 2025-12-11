@@ -1,0 +1,22 @@
+# Deployment-specific tasks from recipes/deploy.yaml
+# Loaded via includes in main recipe.yaml
+
+tasks:
+  deploy:rollback:
+    steps:
+      - desc: "Rollback to previous release"
+        run: "cd {{deploy_path}} && ln -sfn releases/$(ls -t releases | sed -n '2p') current"
+        host: "production"
+
+  deploy:check:
+    steps:
+      - desc: "Check deployment health"
+        run: "curl -f http://localhost/health || exit 1"
+        host: "production"
+
+  deploy:verify:
+    depends: ["deploy:check"]
+    steps:
+      - desc: "Verify deployment"
+        run_locally: "echo 'Deployment verified successfully'"
+

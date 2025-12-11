@@ -1,0 +1,57 @@
+name: release-prepare
+
+permissions:
+  pull-requests: write
+  contents: write
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: "0 0 * * *"  # Daily at midnight UTC
+
+concurrency:
+  group: release-prepare
+
+env:
+  RUST_BACKTRACE: 1
+  CARGO_TERM_COLOR: always
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  release-prepare:
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.GPG_KEY }}
+          git_user_signingkey: true
+          git_commit_gpgsign: true
+          git_tag_gpgsign: true
+        continue-on-error: true
+      
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build
+      
+      - name: Install cargo-edit
+        run: cargo install cargo-edit --locked
+      
+      - name: Install git-cliff
+        run: cargo install git-cliff --locked
+      
+      - name: Run release preparation
+        run: |
+          chmod +x scripts/release-prepare.sh
+          scripts/release-prepare.sh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

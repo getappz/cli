@@ -1,0 +1,56 @@
+config:
+  # AWS S3 bucket name (required)
+  s3_bucket: ""
+  # AWS CloudFront distribution ID (optional, for invalidation)
+  cloudfront_distribution_id: ""
+  # AWS region (default: us-east-1)
+  aws_region: "us-east-1"
+  # Build command
+  build_command: "npm run build"
+  # Build output directory
+  build_output_dir: "dist"
+  # Environment (production, staging, etc.)
+  environment: "production"
+  # S3 prefix/path (optional, for subdirectories)
+  s3_prefix: ""
+
+tools:
+  awscli: "latest"
+
+tasks:
+  build:
+    - desc: "Build the project"
+      run_locally: "{{build_command}}"
+
+  deploy:
+    - desc: "Deploy to AWS S3"
+      run_locally: "aws s3 sync {{build_output_dir}} s3://{{s3_bucket}}/{{s3_prefix}} --region {{aws_region}} --delete"
+
+  deploy:production:
+    - desc: "Deploy to production S3 bucket"
+      run_locally: "aws s3 sync {{build_output_dir}} s3://{{s3_bucket}}/{{s3_prefix}} --region {{aws_region}} --delete --cache-control \"public, max-age=31536000, immutable\""
+
+  cloudfront:invalidate:
+    - desc: "Invalidate CloudFront cache"
+      run_locally: "aws cloudfront create-invalidation --distribution-id {{cloudfront_distribution_id}} --paths \"/*\""
+
+  deploy:with-invalidation:
+    - deploy
+    - cloudfront:invalidate
+
+  aws:s3:list:
+    - desc: "List S3 bucket contents"
+      run_locally: "aws s3 ls s3://{{s3_bucket}} --region {{aws_region}}"
+
+  aws:s3:delete:
+    - desc: "Delete all files from S3 bucket (use with caution)"
+      run_locally: "aws s3 rm s3://{{s3_bucket}} --recursive --region {{aws_region}}"
+
+before:
+  deploy:
+    - build
+  deploy:production:
+    - build
+  deploy:with-invalidation:
+    - build
+

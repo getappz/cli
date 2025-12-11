@@ -1,0 +1,25 @@
+[package]
+name = "cli"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "appz"
+path = "src/main.rs"
+
+[dependencies]
+app = { path = "../app", features = ["self_update"] }
+ui = { path = "../ui" }
+env_var = { path = "../env_var" }
+clap = { workspace = true }
+miette = { workspace = true }
+starbase = "0.10"
+starbase_styles = "0.6"
+starbase_utils = { workspace = true }
+tokio = { workspace = true }
+tracing = "0.1"
+
+[features]
+default = ["self_update"]
+self_update = []

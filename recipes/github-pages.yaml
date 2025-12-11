@@ -1,0 +1,53 @@
+config:
+  # GitHub repository (format: owner/repo)
+  repository: ""
+  # Build command
+  build_command: "npm run build"
+  # Build output directory
+  build_output_dir: "dist"
+  # GitHub branch for deployment (default: gh-pages)
+  deploy_branch: "gh-pages"
+  # GitHub token (set via GITHUB_TOKEN env var or config)
+  github_token: ""
+  # Use gh-pages package (true) or git push (false)
+  use_gh_pages: true
+
+tools:
+  gh-pages: "latest"
+  gh: "latest"
+
+tasks:
+  build:
+    - desc: "Build the project"
+      run_locally: "{{build_command}}"
+
+  deploy:
+    - desc: "Deploy to GitHub Pages"
+      run_locally: "gh-pages -d {{build_output_dir}}"
+
+  deploy:git:
+    - desc: "Deploy to GitHub Pages using git push"
+      run_locally: |
+        git checkout -b {{deploy_branch}} || git checkout {{deploy_branch}}
+        git rm -rf .
+        cp -r {{build_output_dir}}/* .
+        git add .
+        git commit -m "Deploy to GitHub Pages"
+        git push origin {{deploy_branch}}
+        git checkout main
+
+  github:setup:
+    - desc: "Setup GitHub Pages (enable in repository settings)"
+      run_locally: "gh repo edit {{repository}} --enable-pages"
+
+  github:domain:set:
+    - desc: "Set custom domain (set GITHUB_DOMAIN)"
+      run_locally: |
+        echo "{{GITHUB_DOMAIN}}" > {{build_output_dir}}/CNAME
+        gh-pages -d {{build_output_dir}}
+
+before:
+  deploy:
+    - build
+  deploy:git:
+    - build

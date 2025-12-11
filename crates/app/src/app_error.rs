@@ -1,0 +1,79 @@
+#![allow(dead_code)]
+
+use miette::Diagnostic;
+use thiserror::Error;
+
+#[derive(Error, Debug, Diagnostic)]
+pub enum AppError {
+    #[diagnostic(code(app::workspace::invalid_root_env))]
+    #[error(
+        "Unable to determine workspace root. Failed to parse {} into a valid path.",
+        "APPZ_WORKSPACE_ROOT"
+    )]
+    InvalidWorkspaceRootEnvVar,
+
+    #[diagnostic(code(app::missing_working_dir))]
+    #[error("Unable to determine your current working directory.")]
+    MissingWorkingDir,
+
+    #[diagnostic(code(app::recipe::invalid_file))]
+    #[error(
+        "Unable to parse recipe file: {}",
+        .0
+    )]
+    InvalidRecipeFile(String),
+
+    #[diagnostic(code(app::recipe::file_not_found))]
+    #[error(
+        "Recipe file not found: {}",
+        .0
+    )]
+    RecipeFileNotFound(String),
+
+    #[diagnostic(code(app::plugin::load_failed))]
+    #[error(
+        "Failed to load WASM plugin: {}",
+        .0
+    )]
+    PluginLoadFailed(String),
+
+    #[diagnostic(code(app::plugin::invalid_id))]
+    #[error(
+        "Invalid plugin ID: {}",
+        .0
+    )]
+    InvalidPluginId(String),
+
+    #[diagnostic(code(app::task::not_found))]
+    #[error(
+        "Task not found: {}",
+        .0
+    )]
+    TaskNotFound(String),
+
+    #[diagnostic(code(app::task::registry::build_failed))]
+    #[error("Failed to build task registry")]
+    TaskRegistryBuildFailed,
+
+    #[diagnostic(code(app::importer::import_failed))]
+    #[error(
+        "Failed to import recipe: {}",
+        .0
+    )]
+    ImportFailed(String),
+
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+
+    #[error(transparent)]
+    Yaml(#[from] serde_yaml::Error),
+
+    #[error(transparent)]
+    Command(#[from] command::CommandError),
+
+    #[error(transparent)]
+    Inquire(#[from] inquire::InquireError),
+}

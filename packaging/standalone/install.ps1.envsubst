@@ -1,0 +1,174 @@
+#Requires -Version 5.1
+<#
+.SYNOPSIS
+    Install appz on Windows
+
+.DESCRIPTION
+    Downloads and installs appz binary for Windows from GitHub releases.
+    Automatically detects architecture (x64 or arm64) and installs to a directory in PATH.
+
+.PARAMETER Version
+    Specific version to install (e.g., "v0.1.0"). Defaults to latest.
+
+.PARAMETER InstallPath
+    Custom installation path. Defaults to "$env:LOCALAPPDATA\appz\bin\appz.exe"
+
+.EXAMPLE
+    .\install.ps1
+
+.EXAMPLE
+    .\install.ps1 -Version "v0.1.0"
+
+.EXAMPLE
+    .\install.ps1 -InstallPath "C:\Tools\appz.exe"
+#>
+
+param(
+    [string]$Version = "",
+    [string]$InstallPath = ""
+)
+
+$ErrorActionPreference = "Stop"
+
+#region logging setup
+function Write-Debug {
+    if ($env:APPZ_DEBUG -eq "true" -or $env:APPZ_DEBUG -eq "1") {
+        Microsoft.PowerShell.Utility\Write-Debug $args
+    }
+}
+
+function Write-Info {
+    if ($env:APPZ_QUIET -ne "1" -and $env:APPZ_QUIET -ne "true") {
+        Write-Host $args -ForegroundColor Cyan
+    }
+}
+
+function Write-Error {
+    Microsoft.PowerShell.Utility\Write-Error $args
+    exit 1
+}
+#endregion
+
+#region environment setup
+function Get-Architecture {
+    $arch = (Get-CimInstance Win32_Processor).Architecture
+    switch ($arch) {
+        0 { return "x64" }      # x86
+        5 { return "arm64" }    # ARM64
+        9 { return "x64" }      # x64
+        default { Write-Error "Unsupported architecture: $arch" }
+    }
+}
+
+function Get-Checksum {
+    param(
+        [string]$Version,
+        [string]$Arch
+    )
+    
+    # Update this URL with your actual GitHub repository
+    $checksumUrl = "https://github.com/getappz/cli/releases/download/v${Version}/SHASUMS256.txt"
+    
+    # For current version use static checksum otherwise use checksum from releases
+    if ($Version -eq $APPZ_CURRENT_VERSION) {
+        switch ($Arch) {
+            "x64" { return $APPZ_CHECKSUM_WINDOWS_X64 }
+            "arm64" { return $APPZ_CHECKSUM_WINDOWS_ARM64 }
+            default { Write-Warning "No checksum for windows-$Arch" }
+        }
+    } else {
+        try {
+            $checksums = Invoke-WebRequest -Uri $checksumUrl -UseBasicParsing | Select-Object -ExpandProperty Content
+            $checksum = ($checksums -split "`n" | Where-Object { $_ -match "appz-.*windows-${Arch}\.zip" }) -split '\s+' | Select-Object -First 1
+            if ($checksum -match '^[0-9a-f]{64}$') {
+                return $checksum
+            } else {
+                Write-Warning "No checksum for appz $Version and windows-$Arch"
+            }
+        } catch {
+            Write-Warning "Failed to fetch checksums: $_"
+        }
+    }
+}
+
+function Get-FileHash {
+    param([string]$FilePath)
+    
+    $hash = Get-FileHash -Path $FilePath -Algorithm SHA256
+    return $hash.Hash.ToLower()
+}
+#endregion
+
+function Install-Appz {
+    $currentVersion = if ($Version) { $Version } else { $APPZ_CURRENT_VERSION }
+    $currentVersion = $currentVersion -replace '^v', ''
+    
+    $arch = Get-Architecture
+    $installPath = if ($InstallPath) { $InstallPath } else { "$env:LOCALAPPDATA\appz\bin\appz.exe" }
+    $installDir = Split-Path -Parent $installPath
+    
+    # Create install directory if it doesn't exist
+    if (-not (Test-Path $installDir)) {
+        New-Item -ItemType Directory -Path $installDir -Force | Out-Null
+    }
+    
+    # Update this URL with your actual GitHub repository
+    $zipUrl = "https://github.com/getappz/cli/releases/download/v${currentVersion}/appz-${currentVersion}-windows-${arch}.zip"
+    $zipFile = Join-Path $env:TEMP "appz-${currentVersion}-windows-${arch}.zip"
+    
+    Write-Info "appz: downloading appz..."
+    Write-Debug "Downloading from: $zipUrl"
+    
+    try {
+        Invoke-WebRequest -Uri $zipUrl -OutFile $zipFile -UseBasicParsing
+    } catch {
+        Write-Error "Failed to download appz: $_"
+    }
+    
+    # Validate checksum
+    Write-Debug "Validating checksum..."
+    $expectedChecksum = Get-Checksum -Version $currentVersion -Arch $arch
+    if ($expectedChecksum) {
+        $actualChecksum = Get-FileHash -FilePath $zipFile
+        if ($actualChecksum -ne $expectedChecksum) {
+            Write-Error "Checksum validation failed. Expected: $expectedChecksum, Got: $actualChecksum"
+        }
+        Write-Debug "Checksum validated successfully"
+    }
+    
+    # Extract zip file
+    Write-Debug "Extracting to: $installDir"
+    $tempDir = Join-Path $env:TEMP "appz-extract-$(Get-Random)"
+    Expand-Archive -Path $zipFile -DestinationPath $tempDir -Force
+    
+    # Find appz.exe in the extracted files
+    $appzExe = Get-ChildItem -Path $tempDir -Recurse -Filter "appz.exe" | Select-Object -First 1
+    if (-not $appzExe) {
+        Write-Error "appz.exe not found in downloaded archive"
+    }
+    
+    # Copy to install location
+    Copy-Item -Path $appzExe.FullName -Destination $installPath -Force
+    
+    # Cleanup
+    Remove-Item -Path $zipFile -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+    
+    Write-Info "appz: installed successfully to $installPath"
+    
+    # Add to PATH if not already present
+    $binDir = Split-Path -Parent $installPath
+    $currentPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    if ($currentPath -notlike "*$binDir*") {
+        [Environment]::SetEnvironmentVariable("Path", "$currentPath;$binDir", "User")
+        $env:Path += ";$binDir"
+        Write-Info "appz: added $binDir to PATH"
+    }
+    
+    Write-Info ""
+    Write-Info "appz: setup complete! 🎉"
+    Write-Info "appz: run 'appz --help' to get started"
+}
+
+Install-Appz
+

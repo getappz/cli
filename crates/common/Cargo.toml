@@ -1,0 +1,15 @@
+[package]
+name = "common"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+dirs = "5.0"
+miette = { workspace = true }
+relative-path = { version = "1.0", features = ["serde"] }
+regex = { workspace = true }
+rustc-hash = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+

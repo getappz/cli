@@ -1,0 +1,67 @@
+name: release-tag
+
+permissions:
+  contents: write
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+
+jobs:
+  create-tag:
+    if: github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'release')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+      
+      - uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.GPG_KEY }}
+          git_user_signingkey: true
+          git_tag_gpgsign: true
+        continue-on-error: true
+      
+      - name: Install git-cliff
+        run: cargo install git-cliff --locked
+      
+      - name: Get version
+        id: version
+        run: |
+          VERSION=$(grep '^version =' crates/cli/Cargo.toml | head -n1 | cut -d '"' -f 2)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+      
+      - name: Check if tag exists
+        id: check-tag
+        run: |
+          if git rev-parse -q --verify "refs/tags/v${{ env.VERSION }}" >/dev/null ||
+             git ls-remote --exit-code --tags origin "v${{ env.VERSION }}" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Generate changelog
+        if: steps.check-tag.outputs.exists == 'false'
+        run: |
+          git cliff --tag "v${{ env.VERSION }}" --strip all --latest > /tmp/changelog.txt || {
+            echo "Release ${{ env.VERSION }}" > /tmp/changelog.txt
+          }
+      
+      - name: Create and push tag
+        if: steps.check-tag.outputs.exists == 'false'
+        run: |
+          CHANGELOG=$(cat /tmp/changelog.txt | tail -n +3 2>/dev/null || echo "Release ${{ env.VERSION }}")
+          if command -v gpg >/dev/null 2>&1 && gpg --list-secret-keys --keyid-format LONG 2>/dev/null | grep -q sec; then
+            git tag "v${{ env.VERSION }}" -s -m "$CHANGELOG"
+          else
+            git tag "v${{ env.VERSION }}" -m "$CHANGELOG"
+          fi
+          git push --tags
+

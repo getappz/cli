@@ -1,0 +1,36 @@
+# Shared common tasks from recipes/common.yaml
+# Loaded via includes in main recipe.yaml
+
+tasks:
+  backup:database:
+    steps:
+      - desc: "Backup database before deployment"
+        run: "mysqldump -u root myapp > /var/backups/db-{{timestamp}}.sql"
+        host: "production"
+
+  notify:slack:
+    steps:
+      - desc: "Notify Slack about deployment"
+        run_locally: "curl -X POST https://hooks.slack.com/services/... -d 'Deployment started'"
+
+  notify:deployment-complete:
+    steps:
+      - desc: "Notify Slack deployment completed"
+        run_locally: "curl -X POST https://hooks.slack.com/services/... -d 'Deployment completed'"
+
+  cleanup:old-releases:
+    steps:
+      - desc: "Clean up old releases"
+        run: "cd {{deploy_path}}/releases && ls -t | tail -n +{{keep_releases}} | xargs rm -rf"
+        host: "production"
+
+  coverage:report:
+    steps:
+      - desc: "Generate coverage report"
+        run_locally: "npm run coverage"
+
+  changelog:update:
+    steps:
+      - desc: "Update changelog"
+        run_locally: "git-chglog -o CHANGELOG.md"
+

@@ -1,0 +1,37 @@
+# Common tasks loaded from .appz/tasks directory
+# This file is automatically loaded due to includes or default .appz/tasks path
+
+tasks:
+  # Shared common tasks
+  lint:
+    steps:
+      - desc: "Run linter"
+        run_locally: "npm run lint"
+
+  format:
+    steps:
+      - desc: "Format code"
+        run_locally: "npm run format"
+
+  install:
+    steps:
+      - desc: "Install dependencies"
+        run_locally: "npm install"
+
+  # Task with depends in included file
+  test:all:
+    depends: ["test:unit", "test:integration"]
+    steps:
+      - desc: "Run all tests"
+        run_locally: "echo 'All tests completed'"
+
+  test:unit:
+    steps:
+      - desc: "Run unit tests"
+        run_locally: "npm run test:unit"
+
+  test:integration:
+    steps:
+      - desc: "Run integration tests"
+        run_locally: "npm run test:integration"
+

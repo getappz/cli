@@ -1,0 +1,58 @@
+#!/bin/sh
+set -eu
+
+#region logging setup
+if [ "${APPZ_DEBUG-}" = "true" ] || [ "${APPZ_DEBUG-}" = "1" ]; then
+  debug() {
+    echo "$@" >&2
+  }
+else
+  debug() {
+    :
+  }
+fi
+
+if [ "${APPZ_QUIET-}" = "1" ] || [ "${APPZ_QUIET-}" = "true" ]; then
+  info() {
+    :
+  }
+else
+  info() {
+    echo "$@" >&2
+  }
+fi
+
+error() {
+  echo "$@" >&2
+  exit 1
+}
+#endregion
+
+install_appz() {
+  # Download and install appz using the main install script
+  info "appz: downloading and installing appz..."
+  
+  if [ -x "$(command -v curl)" ]; then
+    curl -fsSL https://get.appz.dev/install.sh | sh
+  elif [ -x "$(command -v wget)" ]; then
+    wget -qO- https://get.appz.dev/install.sh | sh
+  else
+    error "appz install requires curl or wget but neither is installed. Aborting."
+  fi
+  
+  install_path="${APPZ_INSTALL_PATH:-$HOME/.local/bin/appz}"
+  
+  if [ ! -f "$install_path" ]; then
+    error "appz installation failed"
+  fi
+  
+  info "appz: installed successfully to $install_path"
+}
+
+# Main execution
+install_appz
+
+info ""
+info "appz: setup complete! 🎉"
+info "appz: ${FINAL_MESSAGE}"
+

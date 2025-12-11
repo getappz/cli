@@ -1,0 +1,189 @@
+name: ppa-publish
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      distributions:
+        description: "Ubuntu distributions to target (space-separated)"
+        required: false
+        default: "jammy noble"
+        type: string
+      build_revision:
+        description: "Build revision number (increment for packaging fixes of same version)"
+        required: false
+        default: "1"
+        type: string
+
+env:
+  DEBIAN_FRONTEND: noninteractive
+
+jobs:
+  publish-ppa:
+    runs-on: ubuntu-latest
+    environment: ppa-publishing
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up environment variables
+        run: |
+          VERSION=$(./scripts/get-version.sh | sed 's/^v//')
+
+          if [ "${{ github.event_name }}" = "release" ]; then
+            DISTRIBUTIONS="jammy noble"
+            BUILD_REVISION="1"
+          else
+            DISTRIBUTIONS="${{ inputs.distributions }}"
+            BUILD_REVISION="${{ inputs.build_revision || '1' }}"
+          fi
+
+          {
+            echo "VERSION=${VERSION}"
+            echo "DISTRIBUTIONS=${DISTRIBUTIONS}"
+            echo "BUILD_REVISION=${BUILD_REVISION}"
+            echo "PACKAGE_NAME=appz"
+            echo "MAINTAINER_NAME=${{ vars.PPA_MAINTAINER_NAME || 'appz Release Bot' }}"
+            echo "MAINTAINER_EMAIL=${{ vars.PPA_MAINTAINER_EMAIL || 'noreply@example.com' }}"
+            echo "PPA_NAME=${{ vars.PPA_NAME || 'ppa:yourusername/appz' }}"
+          } >> "$GITHUB_ENV"
+
+      - name: Install packaging dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            devscripts \
+            debhelper \
+            dh-make \
+            build-essential \
+            git-buildpackage \
+            dput \
+            lintian \
+            quilt \
+            fakeroot \
+            debian-keyring \
+            gpg \
+            libssl-dev \
+            pkg-config
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "${{ env.MAINTAINER_NAME }}"
+          git config --global user.email "${{ env.MAINTAINER_EMAIL }}"
+
+      - name: Import GPG key
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.GPG_KEY }}
+          git_user_signingkey: true
+          git_commit_gpgsign: true
+          trust_level: 5
+
+      - name: Create source package for each distribution
+        run: |
+          # Create tarball
+          git archive --format=tar --prefix="${PACKAGE_NAME}-${VERSION}/" HEAD > "../${PACKAGE_NAME}_${VERSION}.orig.tar"
+          gzip "../${PACKAGE_NAME}_${VERSION}.orig.tar"
+
+          # Create working directory
+          WORK_DIR="/tmp/ppa-build"
+          mkdir -p "$WORK_DIR"
+          cp "../${PACKAGE_NAME}_${VERSION}.orig.tar.gz" "$WORK_DIR/${PACKAGE_NAME}_${VERSION}.orig.tar.gz"
+
+          cd "$WORK_DIR"
+          tar -xzf "${PACKAGE_NAME}_${VERSION}.orig.tar.gz"
+          cd "${PACKAGE_NAME}-${VERSION}"
+
+          # Create debian directory structure
+          mkdir -p debian/source
+          echo "3.0 (quilt)" > debian/source/format
+
+          # Create debian files
+          cat > debian/control << EOF
+          Source: ${PACKAGE_NAME}
+          Section: utils
+          Priority: optional
+          Maintainer: ${MAINTAINER_NAME} <${MAINTAINER_EMAIL}>
+          Build-Depends: debhelper-compat (= 13), curl, libssl-dev, pkgconf
+          Standards-Version: 4.6.2
+          Homepage: https://github.com/yourusername/appz
+          Vcs-Git: https://github.com/yourusername/appz.git
+          Vcs-Browser: https://github.com/yourusername/appz
+
+          Package: ${PACKAGE_NAME}
+          Architecture: any
+          Depends: \${shlibs:Depends}, \${misc:Depends}
+          Description: A Rust task runner CLI
+           appz is a task runner CLI with Deployer-like recipes and ergonomics.
+           Task runner for managing deployments and development workflows.
+          EOF
+
+          cat > debian/rules << 'EOF'
+          #!/usr/bin/make -f
+          %:
+          	dh $@
+          override_dh_auto_build:
+          	curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          	. ~/.cargo/env
+          	cargo build --release --locked --bin appz
+          override_dh_auto_install:
+          	mkdir -p debian/appz/usr/bin
+          	cp target/release/appz debian/appz/usr/bin/
+          EOF
+
+          chmod +x debian/rules
+
+          cat > debian/copyright << EOF
+          Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+          Upstream-Name: ${PACKAGE_NAME}
+          Source: https://github.com/yourusername/appz
+
+          Files: *
+          Copyright: 2024 Appz
+          License: MIT
+          EOF
+
+          # Build source packages for each distribution
+          for DIST in ${DISTRIBUTIONS}; do
+            DIST_VERSION="${VERSION}-${BUILD_REVISION}${DIST}1"
+            cat > debian/changelog << EOF
+          ${PACKAGE_NAME} (${DIST_VERSION}) ${DIST}; urgency=medium
+
+            * New upstream release ${VERSION}
+
+           -- ${MAINTAINER_NAME} <${MAINTAINER_EMAIL}>  $(date -R)
+          EOF
+            debuild -S
+            mkdir -p "/tmp/packages"
+            mv ../*"${DIST_VERSION}"*.dsc "/tmp/packages/"
+            mv ../*"${DIST_VERSION}"*.tar.* "/tmp/packages/"
+            mv ../*"${DIST_VERSION}"*.changes "/tmp/packages/"
+          done
+
+      - name: Upload source packages to PPA
+        run: |
+          cd /tmp/packages
+          cat > ~/.dput.cf << EOF
+          [mise-ppa]
+          fqdn = ppa.launchpad.net
+          method = ftp
+          incoming = ~${PPA_NAME#ppa:}/ubuntu/
+          login = anonymous
+          allow_unsigned_uploads = 0
+          EOF
+
+          for changes_file in *.changes; do
+            echo "Uploading $changes_file to PPA..."
+            dput mise-ppa "$changes_file"
+          done
+

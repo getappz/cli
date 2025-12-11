@@ -1,0 +1,10 @@
+[package]
+name = "command"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+miette = { workspace = true }
+thiserror = { workspace = true }
+shell-words = { workspace = true }
+which = { workspace = true }

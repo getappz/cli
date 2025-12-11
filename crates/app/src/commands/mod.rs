@@ -1,0 +1,54 @@
+pub mod aliases;
+pub mod build;
+pub mod deployment_utils;
+pub mod dev;
+pub mod dev_server;
+pub mod domains;
+pub mod init;
+pub mod link;
+pub mod list;
+pub mod login;
+pub mod logout;
+pub mod ls;
+pub mod plan;
+pub mod preview;
+pub mod projects;
+pub mod promote;
+pub mod recipe_validate;
+pub mod remove;
+pub mod rollback;
+pub mod run;
+#[cfg_attr(not(feature = "self_update"), path = "self_upgrade_stub.rs")]
+pub mod self_upgrade;
+pub mod switch;
+pub mod teams;
+pub mod unlink;
+pub mod version;
+
+pub use aliases::*;
+pub use build::build;
+pub use dev::dev;
+pub use dev_server::dev_server;
+pub use domains::*;
+pub use init::init;
+pub use link::link;
+pub use list::list;
+pub use login::login;
+pub use logout::logout;
+pub use ls::ls;
+pub use plan::plan;
+pub use preview::preview;
+pub use projects::{run as projects_run, resolve_project_id, ProjectsCommands};
+pub use promote::{promote, status as promote_status};
+pub use recipe_validate::recipe_validate;
+pub use remove::remove;
+pub use rollback::{rollback, status as rollback_status};
+pub use run::run;
+#[cfg(not(feature = "self_update"))]
+pub use self_upgrade::{append_self_update_instructions, upgrade_instructions_text};
+#[cfg(feature = "self_update")]
+pub use self_upgrade::{append_self_update_instructions, upgrade_instructions_text, SelfUpdate};
+pub use switch::switch;
+pub use teams::{run as teams_run, resolve_team_id, TeamsCommands};
+pub use unlink::unlink;
+pub use version::{ARCH, OS};

@@ -1,0 +1,194 @@
+# Comprehensive Recipe Example
+# Demonstrates all features supported by saasctl task runner
+
+# Config section: Variables that can be used in tasks with {{variable}} syntax
+config:
+  deploy_path: "/var/www/myapp"
+  keep_releases: 5
+  app_name: "myapp"
+  environment: "production"
+
+# Tools section: Automatically installed via mise before tasks run
+tools:
+  node: "20"
+  go: "1.25.1"
+  hugo: "0.151.0"
+  python: "latest"
+
+# Hosts section: Remote servers for SSH-based execution
+hosts:
+  production:
+    hostname: "prod.example.com"
+    user: "deploy"
+    port: 22
+    identity_file: "~/.ssh/id_prod"
+    forward_agent: true
+    deploy_path: "/var/www/myapp"
+  
+  staging:
+    hostname: "staging.example.com"
+    user: "deploy"
+    port: 2222
+    identity_file: "./keys/staging_key"
+
+# Includes section: Load additional recipe files
+includes:
+  - ".appz/tasks"  # Default directory (auto-loaded if exists)
+  - "recipes/common.yaml"  # Shared tasks
+  - "recipes/deploy.yaml"  # Deployment-specific tasks
+
+# Tasks section: All task types supported
+
+tasks:
+  # 1. Simple dependency-only task (no actions, just dependencies)
+  setup:
+    - install
+    - config:apply
+    - migrate
+
+  # 2. Step-based task with inline depends
+  deploy:
+    depends: ["build", "test"]  # NEW: Inline depends syntax
+    steps:
+      - desc: "Deploy application to production"
+        run_locally: "rsync -avz dist/ {{deploy_path}}/current/"
+      - run: "php artisan config:cache"
+        host: "production"
+      - run: "php artisan route:cache"
+        host: "production"
+
+  # 3. Step-based task with wait_for (soft dependencies)
+  deploy:staging:
+    wait_for: ["notify:slack"]  # Soft dependency - won't fail if notify:slack fails
+    steps:
+      - desc: "Deploy to staging"
+        run_locally: "rsync -avz dist/ staging.example.com:{{deploy_path}}/"
+
+  # 4. Step-based task with both depends and wait_for
+  deploy:production:
+    depends: ["build", "test"]  # Hard dependencies - must succeed
+    wait_for: ["notify:slack", "backup:database"]  # Soft dependencies
+    steps:
+      - desc: "Deploy to production"
+        cd: "{{deploy_path}}"
+        run: "php artisan down"
+        host: "production"
+      - upload:
+          src: ["dist/**", "package.json"]
+          dest: "{{deploy_path}}/current"
+        host: "production"
+      - run: "php artisan migrate --force"
+        host: "production"
+      - run: "php artisan up"
+        host: "production"
+
+  # 5. Task with multiple steps and various step types
+  build:
+    steps:
+      - desc: "Install dependencies"
+        run_locally: "npm install"
+        cd: "{{app_name}}"
+      - desc: "Run linter"
+        run_locally: "npm run lint"
+        cd: "{{app_name}}"
+      - desc: "Build application"
+        run_locally: "npm run build"
+        cd: "{{app_name}}"
+      - desc: "Upload build artifacts"
+        upload:
+          src: "dist/**"
+          dest: "{{deploy_path}}/releases/{{timestamp}}"
+        host: "production"
+
+  # 6. Task with download step
+  backup:
+    steps:
+      - desc: "Download database backup"
+        download:
+          src: "/var/backups/db.sql"
+          dest: "./backups/db-{{timestamp}}.sql"
+        host: "production"
+
+  # 7. Task with once flag (runs only once even if called multiple times)
+  init:
+    steps:
+      - desc: "Initialize project (runs only once)"
+        run_locally: "npm install"
+        once: true
+
+  # 8. Hidden task (not shown in task list)
+  internal:cleanup:
+    steps:
+      - desc: "Internal cleanup task"
+        run_locally: "rm -rf tmp/*"
+        hidden: true
+
+  # 9. Dependency-only task with wait_for
+  ci:
+    wait_for: ["lint", "test"]  # Soft dependencies
+    - build
+    - deploy:staging
+
+  # 10. Task with wait_for and depends (dependency-only variant)
+  release:
+    wait_for: ["changelog:update"]
+    depends: ["build", "test", "deploy:production"]
+
+  # 11. Task using config variables
+  config:apply:
+    steps:
+      - desc: "Apply configuration"
+        run_locally: "echo 'Deploying {{app_name}} to {{environment}}'"
+        cd: "{{deploy_path}}"
+
+  # 12. Task with remote execution
+  migrate:
+    steps:
+      - desc: "Run database migrations"
+        run: "php artisan migrate --force"
+        host: "production"
+        cd: "{{deploy_path}}/current"
+
+  # 13. Task with local execution (explicit)
+  test:
+    steps:
+      - desc: "Run tests locally"
+        run_locally: "npm test"
+        cd: "{{app_name}}"
+
+  # 14. Task with multiple upload sources
+  upload:assets:
+    steps:
+      - desc: "Upload multiple asset directories"
+        upload:
+          src:
+            - "dist/css/**"
+            - "dist/js/**"
+            - "dist/images/**"
+          dest: "{{deploy_path}}/current/public"
+        host: "production"
+
+  # 15. Task that depends on tools being installed
+  generate:docs:
+    depends: ["tools:install"]  # Ensures tools are installed first
+    steps:
+      - desc: "Generate documentation"
+        run_locally: "hugo --destination docs/"
+
+# Before hooks: Run before target task (hard dependency)
+before:
+  deploy:production:
+    - backup:database
+    - notify:slack
+  deploy:
+    - build
+    - test
+
+# After hooks: Run after target task completes (regardless of success/failure)
+after:
+  deploy:production:
+    - notify:deployment-complete
+    - cleanup:old-releases
+  test:
+    - coverage:report
+

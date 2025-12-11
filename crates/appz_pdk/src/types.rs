@@ -1,0 +1,331 @@
+//! Shared types for WASM plugins
+//!
+//! This module provides all the types needed to interact with saasctl host functions.
+
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+/// Error codes for host functions
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(i32)]
+pub enum HostError {
+    Success = 0,
+    InvalidInput = 1,
+    NotFound = 2,
+    PermissionDenied = 3,
+    ExecutionFailed = 4,
+    Timeout = 5,
+    InternalError = 99,
+}
+
+impl From<HostError> for i32 {
+    fn from(code: HostError) -> Self {
+        code as i32
+    }
+}
+
+// ============================================================================
+// Registry Types
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskInput {
+    pub name: String,
+    pub desc: Option<String>,
+    pub body: Option<String>, // WASM callback ID or null for array deps
+    pub deps: Option<Vec<String>>,
+    pub only_if: Option<Vec<String>>, // Condition expressions as strings
+    pub unless: Option<Vec<String>>,
+    pub once: Option<bool>,
+    pub hidden: Option<bool>,
+    pub timeout: Option<u64>, // Timeout in seconds
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskResponse {
+    pub success: bool,
+    pub task_name: String,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DescInput {
+    pub task: String,
+    pub desc: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HookInput {
+    pub target: String,
+    pub hook: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HookResponse {
+    pub success: bool,
+    pub message: Option<String>,
+}
+
+// ============================================================================
+// Context Types
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextSetInput {
+    pub key: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextGetInput {
+    pub key: String,
+    pub default: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextGetOutput {
+    pub value: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextAddInput {
+    pub key: String,
+    pub values: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextParseInput {
+    pub template: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextParseOutput {
+    pub result: String,
+}
+
+// ============================================================================
+// Host Types
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostInput {
+    pub hostnames: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostInfo {
+    pub alias: String,
+    pub hostname: String,
+    pub local: bool,
+    pub config: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostResponse {
+    pub success: bool,
+    pub hosts: Vec<HostInfo>,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostSelectInput {
+    pub selector: String,
+}
+
+// ============================================================================
+// Execution Types
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunInput {
+    pub command: String,
+    pub cwd: Option<String>,
+    pub env: Option<HashMap<String, String>>,
+    pub secret: Option<String>, // For %secret% placeholder
+    pub nothrow: Option<bool>,
+    pub force_output: Option<bool>,
+    pub timeout: Option<u64>,      // Timeout in seconds
+    pub idle_timeout: Option<u64>, // Idle timeout in seconds
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunOutput {
+    pub success: bool,
+    pub stdout: Option<String>,
+    pub stderr: Option<String>,
+    pub exit_code: Option<i32>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InvokeInput {
+    pub task: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OnInput {
+    pub hosts: Vec<String>, // Host aliases or selector string
+    pub callback: String,   // WASM callback ID
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WithinInput {
+    pub path: String,
+    pub callback: String, // WASM callback ID
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BecomeInput {
+    pub user: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RestoreHandle {
+    pub handle: u64, // Opaque handle to restore
+}
+
+// ============================================================================
+// Filesystem Types
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UploadInput {
+    pub source: String,
+    pub destination: String,
+    pub config: Option<UploadConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UploadConfig {
+    pub flags: Option<String>,        // rsync flags override
+    pub options: Option<Vec<String>>, // Additional rsync options
+    pub timeout: Option<u64>,
+    pub progress_bar: Option<bool>,
+    pub display_stats: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DownloadInput {
+    pub source: String,
+    pub destination: String,
+    pub config: Option<UploadConfig>, // Reuse same config struct
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileTransferResult {
+    pub success: bool,
+    pub message: Option<String>,
+    pub error: Option<String>,
+}
+
+// ============================================================================
+// Interaction Types
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AskInput {
+    pub message: String,
+    pub default: Option<String>,
+    pub autocomplete: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChoiceInput {
+    pub message: String,
+    pub choices: Vec<String>,
+    pub default: Option<String>,
+    pub multiselect: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChoiceOutput {
+    pub selected: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfirmInput {
+    pub message: String,
+    pub default: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InputHandle {
+    pub handle: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutputHandle {
+    pub handle: u64,
+}
+
+// ============================================================================
+// Utility Types
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CmdExistsOutput {
+    pub exists: u8, // 1 = true, 0 = false
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommandSupportsInput {
+    pub command: String,
+    pub option: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WhichOutput {
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ErrorInfo {
+    pub message: String,
+    pub code: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FetchInput {
+    pub url: String,
+    pub method: Option<String>,
+    pub headers: Option<HashMap<String, String>>,
+    pub body: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FetchOutput {
+    pub success: bool,
+    pub status_code: Option<u16>,
+    pub body: Option<String>,
+    pub headers: Option<HashMap<String, String>>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VoidResponse {
+    pub success: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportResponse {
+    pub success: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OptionInput {
+    pub name: String,
+    pub shortcut: Option<String>,
+    pub mode: Option<String>,
+    pub desc: Option<String>,
+    pub default: Option<String>,
+}
+
+// ============================================================================
+// Test Types
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TestOutput {
+    pub result: u8, // 1 = true, 0 = false
+}

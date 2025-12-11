@@ -1,0 +1,12 @@
+[package]
+name = "env_var"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Manages environment variables with thread-safe concurrent data structures."
+
+[dependencies]
+regex = { workspace = true }
+rustc-hash = { workspace = true }
+scc = { workspace = true }
+

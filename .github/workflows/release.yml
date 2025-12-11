@@ -1,0 +1,261 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref_name }}
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  # Public repository for releases (configure via secrets)
+  PUBLIC_REPO: ${{ secrets.PUBLIC_REPO || github.repository }}
+
+jobs:
+  build-tarball-linux:
+    name: build-tarball-${{matrix.name}}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x64
+            target: x86_64-unknown-linux-gnu
+          - name: linux-x64-musl
+            target: x86_64-unknown-linux-musl
+          - name: linux-arm64
+            target: aarch64-unknown-linux-gnu
+          - name: linux-arm64-musl
+            target: aarch64-unknown-linux-musl
+          - name: linux-armv7
+            target: armv7-unknown-linux-gnueabi
+          - name: linux-armv7-musl
+            target: armv7-unknown-linux-musleabi
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cross
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+      - name: cache crates
+        id: cache-crates
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry/cache
+          key: cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: cargo-registry
+      - name: Install UPX
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y upx-ucl
+      - name: build-tarball ${{matrix.target}}
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 45
+          max_attempts: 3
+          command: scripts/build-tarball.sh ${{matrix.target}}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tarball-${{matrix.target}}
+          path: |
+            dist/appz-*.tar.gz
+            dist/appz-*.tar.xz
+          if-no-files-found: error
+
+  build-tarball-macos:
+    name: build-tarball-${{matrix.name}}
+    runs-on: macos-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-x64
+            target: x86_64-apple-darwin
+          - name: macos-arm64
+            target: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+      - name: cache crates
+        id: cache-crates
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry/cache
+          key: cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: cargo-registry
+      - name: Setup Rust target
+        run: rustup target add ${{matrix.target}}
+      - name: Install UPX
+        run: brew install upx
+      - name: build-tarball ${{matrix.target}}
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 45
+          max_attempts: 3
+          command: scripts/build-tarball.sh ${{matrix.target}}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tarball-${{matrix.target}}
+          path: |
+            dist/appz-*.tar.gz
+            dist/appz-*.tar.xz
+          if-no-files-found: error
+
+  build-tarball-windows:
+    name: build-tarball-windows-${{matrix.arch}}
+    runs-on: windows-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            target: aarch64-pc-windows-msvc
+          - arch: x64
+            target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup target add ${{matrix.target}}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{matrix.arch}}
+      - name: Install UPX
+        run: |
+          $upxVersion = "4.2.1"
+          $upxUrl = "https://github.com/upx/upx/releases/download/v${upxVersion}/upx-${upxVersion}-win64.zip"
+          $upxZip = "$env:TEMP\upx.zip"
+          $upxDir = "$env:TEMP\upx"
+          New-Item -ItemType Directory -Force -Path $upxDir | Out-Null
+          Invoke-WebRequest -Uri $upxUrl -OutFile $upxZip
+          Expand-Archive -Path $upxZip -DestinationPath $upxDir -Force
+          $upxExe = Get-ChildItem -Path $upxDir -Recurse -Filter "upx.exe" | Select-Object -First 1
+          Copy-Item $upxExe.FullName -Destination "$env:TEMP\upx.exe"
+          echo "$env:TEMP" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+      - run: scripts/build-tarball.ps1 ${{matrix.target}}
+        env:
+          OS: windows
+          ARCH: ${{matrix.arch}}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tarball-${{matrix.target}}
+          path: dist/*.zip
+          if-no-files-found: error
+
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    needs:
+      - build-tarball-linux
+      - build-tarball-macos
+      - build-tarball-windows
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Get version
+        id: version
+        run: |
+          VERSION=$(scripts/get-version.sh)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Setup zipsign
+        run: ./scripts/setup-zipsign.sh
+        env:
+          ZIPSIGN: ${{ secrets.ZIPSIGN }}
+        continue-on-error: true
+      - name: Prepare release assets
+        run: |
+          mkdir -p releases/${{ env.VERSION }}
+          find artifacts -type f \( -name "*.zip" -o -name "*.tar.gz" -o -name "*.tar.xz" \) -exec cp {} releases/${{ env.VERSION }}/ \;
+      - name: Sign release assets
+        if: secrets.ZIPSIGN != ''
+        run: |
+          cd releases/${{ env.VERSION }}
+          for file in *.tar.gz; do
+            if [ -f "$file" ]; then
+              echo "Signing $file..."
+              zipsign sign tar "$file" ~/.zipsign/appz.priv
+              echo "Verifying $file..."
+              zipsign verify tar "$file" "${{ github.workspace }}/zipsign.pub"
+            fi
+          done
+          for file in *.zip; do
+            if [ -f "$file" ]; then
+              echo "Signing $file..."
+              zipsign sign zip "$file" ~/.zipsign/appz.priv
+              echo "Verifying $file..."
+              zipsign verify zip "$file" "${{ github.workspace }}/zipsign.pub"
+            fi
+          done
+        env:
+          ZIPSIGN: ${{ secrets.ZIPSIGN }}
+        continue-on-error: true
+      - name: Generate checksums
+        run: |
+          cd releases/${{ env.VERSION }}
+          sha256sum ./* >SHASUMS256.txt
+          sha512sum ./* >SHASUMS512.txt
+      - name: Render install.sh
+        run: |
+          export APPZ_VERSION="${{ env.VERSION }}"
+          export RELEASE_DIR="releases"
+          export BASE_DIR="$(pwd)"
+          chmod +x scripts/render-install.sh
+          scripts/render-install.sh >releases/install.sh
+          chmod +x releases/install.sh
+      - name: Render install.ps1
+        run: |
+          export APPZ_VERSION="${{ env.VERSION }}"
+          export RELEASE_DIR="releases"
+          export BASE_DIR="$(pwd)"
+          chmod +x scripts/render-install-ps1.sh
+          scripts/render-install-ps1.sh >releases/install.ps1
+      - name: Generate shell-specific scripts
+        run: |
+          export APPZ_VERSION="${{ env.VERSION }}"
+          export BASE_DIR="$(pwd)"
+          chmod +x scripts/render-appz-run.sh
+          scripts/render-appz-run.sh
+          cp artifacts/appz.run/* releases/${{ env.VERSION }}/ || true
+      - name: Generate release notes
+        run: |
+          # Install git-cliff if not available
+          if ! command -v git-cliff >/dev/null 2>&1; then
+            cargo install git-cliff --locked
+          fi
+          
+          # Generate changelog for this release
+          git cliff --tag "${{ env.VERSION }}" --strip all --latest > /tmp/release-notes.txt || {
+            echo "Release ${{ env.VERSION }}" > /tmp/release-notes.txt
+          }
+      
+      - name: Create GitHub Release
+        run: |
+          # Use public repo token if available, otherwise use default token
+          if [ -n "${{ secrets.PUBLIC_REPO_TOKEN }}" ]; then
+            export GH_TOKEN="${{ secrets.PUBLIC_REPO_TOKEN }}"
+          else
+            export GH_TOKEN="${{ secrets.GITHUB_TOKEN }}"
+          fi
+          
+          gh release create "${{ env.VERSION }}" \
+            --title "${{ env.VERSION }}" \
+            --notes-file /tmp/release-notes.txt \
+            --repo "${{ env.PUBLIC_REPO }}" \
+            releases/${{ env.VERSION }}/* \
+            releases/install.sh \
+            releases/install.ps1
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_REPO_TOKEN || secrets.GITHUB_TOKEN }}
+

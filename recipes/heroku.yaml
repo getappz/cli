@@ -1,0 +1,67 @@
+config:
+  # Heroku app name (required)
+  app_name: ""
+  # Build command
+  build_command: "npm run build"
+  # Start command (for production)
+  start_command: "npm start"
+  # Heroku API key (set via HEROKU_API_KEY env var or config)
+  heroku_api_key: ""
+
+tools:
+  heroku: "latest"
+
+tasks:
+  build:
+    - desc: "Build the project"
+      run_locally: "{{build_command}}"
+
+  deploy:
+    - desc: "Deploy to Heroku"
+      run_locally: "git push heroku main"
+
+  deploy:production:
+    - desc: "Deploy to production on Heroku"
+      run_locally: "git push heroku main"
+
+  heroku:create:
+    - desc: "Create Heroku app"
+      run_locally: "heroku create {{app_name}}"
+
+  heroku:login:
+    - desc: "Login to Heroku"
+      run_locally: "heroku login"
+
+  heroku:env:list:
+    - desc: "List environment variables"
+      run_locally: "heroku config --app {{app_name}}"
+
+  heroku:env:set:
+    - desc: "Set environment variable (set HEROKU_ENV_KEY and HEROKU_ENV_VALUE)"
+      run_locally: "heroku config:set {{HEROKU_ENV_KEY}}={{HEROKU_ENV_VALUE}} --app {{app_name}}"
+
+  heroku:logs:
+    - desc: "View deployment logs"
+      run_locally: "heroku logs --tail --app {{app_name}}"
+
+  heroku:open:
+    - desc: "Open app in browser"
+      run_locally: "heroku open --app {{app_name}}"
+
+  heroku:ps:scale:
+    - desc: "Scale dynos (set HEROKU_DYNOS)"
+      run_locally: "heroku ps:scale web={{HEROKU_DYNOS}} --app {{app_name}}"
+
+  heroku:addons:list:
+    - desc: "List addons"
+      run_locally: "heroku addons --app {{app_name}}"
+
+  heroku:addons:create:
+    - desc: "Create addon (set HEROKU_ADDON_NAME)"
+      run_locally: "heroku addons:create {{HEROKU_ADDON_NAME}} --app {{app_name}}"
+
+before:
+  deploy:
+    - build
+  deploy:production:
+    - build

@@ -1,0 +1,16 @@
+[package]
+name = "ui"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+tabled = "0.15"
+indicatif = "0.17"
+inquire = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+owo-colors = "4.0"
+thiserror = { workspace = true }
+serde = { workspace = true }
+miette = { workspace = true }
+

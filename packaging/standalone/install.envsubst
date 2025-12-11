@@ -1,0 +1,281 @@
+#!/bin/sh
+set -eu
+
+#region logging setup
+if [ "${APPZ_DEBUG-}" = "true" ] || [ "${APPZ_DEBUG-}" = "1" ]; then
+  debug() {
+    echo "$@" >&2
+  }
+else
+  debug() {
+    :
+  }
+fi
+
+if [ "${APPZ_QUIET-}" = "1" ] || [ "${APPZ_QUIET-}" = "true" ]; then
+  info() {
+    :
+  }
+else
+  info() {
+    echo "$@" >&2
+  }
+fi
+
+error() {
+  echo "$@" >&2
+  exit 1
+}
+#endregion
+
+#region environment setup
+get_os() {
+  os="$(uname -s)"
+  if [ "$os" = Darwin ]; then
+    echo "macos"
+  elif [ "$os" = Linux ]; then
+    echo "linux"
+  else
+    error "unsupported OS: $os"
+  fi
+}
+
+get_arch() {
+  musl=""
+  if type ldd >/dev/null 2>/dev/null; then
+    if [ "${APPZ_INSTALL_MUSL-}" = "1" ] || [ "${APPZ_INSTALL_MUSL-}" = "true" ]; then
+      musl="-musl"
+    else
+      libc=$(ldd /bin/ls | grep 'musl' | head -1 | cut -d ' ' -f1)
+      if [ -n "$libc" ]; then
+        musl="-musl"
+      fi
+    fi
+  fi
+  arch="$(uname -m)"
+  if [ "$arch" = x86_64 ]; then
+    echo "x64$musl"
+  elif [ "$arch" = aarch64 ] || [ "$arch" = arm64 ]; then
+    echo "arm64$musl"
+  elif [ "$arch" = armv7l ]; then
+    echo "armv7$musl"
+  else
+    error "unsupported architecture: $arch"
+  fi
+}
+
+get_ext() {
+  if [ -n "${APPZ_INSTALL_EXT:-}" ]; then
+    echo "$APPZ_INSTALL_EXT"
+  elif tar_supports_zstd; then
+    echo "tar.zst"
+  elif command -v zstd >/dev/null 2>&1; then
+    echo "tar.zst"
+  else
+    echo "tar.gz"
+  fi
+}
+
+tar_supports_zstd() {
+  # tar is bsdtar or version is >= 1.31
+  if tar --version | grep -q 'bsdtar' && command -v zstd >/dev/null 2>&1; then
+    true
+  elif tar --version | grep -q '1\.(3[1-9]|[4-9][0-9]'; then
+    true
+  else
+    false
+  fi
+}
+
+shasum_bin() {
+  if command -v shasum >/dev/null 2>&1; then
+    echo "shasum"
+  elif command -v sha256sum >/dev/null 2>&1; then
+    echo "sha256sum"
+  else
+    error "appz install requires shasum or sha256sum but neither is installed. Aborting."
+  fi
+}
+
+get_checksum() {
+  version=$1
+  os=$2
+  arch=$3
+  ext=$4
+  # Update this URL with your actual GitHub repository
+  url="https://github.com/getappz/cli/releases/download/v${version}/SHASUMS256.txt"
+
+  # For current version use static checksum otherwise
+  # use checksum from releases
+  if [ "$version" = "$APPZ_CURRENT_VERSION" ]; then
+    checksum_linux_x86_64="$APPZ_CHECKSUM_LINUX_X86_64"
+    checksum_linux_x86_64_musl="$APPZ_CHECKSUM_LINUX_X86_64_MUSL"
+    checksum_linux_arm64="$APPZ_CHECKSUM_LINUX_ARM64"
+    checksum_linux_arm64_musl="$APPZ_CHECKSUM_LINUX_ARM64_MUSL"
+    checksum_linux_armv7="$APPZ_CHECKSUM_LINUX_ARMV7"
+    checksum_linux_armv7_musl="$APPZ_CHECKSUM_LINUX_ARMV7_MUSL"
+    checksum_macos_x86_64="$APPZ_CHECKSUM_MACOS_X86_64"
+    checksum_macos_arm64="$APPZ_CHECKSUM_MACOS_ARM64"
+    checksum_linux_x86_64_zstd="$APPZ_CHECKSUM_LINUX_X86_64_ZSTD"
+    checksum_linux_x86_64_musl_zstd="$APPZ_CHECKSUM_LINUX_X86_64_MUSL_ZSTD"
+    checksum_linux_arm64_zstd="$APPZ_CHECKSUM_LINUX_ARM64_ZSTD"
+    checksum_linux_arm64_musl_zstd="$APPZ_CHECKSUM_LINUX_ARM64_MUSL_ZSTD"
+    checksum_linux_armv7_zstd="$APPZ_CHECKSUM_LINUX_ARMV7_ZSTD"
+    checksum_linux_armv7_musl_zstd="$APPZ_CHECKSUM_LINUX_ARMV7_MUSL_ZSTD"
+    checksum_macos_x86_64_zstd="$APPZ_CHECKSUM_MACOS_X86_64_ZSTD"
+    checksum_macos_arm64_zstd="$APPZ_CHECKSUM_MACOS_ARM64_ZSTD"
+
+    # TODO: refactor this, it's a bit messy
+    if [ "$ext" = "tar.zst" ]; then
+      if [ "$os" = "linux" ]; then
+        if [ "$arch" = "x64" ]; then
+          echo "$checksum_linux_x86_64_zstd"
+        elif [ "$arch" = "x64-musl" ]; then
+          echo "$checksum_linux_x86_64_musl_zstd"
+        elif [ "$arch" = "arm64" ]; then
+          echo "$checksum_linux_arm64_zstd"
+        elif [ "$arch" = "arm64-musl" ]; then
+          echo "$checksum_linux_arm64_musl_zstd"
+        elif [ "$arch" = "armv7" ]; then
+          echo "$checksum_linux_armv7_zstd"
+        elif [ "$arch" = "armv7-musl" ]; then
+          echo "$checksum_linux_armv7_musl_zstd"
+        else
+          warn "no checksum for $os-$arch"
+        fi
+      elif [ "$os" = "macos" ]; then
+        if [ "$arch" = "x64" ]; then
+          echo "$checksum_macos_x86_64_zstd"
+        elif [ "$arch" = "arm64" ]; then
+          echo "$checksum_macos_arm64_zstd"
+        else
+          warn "no checksum for $os-$arch"
+        fi
+      else
+        warn "no checksum for $os-$arch"
+      fi
+    else
+      if [ "$os" = "linux" ]; then
+        if [ "$arch" = "x64" ]; then
+          echo "$checksum_linux_x86_64"
+        elif [ "$arch" = "x64-musl" ]; then
+          echo "$checksum_linux_x86_64_musl"
+        elif [ "$arch" = "arm64" ]; then
+          echo "$checksum_linux_arm64"
+        elif [ "$arch" = "arm64-musl" ]; then
+          echo "$checksum_linux_arm64_musl"
+        elif [ "$arch" = "armv7" ]; then
+          echo "$checksum_linux_armv7"
+        elif [ "$arch" = "armv7-musl" ]; then
+          echo "$checksum_linux_armv7_musl"
+        else
+          warn "no checksum for $os-$arch"
+        fi
+      elif [ "$os" = "macos" ]; then
+        if [ "$arch" = "x64" ]; then
+          echo "$checksum_macos_x86_64"
+        elif [ "$arch" = "arm64" ]; then
+          echo "$checksum_macos_arm64"
+        else
+          warn "no checksum for $os-$arch"
+        fi
+      else
+        warn "no checksum for $os-$arch"
+      fi
+    fi
+  else
+    if command -v curl >/dev/null 2>&1; then
+      debug ">" curl -fsSL "$url"
+      checksums="$(curl --compressed -fsSL "$url")"
+    else
+      if command -v wget >/dev/null 2>&1; then
+        debug ">" wget -qO - "$url"
+        stderr=$(mktemp)
+        checksums="$(wget -qO - "$url")"
+      else
+        error "appz standalone install specific version requires curl or wget but neither is installed. Aborting."
+      fi
+    fi
+    # TODO: verify with minisign or gpg if available
+
+    checksum="$(echo "$checksums" | grep "$os-$arch.$ext")"
+    if ! echo "$checksum" | grep -Eq "^([0-9a-f]{32}|[0-9a-f]{64})"; then
+      warn "no checksum for appz $version and $os-$arch"
+    else
+      echo "$checksum"
+    fi
+  fi
+}
+
+#endregion
+
+download_file() {
+  url="$1"
+  filename="$(basename "$url")"
+  cache_dir="$(mktemp -d)"
+  file="$cache_dir/$filename"
+
+  info "appz: installing appz..."
+
+  if command -v curl >/dev/null 2>&1; then
+    debug ">" curl -#fLo "$file" "$url"
+    curl -#fLo "$file" "$url"
+  else
+    if command -v wget >/dev/null 2>&1; then
+      debug ">" wget -qO "$file" "$url"
+      stderr=$(mktemp)
+      wget -O "$file" "$url" >"$stderr" 2>&1 || error "wget failed: $(cat "$stderr")"
+    else
+      error "appz standalone install requires curl or wget but neither is installed. Aborting."
+    fi
+  fi
+
+  echo "$file"
+}
+
+install_appz() {
+  version="${APPZ_VERSION:-$APPZ_CURRENT_VERSION}"
+  version="${version#v}"
+  os="${APPZ_INSTALL_OS:-$(get_os)}"
+  arch="${APPZ_INSTALL_ARCH:-$(get_arch)}"
+  ext="${APPZ_INSTALL_EXT:-$(get_ext)}"
+  install_path="${APPZ_INSTALL_PATH:-$HOME/.local/bin/appz}"
+  install_dir="$(dirname "$install_path")"
+  install_from_github="${APPZ_INSTALL_FROM_GITHUB:-}"
+  if [ "$version" != "$APPZ_CURRENT_VERSION" ] || [ "$install_from_github" = "1" ] || [ "$install_from_github" = "true" ]; then
+    # Update this URL with your actual GitHub repository
+    tarball_url="https://github.com/getappz/cli/releases/download/v${version}/appz-${version}-${os}-${arch}.${ext}"
+  elif [ -n "${APPZ_TARBALL_URL-}" ]; then
+    tarball_url="$APPZ_TARBALL_URL"
+  else
+    tarball_url="https://get.appz.dev/v${version}/appz-${version}-${os}-${arch}.${ext}"
+  fi
+
+  cache_file=$(download_file "$tarball_url")
+  debug "appz-setup: tarball=$cache_file"
+
+  debug "validating checksum"
+  cd "$(dirname "$cache_file")" && get_checksum "$version" "$os" "$arch" "$ext" | "$(shasum_bin)" -c >/dev/null
+
+  # extract tarball
+  mkdir -p "$install_dir"
+  rm -rf "$install_path"
+  cd "$(mktemp -d)"
+  if [ "$ext" = "tar.zst" ] && ! tar_supports_zstd; then
+    zstd -d -c "$cache_file" | tar -xf -
+  else
+    tar -xf "$cache_file"
+  fi
+  mv appz/bin/appz "$install_path"
+  info "appz: installed successfully to $install_path"
+}
+
+after_finish_help() {
+  info "appz: run \`$install_path --help\` to get started"
+}
+
+install_appz
+if [ "${APPZ_INSTALL_HELP-}" != 0 ]; then
+  after_finish_help
+fi
+

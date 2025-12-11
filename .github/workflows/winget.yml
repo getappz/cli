@@ -1,0 +1,26 @@
+name: winget
+on:
+  release:
+    types: [released]
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: yourusername/winget-pkgs
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+      - run: git config user.name appz-release-bot
+      - run: git config user.email noreply@example.com
+      - run: git remote add microsoft https://github.com/microsoft/winget-pkgs
+      - run: git pull --rebase microsoft master
+      - run: git push -f origin master
+      - uses: vedantmgoyal9/winget-releaser@main
+        with:
+          identifier: Appz.appz
+          max-versions-to-keep: 5
+          token: ${{ secrets.GITHUB_TOKEN }}
+

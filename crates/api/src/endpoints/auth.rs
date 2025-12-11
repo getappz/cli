@@ -84,7 +84,8 @@ impl<'a> Auth<'a> {
         }
 
         // Fetch from server
-        let metadata: AuthorizationServerMetadata = self.client.get("/.well-known/openid-configuration").await?;
+        let metadata: AuthorizationServerMetadata =
+            self.client.get("/.well-known/openid-configuration").await?;
 
         // Update cache
         {
@@ -102,10 +103,7 @@ impl<'a> Auth<'a> {
         client_id: &str,
     ) -> Result<DeviceAuthorizationResponse, ApiError> {
         let metadata = self.discovery().await?;
-        let form_data = [
-            ("client_id", client_id),
-            ("scope", "openid offline_access"),
-        ];
+        let form_data = [("client_id", client_id), ("scope", "openid offline_access")];
 
         self.client
             .post_form(&metadata.device_authorization_endpoint, &form_data)
@@ -125,23 +123,29 @@ impl<'a> Auth<'a> {
         // Make request directly to handle OAuth errors properly
         let response = self
             .client
-            .post_form_raw(&url, &[
-                ("client_id", client_id),
-                ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
-                ("device_code", device_code),
-            ])
+            .post_form_raw(
+                url,
+                &[
+                    ("client_id", client_id),
+                    ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+                    ("device_code", device_code),
+                ],
+            )
             .await?;
 
         let status = response.status();
-        let text = response.text().await.map_err(|e| ApiError::HttpMiddleware(e.to_string()))?;
+        let text = response
+            .text()
+            .await
+            .map_err(|e| ApiError::HttpMiddleware(e.to_string()))?;
 
         if status.is_success() {
             let token_set: TokenSet = serde_json::from_str(&text).map_err(ApiError::Json)?;
             Ok(Ok(token_set))
         } else {
             // Parse OAuth error
-            let oauth_error: crate::models::OAuthErrorResponse =
-                serde_json::from_str(&text).unwrap_or_else(|_| crate::models::OAuthErrorResponse {
+            let oauth_error: crate::models::OAuthErrorResponse = serde_json::from_str(&text)
+                .unwrap_or_else(|_| crate::models::OAuthErrorResponse {
                     error: "unknown_error".to_string(),
                     error_description: Some(text.clone()),
                     error_uri: None,
@@ -204,10 +208,10 @@ impl<'a> Auth<'a> {
         let metadata = self.discovery().await?;
         let response = self
             .client
-            .post_form_raw(&metadata.revocation_endpoint, &[
-                ("token", token),
-                ("client_id", client_id),
-            ])
+            .post_form_raw(
+                &metadata.revocation_endpoint,
+                &[("token", token), ("client_id", client_id)],
+            )
             .await?;
 
         if response.status().is_success() {

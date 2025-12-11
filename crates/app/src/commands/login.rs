@@ -17,8 +17,8 @@ use ui::status;
 #[instrument(skip_all)]
 pub async fn login(_session: AppzSession) -> AppResult {
     // Create a temporary unauthenticated client for login
-    let client = Client::new()
-        .map_err(|e| miette::miette!("Failed to create API client: {}", e))?;
+    let client =
+        Client::new().map_err(|e| miette::miette!("Failed to create API client: {}", e))?;
 
     // Check if user is already logged in
     if let Ok(auth_config) = auth::load_auth() {
@@ -37,10 +37,6 @@ pub async fn login(_session: AppzSession) -> AppResult {
             println!("To deploy something, run `appz ls` to see your deployments.");
             Ok(None)
         }
-        Err(e) => {
-            Err(miette::miette!("Login failed: {}", e))
-        }
+        Err(e) => Err(miette::miette!("Login failed: {}", e)),
     }
 }
-
-

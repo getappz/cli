@@ -319,35 +319,34 @@ impl TaskExecutor {
             }
 
             // Check source/output tracking (skip if sources haven't changed)
-            if !this_clone.force
-                && (!task_sources.is_empty() || !task_outputs.is_empty()) {
-                    let tracker = this_clone.source_tracker.lock().await;
-                    match tracker.should_skip_task(&task_name_clone, &task_sources, &task_outputs) {
-                        Ok(true) => {
-                            // Task should be skipped - sources are up-to-date
-                            if this_clone.verbose {
-                                println!("⊘ {} (skipped - sources unchanged)", task_name_clone);
-                            }
-                            let mut states = this_clone.task_states.lock().await;
-                            states.insert(task_name_clone.clone(), TaskState::Skipped);
-                            deps_for_remove.lock().await.remove(&task_name_clone);
-                            in_flight_c.fetch_sub(1, Ordering::SeqCst);
-                            return Ok(());
+            if !this_clone.force && (!task_sources.is_empty() || !task_outputs.is_empty()) {
+                let tracker = this_clone.source_tracker.lock().await;
+                match tracker.should_skip_task(&task_name_clone, &task_sources, &task_outputs) {
+                    Ok(true) => {
+                        // Task should be skipped - sources are up-to-date
+                        if this_clone.verbose {
+                            println!("⊘ {} (skipped - sources unchanged)", task_name_clone);
                         }
-                        Ok(false) => {
-                            // Task should run - sources changed or outputs missing
-                        }
-                        Err(e) => {
-                            // Error checking sources/outputs - log and run anyway
-                            if this_clone.verbose {
-                                eprintln!(
-                                    "Warning: Failed to check sources/outputs for {}: {}",
-                                    task_name_clone, e
-                                );
-                            }
+                        let mut states = this_clone.task_states.lock().await;
+                        states.insert(task_name_clone.clone(), TaskState::Skipped);
+                        deps_for_remove.lock().await.remove(&task_name_clone);
+                        in_flight_c.fetch_sub(1, Ordering::SeqCst);
+                        return Ok(());
+                    }
+                    Ok(false) => {
+                        // Task should run - sources changed or outputs missing
+                    }
+                    Err(e) => {
+                        // Error checking sources/outputs - log and run anyway
+                        if this_clone.verbose {
+                            eprintln!(
+                                "Warning: Failed to check sources/outputs for {}: {}",
+                                task_name_clone, e
+                            );
                         }
                     }
                 }
+            }
 
             // Note: confirm is handled in the task action wrapper (in app crate)
             // This follows mise's pattern but keeps ui dependency in app layer

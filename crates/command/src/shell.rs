@@ -35,7 +35,7 @@ impl ShellType {
                     return ShellType::Bash;
                 }
             }
-            return ShellType::Sh;
+            ShellType::Sh
         }
     }
 

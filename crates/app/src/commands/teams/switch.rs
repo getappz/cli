@@ -49,4 +49,3 @@ pub async fn switch(session: AppzSession, team: String) -> AppResult {
 
     Ok(None)
 }
-

@@ -72,9 +72,8 @@ fn format_reqwest_error(err: reqwest_middleware::reqwest::Error, url: &str) -> S
 
 /// Callback function type for handling unauthorized errors
 /// Returns a new authentication token on success
-pub type UnauthorizedCallback = Arc<
-    dyn Fn() -> Pin<Box<dyn Future<Output = Result<String, ApiError>> + Send>> + Send + Sync,
->;
+pub type UnauthorizedCallback =
+    Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<String, ApiError>> + Send>> + Send + Sync>;
 
 pub struct Client {
     http_client: ClientWithMiddleware,
@@ -88,8 +87,8 @@ impl Client {
     /// Create a new API client with default base URL
     /// Checks for APPZ_API_URL environment variable, falls back to DEFAULT_BASE_URL
     pub fn new() -> Result<Self, ApiError> {
-        let base_url = std::env::var("APPZ_API_URL")
-            .unwrap_or_else(|_| DEFAULT_BASE_URL.to_string());
+        let base_url =
+            std::env::var("APPZ_API_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.to_string());
         Self::with_base_url(base_url)
     }
 
@@ -193,10 +192,7 @@ impl Client {
     /// Set a callback to be invoked when an Unauthorized error is encountered
     /// The callback should return a new authentication token
     #[tracing::instrument(skip(self, callback))]
-    pub async fn set_unauthorized_handler(
-        &self,
-        callback: UnauthorizedCallback,
-    ) {
+    pub async fn set_unauthorized_handler(&self, callback: UnauthorizedCallback) {
         *self.on_unauthorized.write().await = Some(callback);
     }
 
@@ -219,7 +215,7 @@ impl Client {
     async fn refresh_token_on_unauthorized(&self) -> Result<String, ApiError> {
         // Check if we have a callback handler
         let callback = self.on_unauthorized.read().await.clone();
-        
+
         if let Some(ref callback_fn) = callback {
             // Call the callback to get a new token
             callback_fn().await
@@ -232,13 +228,13 @@ impl Client {
     }
 
     /// Execute a request with automatic retry on Unauthorized errors
-    /// 
+    ///
     /// This method handles:
     /// 1. Sending the request
     /// 2. Detecting Unauthorized errors
     /// 3. Refreshing the token via callback
     /// 4. Retrying the request once
-    /// 
+    ///
     /// The `build_request` closure should build a request builder that can be called multiple times
     async fn execute_with_auth_retry(
         &self,
@@ -246,44 +242,38 @@ impl Client {
         build_request: impl Fn() -> reqwest_middleware::RequestBuilder,
     ) -> Result<reqwest_middleware::reqwest::Response, ApiError> {
         // First attempt
-        let mut response = build_request()
-            .send()
-            .await
-            .map_err(|e| match e {
-                reqwest_middleware::Error::Reqwest(err) => {
-                    ApiError::HttpMiddleware(format_reqwest_error(err, url))
-                }
-                reqwest_middleware::Error::Middleware(err) => ApiError::Middleware(err.to_string()),
-            })?;
+        let mut response = build_request().send().await.map_err(|e| match e {
+            reqwest_middleware::Error::Reqwest(err) => {
+                ApiError::HttpMiddleware(format_reqwest_error(err, url))
+            }
+            reqwest_middleware::Error::Middleware(err) => ApiError::Middleware(err.to_string()),
+        })?;
 
         // Check for Unauthorized and retry if callback is set
         if response.status() == StatusCode::UNAUTHORIZED {
             // Consume the error response
             let _ = response.text().await;
-            
+
             // Refresh token
             match self.refresh_token_on_unauthorized().await {
                 Ok(new_token) => {
                     // Update token
                     self.set_token(new_token).await;
-                    
+
                     // Retry the request
-                    response = build_request()
-                        .send()
-                        .await
-                        .map_err(|e| match e {
-                            reqwest_middleware::Error::Reqwest(err) => {
-                                ApiError::HttpMiddleware(format_reqwest_error(err, url))
-                            }
-                            reqwest_middleware::Error::Middleware(err) => {
-                                ApiError::Middleware(err.to_string())
-                            }
-                        })?;
+                    response = build_request().send().await.map_err(|e| match e {
+                        reqwest_middleware::Error::Reqwest(err) => {
+                            ApiError::HttpMiddleware(format_reqwest_error(err, url))
+                        }
+                        reqwest_middleware::Error::Middleware(err) => {
+                            ApiError::Middleware(err.to_string())
+                        }
+                    })?;
                 }
                 Err(e) => return Err(e),
             }
         }
-        
+
         Ok(response)
     }
 
@@ -291,11 +281,11 @@ impl Client {
     #[tracing::instrument(skip(self))]
     pub async fn get<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, ApiError> {
         let url = format!("{}{}", self.base_url, path);
-        
-        let response = self.execute_with_auth_retry(&url, || {
-            self.http_client.request(Method::GET, &url)
-        }).await?;
-        
+
+        let response = self
+            .execute_with_auth_retry(&url, || self.http_client.request(Method::GET, &url))
+            .await?;
+
         self.handle_response(response).await
     }
 
@@ -307,24 +297,26 @@ impl Client {
         body: Option<impl serde::Serialize>,
     ) -> Result<T, ApiError> {
         let url = format!("{}{}", self.base_url, path);
-        
+
         // Prepare request body
         let json_body = if let Some(ref body) = body {
             Some(serde_json::to_string(body).map_err(ApiError::Json)?)
         } else {
             None
         };
-        
-        let response = self.execute_with_auth_retry(&url, || {
-            let mut req_builder = self.http_client.request(Method::POST, &url);
-            if let Some(ref json_body) = json_body {
-                req_builder = req_builder
-                    .header("Content-Type", "application/json")
-                    .body(json_body.clone());
-            }
-            req_builder
-        }).await?;
-        
+
+        let response = self
+            .execute_with_auth_retry(&url, || {
+                let mut req_builder = self.http_client.request(Method::POST, &url);
+                if let Some(ref json_body) = json_body {
+                    req_builder = req_builder
+                        .header("Content-Type", "application/json")
+                        .body(json_body.clone());
+                }
+                req_builder
+            })
+            .await?;
+
         self.handle_response(response).await
     }
 
@@ -336,24 +328,26 @@ impl Client {
         body: Option<impl serde::Serialize>,
     ) -> Result<T, ApiError> {
         let url = format!("{}{}", self.base_url, path);
-        
+
         // Prepare request body
         let json_body = if let Some(ref body) = body {
             Some(serde_json::to_string(body).map_err(ApiError::Json)?)
         } else {
             None
         };
-        
-        let response = self.execute_with_auth_retry(&url, || {
-            let mut req_builder = self.http_client.request(Method::PATCH, &url);
-            if let Some(ref json_body) = json_body {
-                req_builder = req_builder
-                    .header("Content-Type", "application/json")
-                    .body(json_body.clone());
-            }
-            req_builder
-        }).await?;
-        
+
+        let response = self
+            .execute_with_auth_retry(&url, || {
+                let mut req_builder = self.http_client.request(Method::PATCH, &url);
+                if let Some(ref json_body) = json_body {
+                    req_builder = req_builder
+                        .header("Content-Type", "application/json")
+                        .body(json_body.clone());
+                }
+                req_builder
+            })
+            .await?;
+
         self.handle_response(response).await
     }
 
@@ -361,11 +355,11 @@ impl Client {
     #[tracing::instrument(skip(self))]
     pub async fn delete<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, ApiError> {
         let url = format!("{}{}", self.base_url, path);
-        
-        let response = self.execute_with_auth_retry(&url, || {
-            self.http_client.request(Method::DELETE, &url)
-        }).await?;
-        
+
+        let response = self
+            .execute_with_auth_retry(&url, || self.http_client.request(Method::DELETE, &url))
+            .await?;
+
         let status = response.status();
 
         // Handle 204 No Content specially
@@ -382,11 +376,11 @@ impl Client {
     #[tracing::instrument(skip(self))]
     pub async fn delete_no_content(&self, path: &str) -> Result<(), ApiError> {
         let url = format!("{}{}", self.base_url, path);
-        
-        let response = self.execute_with_auth_retry(&url, || {
-            self.http_client.request(Method::DELETE, &url)
-        }).await?;
-        
+
+        let response = self
+            .execute_with_auth_retry(&url, || self.http_client.request(Method::DELETE, &url))
+            .await?;
+
         let status = response.status();
 
         if status.is_success() {
@@ -444,10 +438,10 @@ impl Client {
             format!("{}{}", self.base_url, path)
         };
 
-        let response = self.execute_with_auth_retry(&url, || {
-            self.http_client.request(Method::GET, &url)
-        }).await?;
-        
+        let response = self
+            .execute_with_auth_retry(&url, || self.http_client.request(Method::GET, &url))
+            .await?;
+
         self.handle_response(response).await
     }
 

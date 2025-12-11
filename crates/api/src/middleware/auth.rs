@@ -16,25 +16,29 @@ pub(crate) fn requires_auth(path: &str) -> bool {
         "/auth/introspect",
         "/auth/revoke",
         "/oauth/device-authorization", // OAuth 2.0 Device Authorization Flow endpoint
-        "/oauth/token", // OAuth 2.0 Token endpoint (for device code exchange)
-        "/oauth/authorize", // OAuth 2.0 Authorization endpoint
-        "/oauth/register", // OAuth 2.0 Dynamic Client Registration
-        "/.well-known", // OpenID Connect Discovery and JWKS
+        "/oauth/token",                // OAuth 2.0 Token endpoint (for device code exchange)
+        "/oauth/authorize",            // OAuth 2.0 Authorization endpoint
+        "/oauth/register",             // OAuth 2.0 Dynamic Client Registration
+        "/.well-known",                // OpenID Connect Discovery and JWKS
     ];
 
     // Check if the path starts with any public path
-    let is_public = public_paths
-        .iter()
-        .any(|public_path| {
-            let matches = path.starts_with(public_path);
-            if matches {
-                eprintln!("[DEBUG] Path '{}' matches public endpoint '{}'", path, public_path);
-            }
-            matches
-        });
-    
+    let is_public = public_paths.iter().any(|public_path| {
+        let matches = path.starts_with(public_path);
+        if matches {
+            eprintln!(
+                "[DEBUG] Path '{}' matches public endpoint '{}'",
+                path, public_path
+            );
+        }
+        matches
+    });
+
     let requires = !is_public;
-    eprintln!("[DEBUG] Path: '{}', is_public: {}, requires_auth: {}", path, is_public, requires);
+    eprintln!(
+        "[DEBUG] Path: '{}', is_public: {}, requires_auth: {}",
+        path, is_public, requires
+    );
     requires
 }
 
@@ -62,20 +66,18 @@ impl Middleware for AuthenticationMiddleware {
         // Check if this endpoint requires authentication
         let url = req.url();
         let path = url.path();
-        
+
         // Force output immediately - these should always appear
-        let _ = std::io::stderr().write_all(
-            format!("[AUTH MIDDLEWARE] URL: {}, Path: '{}'\n", url, path).as_bytes()
-        );
+        let _ = std::io::stderr()
+            .write_all(format!("[AUTH MIDDLEWARE] URL: {}, Path: '{}'\n", url, path).as_bytes());
         let _ = std::io::stderr().flush();
-        
+
         let needs_auth = requires_auth(path);
-        
-        let _ = std::io::stderr().write_all(
-            format!("[AUTH MIDDLEWARE] needs_auth: {}\n", needs_auth).as_bytes()
-        );
+
+        let _ = std::io::stderr()
+            .write_all(format!("[AUTH MIDDLEWARE] needs_auth: {}\n", needs_auth).as_bytes());
         let _ = std::io::stderr().flush();
-        
+
         // Also ensure tracing can see this
         tracing::debug!(url = %url, path = %path, needs_auth = needs_auth, "Auth middleware check");
         tracing::debug!(path = %path, needs_auth = needs_auth, "Checking authentication requirement");
@@ -125,7 +127,7 @@ mod tests {
         // Well-known endpoints should be public
         assert!(!requires_auth("/.well-known/openid-configuration"));
         assert!(!requires_auth("/.well-known/jwks.json"));
-        
+
         // Auth endpoints should be public
         assert!(!requires_auth("/auth/signin"));
         assert!(!requires_auth("/auth/verify"));
@@ -133,7 +135,7 @@ mod tests {
         assert!(!requires_auth("/auth/token"));
         assert!(!requires_auth("/auth/introspect"));
         assert!(!requires_auth("/auth/revoke"));
-        
+
         // OAuth endpoints should be public
         assert!(!requires_auth("/oauth/device-authorization"));
         assert!(!requires_auth("/oauth/token"));

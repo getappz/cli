@@ -5,7 +5,7 @@ use crate::importer;
 use crate::project::ProjectContext;
 use crate::recipe;
 use crate::wasm;
-use api::{Client, error::ApiError as ApiErrorType};
+use api::{error::ApiError as ApiErrorType, Client};
 use async_trait::async_trait;
 use starbase::{AppResult, AppSession};
 use std::path::PathBuf;
@@ -121,38 +121,42 @@ impl AppSession for AppzSession {
 
         // Wrap client in Arc for sharing
         let client_arc = Arc::new(client);
-        
+
         // Set up unauthorized callback for automatic login
         // This will be called when API requests return Unauthorized errors
         let client_for_callback = Arc::clone(&client_arc);
-        client_arc.set_unauthorized_handler(Arc::new(move || {
-            let client_for_login = Arc::clone(&client_for_callback);
-            Box::pin(async move {
-                use ui::status;
-                
-                // Show user-friendly message
-                let _ = status::info("Session expired, logging in...");
-                
-                // Create a temporary unauthenticated client for login
-                let temp_client = api::Client::new()
-                    .map_err(|e| ApiErrorType::Middleware(format!("Failed to create API client: {}", e)))?;
-                
-                // Run device flow login
-                let token = auth::device_flow_login(&temp_client)
-                    .await
-                    .map_err(|e| ApiErrorType::Unauthorized(format!("Login failed: {}", e)))?;
-                
-                // Save token to auth.json
-                let auth_config = auth::AuthConfig::with_token(token.clone());
-                auth::save_auth(&auth_config)
-                    .map_err(|e| ApiErrorType::Middleware(format!("Failed to save authentication: {}", e)))?;
-                
-                // Update the client with the new token
-                client_for_login.set_token(token.clone()).await;
-                
-                Ok(token)
-            })
-        })).await;
+        client_arc
+            .set_unauthorized_handler(Arc::new(move || {
+                let client_for_login = Arc::clone(&client_for_callback);
+                Box::pin(async move {
+                    use ui::status;
+
+                    // Show user-friendly message
+                    let _ = status::info("Session expired, logging in...");
+
+                    // Create a temporary unauthenticated client for login
+                    let temp_client = api::Client::new().map_err(|e| {
+                        ApiErrorType::Middleware(format!("Failed to create API client: {}", e))
+                    })?;
+
+                    // Run device flow login
+                    let token = auth::device_flow_login(&temp_client)
+                        .await
+                        .map_err(|e| ApiErrorType::Unauthorized(format!("Login failed: {}", e)))?;
+
+                    // Save token to auth.json
+                    let auth_config = auth::AuthConfig::with_token(token.clone());
+                    auth::save_auth(&auth_config).map_err(|e| {
+                        ApiErrorType::Middleware(format!("Failed to save authentication: {}", e))
+                    })?;
+
+                    // Update the client with the new token
+                    client_for_login.set_token(token.clone()).await;
+
+                    Ok(token)
+                })
+            }))
+            .await;
 
         // Store client in session (may be authenticated or unauthenticated)
         let _ = self.api_client.set(client_arc);

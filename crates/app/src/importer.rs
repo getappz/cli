@@ -9,10 +9,10 @@ use std::{
 use walkdir::WalkDir;
 
 use crate::host::HostRegistry;
-use crate::shell::{copy_path_recursive, run_local_with, RunOptions, test_local};
+use crate::shell::{copy_path_recursive, run_local_with, test_local, RunOptions};
 use crate::ssh::{RemoteRunOptions, SshClient};
-use task::{Task, TaskRegistry, types::AsyncTaskFn, Context};
 use std::sync::Arc;
+use task::{types::AsyncTaskFn, Context, Task, TaskRegistry};
 use ui::prompt;
 
 #[derive(Deserialize, Debug)]
@@ -477,36 +477,32 @@ fn test_command(ctx: &Context, cmd: &str) -> bool {
 /// Check if non-interactive mode is enabled (following mise pattern)
 /// Checks environment variables and TTY status
 fn is_non_interactive_mode() -> bool {
-    std::env::var("APPZ_YES").is_ok() 
+    std::env::var("APPZ_YES").is_ok()
         || std::env::var("APPZ_NO_INPUT").is_ok()
         || !atty::is(atty::Stream::Stdin)
 }
 
 /// Wrap a task with prompt handling (confirm and ask)
-fn wrap_task_with_prompts(
-    task: Task,
-    confirm: Option<String>,
-    ask: Option<AskConfig>,
-) -> Task {
+fn wrap_task_with_prompts(task: Task, confirm: Option<String>, ask: Option<AskConfig>) -> Task {
     let original_action = task.action.clone();
     let task_name = task.name.clone();
     let confirm_msg = confirm.clone();
     let ask_config = ask.clone();
-    
+
     let wrapped_action: AsyncTaskFn = Arc::new(move |ctx: Arc<Context>| {
         let confirm_msg = confirm_msg.clone();
         let ask_config = ask_config.clone();
         let task_name = task_name.clone();
         let original_action = original_action.clone();
-        
+
         Box::pin(async move {
             let is_non_interactive = is_non_interactive_mode();
-            
+
             // Handle ask prompt first (before confirm)
             if let Some(ref ask_cfg) = ask_config {
                 let var_name = &ask_cfg.var;
                 let message = ctx.parse(&ask_cfg.message);
-                
+
                 let value = if is_non_interactive {
                     // Use default value or empty string in non-interactive mode
                     ask_cfg.default.as_deref().unwrap_or("").to_string()
@@ -518,21 +514,21 @@ fn wrap_task_with_prompts(
                     } else if let Some(ref choices) = ask_cfg.choices {
                         // Choice selection
                         let choices_refs: Vec<&str> = choices.iter().map(|s| s.as_str()).collect();
-                        let default_idx = ask_cfg.default.as_ref().and_then(|d| {
-                            choices.iter().position(|c| c == d)
-                        });
-                        prompt::choose(&message, &choices_refs, default_idx)
-                            .map(|s| s.to_string())
+                        let default_idx = ask_cfg
+                            .default
+                            .as_ref()
+                            .and_then(|d| choices.iter().position(|c| c == d));
+                        prompt::choose(&message, &choices_refs, default_idx).map(|s| s.to_string())
                     } else {
                         // Text input
                         prompt::prompt(&message, ask_cfg.default.as_deref())
                     };
-                    
+
                     result.map_err(|e| miette!("Prompt failed for task '{}': {}", task_name, e))?
                 };
                 ctx.set(var_name, &value);
             }
-            
+
             // Handle confirm prompt (following mise pattern - check right before execution)
             if let Some(ref confirm_msg) = confirm_msg {
                 if !is_non_interactive {
@@ -546,18 +542,22 @@ fn wrap_task_with_prompts(
                             return Err(miette!("aborted by user"));
                         }
                         Err(e) => {
-                            return Err(miette!("Confirmation failed for task '{}': {}", task_name, e));
+                            return Err(miette!(
+                                "Confirmation failed for task '{}': {}",
+                                task_name,
+                                e
+                            ));
                         }
                     }
                 }
                 // In non-interactive mode, skip confirmation (default to yes, like mise)
             }
-            
+
             // Execute original task action
             original_action(ctx).await
         })
     });
-    
+
     // Create new task with wrapped action, preserving all other task properties
     let mut new_task = task.clone();
     new_task.action = wrapped_action;
@@ -895,7 +895,7 @@ pub fn import_file<P: AsRef<Path> + std::fmt::Debug>(
         let ask = def_with_metadata.ask.clone();
         let only_if = def_with_metadata.only_if.clone();
         let unless = def_with_metadata.unless.clone();
-        
+
         let task = match def_with_metadata.task_def {
             TaskDef::Deps(deps) => {
                 let mut t = Task::new(
@@ -1002,30 +1002,28 @@ pub fn import_file<P: AsRef<Path> + std::fmt::Debug>(
                 has_hosts,
             ),
         };
-        
+
         // Apply metadata: conditions, prompts, confirmations
         let mut final_task = task;
-        
+
         // Add conditional execution (only_if/unless) if specified
         if let Some(ref cmd) = only_if {
             let cmd_clone = cmd.clone();
-            final_task = final_task.only_if(move |ctx: &task::Context| {
-                test_command(ctx, &cmd_clone)
-            });
+            final_task =
+                final_task.only_if(move |ctx: &task::Context| test_command(ctx, &cmd_clone));
         }
         if let Some(ref cmd) = unless {
             let cmd_clone = cmd.clone();
-            final_task = final_task.unless(move |ctx: &task::Context| {
-                test_command(ctx, &cmd_clone)
-            });
+            final_task =
+                final_task.unless(move |ctx: &task::Context| test_command(ctx, &cmd_clone));
         }
-        
+
         // Handle confirm and ask prompts via wrapping (following mise pattern)
         // Confirm is checked right before task execution, ask stores values in context
         if confirm.is_some() || ask.is_some() {
             final_task = wrap_task_with_prompts(final_task, confirm, ask);
         }
-        
+
         reg.register(final_task);
     }
 

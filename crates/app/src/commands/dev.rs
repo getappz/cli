@@ -1,6 +1,6 @@
 use crate::detectors::{detect_framework_record, DetectFrameworkRecordOptions, StdFilesystem};
 use crate::session::AppzSession;
-use crate::shell::{is_shell_script, run_local_with, RunOptions};
+use crate::shell::{run_local_with, RunOptions};
 use crate::tunnel::{CloudflaredTunnel, TunnelService};
 use frameworks::frameworks;
 use starbase::AppResult;

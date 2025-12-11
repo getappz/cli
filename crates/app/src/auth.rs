@@ -246,7 +246,7 @@ pub fn requires_auth(command: &crate::app::Commands) -> bool {
 }
 
 /// Get OAuth 2.0 Device Flow client ID from environment variable or use default
-/// 
+///
 /// Priority:
 /// 1. OAUTH_CLI_CLIENT_ID environment variable
 /// 2. Default: cl_appz_cli_550e8400e29b41d4a716446655440000
@@ -260,8 +260,8 @@ pub async fn device_flow_login(client: &Client) -> Result<String> {
     use api::OAuthPollError;
     use std::time::Duration;
     use tokio::time::sleep;
-    use ui::status;
     use ui::prompt;
+    use ui::status;
 
     // Step 1: Request device authorization
     let client_id = get_cli_client_id();
@@ -289,7 +289,7 @@ pub async fn device_flow_login(client: &Client) -> Result<String> {
     println!("Visit {}", verification_uri_complete);
     println!("and enter code: {}", user_code);
     println!();
-    
+
     // Prompt user to press ENTER to open browser
     let _ = prompt::prompt("Press [ENTER] to open the browser", Some(""));
 
@@ -375,7 +375,7 @@ pub async fn device_flow_login(client: &Client) -> Result<String> {
                             MAX_CONSECUTIVE_ERRORS
                         ));
                     }
-                    
+
                     // Log warning but continue polling
                     tracing::warn!(
                         "Network error during polling (attempt {}/{}): {}. Retrying...",
@@ -383,16 +383,18 @@ pub async fn device_flow_login(client: &Client) -> Result<String> {
                         MAX_CONSECUTIVE_ERRORS,
                         e
                     );
-                    
+
                     // Wait a bit longer on network errors before retrying
-                    sleep(Duration::from_millis((poll_interval_ms + 2000).max(0) as u64)).await;
+                    sleep(Duration::from_millis(
+                        (poll_interval_ms + 2000).max(0) as u64
+                    ))
+                    .await;
                     continue;
                 } else {
                     // Fatal error (not a network issue)
-                return Err(miette::miette!("Failed to get token: {}", e));
+                    return Err(miette::miette!("Failed to get token: {}", e));
+                }
             }
         }
     }
 }
-}
-

@@ -38,7 +38,7 @@ pub use logout::logout;
 pub use ls::ls;
 pub use plan::plan;
 pub use preview::preview;
-pub use projects::{run as projects_run, resolve_project_id, ProjectsCommands};
+pub use projects::{resolve_project_id, run as projects_run, ProjectsCommands};
 pub use promote::{promote, status as promote_status};
 pub use recipe_validate::recipe_validate;
 pub use remove::remove;
@@ -49,6 +49,6 @@ pub use self_upgrade::{append_self_update_instructions, upgrade_instructions_tex
 #[cfg(feature = "self_update")]
 pub use self_upgrade::{append_self_update_instructions, upgrade_instructions_text, SelfUpdate};
 pub use switch::switch;
-pub use teams::{run as teams_run, resolve_team_id, TeamsCommands};
+pub use teams::{resolve_team_id, run as teams_run, TeamsCommands};
 pub use unlink::unlink;
 pub use version::{ARCH, OS};

@@ -476,25 +476,26 @@ impl<'a> Runner<'a> {
         // Filter plan for --changed flag
         if changed_only && !force {
             let working_dir = ctx
-                .working_path().cloned()
+                .working_path()
+                .cloned()
                 .unwrap_or_else(|| std::path::PathBuf::from("."));
             let tracker = SourceTracker::new(working_dir);
             plan.retain(|task_name| {
-                    if let Some(task) = self.registry.get(task_name) {
-                        if !task.sources.is_empty() {
-                            // Check if sources have changed
-                            tracker
-                                .has_changed_sources(task_name, &task.sources)
-                                .unwrap_or(true) // If error, include task to be safe
-                        } else {
-                            // No sources defined, include task
-                            true
-                        }
+                if let Some(task) = self.registry.get(task_name) {
+                    if !task.sources.is_empty() {
+                        // Check if sources have changed
+                        tracker
+                            .has_changed_sources(task_name, &task.sources)
+                            .unwrap_or(true) // If error, include task to be safe
                     } else {
-                        // Task not found, include to surface error
+                        // No sources defined, include task
                         true
                     }
-                });
+                } else {
+                    // Task not found, include to surface error
+                    true
+                }
+            });
         }
 
         // Build dependency graph from plan
@@ -519,7 +520,8 @@ impl<'a> Runner<'a> {
 
         // Create source tracker
         let working_dir = ctx
-            .working_path().cloned()
+            .working_path()
+            .cloned()
             .unwrap_or_else(|| std::path::PathBuf::from("."));
         let source_tracker = Arc::new(tokio::sync::Mutex::new(SourceTracker::new(working_dir)));
 

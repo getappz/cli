@@ -20,7 +20,10 @@ fn is_node_tool(tool: &str) -> bool {
     )
 }
 
-fn wrap_with_mise(cmdline: &str) -> String {
+/// Wrap a command with mise, optionally specifying a tool version.
+/// When `pm_version` is provided, produces `mise x tool@version -- tool args` which auto-installs the tool.
+/// When `pm_version` is None, produces `mise x -- command` for existing mise environment.
+fn wrap_with_mise_versioned(cmdline: &str, pm_version: Option<&str>) -> String {
     // Respect explicit tools; just prefix with `mise x --` when applicable
     if !has_mise() {
         return cmdline.to_string();
@@ -33,11 +36,21 @@ fn wrap_with_mise(cmdline: &str) -> String {
     if let Ok(parts) = shell_words::split(cmdline) {
         if let Some(first) = parts.first() {
             if is_node_tool(first) {
+                if let Some(version) = pm_version {
+                    // Use versioned mise exec: mise x yarn@3.6.3 -- yarn install
+                    // This auto-installs the tool if not present and runs the full command
+                    // The command after -- is the full command to execute (including the tool name)
+                    return format!("mise x {}@{} -- {}", first, version, cmdline);
+                }
                 return format!("mise x -- {}", cmdline);
             }
         }
     }
     cmdline.to_string()
+}
+
+fn wrap_with_mise(cmdline: &str) -> String {
+    wrap_with_mise_versioned(cmdline, None)
 }
 
 /// Find all node_modules/.bin directories by walking up from the starting directory.
@@ -287,12 +300,16 @@ pub async fn run_local_with(ctx: &Context, cmd: &str, opts: RunOptions) -> Resul
 
     // Build the command normally
     // For shell scripts, don't wrap with package managers - just run as-is
+    // Extract version from package manager info for mise versioned execution
+    let pm_version = pm_info.as_ref().and_then(|pm| pm.version.as_deref());
+
     let final_cmd = if is_sh_script {
         // Shell script - don't wrap with package managers, just use the command as-is
         cmd.to_string()
     } else if has_pm_prefix {
         // User already specified a package manager, use command as-is (with mise wrapper if needed)
-        wrap_with_mise(cmd)
+        // Pass version so mise can auto-install the correct version (e.g., yarn@3.6.3)
+        wrap_with_mise_versioned(cmd, pm_version)
     } else if let Some(pm_info) = &pm_info {
         // Use detected package manager to run the command
         match pm_info.manager.as_str() {
@@ -304,12 +321,12 @@ pub async fn run_local_with(ctx: &Context, cmd: &str, opts: RunOptions) -> Resul
             "npm" | "pnpm" | "yarn" => {
                 // For npm/pnpm/yarn, run command directly (binaries in node_modules/.bin)
                 // PATH will be set up with node_modules/.bin, so binaries can be found
-                // Use mise to ensure the right tool versions are available
-                wrap_with_mise(cmd)
+                // Use mise with version to ensure the right tool versions are available
+                wrap_with_mise_versioned(cmd, pm_version)
             }
             _ => {
                 // Unknown package manager, use mise as fallback
-                wrap_with_mise(cmd)
+                wrap_with_mise_versioned(cmd, pm_version)
             }
         }
     } else {

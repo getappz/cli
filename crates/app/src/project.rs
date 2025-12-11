@@ -110,6 +110,7 @@ pub struct ProjectLinkAndSettings {
     #[serde(flatten)]
     pub link: ProjectLink,
     /// Project settings
+    #[serde(default)]
     pub settings: ProjectSettings,
 }
 

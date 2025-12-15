@@ -59,8 +59,18 @@ pub const BUILTIN_TEMPLATES: &[(&str, &str, &str, Option<&str>)] = &[
     // Additional static site generators
     ("hexo", "Hexo", "hexojs/hexo-starter", None),
     ("zola", "Zola", "ekzhang/zola-blog-starter", None),
-    ("pelican", "Pelican", "getpelican/pelican", Some("samples/basic")),
-    ("mkdocs", "MkDocs", "sosiristseng/template-mkdocs-material", None),
+    (
+        "pelican",
+        "Pelican",
+        "getpelican/pelican",
+        Some("samples/basic"),
+    ),
+    (
+        "mkdocs",
+        "MkDocs",
+        "sosiristseng/template-mkdocs-material",
+        None,
+    ),
     ("mdbook", "mdBook", "MichaelCurrin/mdbook-quickstart", None),
     (
         "middleman",

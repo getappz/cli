@@ -594,7 +594,9 @@ pub struct HugoInfo {
 /// Detect Hugo version requirements from Hugo config files
 /// Checks config.toml, hugo.toml, config.yaml, hugo.yaml, etc.
 /// Looks for [module.hugoVersion] section with extended and min fields
-pub async fn detect_hugo_info(fs: &Arc<dyn DetectorFilesystem>) -> Result<Option<HugoInfo>, String> {
+pub async fn detect_hugo_info(
+    fs: &Arc<dyn DetectorFilesystem>,
+) -> Result<Option<HugoInfo>, String> {
     // Hugo config files to check (in priority order)
     let toml_configs = ["config.toml", "hugo.toml"];
     let yaml_configs = ["config.yaml", "config.yml", "hugo.yaml", "hugo.yml"];
@@ -633,9 +635,7 @@ fn parse_hugo_toml_config(content: &str) -> Option<HugoInfo> {
     let parsed: toml::Value = toml::from_str(content).ok()?;
 
     // Look for module.hugoVersion section
-    let hugo_version = parsed
-        .get("module")
-        .and_then(|m| m.get("hugoVersion"))?;
+    let hugo_version = parsed.get("module").and_then(|m| m.get("hugoVersion"))?;
 
     let extended = hugo_version
         .get("extended")
@@ -659,9 +659,7 @@ fn parse_hugo_yaml_config(content: &str) -> Option<HugoInfo> {
     let parsed: serde_json::Value = serde_yaml::from_str(content).ok()?;
 
     // Look for module.hugoVersion section
-    let hugo_version = parsed
-        .get("module")
-        .and_then(|m| m.get("hugoVersion"))?;
+    let hugo_version = parsed.get("module").and_then(|m| m.get("hugoVersion"))?;
 
     let extended = hugo_version
         .get("extended")

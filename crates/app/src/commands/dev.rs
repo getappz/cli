@@ -6,7 +6,6 @@ use crate::shell::{command_exists, run_local_with, RunOptions, ToolVersionInfo};
 use crate::tunnel::{CloudflaredTunnel, TunnelService};
 use frameworks::frameworks;
 use starbase::AppResult;
-use std::path::Path;
 use std::sync::Arc;
 use task::Context;
 use tracing::instrument;
@@ -156,7 +155,8 @@ pub async fn dev(session: AppzSession) -> AppResult {
 
             // Detect Hugo-specific info if this is a Hugo project
             let tool_info = if framework.slug == Some("hugo") {
-                let fs_dyn: Arc<dyn crate::detectors::filesystem::DetectorFilesystem> = fs_for_hugo.clone();
+                let fs_dyn: Arc<dyn crate::detectors::filesystem::DetectorFilesystem> =
+                    fs_for_hugo.clone();
                 match detect_hugo_info(&fs_dyn).await {
                     Ok(Some(hugo_info)) => {
                         if hugo_info.extended {

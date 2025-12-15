@@ -203,6 +203,7 @@ pub fn register_mise_tools(reg: &mut TaskRegistry) {
                     env: None,
                     show_output: true,
                     package_manager: None,
+                    tool_info: None,
                 };
                 // Default to bun install; our shell wrapper routes through `mise x --` when available
                 shell::run_local_with(&ctx, "bun install", opts).await

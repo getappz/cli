@@ -56,6 +56,19 @@ pub const BUILTIN_TEMPLATES: &[(&str, &str, &str, Option<&str>)] = &[
     ("spress", "Spress", "spress/Spress", Some("skeleton")),
     ("kirby", "Kirby", "getkirby/starterkit", None),
     ("statamic", "Statamic", "statamic/starter-kit", None),
+    // Additional static site generators
+    ("hexo", "Hexo", "hexojs/hexo-starter", None),
+    ("zola", "Zola", "ekzhang/zola-blog-starter", None),
+    ("pelican", "Pelican", "getpelican/pelican", Some("samples/basic")),
+    ("mkdocs", "MkDocs", "sosiristseng/template-mkdocs-material", None),
+    ("mdbook", "mdBook", "MichaelCurrin/mdbook-quickstart", None),
+    (
+        "middleman",
+        "Middleman",
+        "middleman/middleman-templates-default",
+        Some("template"),
+    ),
+    ("jigsaw", "Jigsaw", "tighten/jigsaw-docs-template", None),
 ];
 
 /// Get built-in template by name

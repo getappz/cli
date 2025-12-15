@@ -52,6 +52,23 @@ pub async fn init(
                     .map_err(|e| miette!("Failed to get project name: {}", e))?
             };
             (pos_arg.clone(), proj_name)
+        } else if pos_arg.starts_with("https://")
+            || pos_arg.starts_with("http://")
+            || pos_arg.starts_with("npm:")
+            || pos_arg.starts_with("./")
+            || pos_arg.starts_with("../")
+            || pos_arg.starts_with('/')
+            || pos_arg.contains('/')
+        {
+            // Priority 2b: Positional argument looks like a template source (URL, npm package, GitHub repo, local path)
+            let proj_name = if let Some(n) = name {
+                n
+            } else {
+                Text::new("Project name:")
+                    .prompt()
+                    .map_err(|e| miette!("Failed to get project name: {}", e))?
+            };
+            (pos_arg.clone(), proj_name)
         } else {
             // Priority 3: Positional argument is project name
             let proj_name = pos_arg.clone();
@@ -265,6 +282,7 @@ pub async fn init(
                 env: None,
                 show_output: true,
                 package_manager: None,
+                tool_info: None,
             };
 
             let result = run_local_with(&ctx, install_cmd, opts).await;

@@ -1,9 +1,12 @@
-use crate::detectors::{detect_framework_record, DetectFrameworkRecordOptions, StdFilesystem};
+use crate::detectors::{
+    detect_framework_record, detect_hugo_info, DetectFrameworkRecordOptions, StdFilesystem,
+};
 use crate::session::AppzSession;
-use crate::shell::{run_local_with, RunOptions};
+use crate::shell::{command_exists, run_local_with, RunOptions, ToolVersionInfo};
 use crate::tunnel::{CloudflaredTunnel, TunnelService};
 use frameworks::frameworks;
 use starbase::AppResult;
+use std::path::Path;
 use std::sync::Arc;
 use task::Context;
 use tracing::instrument;
@@ -103,6 +106,85 @@ pub async fn dev(session: AppzSession) -> AppResult {
                 println!("✓ Using framework dev command");
             }
 
+            // Handle ddev setup for Jigsaw
+            if framework.slug == Some("jigsaw") {
+                if !command_exists("ddev") {
+                    return Err(miette::miette!(
+                        "ddev is required for Jigsaw projects but was not found. Please install ddev first."
+                    ));
+                }
+
+                let ddev_config_path = project_path.join(".ddev").join("config.yaml");
+                if !ddev_config_path.exists() {
+                    println!("⚙️  Configuring ddev for Jigsaw project...");
+                    let mut ctx_config = Context::new();
+                    ctx_config.set_working_path(project_path.clone());
+                    let config_opts = RunOptions {
+                        cwd: Some(project_path.clone()),
+                        env: None,
+                        show_output: true,
+                        package_manager: None,
+                        tool_info: None,
+                    };
+                    run_local_with(
+                        &ctx_config,
+                        "ddev config --project-type=php --php-version=8.2",
+                        config_opts,
+                    )
+                    .await?;
+                    println!("✓ ddev configured");
+                }
+
+                // Ensure ddev is started
+                println!("🚀 Starting ddev...");
+                let mut ctx_start = Context::new();
+                ctx_start.set_working_path(project_path.clone());
+                let start_opts = RunOptions {
+                    cwd: Some(project_path.clone()),
+                    env: None,
+                    show_output: false, // ddev start can be verbose
+                    package_manager: None,
+                    tool_info: None,
+                };
+                // ddev start is idempotent, so it's safe to run even if already started
+                let _ = run_local_with(&ctx_start, "ddev start", start_opts).await;
+                println!("✓ ddev ready");
+            }
+
+            // Create filesystem detector for Hugo info detection
+            let fs_for_hugo = Arc::new(StdFilesystem::new(Some(project_path.clone())));
+
+            // Detect Hugo-specific info if this is a Hugo project
+            let tool_info = if framework.slug == Some("hugo") {
+                let fs_dyn: Arc<dyn crate::detectors::filesystem::DetectorFilesystem> = fs_for_hugo.clone();
+                match detect_hugo_info(&fs_dyn).await {
+                    Ok(Some(hugo_info)) => {
+                        if hugo_info.extended {
+                            println!(
+                                "✓ Hugo extended required{}",
+                                hugo_info
+                                    .min_version
+                                    .as_ref()
+                                    .map(|v| format!(" (min: {})", v))
+                                    .unwrap_or_default()
+                            );
+                        }
+                        Some(ToolVersionInfo {
+                            tool: "hugo".to_string(),
+                            version: hugo_info.min_version,
+                            extended: hugo_info.extended,
+                        })
+                    }
+                    _ => Some(ToolVersionInfo {
+                        tool: "hugo".to_string(),
+                        version: None,
+                        extended: false,
+                    }),
+                }
+            } else {
+                None
+            };
+
             // Create a minimal context for running the command
             let mut ctx = Context::new();
             ctx.set_working_path(project_path.clone());
@@ -111,6 +193,7 @@ pub async fn dev(session: AppzSession) -> AppResult {
                 env: None,
                 show_output: true,
                 package_manager: package_manager.clone(),
+                tool_info,
             };
 
             // If sharing, wait a bit for dev server to start

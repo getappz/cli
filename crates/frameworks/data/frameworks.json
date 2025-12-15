@@ -723,6 +723,332 @@
     "cachePattern": ".next/cache/**"
   },
   {
+    "name": "Hexo",
+    "slug": "hexo",
+    "demo": "https://hexo.io",
+    "logo": null,
+    "tagline": "A fast, simple & powerful blog framework",
+    "description": "Hexo is a fast, simple and powerful blog framework powered by Node.js.",
+    "website": "https://hexo.io",
+    "sort": 16,
+    "envPrefix": null,
+    "useRuntime": null,
+    "ignoreRuntimes": null,
+    "detectors": {
+      "every": null,
+      "some": [
+        {
+          "path": "_config.yml"
+        },
+        {
+          "matchPackage": "hexo"
+        }
+      ]
+    },
+    "settings": {
+      "installCommand": {
+        "placeholder": "`yarn install`, `pnpm install`, `npm install`, or `bun install`",
+        "value": null
+      },
+      "buildCommand": {
+        "placeholder": "`npm run build` or `hexo generate`",
+        "value": "hexo generate"
+      },
+      "devCommand": {
+        "placeholder": "hexo server",
+        "value": "hexo server --port $PORT"
+      },
+      "outputDirectory": {
+        "placeholder": null,
+        "value": "public"
+      }
+    },
+    "recommendedIntegrations": null,
+    "dependency": "hexo",
+    "supersedes": null,
+    "cachePattern": null
+  },
+  {
+    "name": "Zola",
+    "slug": "zola",
+    "demo": "https://www.getzola.org",
+    "logo": null,
+    "tagline": "A fast static site generator in a single binary",
+    "description": "Zola is a fast static site generator in a single binary with everything built-in.",
+    "website": "https://www.getzola.org",
+    "sort": 17,
+    "envPrefix": null,
+    "useRuntime": null,
+    "ignoreRuntimes": null,
+    "detectors": {
+      "every": null,
+      "some": [
+        {
+          "path": "zola.toml"
+        },
+        {
+          "path": "config.toml",
+          "matchContent": "base_url.*=.*\"https?://"
+        }
+      ]
+    },
+    "settings": {
+      "installCommand": {
+        "placeholder": null,
+        "value": null
+      },
+      "buildCommand": {
+        "placeholder": "`zola build`",
+        "value": "zola build"
+      },
+      "devCommand": {
+        "placeholder": "zola serve",
+        "value": "zola serve --port $PORT"
+      },
+      "outputDirectory": {
+        "placeholder": null,
+        "value": "public"
+      }
+    },
+    "recommendedIntegrations": null,
+    "dependency": null,
+    "supersedes": null,
+    "cachePattern": null
+  },
+  {
+    "name": "Pelican",
+    "slug": "pelican",
+    "demo": "https://getpelican.com",
+    "logo": null,
+    "tagline": "A static site generator, written in Python",
+    "description": "Pelican is a static site generator that requires no database or server-side logic.",
+    "website": "https://getpelican.com",
+    "sort": 18,
+    "envPrefix": null,
+    "useRuntime": null,
+    "ignoreRuntimes": null,
+    "detectors": {
+      "every": null,
+      "some": [
+        {
+          "path": "pelicanconf.py"
+        },
+        {
+          "path": "publishconf.py"
+        },
+        {
+          "path": "requirements.txt",
+          "matchContent": "pelican"
+        }
+      ]
+    },
+    "settings": {
+      "installCommand": {
+        "placeholder": "`pip install -r requirements.txt`",
+        "value": null
+      },
+      "buildCommand": {
+        "placeholder": "`pelican` or `pelican content`",
+        "value": "pelican"
+      },
+      "devCommand": {
+        "placeholder": "pelican --listen",
+        "value": "pelican --listen --port $PORT"
+      },
+      "outputDirectory": {
+        "placeholder": null,
+        "value": "output"
+      }
+    },
+    "recommendedIntegrations": null,
+    "dependency": null,
+    "supersedes": null,
+    "cachePattern": null
+  },
+  {
+    "name": "MkDocs",
+    "slug": "mkdocs",
+    "demo": "https://www.mkdocs.org",
+    "logo": null,
+    "tagline": "Project documentation with Markdown",
+    "description": "MkDocs is a fast, simple and downright gorgeous static site generator that's geared towards building project documentation.",
+    "website": "https://www.mkdocs.org",
+    "sort": 19,
+    "envPrefix": null,
+    "useRuntime": null,
+    "ignoreRuntimes": null,
+    "detectors": {
+      "every": null,
+      "some": [
+        {
+          "path": "mkdocs.yml"
+        },
+        {
+          "path": "mkdocs.yaml"
+        }
+      ]
+    },
+    "settings": {
+      "installCommand": {
+        "placeholder": "`pip install -r requirements.txt` or `pip install mkdocs`",
+        "value": null
+      },
+      "buildCommand": {
+        "placeholder": "`mkdocs build`",
+        "value": "mkdocs build"
+      },
+      "devCommand": {
+        "placeholder": "mkdocs serve",
+        "value": "mkdocs serve --dev-addr=0.0.0.0:$PORT"
+      },
+      "outputDirectory": {
+        "placeholder": null,
+        "value": "site"
+      }
+    },
+    "recommendedIntegrations": null,
+    "dependency": null,
+    "supersedes": null,
+    "cachePattern": null
+  },
+  {
+    "name": "mdBook",
+    "slug": "mdbook",
+    "demo": "https://rust-lang.github.io/mdBook",
+    "logo": null,
+    "tagline": "Create book from markdown files",
+    "description": "mdBook is a utility to create modern online books from Markdown files.",
+    "website": "https://rust-lang.github.io/mdBook",
+    "sort": 20,
+    "envPrefix": null,
+    "useRuntime": null,
+    "ignoreRuntimes": null,
+    "detectors": {
+      "every": null,
+      "some": [
+        {
+          "path": "book.toml"
+        }
+      ]
+    },
+    "settings": {
+      "installCommand": {
+        "placeholder": null,
+        "value": null
+      },
+      "buildCommand": {
+        "placeholder": "`mdbook build`",
+        "value": "mdbook build"
+      },
+      "devCommand": {
+        "placeholder": "mdbook serve",
+        "value": "mdbook serve --port $PORT"
+      },
+      "outputDirectory": {
+        "placeholder": null,
+        "value": "book"
+      }
+    },
+    "recommendedIntegrations": null,
+    "dependency": null,
+    "supersedes": null,
+    "cachePattern": null
+  },
+  {
+    "name": "Middleman",
+    "slug": "middleman",
+    "demo": "https://middlemanapp.com",
+    "logo": null,
+    "tagline": "Hand-crafted, modern frontend development",
+    "description": "Middleman is a static site generator using all the shortcuts and tools in modern web development.",
+    "website": "https://middlemanapp.com",
+    "sort": 21,
+    "envPrefix": null,
+    "useRuntime": null,
+    "ignoreRuntimes": null,
+    "detectors": {
+      "every": null,
+      "some": [
+        {
+          "path": "config.rb"
+        },
+        {
+          "path": "Gemfile",
+          "matchContent": "middleman"
+        }
+      ]
+    },
+    "settings": {
+      "installCommand": {
+        "placeholder": "`bundle install`",
+        "value": null
+      },
+      "buildCommand": {
+        "placeholder": "`bundle exec middleman build` or `middleman build`",
+        "value": "middleman build"
+      },
+      "devCommand": {
+        "placeholder": "bundle exec middleman server",
+        "value": "middleman server --port $PORT"
+      },
+      "outputDirectory": {
+        "placeholder": null,
+        "value": "build"
+      }
+    },
+    "recommendedIntegrations": null,
+    "dependency": null,
+    "supersedes": null,
+    "cachePattern": null
+  },
+  {
+    "name": "Jigsaw",
+    "slug": "jigsaw",
+    "demo": "https://jigsaw.tighten.co",
+    "logo": null,
+    "tagline": "Simple static sites with Laravel's Blade",
+    "description": "Jigsaw is a simple static site generator built with Laravel's Blade templating engine.",
+    "website": "https://jigsaw.tighten.co",
+    "sort": 22,
+    "envPrefix": null,
+    "useRuntime": null,
+    "ignoreRuntimes": null,
+    "detectors": {
+      "every": null,
+      "some": [
+        {
+          "path": "config.php"
+        },
+        {
+          "path": "composer.json",
+          "matchContent": "tightenco/jigsaw"
+        }
+      ]
+    },
+    "settings": {
+      "installCommand": {
+        "placeholder": "`ddev composer install`",
+        "value": "ddev composer install"
+      },
+      "buildCommand": {
+        "placeholder": "`ddev exec ./vendor/bin/jigsaw build`",
+        "value": "ddev exec ./vendor/bin/jigsaw build"
+      },
+      "devCommand": {
+        "placeholder": "ddev exec ./vendor/bin/jigsaw serve",
+        "value": "ddev exec ./vendor/bin/jigsaw serve --port $PORT"
+      },
+      "outputDirectory": {
+        "placeholder": null,
+        "value": "build_production"
+      }
+    },
+    "recommendedIntegrations": null,
+    "dependency": null,
+    "supersedes": null,
+    "cachePattern": null
+  },
+  {
     "name": "Other",
     "slug": null,
     "logo": "https://api-frameworks.vercel.sh/framework-logos/other.svg",

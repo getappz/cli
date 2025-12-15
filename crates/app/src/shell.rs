@@ -13,10 +13,13 @@ fn has_mise() -> bool {
     command_exists("mise")
 }
 
-fn is_node_tool(tool: &str) -> bool {
+fn is_mise_tool(tool: &str) -> bool {
     matches!(
         tool,
-        "node" | "npm" | "npx" | "pnpm" | "yarn" | "corepack" | "bun" | "bunx"
+        // Node ecosystem tools
+        "node" | "npm" | "npx" | "pnpm" | "yarn" | "corepack" | "bun" | "bunx" |
+        // Static site generators (binaries)
+        "hugo" | "zola" | "mdbook"
     )
 }
 
@@ -35,7 +38,7 @@ fn wrap_with_mise_versioned(cmdline: &str, pm_version: Option<&str>) -> String {
     // Parse the first token robustly
     if let Ok(parts) = shell_words::split(cmdline) {
         if let Some(first) = parts.first() {
-            if is_node_tool(first) {
+            if is_mise_tool(first) {
                 if let Some(version) = pm_version {
                     // Use versioned mise exec: mise x yarn@3.6.3 -- yarn install
                     // This auto-installs the tool if not present and runs the full command
@@ -117,12 +120,25 @@ pub fn run_local(cmd: &str) -> Result<()> {
     }
 }
 
+/// Tool version info for mise-managed tools (non-Node tools like Hugo)
+#[derive(Default, Clone, Debug)]
+pub struct ToolVersionInfo {
+    /// Tool name (e.g., "hugo")
+    pub tool: String,
+    /// Version requirement (e.g., "0.83.0" or "latest")
+    pub version: Option<String>,
+    /// For Hugo: whether extended version is required (for SCSS/SASS support)
+    pub extended: bool,
+}
+
 #[derive(Default, Clone)]
 pub struct RunOptions {
     pub cwd: Option<PathBuf>,
     pub env: Option<HashMap<String, String>>, // additional env
     pub show_output: bool,
     pub package_manager: Option<crate::detectors::PackageManagerInfo>,
+    /// Tool version info for non-Node mise-managed tools (e.g., Hugo)
+    pub tool_info: Option<ToolVersionInfo>,
 }
 
 /// Build PATH string from path parts with platform-specific separator
@@ -303,9 +319,43 @@ pub async fn run_local_with(ctx: &Context, cmd: &str, opts: RunOptions) -> Resul
     // Extract version from package manager info for mise versioned execution
     let pm_version = pm_info.as_ref().and_then(|pm| pm.version.as_deref());
 
+    // Check if we have tool info for non-Node tools (e.g., Hugo)
+    let tool_mise_version = opts.tool_info.as_ref().map(|info| {
+        let version = info.version.as_deref().unwrap_or("latest");
+        if info.extended {
+            // Hugo extended version format: extended_0.83.0 or extended_latest
+            format!("extended_{}", version)
+        } else {
+            version.to_string()
+        }
+    });
+
+    // Check if command starts with a binary tool that mise can install via GitHub
+    let cmd_parts: Vec<&str> = cmd.split_whitespace().collect();
+    let first_token = cmd_parts.first().copied().unwrap_or("");
+    let is_binary_tool = matches!(first_token, "zola" | "mdbook");
+
     let final_cmd = if is_sh_script {
         // Shell script - don't wrap with package managers, just use the command as-is
         cmd.to_string()
+    } else if let Some(ref tool_info) = opts.tool_info {
+        // Non-Node tool with version info (e.g., Hugo)
+        // Use mise x hugo@extended_0.83.0 -- hugo server
+        if has_mise() && is_mise_tool(&tool_info.tool) {
+            let mise_version = tool_mise_version.as_deref().unwrap_or("latest");
+            format!("mise x {}@{} -- {}", tool_info.tool, mise_version, cmd)
+        } else {
+            cmd.to_string()
+        }
+    } else if is_binary_tool && has_mise() {
+        // Binary tools that mise can install via GitHub backend
+        // Use mise x github:repo/name@latest -- command
+        let repo = match first_token {
+            "zola" => "getzola/zola",
+            "mdbook" => "rust-lang/mdbook",
+            _ => unreachable!(), // We already checked is_binary_tool
+        };
+        format!("mise x github:{}@latest -- {}", repo, cmd)
     } else if has_pm_prefix {
         // User already specified a package manager, use command as-is (with mise wrapper if needed)
         // Pass version so mise can auto-install the correct version (e.g., yarn@3.6.3)

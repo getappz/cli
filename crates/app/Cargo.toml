@@ -47,6 +47,7 @@ url = { workspace = true }
 indicatif = { workspace = true }
 self_update = { workspace = true, optional = true }
 webbrowser = "1.0"
+toml = "0.8"
 
 [features]
 default = ["self_update"]

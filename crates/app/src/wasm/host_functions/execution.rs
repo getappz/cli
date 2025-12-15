@@ -36,6 +36,7 @@ host_fn!(pub appz_exec_run(
         env: input.env,
         show_output: input.force_output.unwrap_or(false),
         package_manager: None,
+        tool_info: None,
     };
 
     // Execute command (run_local_with is now async)
@@ -104,6 +105,7 @@ host_fn!(pub appz_exec_run_local(
         env: input.env,
         show_output: input.force_output.unwrap_or(false),
         package_manager: None,
+        tool_info: None,
     };
 
     // Execute command (run_local_with is now async)

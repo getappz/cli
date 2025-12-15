@@ -581,3 +581,100 @@ pub async fn detect_package_manager(
         Ok(None)
     }
 }
+
+/// Hugo version requirements detected from config files
+#[derive(Debug, Clone, Default)]
+pub struct HugoInfo {
+    /// Whether Hugo extended is required (for SCSS/SASS support)
+    pub extended: bool,
+    /// Minimum version required (e.g., "0.83.0")
+    pub min_version: Option<String>,
+}
+
+/// Detect Hugo version requirements from Hugo config files
+/// Checks config.toml, hugo.toml, config.yaml, hugo.yaml, etc.
+/// Looks for [module.hugoVersion] section with extended and min fields
+pub async fn detect_hugo_info(fs: &Arc<dyn DetectorFilesystem>) -> Result<Option<HugoInfo>, String> {
+    // Hugo config files to check (in priority order)
+    let toml_configs = ["config.toml", "hugo.toml"];
+    let yaml_configs = ["config.yaml", "config.yml", "hugo.yaml", "hugo.yml"];
+
+    // Try TOML configs first
+    for config_file in toml_configs {
+        if !fs.is_file(config_file).await {
+            continue;
+        }
+        if let Ok(content) = fs.read_file(config_file).await {
+            if let Some(info) = parse_hugo_toml_config(&content) {
+                return Ok(Some(info));
+            }
+        }
+    }
+
+    // Try YAML configs
+    for config_file in yaml_configs {
+        if !fs.is_file(config_file).await {
+            continue;
+        }
+        if let Ok(content) = fs.read_file(config_file).await {
+            if let Some(info) = parse_hugo_yaml_config(&content) {
+                return Ok(Some(info));
+            }
+        }
+    }
+
+    // No Hugo version requirements found, return default (non-extended, latest)
+    Ok(Some(HugoInfo::default()))
+}
+
+/// Parse Hugo TOML config to extract [module.hugoVersion] section
+fn parse_hugo_toml_config(content: &str) -> Option<HugoInfo> {
+    // Parse TOML
+    let parsed: toml::Value = toml::from_str(content).ok()?;
+
+    // Look for module.hugoVersion section
+    let hugo_version = parsed
+        .get("module")
+        .and_then(|m| m.get("hugoVersion"))?;
+
+    let extended = hugo_version
+        .get("extended")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let min_version = hugo_version
+        .get("min")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    Some(HugoInfo {
+        extended,
+        min_version,
+    })
+}
+
+/// Parse Hugo YAML config to extract module.hugoVersion section
+fn parse_hugo_yaml_config(content: &str) -> Option<HugoInfo> {
+    // Parse YAML as JSON value (serde_yaml uses serde_json::Value compatible structure)
+    let parsed: serde_json::Value = serde_yaml::from_str(content).ok()?;
+
+    // Look for module.hugoVersion section
+    let hugo_version = parsed
+        .get("module")
+        .and_then(|m| m.get("hugoVersion"))?;
+
+    let extended = hugo_version
+        .get("extended")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let min_version = hugo_version
+        .get("min")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    Some(HugoInfo {
+        extended,
+        min_version,
+    })
+}

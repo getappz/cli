@@ -369,6 +369,7 @@ fn create_task_from_steps(
                     env: None,
                     show_output: true,
                     package_manager: None,
+                    tool_info: None,
                 };
                 run_local_with(&ctx, &prepared, opts)
                     .await
@@ -407,6 +408,7 @@ fn create_task_from_steps(
                         env: None,
                         show_output: true,
                         package_manager: None,
+                        tool_info: None,
                     };
                     run_local_with(&ctx, &prepared, opts)
                         .await

@@ -2,7 +2,7 @@ use crate::detectors::{
     detect_framework_record, detect_hugo_info, DetectFrameworkRecordOptions, StdFilesystem,
 };
 use crate::session::AppzSession;
-use crate::shell::{command_exists, run_local_with, RunOptions, ToolVersionInfo};
+use crate::shell::{command_exists, ensure_yarn_installed, run_local_with, RunOptions, ToolVersionInfo};
 use crate::tunnel::{CloudflaredTunnel, TunnelService};
 use frameworks::frameworks;
 use starbase::AppResult;
@@ -189,12 +189,17 @@ pub async fn dev(session: AppzSession) -> AppResult {
             let mut ctx = Context::new();
             ctx.set_working_path(project_path.clone());
             let opts = RunOptions {
-                cwd: Some(project_path),
+                cwd: Some(project_path.clone()),
                 env: None,
                 show_output: true,
                 package_manager: package_manager.clone(),
                 tool_info,
             };
+
+            // Install yarn if it's the detected package manager or used in scripts
+            if let Err(e) = ensure_yarn_installed(&ctx, &package_manager, &project_path).await {
+                eprintln!("⚠️  Warning: Failed to install yarn, but continuing: {}", e);
+            }
 
             // If sharing, wait a bit for dev server to start
             if share {

@@ -260,7 +260,24 @@ pub async fn init(
         // Check for package.json to determine if we should run npm install
         let package_json = project_path.join("package.json");
         if package_json.exists() {
-            info!("Installing dependencies...");
+            // Detect package manager
+            use crate::detectors::{detect_package_manager, StdFilesystem};
+            use std::sync::Arc;
+            let fs_std = Arc::new(StdFilesystem::new(Some(project_path.clone())));
+            let fs: Arc<dyn crate::detectors::filesystem::DetectorFilesystem> = fs_std;
+            let package_manager = detect_package_manager(&fs).await.ok().flatten();
+            
+            // Use shell::run_local_with which automatically wraps with mise if supported
+            use crate::shell::{ensure_yarn_installed, run_local_with, RunOptions};
+            use task::Context;
+
+            let ctx = Arc::new(Context::new());
+            
+            // Install yarn if it's the detected package manager
+            if let Err(e) = ensure_yarn_installed(&ctx, &package_manager, &project_path).await {
+                warn!("Failed to install yarn, but continuing: {}", e);
+            }
+            
             let install_cmd = if project_path.join("pnpm-lock.yaml").exists() {
                 "pnpm install"
             } else if project_path.join("yarn.lock").exists() {
@@ -271,17 +288,12 @@ pub async fn init(
                 "npm install"
             };
 
-            // Use shell::run_local_with which automatically wraps with mise if supported
-            use crate::shell::{run_local_with, RunOptions};
-            use std::sync::Arc;
-            use task::Context;
-
-            let ctx = Arc::new(Context::new());
+            info!("Installing dependencies...");
             let opts = RunOptions {
                 cwd: Some(project_path.clone()),
                 env: None,
                 show_output: true,
-                package_manager: None,
+                package_manager: package_manager.clone(),
                 tool_info: None,
             };
 

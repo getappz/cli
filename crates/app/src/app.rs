@@ -197,10 +197,9 @@ pub enum Commands {
     Logout,
     /// Initialize a new project from a template
     Init {
-        /// Template name (built-in) or project name
+        /// Template source (GitHub URL, npm package, local path, or built-in template name) or project name
         template_or_name: Option<String>,
-        /// Project name/directory (explicit, takes precedence over positional)
-        #[arg(short, long)]
+        /// Project name/directory (when template is provided as first positional argument)
         name: Option<String>,
         /// Template source (GitHub URL, npm package, local path, or built-in template name)
         #[arg(short = 'T', long)]

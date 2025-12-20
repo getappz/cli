@@ -1,6 +1,6 @@
-use crate::detectors::{detect_framework_record, DetectFrameworkRecordOptions, StdFilesystem};
+use crate::detectors::{detect_framework_record, detect_hugo_info, DetectFrameworkRecordOptions, StdFilesystem};
 use crate::session::AppzSession;
-use crate::shell::{command_exists, is_shell_script, run_local_with, RunOptions};
+use crate::shell::{command_exists, is_shell_script, run_local_with, RunOptions, ToolVersionInfo};
 use frameworks::frameworks;
 use miette::Result;
 use starbase::AppResult;
@@ -182,11 +182,14 @@ pub async fn build(session: AppzSession) -> AppResult {
                     )
                 })?;
 
-            // Determine install command (priority: user script > framework command > package manager default)
+            // Determine install command (priority: user script > framework command > Jekyll bundle install > package manager default)
             let install_cmd = if let Some(ref user_install) = user_install_script {
                 user_install.clone()
             } else if let Some(ref framework_install) = framework_install_cmd {
                 framework_install.clone()
+            } else if framework.slug == Some("jekyll") && project_path.join("Gemfile").exists() {
+                // Jekyll project with Gemfile - use bundle install
+                "bundle install".to_string()
             } else {
                 get_default_install_command(&package_manager)
             };
@@ -245,6 +248,39 @@ pub async fn build(session: AppzSession) -> AppResult {
                 println!("✓ ddev ready");
             }
 
+            // Detect Hugo-specific info if this is a Hugo project
+            let tool_info = if framework.slug == Some("hugo") {
+                let fs_for_hugo = Arc::new(StdFilesystem::new(Some(project_path.clone())));
+                let fs_dyn: Arc<dyn crate::detectors::filesystem::DetectorFilesystem> =
+                    fs_for_hugo.clone();
+                match detect_hugo_info(&fs_dyn).await {
+                    Ok(Some(hugo_info)) => {
+                        if hugo_info.extended {
+                            println!(
+                                "✓ Hugo extended required{}",
+                                hugo_info
+                                    .min_version
+                                    .as_ref()
+                                    .map(|v| format!(" (min: {})", v))
+                                    .unwrap_or_default()
+                            );
+                        }
+                        Some(ToolVersionInfo {
+                            tool: "hugo".to_string(),
+                            version: hugo_info.min_version,
+                            extended: hugo_info.extended,
+                        })
+                    }
+                    _ => Some(ToolVersionInfo {
+                        tool: "hugo".to_string(),
+                        version: None,
+                        extended: false,
+                    }),
+                }
+            } else {
+                None
+            };
+
             // Display which install command is being used
             if user_install_script.is_some() {
                 println!("✓ Using user-defined install script from package.json");
@@ -269,8 +305,14 @@ pub async fn build(session: AppzSession) -> AppResult {
                 env: None,
                 show_output: true,
                 package_manager: package_manager.clone(),
-                tool_info: None,
+                tool_info,
             };
+
+            // Install yarn if it's the detected package manager
+            use crate::shell::ensure_yarn_installed;
+            if let Err(e) = ensure_yarn_installed(&ctx, &package_manager, &project_path).await {
+                eprintln!("⚠️  Warning: Failed to install yarn, but continuing: {}", e);
+            }
 
             // Execute install step: check for appz:install recipe task first
             let using_appz_install = registry.get("appz:install").is_some();

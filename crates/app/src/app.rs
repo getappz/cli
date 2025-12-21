@@ -179,6 +179,11 @@ pub enum Commands {
         #[arg(long)]
         share: bool,
     },
+    /// SEO commands
+    Seo {
+        #[command(subcommand)]
+        command: crate::commands::seo::SeoCommands,
+    },
     /// List all deployments
     Ls,
     /// Link current directory to a project

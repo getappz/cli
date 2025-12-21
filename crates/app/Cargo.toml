@@ -18,6 +18,7 @@ chrono = { workspace = true }
 regex = { workspace = true }
 itertools = "0.13"
 walkdir = "2"
+ai_seo = { path = "../ai-seo" }
 task = { path = "../task" }
 command = { path = "../command" }
 frameworks = { path = "../frameworks" }

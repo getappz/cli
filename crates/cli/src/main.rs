@@ -105,6 +105,9 @@ async fn main() -> MainResult {
                 Commands::DevServer { .. } => app::commands::dev_server(session).await,
                 Commands::Build => app::commands::build(session).await,
                 Commands::Preview { .. } => app::commands::preview(session).await,
+                Commands::Seo { command } => {
+                    app::commands::seo::run(session, command).await
+                }
                 Commands::Ls => app::commands::ls(session).await,
                 Commands::Link { project, team } => {
                     app::commands::link(session, project, team).await

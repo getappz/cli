@@ -18,6 +18,7 @@ pub mod recipe_validate;
 pub mod remove;
 pub mod rollback;
 pub mod run;
+pub mod seo;
 #[cfg_attr(not(feature = "self_update"), path = "self_upgrade_stub.rs")]
 pub mod self_upgrade;
 pub mod switch;
@@ -44,6 +45,7 @@ pub use recipe_validate::recipe_validate;
 pub use remove::remove;
 pub use rollback::{rollback, status as rollback_status};
 pub use run::run;
+pub use seo::{run as seo_run, SeoCommands};
 #[cfg(not(feature = "self_update"))]
 pub use self_upgrade::{append_self_update_instructions, upgrade_instructions_text};
 #[cfg(feature = "self_update")]

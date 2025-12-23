@@ -8,6 +8,7 @@ members = [
     "crates/dev-server",
     "crates/env_var",
     "crates/frameworks",
+    "crates/ssg-migrator",
     "crates/task",
     "crates/ui",
     "crates/appz_pdk",

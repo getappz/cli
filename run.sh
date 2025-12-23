@@ -4,4 +4,4 @@
 # Alias: alias appz='/home/avihs/projects/appz-cli/run.sh'
 
 CWD="$(pwd)"
-cd /home/avihs/projects/appz-cli && cargo run --package cli --quiet -- --cwd "$CWD" "$@"
+cd /home/avihs/workspace/appz-cli && cargo run --package cli --quiet -- --cwd "$CWD" "$@"

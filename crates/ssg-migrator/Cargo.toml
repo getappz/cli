@@ -1,0 +1,27 @@
+[package]
+name = "ssg-migrator"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# Biome crates for parsing and AST manipulation
+biome_js_parser = { path = "../../../code-ref/biome/crates/biome_js_parser" }
+biome_js_syntax = { path = "../../../code-ref/biome/crates/biome_js_syntax" }
+biome_rowan = { path = "../../../code-ref/biome/crates/biome_rowan" }
+biome_fs = { path = "../../../code-ref/biome/crates/biome_fs" }
+biome_glob = { path = "../../../code-ref/biome/crates/biome_glob" }
+
+# Core dependencies
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+miette = { workspace = true }
+thiserror = { workspace = true }
+walkdir = "2"
+regex = { workspace = true }
+camino = "1.2"
+
+# ast-grep for efficient pattern matching
+ast-grep-core = "0.39.7"
+ast-grep-language = "0.39.7"
+

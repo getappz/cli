@@ -277,6 +277,21 @@ pub enum Commands {
         #[arg(long)]
         safe: bool,
     },
+    /// Migrate React SPA to Astro SSG
+    Migrate {
+        /// Source React SPA directory (default: current directory)
+        #[arg(short, long)]
+        source: Option<std::path::PathBuf>,
+        /// Output directory for Astro project
+        #[arg(short, long)]
+        output: Option<std::path::PathBuf>,
+        /// Project name for Astro app
+        #[arg(short, long)]
+        name: Option<String>,
+        /// Overwrite existing directory
+        #[arg(long)]
+        force: bool,
+    },
     /// Update appz itself to the latest version
     #[cfg(feature = "self_update")]
     SelfUpdate {

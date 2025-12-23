@@ -49,6 +49,8 @@ indicatif = { workspace = true }
 self_update = { workspace = true, optional = true }
 webbrowser = "1.0"
 toml = "0.8"
+ssg-migrator = { path = "../ssg-migrator" }
+camino = "1.2"
 
 [features]
 default = ["self_update"]

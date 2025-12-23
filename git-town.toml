@@ -1,4 +1,4 @@
 # See https://www.git-town.com/configuration-file for details
 
 [branches]
-main = "devel"
+main = "main"

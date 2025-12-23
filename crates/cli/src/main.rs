@@ -140,6 +140,9 @@ async fn main() -> MainResult {
                 Commands::Remove { resources, yes, safe } => {
                     app::commands::remove(session, resources, yes, safe).await
                 }
+                Commands::Migrate { source, output, name, force } => {
+                    app::commands::migrate(session, source, output, name, force).await
+                }
                 #[cfg(feature = "self_update")]
                 Commands::SelfUpdate { version, force, yes } => {
                     use app::commands::SelfUpdate;

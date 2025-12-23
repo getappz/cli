@@ -1,20 +1,20 @@
 
 use serde::Serialize;
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, Debug)]
 pub struct Heading {
     pub level: u8,
     pub text: String,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, Debug)]
 pub struct ImageInfo {
     pub src: String,
     pub alt: Option<String>,
     pub loading: Option<String>,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, Debug)]
 pub struct LinkInfo {
     pub href: String,
     pub text: String,
@@ -26,6 +26,10 @@ pub struct SeoIssue {
     pub severity: Severity,
     pub message: String,
     pub hint: Option<String>,
+    /// CSS-like selector for the element (replaces line numbers which are unreliable with streaming parsers)
+    pub selector: Option<String>,
+    /// AI-generated suggestion (advisory only, never affects rule execution)
+    pub suggestion: Option<String>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -71,6 +75,22 @@ pub struct SeoReport {
     pub links: Vec<LinkInfo>,
     pub issues: Vec<SeoIssue>,
     pub score: SeoScore,
+    // Additional metadata for enhanced rules
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub charset: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub viewport: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lang: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub robots_meta: Option<String>,
+    pub favicon: bool,
+    #[serde(skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub og_tags: std::collections::HashMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub twitter_card: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub json_ld_scripts: Vec<String>,
 }
 
 // Site-level aggregation models

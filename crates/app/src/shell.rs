@@ -520,7 +520,7 @@ pub async fn run_local_with(ctx: &Context, cmd: &str, opts: RunOptions) -> Resul
     let pm_name = pm_info.as_ref().map(|pm| pm.manager.as_str());
 
     // Check if we have tool info for non-Node tools (e.g., Hugo)
-    let tool_mise_version = opts.tool_info.as_ref().map(|info| {
+    let _tool_mise_version = opts.tool_info.as_ref().map(|info| {
         let version = info.version.as_deref().unwrap_or("latest");
         if info.extended {
             // Hugo extended version format: extended_0.83.0 or extended_latest

@@ -10,6 +10,9 @@ pub mod routing;
 pub mod mutation;
 pub mod diff;
 pub mod preview;
+pub mod db;
+pub mod utils;
+pub mod format;
 
 // Re-export commonly used types
 pub use routing::FixRouting;

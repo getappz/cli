@@ -15,6 +15,8 @@ pub use fix::seo_fix;
 pub enum SeoCommands {
     /// Audit SEO of HTML files in the build output directory
     Audit {
+        /// Single file, single path or list of paths to analyze
+        paths: Vec<PathBuf>,
         /// Directory to audit (default: detect from framework)
         #[arg(short, long)]
         dir: Option<PathBuf>,
@@ -24,6 +26,9 @@ pub enum SeoCommands {
         /// Automatically fix detected SEO issues
         #[arg(long)]
         fix: bool,
+        /// Force re-analysis of all pages, even if content hasn't changed
+        #[arg(long)]
+        force: bool,
     },
     /// Fix SEO issues with preview and control
     Fix {
@@ -45,16 +50,19 @@ pub enum SeoCommands {
         /// Skip specific issue codes (comma-separated)
         #[arg(long)]
         skip: Option<String>,
+        /// Only fix specific issue codes (comma-separated, takes precedence over --skip)
+        #[arg(long)]
+        only: Option<String>,
     },
 }
 
 pub async fn run(session: AppzSession, command: SeoCommands) -> AppResult {
     match command {
-        SeoCommands::Audit { dir, verbose, fix } => {
-            seo_audit(session, dir, verbose, fix).await
+        SeoCommands::Audit { paths, dir, verbose, fix, force } => {
+            seo_audit(session, paths, dir, verbose, fix, force).await
         }
-        SeoCommands::Fix { dir, preview, apply, json, scope, skip } => {
-            seo_fix(session, dir, preview, apply, json, scope, skip).await
+        SeoCommands::Fix { dir, preview, apply, json, scope, skip, only } => {
+            seo_fix(session, dir, preview, apply, json, scope, skip, only).await
         }
     }
 }

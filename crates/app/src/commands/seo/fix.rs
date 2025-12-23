@@ -29,6 +29,7 @@ pub async fn seo_fix(
     json: bool,
     scope: Option<String>,
     skip: Option<String>,
+    only: Option<String>,
 ) -> AppResult {
     // Default to preview mode if neither preview nor apply is specified
     let preview_mode = preview || !apply;
@@ -144,8 +145,12 @@ pub async fn seo_fix(
         }
     }
 
-    // Apply skip filter if provided
-    if let Some(ref skip_str) = skip {
+    // Apply only filter if provided (takes precedence over skip)
+    if let Some(ref only_str) = only {
+        let only_list: Vec<&str> = only_str.split(',').map(|s| s.trim()).collect();
+        site_fix_plans.retain(|plan| only_list.contains(&plan.issue));
+    } else if let Some(ref skip_str) = skip {
+        // Apply skip filter if only is not provided
         let skip_list: Vec<&str> = skip_str.split(',').map(|s| s.trim()).collect();
         site_fix_plans.retain(|plan| !skip_list.contains(&plan.issue));
     }
@@ -162,11 +167,9 @@ pub async fn seo_fix(
         // For each fix plan, generate a sample diff
         for site_plan in &site_fix_plans {
             // Find a representative page for this issue
-            let issue_count = site_summary.issues.by_code
+            if site_summary.issues.by_code
                 .iter()
-                .find(|ic| ic.code == site_plan.issue);
-
-            if let Some(issue_count) = issue_count {
+                .any(|ic| ic.code == site_plan.issue) {
                 // Try to find a page with this issue
                 for (relative_path, html_content, _) in &file_data {
                     // Check if this page has the issue

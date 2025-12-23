@@ -39,6 +39,7 @@ starbase_utils = { workspace = true }
 tokio = { workspace = true }
 tracing = "0.1"
 
+
 [features]
 default = ["self_update"]
 self_update = []
@@ -60,6 +61,8 @@ tokio = { version = "1.0", features = ["full"] }
 tokio-util = { version = "0.7", features = ["full"] }
 futures = "0.3"
 futures-util = "0.3"
+rusqlite = { version = "0.38.0", features = ["bundled"] }
+
 
 # CLI and UI
 clap = { version = "4.5", features = ["derive", "env"] }

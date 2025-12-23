@@ -10,6 +10,7 @@ use crate::models::{Severity, SiteSeoSummary};
 use crate::FixRouting;
 use serde::Serialize;
 use std::collections::HashMap;
+use owo_colors::OwoColorize;
 
 /// Canonical Fix Preview data model
 ///
@@ -242,19 +243,19 @@ pub fn format_cli_preview(preview: &FixPreview) -> String {
     let mut output = String::new();
     
     // Header
-    output.push_str("──────────────── SEO FIX PREVIEW ────────────────\n\n");
+    output.push_str(&format!("{}\n\n", "──────────────── SEO FIX PREVIEW ────────────────".bold().cyan()));
     
     // Summary
-    output.push_str("Summary\n");
-    output.push_str(&format!("• Issues detected:        {}\n", preview.summary.total_issues));
-    output.push_str(&format!("• Fixes planned:          {}\n", preview.summary.fixes_planned));
-    output.push_str(&format!("• Pages affected:         {}\n", preview.summary.pages_affected));
-    output.push_str(&format!("• Template fixes:         {}\n", preview.summary.routing.template));
-    output.push_str(&format!("• Section fixes:          {}\n", preview.summary.routing.section));
-    output.push_str(&format!("• Page fixes:             {}\n\n", preview.summary.routing.page));
+    output.push_str(&format!("{}\n", "Summary".bold()));
+    output.push_str(&format!("{} Issues detected:        {}\n", "•".bright_black(), preview.summary.total_issues.to_string().yellow()));
+    output.push_str(&format!("{} Fixes planned:          {}\n", "•".bright_black(), preview.summary.fixes_planned.to_string().green()));
+    output.push_str(&format!("{} Pages affected:         {}\n", "•".bright_black(), preview.summary.pages_affected.to_string().cyan()));
+    output.push_str(&format!("{} Template fixes:         {}\n", "•".bright_black(), preview.summary.routing.template.to_string().cyan()));
+    output.push_str(&format!("{} Section fixes:          {}\n", "•".bright_black(), preview.summary.routing.section.to_string().cyan()));
+    output.push_str(&format!("{} Page fixes:             {}\n\n", "•".bright_black(), preview.summary.routing.page.to_string().cyan()));
     
     // Fix plan details
-    output.push_str("──────────────── FIX PLAN ────────────────\n\n");
+    output.push_str(&format!("{}\n\n", "──────────────── FIX PLAN ────────────────".bold().cyan()));
     
     for fix in &preview.fixes {
         // Get issue name from registry
@@ -268,54 +269,80 @@ pub fn format_cli_preview(preview: &FixPreview) -> String {
             _ => "SEO issue",
         };
         
-        output.push_str(&format!("[{}] {}\n", fix.issue_code, &issue_name));
-        output.push_str(&format!("Severity: {:?}\n", fix.severity));
-        output.push_str(&format!("Routing: {}\n", &fix.routing));
-        output.push_str(&format!("Reason: {}\n\n", fix.reason));
+        // Color issue code and name based on severity
+        let (colored_code, colored_name) = match fix.severity {
+            Severity::Critical => (format!("{}", fix.issue_code.red().bold()), format!("{}", issue_name.red().bold())),
+            Severity::High => (format!("{}", fix.issue_code.red()), format!("{}", issue_name.red())),
+            Severity::Medium => (format!("{}", fix.issue_code.yellow()), format!("{}", issue_name.yellow())),
+            Severity::Low => (format!("{}", fix.issue_code.bright_blue()), format!("{}", issue_name.bright_blue())),
+        };
         
-        output.push_str("Action:\n");
+        output.push_str(&format!("[{}] {}\n", colored_code, colored_name));
+        
+        // Color severity
+        let severity_str = format!("{:?}", fix.severity);
+        let colored_severity = match fix.severity {
+            Severity::Critical => format!("{}", severity_str.red().bold()),
+            Severity::High => format!("{}", severity_str.red()),
+            Severity::Medium => format!("{}", severity_str.yellow()),
+            Severity::Low => format!("{}", severity_str.bright_blue()),
+        };
+        output.push_str(&format!("Severity: {}\n", colored_severity));
+        output.push_str(&format!("Routing: {}\n", fix.routing.cyan()));
+        output.push_str(&format!("Reason: {}\n\n", fix.reason.bright_black()));
+        
+        output.push_str(&format!("{}\n", "Action:".bold()));
         for action in &fix.actions {
-            output.push_str(&format!("• {}\n", action));
+            output.push_str(&format!("{} {}\n", "•".bright_black(), action));
         }
         output.push_str("\n");
         
         // Show diff preview if available
         if !fix.diffs.is_empty() {
-            output.push_str("Preview:\n");
+            output.push_str(&format!("{}\n", "Preview:".bold()));
             // Show first diff as example
             if let Some(diff) = fix.diffs.first() {
                 if !diff.before.is_empty() {
-                    output.push_str(&format!("- {}\n", diff.before));
+                    output.push_str(&format!("{} {}\n", "-".red(), diff.before.red()));
                 }
                 if !diff.after.is_empty() {
-                    output.push_str(&format!("+ {}\n", diff.after));
+                    output.push_str(&format!("{} {}\n", "+".green(), diff.after.green()));
                 }
             }
             output.push_str("\n");
         }
         
         // Impact
-        output.push_str("Impact:\n");
-        output.push_str(&format!("✓ Fixes {} page(s)\n", fix.affected_pages));
-        output.push_str(&format!("✓ Risk: {:?}\n", fix.risk));
+        output.push_str(&format!("{}\n", "Impact:".bold()));
+        output.push_str(&format!("{} Fixes {} page(s)\n", "✓".green().bold(), fix.affected_pages.to_string().cyan()));
+        
+        // Color risk
+        let risk_str = format!("{:?}", fix.risk);
+        let colored_risk = match fix.risk {
+            FixRisk::None => format!("{}", risk_str.green()),
+            FixRisk::Low => format!("{}", risk_str.green()),
+            FixRisk::Medium => format!("{}", risk_str.yellow()),
+            FixRisk::High => format!("{}", risk_str.yellow()),
+        };
+        output.push_str(&format!("{} Risk: {}\n", "✓".green().bold(), colored_risk));
         if fix.ai_used {
-            output.push_str("✓ AI-assisted\n");
+            output.push_str(&format!("{} {}\n", "✓".green().bold(), "AI-assisted".magenta()));
             if let Some(ref scope) = fix.ai_scope {
-                output.push_str(&format!("  Scope: {}\n", scope));
+                output.push_str(&format!("  Scope: {}\n", scope.magenta()));
             }
         } else {
-            output.push_str("✓ Zero content rewrite\n");
+            output.push_str(&format!("{} {}\n", "✓".green().bold(), "Zero content rewrite".green()));
         }
-        output.push_str("✓ Idempotent\n");
+        output.push_str(&format!("{} {}\n", "✓".green().bold(), "Idempotent".green()));
         
-        output.push_str("\n──────────────────────────────────────────\n\n");
+        output.push_str(&format!("\n{}\n\n", "──────────────────────────────────────────".bright_black()));
     }
     
     // Commands
-    output.push_str("Run with:\n");
-    output.push_str("  --apply        Apply fixes\n");
-    output.push_str("  --scope=page   Downgrade template fix\n");
-    output.push_str("  --skip=CODE    Skip specific issue\n");
+    output.push_str(&format!("{}\n", "Run with:".bold()));
+    output.push_str(&format!("  {}        {}\n", "--apply".green().bold(), "Apply fixes"));
+    output.push_str(&format!("  {}   {}\n", "--scope=page".yellow(), "Downgrade template fix"));
+    output.push_str(&format!("  {}    {}\n", "--skip=CODE".yellow(), "Skip specific issue"));
     
     output
 }

@@ -1,6 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use crate::models::*;
 use crate::registry::lookup;
+use bitvec::prelude::*;
 
 /// Calculate page weight based on URL depth
 /// Homepage gets 2.0, shallow pages (1-2 slashes) get 1.5, deep pages get 1.0
@@ -153,7 +154,11 @@ pub struct SiteAggregator {
     page_count: usize,
     score_acc: ScoreAccumulator,
     issue_counts: HashMap<&'static str, usize>,
-    affected_pages: HashMap<&'static str, HashSet<String>>,
+    /// Track affected pages using BitVec (page index -> bool)
+    /// More memory-efficient than HashSet<String>
+    affected_pages: HashMap<&'static str, BitVec>,
+    /// Map page index to URL for final output
+    page_urls: Vec<String>,
     coverage: CoverageAccumulator,
     severity_counts: SeverityCounts,
     category_counts: CategoryCounts,
@@ -166,6 +171,7 @@ impl SiteAggregator {
             score_acc: ScoreAccumulator::new(),
             issue_counts: HashMap::new(),
             affected_pages: HashMap::new(),
+            page_urls: Vec::new(),
             coverage: CoverageAccumulator::new(),
             severity_counts: SeverityCounts {
                 critical: 0,
@@ -185,7 +191,11 @@ impl SiteAggregator {
 
     /// Ingest a single page report into the aggregation
     pub fn ingest(&mut self, report: &SeoReport) {
+        let page_index = self.page_count;
         self.page_count += 1;
+
+        // Store URL for this page index
+        self.page_urls.push(report.url.clone());
 
         // Add score with weight
         let weight = page_weight(&report.url);
@@ -199,11 +209,17 @@ impl SiteAggregator {
             // Count by code
             *self.issue_counts.entry(issue.code).or_insert(0) += 1;
             
-            // Track affected pages
-            self.affected_pages
+            // Track affected pages using BitVec (more efficient than HashSet<String>)
+            // Ensure all bitvecs are large enough for current page count
+            let bitvec = self.affected_pages
                 .entry(issue.code)
-                .or_insert_with(HashSet::new)
-                .insert(report.url.clone());
+                .or_insert_with(|| bitvec![0; self.page_count]);
+            
+            // Resize if needed (shouldn't happen often, but handle growth)
+            if bitvec.len() < self.page_count {
+                bitvec.resize(self.page_count, false);
+            }
+            bitvec.set(page_index, true);
 
             // Count by severity
             match issue.severity {
@@ -233,6 +249,7 @@ impl SiteAggregator {
         let coverage = self.coverage.finalize(self.page_count);
 
         // Build issue counts by code
+        // Convert BitVec indices back to URLs
         let mut issue_counts: Vec<IssueCount> = self
             .issue_counts
             .into_iter()
@@ -240,7 +257,11 @@ impl SiteAggregator {
                 let urls: Vec<String> = self
                     .affected_pages
                     .get(code)
-                    .map(|s| s.iter().cloned().collect())
+                    .map(|bitvec| {
+                        bitvec.iter_ones()
+                            .filter_map(|idx| self.page_urls.get(idx).cloned())
+                            .collect()
+                    })
                     .unwrap_or_default();
                 let affected_pages = urls.len();
                 IssueCount {

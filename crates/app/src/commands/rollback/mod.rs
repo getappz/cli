@@ -18,7 +18,7 @@ pub async fn rollback(
     session: AppzSession,
     deployment_id_or_url: Option<String>,
     timeout: Option<String>,
-    yes: bool,
+    _yes: bool,
 ) -> AppResult {
     let client = session.get_api_client();
     let cwd = session.working_dir.clone();

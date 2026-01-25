@@ -1,0 +1,17 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../sites/live/makemysolar"
+		},
+		{
+			"path": "../code-ref/biome"
+		},
+		{
+			"path": "../code-ref/codemod"
+		}
+	],
+	"settings": {}
+}

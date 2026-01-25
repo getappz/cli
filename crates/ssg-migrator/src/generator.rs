@@ -315,7 +315,7 @@ pub fn generate_astro_project(config: &MigrationConfig, analysis: &ProjectAnalys
     generate_package_json(&config.output_dir, analysis)?;
 
     // Generate tsconfig.json
-    generate_tsconfig(&config.output_dir)?;
+    generate_tsconfig(&config.output_dir, &analysis)?;
 
     // Copy tailwind config if exists
     if analysis.has_tailwind {
@@ -489,22 +489,34 @@ fn generate_package_json(output_dir: &Utf8PathBuf, analysis: &ProjectAnalysis) -
     Ok(())
 }
 
-fn generate_tsconfig(output_dir: &Utf8PathBuf) -> Result<()> {
+fn generate_tsconfig(output_dir: &Utf8PathBuf, analysis: &ProjectAnalysis) -> Result<()> {
     let tsconfig_path = output_dir.join("tsconfig.json");
+    
+    // Build client-required components set to create path aliases
+    let client_required = collect_client_required_components(analysis);
+    
+    // Build path aliases - we don't need component-specific aliases anymore
+    // since we're updating import paths directly to use react/ directory
+    let path_aliases = vec!["\"@/*\": [\"./src/*\"]".to_string()];
+    
+    let paths_json = path_aliases.join(",\n      ");
+    
+    let tsconfig = format!(
+        r#"{{
+  "extends": "astro/tsconfigs/strict",
+  "compilerOptions": {{
+    "baseUrl": ".",
+    "paths": {{
+      {}
+    }}
+  }}
+}}
+"#,
+        paths_json
+    );
+
     let mut file = fs::File::create(&tsconfig_path)
         .map_err(|e| miette!("Failed to create tsconfig.json: {}", e))?;
-
-    let tsconfig = r#"{
-  "extends": "astro/tsconfigs/strict",
-  "compilerOptions": {
-    "baseUrl": ".",
-    "paths": {
-      "@/*": ["./src/*"]
-    }
-  }
-}
-"#;
-
     file.write_all(tsconfig.as_bytes())
         .map_err(|e| miette!("Failed to write tsconfig.json: {}", e))?;
 
@@ -658,7 +670,7 @@ fn generate_pages(pages_dir: &Utf8PathBuf, analysis: &ProjectAnalysis) -> Result
                 let page_content = format!(
                     r#"---
 import Layout from '../layouts/Layout.astro';
-import {} from '../components/ui/{}.tsx';
+import {} from '../components/react/{}.tsx';
 ---
 <Layout>
   <{} client:load />
@@ -736,7 +748,7 @@ fn generate_client_only_page(component_name: &str) -> String {
     format!(
         r#"---
 import Layout from '../layouts/Layout.astro';
-import {} from '../components/ui/{}.tsx';
+import {} from '../components/react/{}.tsx';
 ---
 <Layout>
   <{} client:load />
@@ -827,8 +839,8 @@ fn transform_page_to_astro_static(content: &str, _component_name: &str, analysis
                     });
                 
                 if is_client_side {
-                    // Client-side component - import from ui directory
-                    component_imports.push(format!("import {} from '../components/ui/{}.tsx';", comp_name_str, comp_path.trim_end_matches(".tsx").trim_end_matches(".ts")));
+                    // Client-side component - import from react directory
+                    component_imports.push(format!("import {} from '../components/react/{}.tsx';", comp_name_str, comp_path.trim_end_matches(".tsx").trim_end_matches(".ts")));
                     component_usage.push((comp_name_str.clone(), true));
                 } else {
                     // Static component - import as Astro component
@@ -1040,6 +1052,23 @@ fn transform_page_to_astro_static(content: &str, _component_name: &str, analysis
         format!("<!-- {} -->", content)
     }).to_string();
     
+    // Fix image src attributes: src={imageVar} -> src={imageVar.src}
+    // In React, imported images can be used directly, but Astro needs .src property
+    // Pattern: src={variableName} where variableName is an imported image
+    let src_expression_pattern = Regex::new(r#"src=\{(?:([a-zA-Z_$][a-zA-Z0-9_$]*)|([a-zA-Z_$][a-zA-Z0-9_$]*\.[a-zA-Z0-9_$]+))\}"#).unwrap();
+    jsx_content = src_expression_pattern.replace_all(&jsx_content, |caps: &regex::Captures| {
+        if let Some(simple_var) = caps.get(1) {
+            // Simple variable: src={imageVar} -> src={imageVar.src}
+            let var_name = simple_var.as_str();
+            format!("src={{{}.src}}", var_name)
+        } else if let Some(prop_access) = caps.get(2) {
+            // Already has property access: src={obj.prop} -> keep as-is
+            format!("src={{{}}}", prop_access.as_str())
+        } else {
+            caps.get(0).unwrap().as_str().to_string()
+        }
+    }).to_string();
+    
     result.push_str("  ");
     result.push_str(&jsx_content);
     result.push_str("\n");
@@ -1127,6 +1156,10 @@ fn transform_component_to_astro_static(content: &str, _component_name: &str, ana
             } else if !path.starts_with("react") && !path.starts_with(".") && !path.starts_with("@/") {
                 // External default imports - these should be included too
                 // For example: import something from 'some-package'
+                component_imports.push(format!("import {} from '{}';", comp_name, path));
+            } else if path.ends_with(".jpg") || path.ends_with(".jpeg") || path.ends_with(".png") 
+                || path.ends_with(".svg") || path.ends_with(".webp") || path.ends_with(".gif") {
+                // Image imports - keep as-is, but we'll need to convert src={imageVar} to src={imageVar.src}
                 component_imports.push(format!("import {} from '{}';", comp_name, path));
             }
         }
@@ -1295,29 +1328,72 @@ fn transform_component_to_astro_static(content: &str, _component_name: &str, ana
         format!("<!-- {} -->", content)
     }).to_string();
     
+    // Fix image src attributes: src={imageVar} -> src={imageVar.src}
+    // In React, imported images can be used directly, but Astro needs .src property
+    // Pattern: src={variableName} where variableName is an imported image
+    let src_expression_pattern = Regex::new(r#"src=\{(?:([a-zA-Z_$][a-zA-Z0-9_$]*)|([a-zA-Z_$][a-zA-Z0-9_$]*\.[a-zA-Z0-9_$]+))\}"#).unwrap();
+    jsx_content = src_expression_pattern.replace_all(&jsx_content, |caps: &regex::Captures| {
+        if let Some(simple_var) = caps.get(1) {
+            // Simple variable: src={imageVar} -> src={imageVar.src}
+            let var_name = simple_var.as_str();
+            format!("src={{{}.src}}", var_name)
+        } else if let Some(prop_access) = caps.get(2) {
+            // Already has property access: src={obj.prop} -> keep as-is
+            format!("src={{{}}}", prop_access.as_str())
+        } else {
+            caps.get(0).unwrap().as_str().to_string()
+        }
+    }).to_string();
+    
     result.push_str(&jsx_content);
     result.push_str("\n");
     
     result
 }
 
+/// Collect all component names that are imported by client-side components
+/// This is the single source of truth for what needs to be copied to ui/
+fn collect_client_required_components(
+    analysis: &ProjectAnalysis,
+) -> std::collections::HashSet<String> {
+    let mut required = std::collections::HashSet::new();
+
+    for component in &analysis.components {
+        if component.is_client_side {
+            for imported in &component.imports {
+                required.insert(imported.clone());
+            }
+        }
+    }
+
+    required
+}
+
 fn generate_components(components_dir: &Utf8PathBuf, analysis: &ProjectAnalysis) -> Result<()> {
-    // Create ui subdirectory for React components
+    // Create ui subdirectory for shadcn/ui components (Button, etc.)
     let ui_dir = components_dir.join("ui");
     fs::create_dir_all(&ui_dir)
         .map_err(|e| miette!("Failed to create ui directory: {}", e))?;
 
-    // First, copy all UI components from src/components/ui (they're needed by React components)
+    // Create react subdirectory for React components that need hydration
+    let react_dir = components_dir.join("react");
+    fs::create_dir_all(&react_dir)
+        .map_err(|e| miette!("Failed to create react directory: {}", e))?;
+
+    // Build the client-required component set once (single source of truth)
+    let client_required = collect_client_required_components(analysis);
+
+    // First, copy all UI components from src/components/ui (shadcn/ui components)
     let source_ui_dir = analysis.source_dir.join("src/components/ui");
     if source_ui_dir.exists() {
-        copy_ui_components(&source_ui_dir, &ui_dir, analysis)?;
+        copy_ui_components(&source_ui_dir, &ui_dir, analysis, &client_required)?;
     }
 
-    // Also copy React components from src/components/ that are imported by other React components
-    // These are components like Navbar, Footer, WhatsAppButton that don't use hooks but are React components
+    // Copy React components from src/components/ that are imported by other React components
+    // These are components required by client-side components - they go to react/ directory
     let source_components_dir = analysis.source_dir.join("src/components");
     if source_components_dir.exists() {
-        copy_react_components_from_components_dir(&source_components_dir, &ui_dir, analysis)?;
+        copy_react_components_from_components_dir(&source_components_dir, &react_dir, &client_required, analysis)?;
     }
 
     // Now handle other components
@@ -1334,9 +1410,9 @@ fn generate_components(components_dir: &Utf8PathBuf, analysis: &ProjectAnalysis)
         }
         
         if component.is_client_side {
-            // Copy React component as-is to ui directory (for page components)
+            // Copy React component as-is to react directory (for page components)
             if is_page_component {
-                let dest_path = ui_dir.join(format!("{}.tsx", component.name));
+                let dest_path = react_dir.join(format!("{}.tsx", component.name));
                 let source_path = BiomePath::new(component.file_path.clone());
                 let content = source_path
                     .read_to_string()
@@ -1344,21 +1420,22 @@ fn generate_components(components_dir: &Utf8PathBuf, analysis: &ProjectAnalysis)
                 
                 // Fix imports in the React component
                 let fixed_content = fix_react_imports(&content);
-                let fixed_content = fix_all_component_imports(&fixed_content, analysis);
+                let fixed_content = fix_all_component_imports(&fixed_content, analysis, &client_required);
                 
                 let mut file = fs::File::create(&dest_path)
                     .map_err(|e| miette!("Failed to create component: {}", e))?;
                 file.write_all(fixed_content.as_bytes())
                     .map_err(|e| miette!("Failed to write component: {}", e))?;
             } else {
-                // Regular client-side component - copy to ui with fixed imports
-                let dest_path = ui_dir.join(format!("{}.tsx", component.name));
+                // Regular client-side component - copy to react with fixed imports
+                let dest_path = react_dir.join(format!("{}.tsx", component.name));
                 let source_path = BiomePath::new(component.file_path.clone());
                 let content = source_path
                     .read_to_string()
                     .map_err(|e| miette!("Failed to read component: {}", e))?;
                 
                 let fixed_content = fix_react_imports(&content);
+                let fixed_content = fix_all_component_imports(&fixed_content, analysis, &client_required);
                 
                 let mut file = fs::File::create(&dest_path)
                     .map_err(|e| miette!("Failed to create component: {}", e))?;
@@ -1367,42 +1444,43 @@ fn generate_components(components_dir: &Utf8PathBuf, analysis: &ProjectAnalysis)
             }
         } else {
             // Static component - check if it's imported by any client-side component
-            let is_imported_by_client = analysis.components.iter().any(|c| {
-                c.is_client_side && c.imports.contains(&component.name)
-            });
+            let is_imported_by_client = client_required.contains(&component.name);
             
             if is_imported_by_client {
-                // If imported by a client-side component, also copy it to ui/ as React component
-                let dest_path = ui_dir.join(format!("{}.tsx", component.name));
+                // If imported by a client-side component, copy it to react/ as React component
+                // BUT DO NOT convert to .astro - it's needed as React component
+                let dest_path = react_dir.join(format!("{}.tsx", component.name));
                 let source_path = BiomePath::new(component.file_path.clone());
                 let content = source_path
                     .read_to_string()
                     .map_err(|e| miette!("Failed to read component: {}", e))?;
                 
                 let fixed_content = fix_react_imports(&content);
-                let fixed_content = fix_all_component_imports(&fixed_content, analysis);
+                let fixed_content = fix_all_component_imports(&fixed_content, analysis, &client_required);
                 
                 let mut file = fs::File::create(&dest_path)
                     .map_err(|e| miette!("Failed to create component: {}", e))?;
                 file.write_all(fixed_content.as_bytes())
                     .map_err(|e| miette!("Failed to write component: {}", e))?;
-            }
-            
-            // Transform to Astro component (only for non-page, non-ui components)
-            if !is_page_component {
-                let dest_path = components_dir.join(format!("{}.astro", component.name));
-                let source_path = BiomePath::new(component.file_path.clone());
-                let content = source_path
-                    .read_to_string()
-                    .map_err(|e| miette!("Failed to read component: {}", e))?;
                 
-                // Use the proper component transformer with safety checks
-                let astro_content = transform_component_to_astro(&content, &component.name, analysis);
-                
-                let mut file = fs::File::create(&dest_path)
-                    .map_err(|e| miette!("Failed to create component: {}", e))?;
-                file.write_all(astro_content.as_bytes())
-                    .map_err(|e| miette!("Failed to write Astro component: {}", e))?;
+                // Skip Astro conversion - this component is needed as React
+            } else {
+                // Pure static component - transform to Astro (only for non-page, non-ui components)
+                if !is_page_component {
+                    let dest_path = components_dir.join(format!("{}.astro", component.name));
+                    let source_path = BiomePath::new(component.file_path.clone());
+                    let content = source_path
+                        .read_to_string()
+                        .map_err(|e| miette!("Failed to read component: {}", e))?;
+                    
+                    // Use the proper component transformer with safety checks
+                    let astro_content = transform_component_to_astro(&content, &component.name, analysis);
+                    
+                    let mut file = fs::File::create(&dest_path)
+                        .map_err(|e| miette!("Failed to create component: {}", e))?;
+                    file.write_all(astro_content.as_bytes())
+                        .map_err(|e| miette!("Failed to write Astro component: {}", e))?;
+                }
             }
         }
     }
@@ -1410,7 +1488,12 @@ fn generate_components(components_dir: &Utf8PathBuf, analysis: &ProjectAnalysis)
     Ok(())
 }
 
-fn copy_ui_components(source_ui_dir: &Utf8PathBuf, dest_ui_dir: &Utf8PathBuf, _analysis: &ProjectAnalysis) -> Result<()> {
+fn copy_ui_components(
+    source_ui_dir: &Utf8PathBuf, 
+    dest_ui_dir: &Utf8PathBuf, 
+    analysis: &ProjectAnalysis,
+    client_required: &std::collections::HashSet<String>
+) -> Result<()> {
     for entry in WalkDir::new(source_ui_dir) {
         let entry = entry.map_err(|e| miette!("Failed to read ui directory: {}", e))?;
         let path = Utf8PathBuf::from_path_buf(entry.path().to_path_buf())
@@ -1428,6 +1511,7 @@ fn copy_ui_components(source_ui_dir: &Utf8PathBuf, dest_ui_dir: &Utf8PathBuf, _a
             
             // Fix imports in UI components
             let fixed_content = fix_react_imports(&content);
+            let fixed_content = fix_all_component_imports(&fixed_content, analysis, client_required);
             
             let mut file = fs::File::create(&dest_path)
                 .map_err(|e| miette!("Failed to create ui component: {}", e))?;
@@ -1439,10 +1523,14 @@ fn copy_ui_components(source_ui_dir: &Utf8PathBuf, dest_ui_dir: &Utf8PathBuf, _a
     Ok(())
 }
 
-fn copy_react_components_from_components_dir(source_components_dir: &Utf8PathBuf, dest_ui_dir: &Utf8PathBuf, analysis: &ProjectAnalysis) -> Result<()> {
-    // Components that are React components (use JSX) and are imported by other React components
-    // These need to be in ui/ even if they don't use hooks
-    let react_component_names = vec!["Navbar", "Footer", "WhatsAppButton"];
+fn copy_react_components_from_components_dir(
+    source_components_dir: &Utf8PathBuf, 
+    dest_ui_dir: &Utf8PathBuf, 
+    client_required: &std::collections::HashSet<String>,
+    analysis: &ProjectAnalysis
+) -> Result<()> {
+    // Copy all components that are required by client-side components
+    // This guarantees any component imported by a React component is available as React
     
     for entry in WalkDir::new(source_components_dir) {
         let entry = entry.map_err(|e| miette!("Failed to read components directory: {}", e))?;
@@ -1459,8 +1547,10 @@ fn copy_react_components_from_components_dir(source_components_dir: &Utf8PathBuf
                 .ok_or_else(|| miette!("Invalid file name"))?
                 .to_string();
             
-            // Only copy known React components that are imported by other components
-            if react_component_names.contains(&file_stem.as_str()) {
+            // Copy if it's required by any client-side component
+            let should_copy = client_required.contains(&file_stem);
+            
+            if should_copy {
                 let file_name = path.file_name()
                     .ok_or_else(|| miette!("Invalid file name"))?;
                 let dest_path = dest_ui_dir.join(file_name);
@@ -1475,7 +1565,7 @@ fn copy_react_components_from_components_dir(source_components_dir: &Utf8PathBuf
                     .unwrap_or_else(|_| content.clone());
                 
                 // Fix all component imports based on analysis
-                let fixed_content = fix_all_component_imports(&fixed_content, analysis);
+                let fixed_content = fix_all_component_imports(&fixed_content, analysis, client_required);
                 
                 let mut file = fs::File::create(&dest_path)
                     .map_err(|e| miette!("Failed to create component: {}", e))?;
@@ -1533,30 +1623,19 @@ fn fix_react_imports(content: &str) -> String {
 }
 
 fn fix_component_import_paths(content: &str) -> String {
-    // List of common component names that are copied to ui/ directory
-    // These are components from src/components/ (not src/components/ui/) that are client-side
-    let common_components = vec!["Navbar", "Footer", "WhatsAppButton"];
-    
-    let mut fixed = content.to_string();
-    
-    // Fix imports like: import X from '@/components/X';
-    // to: import X from '@/components/ui/X';
-    for comp_name in &common_components {
-        // Match: import X from '@/components/X';
-        let pattern = format!(r#"import\s+(\w+)\s+from\s+['"]@/components/{}(?:\.tsx)?['"]"#, comp_name);
-        let regex = Regex::new(&pattern).unwrap();
-        fixed = regex.replace_all(&fixed, |caps: &regex::Captures| {
-            let import_name = caps.get(1).unwrap().as_str();
-            format!("import {} from '@/components/ui/{}'", import_name, comp_name)
-        }).to_string();
-    }
-    
-    fixed
+    // This function is now deprecated - import paths are fixed by fix_all_component_imports
+    // which uses client_required set and maintains original paths via tsconfig aliases
+    // Keeping this for backward compatibility but it shouldn't be needed
+    content.to_string()
 }
 
 /// Fix all component imports in a React component based on analysis data
-/// This ensures imports point to the correct locations (ui/ for client-side, .astro for static)
-fn fix_all_component_imports(content: &str, analysis: &ProjectAnalysis) -> String {
+/// This ensures imports point to the correct locations (react/ for client-side, .astro for static)
+fn fix_all_component_imports(
+    content: &str, 
+    analysis: &ProjectAnalysis,
+    client_required: &std::collections::HashSet<String>
+) -> String {
     let mut fixed = content.to_string();
     
     // Create a map of component names to their destination paths
@@ -1572,24 +1651,30 @@ fn fix_all_component_imports(content: &str, analysis: &ProjectAnalysis) -> Strin
         
         // Determine the correct import path
         if component.is_client_side {
-            // Client-side components go to ui/
-            component_paths.insert(comp_name.clone(), format!("@/components/ui/{}", comp_name));
+            // Client-side components go to react/
+            component_paths.insert(comp_name.clone(), format!("@/components/react/{}", comp_name));
         } else {
             // Static components become .astro files
             // But if they're imported by React components, they need to be available as React components too
             // Check if this component is imported by any client-side component
-            let is_imported_by_client = analysis.components.iter().any(|c| {
-                c.is_client_side && c.imports.contains(comp_name)
-            });
+            let is_imported_by_client = client_required.contains(comp_name);
             
             if is_imported_by_client {
-                // If imported by a client-side component, it needs to be in ui/ as well
-                // So we'll import it from ui/ (it will be copied there)
-                component_paths.insert(comp_name.clone(), format!("@/components/ui/{}", comp_name));
+                // If imported by a client-side component, it needs to be in react/ as well
+                component_paths.insert(comp_name.clone(), format!("@/components/react/{}", comp_name));
             } else {
                 // Pure static component - becomes .astro
                 component_paths.insert(comp_name.clone(), format!("@/components/{}.astro", comp_name));
             }
+        }
+    }
+    
+    // Also add components that are imported by client-side components but might not be in analysis.components
+    // This handles cases where components are copied to react/ but weren't analyzed
+    for imported_name in client_required {
+        if !component_paths.contains_key(imported_name) {
+            // If it's imported by a client-side component, it should be in react/
+            component_paths.insert(imported_name.clone(), format!("@/components/react/{}", imported_name));
         }
     }
     
@@ -1630,6 +1715,19 @@ fn transform_with_regex_fallback(content: &str) -> String {
     // Remove useLocation hook calls
     let location_pattern = Regex::new(r#"const\s+location\s*=\s*useLocation\(\);"#).unwrap();
     fixed = location_pattern.replace_all(&fixed, "").to_string();
+    
+    // Remove useNavigate hook calls
+    let navigate_pattern = Regex::new(r#"const\s+navigate\s*=\s*useNavigate\(\);"#).unwrap();
+    fixed = navigate_pattern.replace_all(&fixed, "").to_string();
+    
+    // Replace navigate('/path') calls with window.location.href = '/path'
+    // Pattern: navigate('/path') or navigate("/path")
+    let navigate_call_pattern = Regex::new(r#"navigate\((['"])([^'"]+)\1\)"#).unwrap();
+    fixed = navigate_call_pattern.replace_all(&fixed, |caps: &regex::Captures| {
+        let quote = caps.get(1).unwrap().as_str();
+        let path = caps.get(2).unwrap().as_str();
+        format!("window.location.href = {}{}{}", quote, path, quote)
+    }).to_string();
     
     // Remove useEffect hooks that use location
     let useEffect_location_pattern = Regex::new(r#"useEffect\(\(\)\s*=>\s*\{[^}]*location[^}]*\},\s*\[location\.pathname\]\);"#).unwrap();

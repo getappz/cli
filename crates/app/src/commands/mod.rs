@@ -4,6 +4,7 @@ pub mod deployment_utils;
 pub mod dev;
 pub mod dev_server;
 pub mod domains;
+pub mod gen;
 pub mod init;
 pub mod link;
 pub mod list;

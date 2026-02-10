@@ -11,7 +11,7 @@ members = [
     "crates/ssg-migrator",
     "crates/task",
     "crates/ui",
-    "crates/appz_pdk",
+    "crates/appz_pdk", "crates/studio",
 ]
 resolver = "2"
 

@@ -242,6 +242,7 @@ pub fn requires_auth(command: &crate::app::Commands) -> bool {
             | crate::app::Commands::Promote { .. }
             | crate::app::Commands::Rollback { .. }
             | crate::app::Commands::Remove { .. }
+            | crate::app::Commands::Gen { .. }
     )
 }
 

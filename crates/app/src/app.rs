@@ -273,6 +273,21 @@ pub enum Commands {
         #[arg(long)]
         safe: bool,
     },
+    /// Generate a website from a natural-language prompt (AI)
+    Gen {
+        /// Natural-language prompt describing the website to generate
+        #[arg(required = true, trailing_var_arg = true)]
+        prompt: Vec<String>,
+        /// Output directory (default: ./gen-output or ./<name> if --name set)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// Project name (used as output dir name if --output not set)
+        #[arg(short, long)]
+        name: Option<String>,
+        /// AI model to use (backend default if not set)
+        #[arg(short, long)]
+        model: Option<String>,
+    },
     /// Migrate React SPA to Astro SSG
     Migrate {
         /// Source React SPA directory (default: current directory)

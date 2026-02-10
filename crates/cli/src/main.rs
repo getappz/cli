@@ -140,6 +140,9 @@ async fn main() -> MainResult {
                 Commands::Remove { resources, yes, safe } => {
                     app::commands::remove(session, resources, yes, safe).await
                 }
+                Commands::Gen { prompt, output, name, model } => {
+                    app::commands::gen::run(session, prompt, output, name, model).await
+                }
                 Commands::Migrate { source, output, name, force } => {
                     app::commands::migrate(session, source, output, name, force).await
                 }

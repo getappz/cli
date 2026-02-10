@@ -320,6 +320,51 @@ impl Client {
         self.handle_response(response).await
     }
 
+    /// Execute a POST request with JSON body and return response body as text
+    #[tracing::instrument(skip(self, body))]
+    pub async fn post_return_text(
+        &self,
+        path: &str,
+        body: Option<impl serde::Serialize>,
+    ) -> Result<String, ApiError> {
+        let url = format!("{}{}", self.base_url, path);
+
+        let json_body = if let Some(ref body) = body {
+            Some(serde_json::to_string(body).map_err(ApiError::Json)?)
+        } else {
+            None
+        };
+
+        let response = self
+            .execute_with_auth_retry(&url, || {
+                let mut req_builder = self.http_client.request(Method::POST, &url);
+                if let Some(ref json_body) = json_body {
+                    req_builder = req_builder
+                        .header("Content-Type", "application/json")
+                        .body(json_body.clone());
+                }
+                req_builder
+            })
+            .await?;
+
+        let status = response.status();
+        let headers = response.headers().clone();
+        let text = response
+            .text()
+            .await
+            .map_err(|e| ApiError::HttpMiddleware(format!("Failed to read response: {}", e)))?;
+
+        if !status.is_success() {
+            return Err(crate::http::response_handler::error_from_status_body_headers(
+                status,
+                &text,
+                &headers,
+            ));
+        }
+
+        Ok(text)
+    }
+
     /// Execute a PATCH request with JSON body and deserialize JSON response
     #[tracing::instrument(skip(self, body))]
     pub async fn patch<T: serde::de::DeserializeOwned>(

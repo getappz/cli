@@ -1,7 +1,7 @@
 use crate::types::{ComponentInfo, ProjectAnalysis, RouteInfo};
 use biome_fs::BiomePath;
 use biome_js_parser::{parse, JsParserOptions};
-use biome_js_syntax::{JsFileSource, JsSyntaxKind, JsSyntaxNode, JsImport};
+use biome_js_syntax::{JsFileSource, JsSyntaxNode, JsImport};
 use biome_rowan::AstNode;
 use camino::Utf8PathBuf;
 use miette::{miette, Result};
@@ -68,15 +68,14 @@ fn parse_routes(app_path: &Utf8PathBuf) -> Result<Vec<RouteInfo>> {
     }
 
     // Also check for catch-all route
-    if content.contains(r#"path="*""#) || content.contains(r#"path='*'"#) {
-        if !routes.iter().any(|r| r.is_catch_all) {
+    if (content.contains(r#"path="*""#) || content.contains(r#"path='*'"#))
+        && !routes.iter().any(|r| r.is_catch_all) {
             routes.push(RouteInfo {
                 path: "*".to_string(),
                 component: "NotFound".to_string(),
                 is_catch_all: true,
             });
         }
-    }
 
     // If no routes found, add default index route
     if routes.is_empty() {

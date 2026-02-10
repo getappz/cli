@@ -6,6 +6,8 @@ use miette::{miette, Result};
 use starbase::AppResult;
 use std::path::PathBuf;
 use tracing::instrument;
+use ui::progress::SpinnerHandle;
+use ui::status;
 
 #[instrument(skip_all)]
 pub async fn run(
@@ -19,31 +21,54 @@ pub async fn run(
     let output_dir = resolve_output_dir(working_dir, output, name)?;
     let prompt_str = prompt.join(" ").trim().to_string();
     if prompt_str.is_empty() {
-        return Err(miette!("Prompt cannot be empty").into());
+        let _ = status::error("Prompt cannot be empty");
+        return Err(miette!("Prompt cannot be empty"));
     }
 
-    tracing::info!("Scaffolding at {}", output_dir.display());
+    let _ = status::info(&format!(
+        "Output directory: {}",
+        output_dir.display()
+    ));
+    let _ = status::info("Scaffolding Vite + React + Tailwind project...");
     scaffold(&output_dir).map_err(|e| miette!("{}", e))?;
+    let _ = status::success("Scaffold complete");
 
     let client = session.get_api_client();
-    tracing::info!("Requesting AI generation from API");
+    let spinner = SpinnerHandle::new("Generating code from your description...");
     let response = client
         .gen()
         .generate(prompt_str, model)
-        .await
-        .map_err(|e| miette!("API generation failed: {}", e))?;
+        .await;
+    let response = match response {
+        Ok(r) => {
+            spinner.finish_with_message("Generation complete");
+            r
+        }
+        Err(e) => {
+            spinner.finish();
+            let _ = status::error(&format!("API generation failed: {}", e));
+            return Err(miette!("API generation failed: {}", e));
+        }
+    };
 
     if response.trim().is_empty() {
-        return Err(miette!("API returned empty response").into());
+        let _ = status::error("API returned empty response");
+        return Err(miette!("API returned empty response"));
     }
 
-    tracing::info!("Applying generated code");
-    parse_and_apply(response.trim(), &output_dir)
-        .await
-        .map_err(|e| miette!("{}", e))?;
+    let _ = status::info("Applying generated files and installing dependencies...");
+    if let Err(e) = parse_and_apply(response.trim(), &output_dir).await {
+        let _ = status::error(&format!("Failed to apply generated code: {}", e));
+        return Err(miette!("{}", e));
+    }
+    let _ = status::success("Applied successfully");
 
-    println!("Generated project at: {}", output_dir.display());
-    println!("Next steps:");
+    let _ = status::success_with_spacing(&format!(
+        "Generated project at {}",
+        output_dir.display()
+    ));
+    println!("  Location: {}", output_dir.display());
+    println!("\nNext steps:");
     println!("  cd {}", output_dir.display());
     println!("  npm run dev");
 

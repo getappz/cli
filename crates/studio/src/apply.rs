@@ -1,9 +1,9 @@
 //! Write parsed files and run npm install / commands.
 
-use crate::parse::{FileEntry, ParsedResponse};
+use crate::parse::ParsedResponse;
 use miette::{miette, Result};
 use starbase_utils::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tracing::instrument;
 
 fn normalize_path(path: &str) -> &str {

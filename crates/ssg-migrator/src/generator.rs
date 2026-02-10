@@ -817,7 +817,7 @@ fn transform_page_to_astro_static(content: &str, _component_name: &str, analysis
                 let comp_name_clean = comp_path.trim_end_matches(".tsx").trim_end_matches(".ts");
                 
                 // Known React components that are always client-side (even if they don't use hooks)
-                let known_react_components = vec!["Navbar", "Footer", "WhatsAppButton"];
+                let known_react_components = ["Navbar", "Footer", "WhatsAppButton"];
                 let is_known_react = known_react_components.contains(&comp_name_clean);
                 
                 let is_client_side = is_known_react || analysis.components.iter()
@@ -908,9 +908,9 @@ fn transform_page_to_astro_static(content: &str, _component_name: &str, analysis
     if component_start > last_import_end {
         let constants_section = &content[last_import_end..component_start].trim();
         if !constants_section.is_empty() {
-            result.push_str("\n");
+            result.push('\n');
             result.push_str(constants_section);
-            result.push_str("\n");
+            result.push('\n');
         }
     }
     
@@ -1042,7 +1042,7 @@ fn transform_page_to_astro_static(content: &str, _component_name: &str, analysis
     
     result.push_str("  ");
     result.push_str(&jsx_content);
-    result.push_str("\n");
+    result.push('\n');
     
     result.push_str("</Layout>\n");
     result
@@ -1106,7 +1106,7 @@ fn transform_component_to_astro_static(content: &str, _component_name: &str, ana
                 let comp_name_str = comp_name.to_string();
                 let comp_name_clean = comp_path.trim_end_matches(".tsx").trim_end_matches(".ts");
                 
-                let known_react_components = vec!["Navbar", "Footer", "WhatsAppButton"];
+                let known_react_components = ["Navbar", "Footer", "WhatsAppButton"];
                 let is_known_react = known_react_components.contains(&comp_name_clean);
                 
                 let is_client_side = is_known_react || analysis.components.iter()
@@ -1184,9 +1184,9 @@ fn transform_component_to_astro_static(content: &str, _component_name: &str, ana
     if component_start > last_import_end {
         let constants_section = &content[last_import_end..component_start].trim();
         if !constants_section.is_empty() {
-            result.push_str("\n");
+            result.push('\n');
             result.push_str(constants_section);
-            result.push_str("\n");
+            result.push('\n');
         }
     }
     
@@ -1296,7 +1296,7 @@ fn transform_component_to_astro_static(content: &str, _component_name: &str, ana
     }).to_string();
     
     result.push_str(&jsx_content);
-    result.push_str("\n");
+    result.push('\n');
     
     result
 }
@@ -1442,7 +1442,7 @@ fn copy_ui_components(source_ui_dir: &Utf8PathBuf, dest_ui_dir: &Utf8PathBuf, _a
 fn copy_react_components_from_components_dir(source_components_dir: &Utf8PathBuf, dest_ui_dir: &Utf8PathBuf, analysis: &ProjectAnalysis) -> Result<()> {
     // Components that are React components (use JSX) and are imported by other React components
     // These need to be in ui/ even if they don't use hooks
-    let react_component_names = vec!["Navbar", "Footer", "WhatsAppButton"];
+    let react_component_names = ["Navbar", "Footer", "WhatsAppButton"];
     
     for entry in WalkDir::new(source_components_dir) {
         let entry = entry.map_err(|e| miette!("Failed to read components directory: {}", e))?;

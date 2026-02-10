@@ -1,6 +1,6 @@
 use crate::session::AppzSession;
 use camino::Utf8PathBuf;
-use miette::{miette, Result};
+use miette::miette;
 use ssg_migrator::{analyze_project, generate_astro_project, MigrationConfig};
 use starbase::AppResult;
 use std::path::PathBuf;
@@ -24,7 +24,7 @@ pub async fn migrate(
     };
 
     if !source_dir.exists() {
-        return Err(miette!("Source directory does not exist: {}", source_dir).into());
+        return Err(miette!("Source directory does not exist: {}", source_dir));
     }
 
     // Determine output directory

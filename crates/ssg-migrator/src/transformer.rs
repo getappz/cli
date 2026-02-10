@@ -77,7 +77,7 @@ fn extract_jsx_content(content: &str) -> String {
     }
     
     // If we can't extract, return a placeholder
-    format!("<!-- Migrated from React component -->\n<div>Content migrated</div>")
+    "<!-- Migrated from React component -->\n<div>Content migrated</div>".to_string()
 }
 
 pub fn transform_route_to_astro_page(

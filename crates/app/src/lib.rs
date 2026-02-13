@@ -11,6 +11,7 @@ mod log;
 mod project;
 mod recipe;
 mod services;
+mod sandbox_helpers;
 mod session;
 mod shell;
 mod ssh;

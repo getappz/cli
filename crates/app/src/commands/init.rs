@@ -1,11 +1,16 @@
-use crate::detectors::{detect_framework_record, DetectFrameworkRecordOptions, StdFilesystem};
+use crate::detectors::{
+    detect_framework_record, detect_package_manager, DetectFrameworkRecordOptions,
+    PackageManagerInfo, StdFilesystem,
+};
+use crate::detectors::filesystem::DetectorFilesystem;
+use crate::sandbox_helpers::mise_tools_for_execution;
 use crate::services::{TemplateService, TemplateSource};
 use crate::session::AppzSession;
-use crate::shell::copy_path_recursive;
 use crate::templates::{get_builtin_template, BUILTIN_TEMPLATES};
 use frameworks::frameworks;
 use inquire::{Select, Text};
 use miette::miette;
+use sandbox::{create_sandbox, SandboxConfig};
 use starbase::AppResult;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -226,19 +231,28 @@ pub async fn init(
         }
     };
 
-    // Create project directory
-    std::fs::create_dir_all(&project_path)
-        .map_err(|e| miette!("Failed to create project directory: {}", e))?;
+    // Create sandbox first — it creates the project directory
+    let sandbox_config = SandboxConfig::new(project_path.clone())
+        .with_settings(mise_tools_for_execution(&None::<PackageManagerInfo>, None));
+    let sandbox = create_sandbox(sandbox_config)
+        .await
+        .map_err(|e| miette!("Sandbox setup failed: {}", e))?;
 
-    // Copy template files to project directory
+    // Copy template files into sandbox
     info!("Copying template files to: {}", project_path.display());
-    copy_path_recursive(&template_dir, &project_path)
+    sandbox
+        .fs()
+        .copy_from_external(&template_dir, ".")
         .map_err(|e| miette!("Failed to copy template files: {}", e))?;
 
     // Auto-detect framework
-    let fs = Arc::new(StdFilesystem::new(Some(project_path.clone())));
+    let fs: Arc<dyn DetectorFilesystem> =
+        Arc::new(StdFilesystem::new(Some(project_path.clone())));
     let framework_list: Vec<_> = frameworks().to_vec();
-    let options = DetectFrameworkRecordOptions { fs, framework_list };
+    let options = DetectFrameworkRecordOptions {
+        fs: Arc::clone(&fs),
+        framework_list,
+    };
 
     let detected_framework = match detect_framework_record(options).await {
         Ok(Some((framework, _version, _package_manager))) => {
@@ -255,9 +269,8 @@ pub async fn init(
         }
     };
 
-    // Run install command if not skipped
+    // Run install command if not skipped (reuse existing sandbox)
     if !skip_install {
-        // Check for package.json to determine if we should run npm install
         let package_json = project_path.join("package.json");
         if package_json.exists() {
             info!("Installing dependencies...");
@@ -271,25 +284,24 @@ pub async fn init(
                 "npm install"
             };
 
-            // Use shell::run_local_with which automatically wraps with mise if supported
-            use crate::shell::{run_local_with, RunOptions};
-            use std::sync::Arc;
-            use task::Context;
+            // Ensure package-manager-specific tools (e.g. pnpm, yarn, bun)
+            let package_manager = detect_package_manager(&fs).await.ok().flatten();
+            let pm_settings = mise_tools_for_execution(&package_manager, None);
+            for spec in &pm_settings.mise_tools {
+                if let Err(e) = sandbox.ensure_tool(spec).await {
+                    warn!("Could not ensure {}: {}", spec.to_mise_arg(), e);
+                }
+            }
 
-            let ctx = Arc::new(Context::new());
-            let opts = RunOptions {
-                cwd: Some(project_path.clone()),
-                env: None,
-                show_output: true,
-                package_manager: None,
-                tool_info: None,
-            };
-
-            let result = run_local_with(&ctx, install_cmd, opts).await;
-
-            match result {
-                Ok(_) => {
+            let exec_result = sandbox.exec_interactive(install_cmd).await;
+            match exec_result {
+                Ok(status) if status.success() => {
                     info!("✓ Dependencies installed");
+                }
+                Ok(_) => {
+                    warn!(
+                        "Install command failed, but project was created successfully"
+                    );
                 }
                 Err(e) => {
                     warn!(

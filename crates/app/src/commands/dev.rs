@@ -1,9 +1,11 @@
 use crate::detectors::{
     detect_framework_record, detect_hugo_info, DetectFrameworkRecordOptions, StdFilesystem,
 };
+use crate::sandbox_helpers::mise_tools_for_execution;
 use crate::session::AppzSession;
-use crate::shell::{command_exists, run_local_with, RunOptions, ToolVersionInfo};
+use crate::shell::{command_exists, is_shell_script, run_local_with, RunOptions, ToolVersionInfo};
 use crate::tunnel::{CloudflaredTunnel, TunnelService};
+use sandbox::{create_sandbox, SandboxConfig};
 use frameworks::frameworks;
 use starbase::AppResult;
 use std::sync::Arc;
@@ -61,7 +63,9 @@ pub async fn dev(session: AppzSession) -> AppResult {
     };
 
     // Create filesystem detector
-    let fs = Arc::new(StdFilesystem::new(Some(project_path.clone())));
+    use crate::detectors::filesystem::DetectorFilesystem;
+    let fs: Arc<dyn DetectorFilesystem> =
+        Arc::new(StdFilesystem::new(Some(project_path.clone())));
 
     // Get all available frameworks
     let framework_list: Vec<_> = frameworks().to_vec();
@@ -185,15 +189,15 @@ pub async fn dev(session: AppzSession) -> AppResult {
                 None
             };
 
-            // Create a minimal context for running the command
+            // Create a minimal context for fallback (run_local_with)
             let mut ctx = Context::new();
             ctx.set_working_path(project_path.clone());
             let opts = RunOptions {
-                cwd: Some(project_path),
+                cwd: Some(project_path.clone()),
                 env: None,
                 show_output: true,
                 package_manager: package_manager.clone(),
-                tool_info,
+                tool_info: tool_info.clone(),
             };
 
             // If sharing, wait a bit for dev server to start
@@ -202,10 +206,24 @@ pub async fn dev(session: AppzSession) -> AppResult {
                 tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
             }
 
-            // Try to run the dev command
-            // If it fails and it's a shell script on Windows, fallback to framework command
-            // Note: tunnel will be cleaned up by Drop when it goes out of scope
-            let result = run_local_with(&ctx, &dev_cmd, opts.clone()).await;
+            // Run the dev command via sandbox (mise-managed) with fallback to run_local_with
+            let config = SandboxConfig::new(project_path.clone())
+                .with_settings(mise_tools_for_execution(
+                    &package_manager,
+                    tool_info.as_ref(),
+                ));
+
+            let result = match create_sandbox(config).await {
+                Ok(sandbox) => sandbox
+                    .exec_interactive(&dev_cmd)
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| miette::miette!("{}", e)),
+                Err(e) => {
+                    tracing::debug!("Sandbox setup failed, falling back to run_local_with: {}", e);
+                    run_local_with(&ctx, &dev_cmd, opts.clone()).await
+                }
+            };
 
             // Clean up tunnel after command completes (success or failure)
             if let Some(ref mut t) = tunnel {

@@ -1,6 +1,11 @@
-use crate::detectors::{detect_framework_record, DetectFrameworkRecordOptions, StdFilesystem};
+use crate::detectors::{
+    detect_framework_record, DetectFrameworkRecordOptions, StdFilesystem,
+};
+use crate::detectors::filesystem::DetectorFilesystem;
+use crate::sandbox_helpers::mise_tools_for_execution;
 use crate::session::AppzSession;
 use crate::shell::{command_exists, is_shell_script, run_local_with, RunOptions};
+use sandbox::{create_sandbox, SandboxConfig};
 use frameworks::frameworks;
 use miette::Result;
 use starbase::AppResult;
@@ -142,7 +147,8 @@ pub async fn build(session: AppzSession) -> AppResult {
     let registry = session.get_task_registry();
 
     // Create filesystem detector
-    let fs = Arc::new(StdFilesystem::new(Some(project_path.clone())));
+    let fs: Arc<dyn DetectorFilesystem> =
+        Arc::new(StdFilesystem::new(Some(project_path.clone())));
 
     // Get all available frameworks
     let framework_list: Vec<_> = frameworks().to_vec();
@@ -261,7 +267,7 @@ pub async fn build(session: AppzSession) -> AppResult {
                 println!("✓ Using framework build command");
             }
 
-            // Create a minimal context for running the commands
+            // Create a minimal context for fallback (run_local_with)
             let mut ctx = Context::new();
             ctx.set_working_path(project_path.clone());
             let opts = RunOptions {
@@ -271,6 +277,16 @@ pub async fn build(session: AppzSession) -> AppResult {
                 package_manager: package_manager.clone(),
                 tool_info: None,
             };
+
+            // Sandbox for install/build (mise-managed, node_modules/.bin in PATH)
+            let config = SandboxConfig::new(project_path.clone())
+                .with_settings(mise_tools_for_execution(&package_manager, None));
+            let sandbox = create_sandbox(config).await.ok();
+            if sandbox.is_none() {
+                tracing::debug!(
+                    "Sandbox setup failed, will use run_local_with fallback for install/build"
+                );
+            }
 
             // Execute install step: check for appz:install recipe task first
             let using_appz_install = registry.get("appz:install").is_some();
@@ -286,9 +302,16 @@ pub async fn build(session: AppzSession) -> AppResult {
                 )
                 .await?;
             } else {
-                // Execute framework install command
+                // Execute framework install command via sandbox (with fallback)
                 println!("\n📦 Running install command...");
-                let install_result = run_local_with(&ctx, &install_cmd, opts.clone()).await;
+                let install_result = if let Some(ref s) = sandbox {
+                    s.exec_interactive(&install_cmd)
+                        .await
+                        .map(|_| ())
+                        .map_err(|e| miette::miette!("{}", e))
+                } else {
+                    run_local_with(&ctx, &install_cmd, opts.clone()).await
+                };
 
                 // Handle shell script fallback on Windows
                 handle_shell_script_fallback(
@@ -317,9 +340,16 @@ pub async fn build(session: AppzSession) -> AppResult {
                 )
                 .await?;
             } else {
-                // Execute framework build command
+                // Execute framework build command via sandbox (with fallback)
                 println!("\n🔨 Running build command...");
-                let build_result = run_local_with(&ctx, &build_cmd, opts.clone()).await;
+                let build_result = if let Some(ref s) = sandbox {
+                    s.exec_interactive(&build_cmd)
+                        .await
+                        .map(|_| ())
+                        .map_err(|e| miette::miette!("{}", e))
+                } else {
+                    run_local_with(&ctx, &build_cmd, opts.clone()).await
+                };
 
                 // Handle shell script fallback on Windows
                 handle_shell_script_fallback(

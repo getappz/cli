@@ -52,6 +52,8 @@ ssg-migrator = { path = "../ssg-migrator" }
 camino = "1.2"
 appz-studio = { path = "../studio" }
 sandbox = { path = "../sandbox" }
+deployer = { path = "../deployer" }
+checker = { path = "../checker" }
 
 [features]
 default = ["self_update"]

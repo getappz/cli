@@ -143,6 +143,18 @@ async fn main() -> MainResult {
                 Commands::Gen { prompt, output, name, model } => {
                     app::commands::gen::run(session, prompt, output, name, model).await
                 }
+                Commands::Deploy { provider, preview, no_build, dry_run, json, all, yes } => {
+                    app::commands::deploy(session, provider, preview, no_build, dry_run, json, all, yes).await
+                }
+                Commands::DeployInit { provider } => {
+                    app::commands::deploy_init(session, provider).await
+                }
+                Commands::DeployList { provider } => {
+                    app::commands::deploy_list(session, provider).await
+                }
+                Commands::Check { fix, ai_fix, strict, changed, staged, format, json, watch, checker, jobs, init, max_attempts, ai_verify, verbose_ai } => {
+                    app::commands::check(session, fix, ai_fix, strict, changed, staged, format, json, watch, checker, jobs, init, max_attempts, ai_verify, verbose_ai).await
+                }
                 Commands::Migrate { source, output, name, force } => {
                     app::commands::migrate(session, source, output, name, force).await
                 }

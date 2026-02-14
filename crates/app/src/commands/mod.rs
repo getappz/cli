@@ -1,5 +1,7 @@
 pub mod aliases;
 pub mod build;
+pub mod check;
+pub mod deploy;
 pub mod deployment_utils;
 pub mod dev;
 pub mod dev_server;
@@ -29,6 +31,8 @@ pub mod version;
 
 pub use aliases::*;
 pub use build::build;
+pub use check::check;
+pub use deploy::{deploy, deploy_init, deploy_list};
 pub use dev::dev;
 pub use dev_server::dev_server;
 pub use domains::*;

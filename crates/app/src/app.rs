@@ -288,6 +288,104 @@ pub enum Commands {
         #[arg(short, long)]
         model: Option<String>,
     },
+    /// Deploy to a hosting provider (Vercel, Netlify, Cloudflare Pages, etc.)
+    Deploy {
+        /// Target provider (vercel, netlify, cloudflare-pages, github-pages, etc.)
+        /// Auto-detected if not specified.
+        provider: Option<String>,
+
+        /// Deploy as preview instead of production
+        #[arg(long)]
+        preview: bool,
+
+        /// Skip the build step before deploying
+        #[arg(long)]
+        no_build: bool,
+
+        /// Show what would happen without actually deploying
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Output results as JSON (useful for CI/CD)
+        #[arg(long)]
+        json: bool,
+
+        /// Deploy to all configured targets in parallel
+        #[arg(long)]
+        all: bool,
+
+        /// Skip confirmation prompts (for CI/CD)
+        #[arg(long, short)]
+        yes: bool,
+    },
+    /// Set up deployment configuration for a provider
+    DeployInit {
+        /// Target provider to configure (vercel, netlify, etc.)
+        provider: Option<String>,
+    },
+    /// List recent deployments
+    DeployList {
+        /// Provider to list deployments from
+        provider: Option<String>,
+    },
+    /// Check code for errors, lint issues, formatting problems, and secrets
+    Check {
+        /// Auto-fix safe issues (like biome --fix)
+        #[arg(long)]
+        fix: bool,
+
+        /// Use AI to suggest fixes for complex errors (human-in-loop)
+        #[arg(long)]
+        ai_fix: bool,
+
+        /// Treat warnings as errors (non-zero exit)
+        #[arg(long)]
+        strict: bool,
+
+        /// Only check files changed since last commit
+        #[arg(long)]
+        changed: bool,
+
+        /// Only check git-staged files
+        #[arg(long)]
+        staged: bool,
+
+        /// Check and fix formatting
+        #[arg(long)]
+        format: bool,
+
+        /// Output results as JSON (for CI/CD)
+        #[arg(long)]
+        json: bool,
+
+        /// Watch for changes and re-check
+        #[arg(long)]
+        watch: bool,
+
+        /// Specific checker to run (biome, tsc, ruff, clippy, phpstan, stylelint, secrets)
+        #[arg(long)]
+        checker: Option<String>,
+
+        /// Number of parallel jobs (default: num_cpus)
+        #[arg(long, short)]
+        jobs: Option<usize>,
+
+        /// Initialize checker config files for detected frameworks
+        #[arg(long)]
+        init: bool,
+
+        /// Maximum AI fix retry attempts (default: 3)
+        #[arg(long, default_value = "3")]
+        max_attempts: u32,
+
+        /// Verify AI patches before applying (default: true in interactive)
+        #[arg(long)]
+        ai_verify: Option<bool>,
+
+        /// Print AI reasoning and confidence scores
+        #[arg(long)]
+        verbose_ai: bool,
+    },
     /// Migrate React SPA to Astro SSG
     Migrate {
         /// Source React SPA directory (default: current directory)

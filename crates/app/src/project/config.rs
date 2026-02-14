@@ -22,11 +22,18 @@ pub struct LocalConfig {
     pub framework: Option<String>,
     #[serde(rename = "rootDirectory")]
     pub root_directory: Option<String>,
+    /// Deployment configuration for hosting providers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deploy: Option<deployer::DeployConfig>,
+    /// Check/lint configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check: Option<checker::CheckConfig>,
 }
 
 /// Read local configuration from appz.json (sync version)
 ///
 /// Returns None if file doesn't exist or is invalid.
+#[allow(dead_code)]
 pub fn read_config(project_path: &Path) -> Result<Option<ProjectSettings>> {
     let config_path = project_path.join("appz.json");
 

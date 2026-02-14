@@ -386,20 +386,34 @@ pub enum Commands {
         #[arg(long)]
         verbose_ai: bool,
     },
-    /// Migrate React SPA to Astro SSG
+    /// AI-powered website creation, redesign, and cloning
+    Site {
+        #[command(subcommand)]
+        command: crate::commands::site::SiteCommands,
+    },
+    /// Migrate React SPA to Astro or Next.js
     Migrate {
         /// Source React SPA directory (default: current directory)
-        #[arg(short, long)]
+        #[arg(short, long, value_name = "SOURCE")]
         source: Option<std::path::PathBuf>,
-        /// Output directory for Astro project
-        #[arg(short, long)]
+        /// Output directory for migrated project
+        #[arg(short, long, value_name = "OUTPUT")]
         output: Option<std::path::PathBuf>,
-        /// Project name for Astro app
+        /// SOURCE and OUTPUT as positional args (e.g. `migrate academy-connect academy-connect-nextjs`)
+        #[arg(value_name = "SOURCE OUTPUT", index = 1, num_args = 0..=2)]
+        args: Vec<std::path::PathBuf>,
+        /// Project name for migrated app
         #[arg(short, long)]
         name: Option<String>,
         /// Overwrite existing directory
         #[arg(long)]
         force: bool,
+        /// Migration target: astro (default) or nextjs
+        #[arg(long, default_value = "astro")]
+        target: String,
+        /// Generate a static-export Next.js project (output: 'export')
+        #[arg(long, alias = "static")]
+        static_export: bool,
     },
     /// Update appz itself to the latest version
     #[cfg(feature = "self_update")]

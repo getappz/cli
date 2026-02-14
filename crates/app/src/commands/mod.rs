@@ -24,6 +24,7 @@ pub mod rollback;
 pub mod run;
 #[cfg_attr(not(feature = "self_update"), path = "self_upgrade_stub.rs")]
 pub mod self_upgrade;
+pub mod site;
 pub mod switch;
 pub mod teams;
 pub mod unlink;

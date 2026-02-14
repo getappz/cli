@@ -36,5 +36,7 @@ pub struct MigrationConfig {
     pub output_dir: Utf8PathBuf,
     pub project_name: String,
     pub force: bool,
+    /// When true, generate a static-export Next.js project (`output: 'export'` in next.config).
+    pub static_export: bool,
 }
 

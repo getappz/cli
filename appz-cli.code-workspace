@@ -8,6 +8,9 @@
 		},
 		{
 			"path": "../appz-ref"
+		},
+		{
+			"path": "../lovable-ref"
 		}
 	],
 	"settings": {}

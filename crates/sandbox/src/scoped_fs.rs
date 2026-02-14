@@ -537,6 +537,10 @@ impl ScopedFs {
             return Ok(());
         }
 
+        // Ensure destination root exists (needed when source is flat, i.e. has no subdirs)
+        let dst_root = self.resolve(dst_rel)?;
+        starbase_fs::create_dir_all(&dst_root)?;
+
         let mut dirs = Vec::new();
         let mut files: Vec<(PathBuf, PathBuf)> = Vec::new();
         collect_tree_external(self, src, dst_rel, &mut dirs, &mut files)?;

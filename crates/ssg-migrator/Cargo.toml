@@ -25,3 +25,6 @@ camino = "1.2"
 ast-grep-core = "0.39.7"
 ast-grep-language = "0.39.7"
 
+# Sandbox for path-safe file I/O and JSON merge
+sandbox = { path = "../sandbox" }
+

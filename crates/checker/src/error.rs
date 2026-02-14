@@ -133,3 +133,11 @@ impl From<sandbox::SandboxError> for CheckerError {
         }
     }
 }
+
+impl From<ai::AiError> for CheckerError {
+    fn from(err: ai::AiError) -> Self {
+        CheckerError::AiFixFailed {
+            reason: err.to_string(),
+        }
+    }
+}

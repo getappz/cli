@@ -55,6 +55,7 @@ sandbox = { path = "../sandbox" }
 deployer = { path = "../deployer" }
 checker = { path = "../checker" }
 init = { path = "../init" }
+site-builder = { path = "../site-builder" }
 
 [features]
 default = ["self_update"]

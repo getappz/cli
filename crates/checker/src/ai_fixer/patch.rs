@@ -253,6 +253,90 @@ fn parse_range(s: &str) -> CheckResult<(usize, usize)> {
 }
 
 // ---------------------------------------------------------------------------
+// Fuzzy sequence matching (ported from OpenAI Codex apply-patch)
+// ---------------------------------------------------------------------------
+
+/// Find `pattern` lines within `lines` starting at or after `start`.
+///
+/// Uses a 4-pass strategy with decreasing strictness:
+/// 1. **Exact** -- byte-for-byte match
+/// 2. **Rstrip** -- ignores trailing whitespace
+/// 3. **Trim** -- ignores leading and trailing whitespace
+/// 4. **Unicode normalise** -- normalises typographic dashes, quotes, spaces
+///
+/// Returns the starting index of the match, or `None`.
+fn seek_sequence(lines: &[String], pattern: &[String], start: usize) -> Option<usize> {
+    if pattern.is_empty() {
+        return Some(start);
+    }
+    if pattern.len() > lines.len() {
+        return None;
+    }
+
+    let end = lines.len().saturating_sub(pattern.len());
+
+    // Pass 1: exact.
+    for i in start..=end {
+        if lines[i..i + pattern.len()] == *pattern {
+            return Some(i);
+        }
+    }
+
+    // Pass 2: rstrip.
+    for i in start..=end {
+        let ok = pattern.iter().enumerate().all(|(j, pat)| {
+            lines[i + j].trim_end() == pat.trim_end()
+        });
+        if ok {
+            return Some(i);
+        }
+    }
+
+    // Pass 3: trim both sides.
+    for i in start..=end {
+        let ok = pattern.iter().enumerate().all(|(j, pat)| {
+            lines[i + j].trim() == pat.trim()
+        });
+        if ok {
+            return Some(i);
+        }
+    }
+
+    // Pass 4: Unicode normalisation.
+    for i in start..=end {
+        let ok = pattern.iter().enumerate().all(|(j, pat)| {
+            normalise_unicode(&lines[i + j]) == normalise_unicode(pat)
+        });
+        if ok {
+            return Some(i);
+        }
+    }
+
+    None
+}
+
+/// Normalise common Unicode punctuation to ASCII equivalents.
+fn normalise_unicode(s: &str) -> String {
+    s.trim()
+        .chars()
+        .map(|c| match c {
+            // Various dashes → ASCII '-'
+            '\u{2010}' | '\u{2011}' | '\u{2012}' | '\u{2013}' | '\u{2014}' | '\u{2015}'
+            | '\u{2212}' => '-',
+            // Fancy single quotes → '\''
+            '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}' => '\'',
+            // Fancy double quotes → '"'
+            '\u{201C}' | '\u{201D}' | '\u{201E}' | '\u{201F}' => '"',
+            // Non-breaking / special spaces → regular space
+            '\u{00A0}' | '\u{2002}' | '\u{2003}' | '\u{2004}' | '\u{2005}' | '\u{2006}'
+            | '\u{2007}' | '\u{2008}' | '\u{2009}' | '\u{200A}' | '\u{202F}' | '\u{205F}'
+            | '\u{3000}' => ' ',
+            other => other,
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
 // Application
 // ---------------------------------------------------------------------------
 
@@ -278,78 +362,139 @@ pub fn apply_patch(
     Ok(results)
 }
 
-/// Apply hunks to a single file's content.
+/// Apply hunks to a single file's content using fuzzy content matching.
+///
+/// Instead of trusting line numbers from the diff, each hunk's removed +
+/// context lines are located in the file via [`seek_sequence`] (4-pass
+/// fuzzy matching). Replacements are collected and then applied in
+/// **reverse order** to avoid index shifts.
 fn apply_file_patch(original: &str, hunks: &[Hunk]) -> CheckResult<PatchResult> {
-    let original_lines: Vec<&str> = original.lines().collect();
+    let original_lines: Vec<String> = original.lines().map(String::from).collect();
     let total_original = original_lines.len();
-    let mut output_lines: Vec<String> = Vec::with_capacity(total_original);
 
-    // Track statistics.
-    let mut lines_added = 0usize;
-    let mut lines_removed = 0usize;
+    // Build a (start_idx, old_len, new_lines) replacement for each hunk.
+    let mut replacements: Vec<(usize, usize, Vec<String>)> = Vec::new();
 
-    // Sort hunks by old_start to apply in order.
+    // Track the minimum search position so we don't match the same region
+    // twice when hunks are ordered top-to-bottom.
+    let mut search_from = 0usize;
+
+    // Sort hunks by old_start for deterministic ordering.
     let mut sorted_hunks: Vec<&Hunk> = hunks.iter().collect();
     sorted_hunks.sort_by_key(|h| h.old_start);
 
-    // Current position in the original file (0-based index).
-    let mut orig_pos = 0usize;
-
     for hunk in &sorted_hunks {
-        // Hunk old_start is 1-based; convert to 0-based.
-        let hunk_start = if hunk.old_start > 0 {
-            hunk.old_start - 1
-        } else {
-            0
-        };
+        // Collect the "old" lines for this hunk (context + remove lines, in order).
+        let old_lines: Vec<String> = hunk
+            .lines
+            .iter()
+            .filter_map(|hl| match hl {
+                HunkLine::Context(c) => Some(c.clone()),
+                HunkLine::Remove(c) => Some(c.clone()),
+                HunkLine::Add(_) => None,
+            })
+            .collect();
 
-        // Copy lines before this hunk.
-        while orig_pos < hunk_start && orig_pos < total_original {
-            output_lines.push(original_lines[orig_pos].to_string());
-            orig_pos += 1;
+        // Collect the "new" lines (context + add lines, in order).
+        let new_lines: Vec<String> = hunk
+            .lines
+            .iter()
+            .filter_map(|hl| match hl {
+                HunkLine::Context(c) => Some(c.clone()),
+                HunkLine::Add(c) => Some(c.clone()),
+                HunkLine::Remove(_) => None,
+            })
+            .collect();
+
+        if old_lines.is_empty() {
+            // Pure addition: insert at the hunk's target position.
+            let insert_at = if hunk.old_start > 0 {
+                (hunk.old_start - 1).min(total_original)
+            } else {
+                0
+            };
+            replacements.push((insert_at, 0, new_lines));
+            continue;
         }
 
-        // Apply hunk lines.
-        for hline in &hunk.lines {
-            match hline {
-                HunkLine::Context(content) => {
-                    // Context line: advance original position.
-                    output_lines.push(content.clone());
-                    orig_pos += 1;
-                }
-                HunkLine::Add(content) => {
-                    output_lines.push(content.clone());
-                    lines_added += 1;
-                }
-                HunkLine::Remove(_) => {
-                    // Skip the original line.
-                    orig_pos += 1;
-                    lines_removed += 1;
-                }
+        // Try fuzzy content matching first.
+        let match_start = seek_sequence(&original_lines, &old_lines, search_from);
+
+        // Fallback: try from the hunk's stated line number.
+        let match_start = match_start.or_else(|| {
+            let hint = if hunk.old_start > 0 {
+                hunk.old_start - 1
+            } else {
+                0
+            };
+            seek_sequence(&original_lines, &old_lines, hint)
+        });
+
+        // Last resort: try from the very beginning.
+        let match_start = match_start.or_else(|| {
+            if search_from > 0 {
+                seek_sequence(&original_lines, &old_lines, 0)
+            } else {
+                None
+            }
+        });
+
+        match match_start {
+            Some(idx) => {
+                replacements.push((idx, old_lines.len(), new_lines));
+                search_from = idx + old_lines.len();
+            }
+            None => {
+                return Err(CheckerError::AiFixFailed {
+                    reason: format!(
+                        "Could not locate hunk in file (expected near line {}). \
+                         First old line: {:?}",
+                        hunk.old_start,
+                        old_lines.first().map(|s| s.as_str()).unwrap_or("(empty)")
+                    ),
+                });
             }
         }
     }
 
-    // Copy remaining lines after the last hunk.
-    while orig_pos < total_original {
-        output_lines.push(original_lines[orig_pos].to_string());
-        orig_pos += 1;
+    // Sort by start index ascending, then apply in reverse to preserve indices.
+    replacements.sort_by_key(|(start, _, _)| *start);
+
+    let mut lines = original_lines;
+
+    for (start, old_len, new_lines) in replacements.iter().rev() {
+        // Remove old lines.
+        let end = (*start + old_len).min(lines.len());
+        lines.drain(*start..end);
+
+        // Insert new lines.
+        for (j, line) in new_lines.iter().enumerate() {
+            lines.insert(start + j, line.clone());
+        }
     }
 
+    // Count actual add/remove lines from the hunks (excluding context).
+    let actual_removed: usize = hunks
+        .iter()
+        .flat_map(|h| &h.lines)
+        .filter(|l| matches!(l, HunkLine::Remove(_)))
+        .count();
+    let actual_added: usize = hunks
+        .iter()
+        .flat_map(|h| &h.lines)
+        .filter(|l| matches!(l, HunkLine::Add(_)))
+        .count();
+
     let change_pct = if total_original == 0 {
-        if lines_added > 0 {
-            100.0
-        } else {
-            0.0
-        }
+        if actual_added > 0 { 100.0 } else { 0.0 }
     } else {
-        ((lines_added + lines_removed) as f32 / total_original as f32) * 100.0
+        ((actual_added + actual_removed) as f32 / total_original as f32) * 100.0
     };
 
     Ok(PatchResult {
-        content: output_lines.join("\n"),
-        lines_added,
-        lines_removed,
+        content: lines.join("\n"),
+        lines_added: actual_added,
+        lines_removed: actual_removed,
         change_pct,
     })
 }

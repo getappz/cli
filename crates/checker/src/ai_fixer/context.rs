@@ -7,6 +7,8 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use common::HeadTailBuffer;
+
 use crate::output::CheckIssue;
 
 // ---------------------------------------------------------------------------
@@ -333,7 +335,7 @@ pub fn collect_context(
         }
     }
 
-    // 5. Include config files.
+    // 5. Include config files (using HeadTailBuffer for safety).
     for config_file in CONFIG_FILES {
         if ctx.total_bytes >= max_bytes {
             break;
@@ -347,7 +349,9 @@ pub fn collect_context(
         if let Ok(content) = fs.read_to_string(config_file) {
             // Config files are usually small, but cap at 4KB.
             let truncated = if content.len() > 4096 {
-                format!("{}...(truncated)", &content[..4096])
+                let mut buf = HeadTailBuffer::new(4096);
+                buf.write(content.as_bytes());
+                buf.to_string_lossy()
             } else {
                 content
             };

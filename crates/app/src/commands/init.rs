@@ -1,20 +1,14 @@
-use crate::detectors::{
-    detect_framework_record, detect_package_manager, DetectFrameworkRecordOptions,
-    PackageManagerInfo, StdFilesystem,
-};
-use crate::detectors::filesystem::DetectorFilesystem;
-use crate::sandbox_helpers::mise_tools_for_execution;
-use crate::services::{TemplateService, TemplateSource};
+//! Project initialization — delegates to the init crate.
+//!
+//! Handles interactive prompts when args are missing, then calls init::run().
+
 use crate::session::AppzSession;
+use tracing::instrument;
 use crate::templates::{get_builtin_template, BUILTIN_TEMPLATES};
-use frameworks::frameworks;
 use inquire::{Select, Text};
 use miette::miette;
-use sandbox::{create_sandbox, SandboxConfig};
 use starbase::AppResult;
 use std::path::PathBuf;
-use std::sync::Arc;
-use tracing::{info, instrument, warn};
 
 #[instrument(skip_all)]
 pub async fn init(
@@ -26,309 +20,124 @@ pub async fn init(
     force: bool,
     output: Option<PathBuf>,
 ) -> AppResult {
-    // Determine template and project name based on priority:
-    // 1. --template flag (explicit template)
-    // 2. positional argument matching built-in template
-    // 3. positional argument as project name
-    // 4. interactive prompts
+    let (template_source, project_name) = resolve_template_and_name(
+        template_or_name,
+        name,
+        template,
+    )?;
 
-    let (template_source, project_name) = if let Some(explicit_template) = template {
-        // Priority 1: --template flag takes precedence
-        let proj_name = if let Some(n) = name {
-            n
-        } else if let Some(pos_arg) = &template_or_name {
-            // If --template is provided, positional arg is project name
-            pos_arg.clone()
-        } else {
-            Text::new("Project name:")
-                .prompt()
-                .map_err(|e| miette!("Failed to get project name: {}", e))?
-        };
-        (explicit_template, proj_name)
-    } else if let Some(pos_arg) = &template_or_name {
-        // Check if positional argument matches a built-in template
-        if get_builtin_template(pos_arg).is_some() {
-            // Priority 2: Positional argument is a built-in template
-            let proj_name = if let Some(n) = name {
-                n
-            } else {
-                Text::new("Project name:")
-                    .prompt()
-                    .map_err(|e| miette!("Failed to get project name: {}", e))?
-            };
-            (pos_arg.clone(), proj_name)
-        } else if pos_arg.starts_with("https://")
+    if project_name.is_empty() {
+        return Err(miette!("Project name cannot be empty"));
+    }
+
+    let output_dir = output.unwrap_or_else(|| session.working_dir.clone());
+
+    init::run(
+        Some(template_source),
+        Some(project_name),
+        None,
+        None,
+        None,
+        skip_install,
+        force,
+        Some(output_dir),
+        false,
+    )
+    .await
+    .map_err(|e| miette!("{}", e))?;
+
+    Ok(None)
+}
+
+fn resolve_template_and_name(
+    template_or_name: Option<String>,
+    name: Option<String>,
+    template: Option<String>,
+) -> Result<(String, String), miette::Report> {
+    if let Some(explicit_template) = template {
+        let proj_name = name
+            .or_else(|| template_or_name)
+            .ok_or_else(|| miette!("Project name required. Use --name or provide as positional argument."))?;
+        return Ok((explicit_template, proj_name));
+    }
+
+    if let Some(pos_arg) = template_or_name {
+        let is_source = get_builtin_template(&pos_arg).is_some()
+            || pos_arg.starts_with("https://")
             || pos_arg.starts_with("http://")
             || pos_arg.starts_with("npm:")
             || pos_arg.starts_with("./")
             || pos_arg.starts_with("../")
             || pos_arg.starts_with('/')
             || pos_arg.contains('/')
-        {
-            // Priority 2b: Positional argument looks like a template source (URL, npm package, GitHub repo, local path)
-            let proj_name = if let Some(n) = name {
-                n
-            } else {
-                Text::new("Project name:")
-                    .prompt()
-                    .map_err(|e| miette!("Failed to get project name: {}", e))?
-            };
-            (pos_arg.clone(), proj_name)
-        } else {
-            // Priority 3: Positional argument is project name
-            let proj_name = pos_arg.clone();
-            // Prompt for template interactively
-            let template_src = {
-                // Show interactive template selection
-                let template_options_strings: Vec<String> = BUILTIN_TEMPLATES
-                    .iter()
-                    .map(|(slug, name, _, _)| format!("{} ({})", name, slug))
-                    .collect();
+            || init::has_create_command(&pos_arg);
 
-                let template_options: Vec<&str> = template_options_strings
-                    .iter()
-                    .map(|s| s.as_str())
-                    .collect();
-
-                let mut options = vec!["Custom GitHub URL", "Custom npm package", "Local path"];
-                options.extend(template_options);
-
-                let selected = Select::new("Select a template:", options)
-                    .prompt()
-                    .map_err(|e| miette!("Failed to select template: {}", e))?;
-
-                if selected == "Custom GitHub URL" {
-                    Text::new("GitHub repository (user/repo or full URL):")
-                        .prompt()
-                        .map_err(|e| miette!("Failed to get GitHub URL: {}", e))?
-                } else if selected == "Custom npm package" {
-                    let pkg = Text::new("npm package name:")
-                        .prompt()
-                        .map_err(|e| miette!("Failed to get npm package: {}", e))?;
-                    format!("npm:{}", pkg)
-                } else if selected == "Local path" {
-                    Text::new("Local template path:")
-                        .prompt()
-                        .map_err(|e| miette!("Failed to get local path: {}", e))?
-                } else {
-                    // Extract slug from selected option (format: "Name (slug)")
-                    let slug = selected
-                        .split('(')
-                        .nth(1)
-                        .and_then(|s| s.strip_suffix(')'))
-                        .unwrap_or(selected);
-                    slug.to_string()
-                }
-            };
-            (template_src, proj_name)
+        if is_source {
+            let proj_name = name.ok_or_else(|| {
+                miette!("Project name required. Use --name when using a template source.")
+            })?;
+            return Ok((pos_arg, proj_name));
         }
+
+        let template_src = prompt_for_template()?;
+        return Ok((template_src, pos_arg));
+    }
+
+    let proj_name = name.ok_or_else(|| {
+        miette!("Project name required. Use --name or provide as positional argument.")
+    })?;
+    let template_src = prompt_for_template()?;
+    Ok((template_src, proj_name))
+}
+
+fn prompt_for_template() -> Result<String, miette::Report> {
+    let template_options_strings: Vec<String> = BUILTIN_TEMPLATES
+        .iter()
+        .map(|(slug, name, _, _)| format!("{} ({})", name, slug))
+        .collect();
+
+    let template_options: Vec<&str> = template_options_strings
+        .iter()
+        .map(|s| s.as_str())
+        .collect();
+
+    let mut options = vec!["Custom GitHub URL", "Custom npm package", "Local path"];
+    options.extend(template_options);
+
+    let selected = Select::new("Select a template:", options)
+        .prompt()
+        .map_err(|e| miette!("Failed to select template: {}", e))?;
+
+    if selected == "Custom GitHub URL" {
+        Text::new("Git repository (user/repo or full URL - GitHub, GitLab, Bitbucket):")
+            .prompt()
+            .map_err(|e| miette!("Failed to get URL: {}", e))
+    } else if selected == "Custom npm package" {
+        let pkg = Text::new("npm package name:")
+            .prompt()
+            .map_err(|e| miette!("Failed to get npm package: {}", e))?;
+        Ok(format!("npm:{}", pkg))
+    } else if selected == "Local path" {
+        Text::new("Local template path:")
+            .prompt()
+            .map_err(|e| miette!("Failed to get local path: {}", e))
     } else {
-        // Priority 4: No positional argument, use interactive mode
-        let proj_name = if let Some(n) = name {
-            n
-        } else {
-            Text::new("Project name:")
-                .prompt()
-                .map_err(|e| miette!("Failed to get project name: {}", e))?
-        };
-
-        let template_src = {
-            // Show interactive template selection
-            let template_options_strings: Vec<String> = BUILTIN_TEMPLATES
-                .iter()
-                .map(|(slug, name, _, _)| format!("{} ({})", name, slug))
-                .collect();
-
-            let template_options: Vec<&str> = template_options_strings
-                .iter()
-                .map(|s| s.as_str())
-                .collect();
-
-            let mut options = vec!["Custom GitHub URL", "Custom npm package", "Local path"];
-            options.extend(template_options);
-
-            let selected = Select::new("Select a template:", options)
-                .prompt()
-                .map_err(|e| miette!("Failed to select template: {}", e))?;
-
-            if selected == "Custom GitHub URL" {
-                Text::new("GitHub repository (user/repo or full URL):")
-                    .prompt()
-                    .map_err(|e| miette!("Failed to get GitHub URL: {}", e))?
-            } else if selected == "Custom npm package" {
-                let pkg = Text::new("npm package name:")
-                    .prompt()
-                    .map_err(|e| miette!("Failed to get npm package: {}", e))?;
-                format!("npm:{}", pkg)
-            } else if selected == "Local path" {
-                Text::new("Local template path:")
-                    .prompt()
-                    .map_err(|e| miette!("Failed to get local path: {}", e))?
-            } else {
-                // Extract slug from selected option (format: "Name (slug)")
-                let slug = selected
-                    .split('(')
-                    .nth(1)
-                    .and_then(|s| s.strip_suffix(')'))
-                    .unwrap_or(selected);
-                slug.to_string()
-            }
-        };
-        (template_src, proj_name)
-    };
-
-    if project_name.is_empty() {
-        return Err(miette!("Project name cannot be empty"));
-    }
-
-    // Determine output directory
-    let output_dir = output.unwrap_or_else(|| session.working_dir.clone());
-    let project_path = output_dir.join(&project_name);
-
-    // Check if directory exists
-    if project_path.exists() && !force {
-        return Err(miette!(
-            "Directory '{}' already exists. Use --force to overwrite.",
-            project_path.display()
-        ));
-    }
-
-    if project_path.exists() && force {
-        info!("Removing existing directory: {}", project_path.display());
-        std::fs::remove_dir_all(&project_path)
-            .map_err(|e| miette!("Failed to remove existing directory: {}", e))?;
-    }
-
-    // Parse template source
-    let parsed_source = TemplateService::parse_template_source(&template_source)
-        .map_err(|e| miette!("Invalid template source: {}", e))?;
-
-    // Download/extract template
-    info!("Downloading template from: {}", template_source);
-    let template_dir = match parsed_source {
-        TemplateSource::GitHub {
-            url,
-            branch,
-            subfolder,
-        } => {
-            TemplateService::download_github_template(&url, subfolder.as_deref(), branch.as_deref())
-                .await
-                .map_err(|e| miette!("Failed to download GitHub template: {}", e))?
-        }
-        TemplateSource::Npm(package) => TemplateService::download_npm_template(&package)
-            .await
-            .map_err(|e| miette!("Failed to download npm template: {}", e))?,
-        TemplateSource::Local(path) => {
-            let local_path = PathBuf::from(path);
-            TemplateService::copy_local_template(&local_path)
-                .await
-                .map_err(|e| miette!("Failed to access local template: {}", e))?
-        }
-        TemplateSource::Builtin { repo, subfolder } => {
-            TemplateService::download_github_template(&repo, subfolder.as_deref(), None)
-                .await
-                .map_err(|e| miette!("Failed to download built-in template: {}", e))?
-        }
-    };
-
-    // Create sandbox first — it creates the project directory
-    let sandbox_config = SandboxConfig::new(project_path.clone())
-        .with_settings(mise_tools_for_execution(&None::<PackageManagerInfo>, None));
-    let sandbox = create_sandbox(sandbox_config)
-        .await
-        .map_err(|e| miette!("Sandbox setup failed: {}", e))?;
-
-    // Copy template files into sandbox
-    info!("Copying template files to: {}", project_path.display());
-    sandbox
-        .fs()
-        .copy_from_external(&template_dir, ".")
-        .map_err(|e| miette!("Failed to copy template files: {}", e))?;
-
-    // Auto-detect framework
-    let fs: Arc<dyn DetectorFilesystem> =
-        Arc::new(StdFilesystem::new(Some(project_path.clone())));
-    let framework_list: Vec<_> = frameworks().to_vec();
-    let options = DetectFrameworkRecordOptions {
-        fs: Arc::clone(&fs),
-        framework_list,
-    };
-
-    let detected_framework = match detect_framework_record(options).await {
-        Ok(Some((framework, _version, _package_manager))) => {
-            info!("✓ Detected framework: {}", framework.name);
-            Some(framework.name)
-        }
-        Ok(None) => {
-            warn!("No framework detected in project");
-            None
-        }
-        Err(e) => {
-            warn!("Failed to detect framework: {}", e);
-            None
-        }
-    };
-
-    // Run install command if not skipped (reuse existing sandbox)
-    if !skip_install {
-        let package_json = project_path.join("package.json");
-        if package_json.exists() {
-            info!("Installing dependencies...");
-            let install_cmd = if project_path.join("pnpm-lock.yaml").exists() {
-                "pnpm install"
-            } else if project_path.join("yarn.lock").exists() {
-                "yarn install"
-            } else if project_path.join("bun.lockb").exists() {
-                "bun install"
-            } else {
-                "npm install"
+        let slug = selected
+            .split('(')
+            .nth(1)
+            .and_then(|s| s.strip_suffix(')'))
+            .unwrap_or(selected);
+        let slug = slug.to_string();
+        if init::has_create_command(&slug) {
+            Ok(slug)
+        } else if let Some((repo, subfolder)) = get_builtin_template(&slug) {
+            let src = match subfolder {
+                Some(sf) => format!("{}/{}", repo, sf),
+                None => repo.to_string(),
             };
-
-            // Ensure package-manager-specific tools (e.g. pnpm, yarn, bun)
-            let package_manager = detect_package_manager(&fs).await.ok().flatten();
-            let pm_settings = mise_tools_for_execution(&package_manager, None);
-            for spec in &pm_settings.mise_tools {
-                if let Err(e) = sandbox.ensure_tool(spec).await {
-                    warn!("Could not ensure {}: {}", spec.to_mise_arg(), e);
-                }
-            }
-
-            let exec_result = sandbox.exec_interactive(install_cmd).await;
-            match exec_result {
-                Ok(status) if status.success() => {
-                    info!("✓ Dependencies installed");
-                }
-                Ok(_) => {
-                    warn!(
-                        "Install command failed, but project was created successfully"
-                    );
-                }
-                Err(e) => {
-                    warn!(
-                        "Install command failed, but project was created successfully: {}",
-                        e
-                    );
-                }
-            }
+            Ok(src)
+        } else {
+            Ok(slug)
         }
     }
-
-    // Display success message
-    println!("\n✓ Project initialized successfully!");
-    println!("  Location: {}", project_path.display());
-    if let Some(fw) = detected_framework {
-        println!("  Framework: {}", fw);
-    }
-    println!("\nNext steps:");
-    println!("  cd {}", project_name);
-    if !skip_install {
-        println!("  # Dependencies are already installed");
-    } else {
-        println!("  # Install dependencies: npm install (or pnpm/yarn/bun)");
-    }
-    if detected_framework.is_some() {
-        println!("  # Start development server: appz dev");
-    }
-
-    Ok(None)
 }

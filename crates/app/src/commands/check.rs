@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use checker::{
     ai_fixer, fixer, git, init, read_check_config, run_checks,
-    runner::RunOptions, CheckConfig,
+    runner::RunOptions,
 };
 use miette::{miette, Result};
 use starbase::AppResult;
@@ -129,7 +129,11 @@ pub async fn check(
             Some(max_attempts),
             ai_verify,
             verbose_ai,
-        );
+        )
+        .map(|mut c| {
+            c.project_dir = Some(project_dir.clone());
+            c
+        });
         match repair_config {
             Some(config) => {
                 let applied = ai_fixer::run_ai_fix(sandbox.clone(), &report.issues, &config)
@@ -159,7 +163,9 @@ pub async fn check(
             .map_err(|e| miette!("Failed to serialize report: {}", e))?;
         println!("{}", json);
     } else {
-        fixer::display_report_summary(&report, effective_strict);
+        // Issues were already streamed to the terminal as each provider
+        // finished. Only print the final summary line here.
+        fixer::display_streamed_summary(&report, effective_strict);
     }
 
     // 8. Exit with appropriate code.

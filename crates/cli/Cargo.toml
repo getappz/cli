@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 app = { path = "../app", features = ["self_update"] }
+common = { path = "../common" }
 ui = { path = "../ui" }
 env_var = { path = "../env_var" }
 clap = { workspace = true }

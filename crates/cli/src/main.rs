@@ -34,6 +34,9 @@ fn get_tracing_modules() -> Vec<String> {
 
 #[tokio::main]
 async fn main() -> MainResult {
+    // Apply security hardening before processing any input.
+    common::hardening::harden_process();
+
     // Detect info about the current process
     let version = get_version();
 

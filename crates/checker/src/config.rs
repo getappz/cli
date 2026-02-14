@@ -220,29 +220,46 @@ impl CheckContext {
 }
 
 // ---------------------------------------------------------------------------
-// Config I/O
+// Config I/O (layered: user config → project config → CLI flags)
 // ---------------------------------------------------------------------------
 
-/// Read the check configuration from `appz.json`.
+/// Read the check configuration from `appz.json`, layered with user
+/// defaults from `~/.appz/config.toml`.
 ///
-/// Returns `None` if the file doesn't exist or has no `check` section.
+/// Merge precedence (lowest → highest):
+/// 1. User config `~/.appz/config.toml` `[check]` section
+/// 2. Project config `appz.json` `check` key
+/// 3. CLI flags (applied by the caller after this function)
+///
+/// Returns `None` if neither config exists or has a `check` section.
 pub fn read_check_config(project_dir: &Path) -> CheckResult<Option<CheckConfig>> {
-    let config_path = project_dir.join("appz.json");
+    // 1. Read user-level config.
+    let user_check = common::user_config::read_user_config_section("check");
 
-    if !config_path.exists() {
-        return Ok(None);
-    }
-
-    let content = std::fs::read_to_string(&config_path)?;
-    let root: serde_json::Value = serde_json::from_str(&content)?;
-
-    match root.get("check") {
-        Some(check_value) => {
-            let config: CheckConfig = serde_json::from_value(check_value.clone())?;
-            Ok(Some(config))
+    // 2. Read project-level config.
+    let project_check = {
+        let config_path = project_dir.join("appz.json");
+        if config_path.exists() {
+            let content = std::fs::read_to_string(&config_path)?;
+            let root: serde_json::Value = serde_json::from_str(&content)?;
+            root.get("check").cloned()
+        } else {
+            None
         }
-        None => Ok(None),
-    }
+    };
+
+    // 3. Merge: user (base) ← project (overlay).
+    let merged = match (user_check, project_check) {
+        (None, None) => return Ok(None),
+        (Some(user), None) => user,
+        (None, Some(project)) => project,
+        (Some(user), Some(project)) => {
+            common::user_config::deep_merge_json(&user, &project)
+        }
+    };
+
+    let config: CheckConfig = serde_json::from_value(merged)?;
+    Ok(Some(config))
 }
 
 /// Read the check configuration asynchronously.

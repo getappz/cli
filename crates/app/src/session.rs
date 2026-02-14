@@ -67,9 +67,10 @@ impl AppzSession {
 
 /// Check if a command requires project context (must be linked)
 /// Commands that return an error if not linked
+/// Note: Build is excluded for now (auth disabled); will be re-enabled later
 pub fn requires_project_context(command: &crate::app::Commands) -> bool {
     use crate::app::Commands;
-    matches!(command, Commands::Ls | Commands::Build)
+    matches!(command, Commands::Ls)
 }
 
 #[async_trait]

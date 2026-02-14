@@ -76,11 +76,31 @@ pub fn display_fix_summary(report: &FixReport) {
 }
 
 /// Display the final check report summary.
+///
+/// When `issues_already_displayed` is `true` (streaming mode), skips the
+/// per-issue listing and only prints the summary line.
 pub fn display_report_summary(report: &CheckReport, strict: bool) {
+    display_report(report, strict, false)
+}
+
+/// Display only the summary line (for streaming mode where issues
+/// were already printed as each provider completed).
+pub fn display_streamed_summary(report: &CheckReport, strict: bool) {
+    display_report(report, strict, true)
+}
+
+fn display_report(report: &CheckReport, strict: bool, skip_issues: bool) {
     let _ = ui::layout::blank_line();
 
     if report.issues.is_empty() {
         let _ = ui::status::success("No issues found!");
+        // Still print providers + duration.
+        let duration_ms = report.duration.as_millis();
+        let _ = ui::status::info(&format!(
+            "Checked with {} in {}ms",
+            report.providers_run.join(", "),
+            duration_ms
+        ));
         return;
     }
 
@@ -101,49 +121,51 @@ pub fn display_report_summary(report: &CheckReport, strict: bool) {
         .filter(|i| i.severity == Severity::Info || i.severity == Severity::Hint)
         .count();
 
-    // Display issues grouped by file.
-    let mut current_file = String::new();
-    for issue in &report.issues {
-        let file_str = issue.file.display().to_string();
-        if file_str != current_file {
-            let _ = ui::layout::blank_line();
-            let _ = ui::status::info(&file_str);
-            current_file = file_str;
+    // Display issues grouped by file (skipped in streaming mode).
+    if !skip_issues {
+        let mut current_file = String::new();
+        for issue in &report.issues {
+            let file_str = issue.file.display().to_string();
+            if file_str != current_file {
+                let _ = ui::layout::blank_line();
+                let _ = ui::status::info(&file_str);
+                current_file = file_str;
+            }
+
+            let location = match (issue.line, issue.column) {
+                (Some(l), Some(c)) => format!("{}:{}", l, c),
+                (Some(l), None) => format!("{}:1", l),
+                _ => String::new(),
+            };
+
+            let code_str = issue
+                .code
+                .as_deref()
+                .map(|c| format!(" [{}]", c))
+                .unwrap_or_default();
+
+            let fix_indicator = if issue.has_safe_fix() { " (fixable)" } else { "" };
+
+            let line = format!(
+                "  {:>8} {:>10}  {}{}{}",
+                issue.severity, location, issue.message, code_str, fix_indicator
+            );
+
+            match issue.severity {
+                Severity::Error => {
+                    let _ = ui::status::error(&line);
+                }
+                Severity::Warning => {
+                    let _ = ui::status::warning(&line);
+                }
+                _ => {
+                    let _ = ui::status::info(&line);
+                }
+            }
         }
 
-        let location = match (issue.line, issue.column) {
-            (Some(l), Some(c)) => format!("{}:{}", l, c),
-            (Some(l), None) => format!("{}:1", l),
-            _ => String::new(),
-        };
-
-        let code_str = issue
-            .code
-            .as_deref()
-            .map(|c| format!(" [{}]", c))
-            .unwrap_or_default();
-
-        let fix_indicator = if issue.has_safe_fix() { " (fixable)" } else { "" };
-
-        let line = format!(
-            "  {:>8} {:>10}  {}{}{}",
-            issue.severity, location, issue.message, code_str, fix_indicator
-        );
-
-        match issue.severity {
-            Severity::Error => {
-                let _ = ui::status::error(&line);
-            }
-            Severity::Warning => {
-                let _ = ui::status::warning(&line);
-            }
-            _ => {
-                let _ = ui::status::info(&line);
-            }
-        }
+        let _ = ui::layout::blank_line();
     }
-
-    let _ = ui::layout::blank_line();
 
     // Summary line.
     let mut parts = Vec::new();

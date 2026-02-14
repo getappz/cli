@@ -25,3 +25,4 @@ similar = "2.6"
 which = { workspace = true }
 chrono = { workspace = true }
 reqwest = { workspace = true }
+rand = { workspace = true }

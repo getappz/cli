@@ -14,7 +14,12 @@ use crate::error::{CheckResult, CheckerError};
 use crate::output::CheckIssue;
 
 use super::context::RepairContext;
-use super::llm::{call_llm, extract_diff_block, extract_json_block, ChatMessage, LlmConfig};
+use super::llm::{
+    call_llm, call_llm_streaming, extract_diff_block, extract_json_block, ChatMessage, LlmConfig,
+    TokenUsage,
+};
+
+use std::path::Path;
 
 // =========================================================================
 // Planner Agent
@@ -42,13 +47,15 @@ pub struct FileEditPlan {
 
 /// Run the Planner Agent.
 ///
-/// Analyses diagnostics and relevant context, returns a structured repair plan.
+/// Analyses diagnostics and relevant context, returns a structured repair plan
+/// and token usage (if available).
 pub async fn run_planner(
     config: &LlmConfig,
     issues: &[CheckIssue],
     context: &RepairContext,
     verbose: bool,
-) -> CheckResult<RepairPlan> {
+    project_dir: Option<&Path>,
+) -> CheckResult<(RepairPlan, Option<TokenUsage>)> {
     let diagnostics = format_diagnostics(issues);
     let file_tree = &context.file_tree;
 
@@ -60,7 +67,7 @@ pub async fn run_planner(
         file_snippets.push_str("\n\n");
     }
 
-    let system_prompt = PLANNER_SYSTEM_PROMPT;
+    let system_prompt = planner_prompt(project_dir);
     let user_prompt = format!(
         "{FILE_TREE}\n{file_tree}\n\n\
          {ERRORS}\n{diagnostics}\n\n\
@@ -76,11 +83,12 @@ pub async fn run_planner(
     }
 
     let messages = vec![
-        ChatMessage::system(system_prompt),
+        ChatMessage::system(&system_prompt),
         ChatMessage::user(user_prompt),
     ];
 
     let response = call_llm(config, &messages).await?;
+    let usage = response.usage.clone();
 
     if verbose {
         let _ = ui::status::info(&format!(
@@ -107,7 +115,7 @@ pub async fn run_planner(
         }
     }
 
-    Ok(plan)
+    Ok((plan, usage))
 }
 
 // =========================================================================
@@ -117,7 +125,8 @@ pub async fn run_planner(
 /// Run the Fix Agent.
 ///
 /// Given the repair plan and full file context, generates a unified diff.
-/// Returns the raw diff string.
+/// Returns the raw diff string and token usage. Uses streaming for real-time
+/// progress display.
 pub async fn run_fixer(
     config: &LlmConfig,
     plan: &RepairPlan,
@@ -125,7 +134,8 @@ pub async fn run_fixer(
     context: &RepairContext,
     reflection: Option<&str>,
     verbose: bool,
-) -> CheckResult<String> {
+    project_dir: Option<&Path>,
+) -> CheckResult<(String, Option<TokenUsage>)> {
     let diagnostics = format_diagnostics(issues);
 
     // Build the plan section.
@@ -160,7 +170,7 @@ pub async fn run_fixer(
         }
     }
 
-    let system_prompt = FIXER_SYSTEM_PROMPT;
+    let system_prompt = fixer_prompt(project_dir);
 
     let mut user_prompt = format!(
         "{ERRORS}\n{diagnostics}\n\n\
@@ -186,11 +196,26 @@ pub async fn run_fixer(
     }
 
     let messages = vec![
-        ChatMessage::system(system_prompt),
+        ChatMessage::system(&system_prompt),
         ChatMessage::user(user_prompt),
     ];
 
-    let response = call_llm(config, &messages).await?;
+    // Use streaming for the fix agent (longest response) to show progress.
+    let char_count = std::sync::atomic::AtomicUsize::new(0);
+    let response = call_llm_streaming(config, &messages, |delta| {
+        let count = char_count.fetch_add(delta.len(), std::sync::atomic::Ordering::Relaxed)
+            + delta.len();
+        if count % 200 < 20 {
+            eprint!("\r[Fixer] Generating... {} chars", count);
+        }
+    })
+    .await?;
+    let final_count = char_count.load(std::sync::atomic::Ordering::Relaxed);
+    if final_count > 0 {
+        eprintln!("\r[Fixer] Generation complete: {} chars", final_count);
+    }
+
+    let usage = response.usage.clone();
 
     if verbose {
         let _ = ui::status::info(&format!(
@@ -204,7 +229,7 @@ pub async fn run_fixer(
         reason: "Fix agent did not return a valid unified diff".to_string(),
     })?;
 
-    Ok(diff)
+    Ok((diff, usage))
 }
 
 // =========================================================================
@@ -225,13 +250,15 @@ pub struct VerifyResult {
 /// Run the Verify Agent.
 ///
 /// Checks the proposed diff against the original errors and file content.
+/// Returns the verification result and token usage.
 pub async fn run_verifier(
     config: &LlmConfig,
     diff: &str,
     issues: &[CheckIssue],
     context: &RepairContext,
     verbose: bool,
-) -> CheckResult<VerifyResult> {
+    project_dir: Option<&Path>,
+) -> CheckResult<(VerifyResult, Option<TokenUsage>)> {
     let diagnostics = format_diagnostics(issues);
 
     // Include original file contents for the files being patched.
@@ -242,7 +269,7 @@ pub async fn run_verifier(
         file_contents.push_str("\n\n");
     }
 
-    let system_prompt = VERIFIER_SYSTEM_PROMPT;
+    let system_prompt = verifier_prompt(project_dir);
     let user_prompt = format!(
         "{ERRORS}\n{diagnostics}\n\n\
          {FILES}\n{file_contents}\n\n\
@@ -259,11 +286,12 @@ pub async fn run_verifier(
     }
 
     let messages = vec![
-        ChatMessage::system(system_prompt),
+        ChatMessage::system(&system_prompt),
         ChatMessage::user(user_prompt),
     ];
 
     let response = call_llm(config, &messages).await?;
+    let usage = response.usage.clone();
 
     if verbose {
         let _ = ui::status::info(&format!(
@@ -290,7 +318,7 @@ pub async fn run_verifier(
         ));
     }
 
-    Ok(result)
+    Ok((result, usage))
 }
 
 // =========================================================================
@@ -320,10 +348,66 @@ fn format_diagnostics(issues: &[CheckIssue]) -> String {
 }
 
 // =========================================================================
-// Prompt Templates
+// Custom prompt loading
 // =========================================================================
 
-const PLANNER_SYSTEM_PROMPT: &str = "\
+/// Load a custom prompt from the project or user prompts directory.
+///
+/// Lookup order:
+/// 1. `{project_dir}/.appz/prompts/{name}.md`
+/// 2. `~/.appz/prompts/{name}.md`
+/// 3. Falls back to the hardcoded default.
+///
+/// If a custom prompt is found, its content replaces the system prompt.
+/// The file should contain plain text (markdown is fine).
+fn load_custom_prompt(project_dir: Option<&Path>, name: &str, default: &str) -> String {
+    let filename = format!("prompts/{}.md", name);
+
+    // Use the layered file reader from common::user_config.
+    if let Some(dir) = project_dir {
+        if let Some(content) = common::user_config::read_layered_file(dir, &filename) {
+            let trimmed = content.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+    } else {
+        // No project dir: try user-level only.
+        if let Some(user_file) = common::user_config::user_appz_file(&filename) {
+            if user_file.exists() {
+                if let Ok(content) = std::fs::read_to_string(&user_file) {
+                    let trimmed = content.trim();
+                    if !trimmed.is_empty() {
+                        return trimmed.to_string();
+                    }
+                }
+            }
+        }
+    }
+
+    default.to_string()
+}
+
+/// Resolve the planner system prompt (custom or default).
+pub fn planner_prompt(project_dir: Option<&Path>) -> String {
+    load_custom_prompt(project_dir, "planner", DEFAULT_PLANNER_SYSTEM_PROMPT)
+}
+
+/// Resolve the fixer system prompt (custom or default).
+pub fn fixer_prompt(project_dir: Option<&Path>) -> String {
+    load_custom_prompt(project_dir, "fixer", DEFAULT_FIXER_SYSTEM_PROMPT)
+}
+
+/// Resolve the verifier system prompt (custom or default).
+pub fn verifier_prompt(project_dir: Option<&Path>) -> String {
+    load_custom_prompt(project_dir, "verifier", DEFAULT_VERIFIER_SYSTEM_PROMPT)
+}
+
+// =========================================================================
+// Prompt Templates (defaults)
+// =========================================================================
+
+const DEFAULT_PLANNER_SYSTEM_PROMPT: &str = "\
 You are a senior software engineer analysing compiler, linter, and test errors.
 
 You are given:
@@ -353,7 +437,7 @@ Output ONLY valid JSON in this exact schema:
 
 Do not wrap the JSON in a code block. Output raw JSON only.";
 
-const FIXER_SYSTEM_PROMPT: &str = "\
+const DEFAULT_FIXER_SYSTEM_PROMPT: &str = "\
 You are an automated code repair system. You generate unified diff patches.
 
 Rules:
@@ -373,7 +457,7 @@ Output format:
 
 Output ONLY the unified diff. No explanations, no markdown, no commentary.";
 
-const VERIFIER_SYSTEM_PROMPT: &str = "\
+const DEFAULT_VERIFIER_SYSTEM_PROMPT: &str = "\
 You are a code review system verifying a proposed patch.
 
 You are given:

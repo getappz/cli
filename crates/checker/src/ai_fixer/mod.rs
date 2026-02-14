@@ -42,7 +42,7 @@ use crate::output::CheckIssue;
 
 use self::agents::{run_fixer, run_planner, run_verifier};
 use self::context::collect_context;
-use self::llm::LlmConfig;
+use self::llm::{LlmConfig, TokenUsage};
 use self::patch::{apply_patch, display_patch_preview, parse_unified_diff, validate_patch};
 use self::safety::{confidence_ok, filter_sendable_issues, validate_safety, SafetyConfig};
 
@@ -67,6 +67,8 @@ pub struct AiRepairConfig {
     pub verbose: bool,
     /// Maximum context bytes for the AI.
     pub max_context_bytes: Option<usize>,
+    /// Project directory for custom prompt resolution.
+    pub project_dir: Option<std::path::PathBuf>,
 }
 
 impl AiRepairConfig {
@@ -157,6 +159,7 @@ impl AiRepairConfig {
             verify_enabled,
             verbose: verbose_ai,
             max_context_bytes: None,
+            project_dir: None,
         })
     }
 }
@@ -303,6 +306,7 @@ async fn repair_loop(
     let mut total_fixed = 0usize;
     let mut reflection: Option<String> = None;
     let current_issues = issues.to_vec();
+    let mut cumulative_usage = TokenUsage::default();
 
     while attempt < max_attempts && !current_issues.is_empty() {
         attempt += 1;
@@ -312,11 +316,13 @@ async fn repair_loop(
         ));
 
         // --- Plan ---
-        let plan = match run_planner(
+        let proj_dir = config.project_dir.as_deref();
+        let (plan, planner_usage) = match run_planner(
             &config.planner_llm,
             &current_issues,
             context,
             config.verbose,
+            proj_dir,
         )
         .await
         {
@@ -326,6 +332,7 @@ async fn repair_loop(
                 break;
             }
         };
+        accumulate_usage(&mut cumulative_usage, planner_usage.as_ref());
 
         if plan.files_to_edit.is_empty() {
             let _ = ui::status::info("[Planner] No files to edit. Stopping.");
@@ -333,13 +340,14 @@ async fn repair_loop(
         }
 
         // --- Fix ---
-        let diff_text = match run_fixer(
+        let (diff_text, fixer_usage) = match run_fixer(
             &config.fixer_llm,
             &plan,
             &current_issues,
             context,
             reflection.as_deref(),
             config.verbose,
+            proj_dir,
         )
         .await
         {
@@ -350,6 +358,7 @@ async fn repair_loop(
                 continue;
             }
         };
+        accumulate_usage(&mut cumulative_usage, fixer_usage.as_ref());
 
         // --- Parse the diff ---
         let parsed_patch = match parse_unified_diff(&diff_text) {
@@ -415,10 +424,12 @@ async fn repair_loop(
                 &current_issues,
                 context,
                 config.verbose,
+                proj_dir,
             )
             .await
             {
-                Ok(verify_result) => {
+                Ok((verify_result, verifier_usage)) => {
+                    accumulate_usage(&mut cumulative_usage, verifier_usage.as_ref());
                     if !verify_result.valid {
                         let _ = ui::status::warning(&format!(
                             "[Verifier] Rejected: {}",
@@ -540,5 +551,26 @@ async fn repair_loop(
         ));
     }
 
+    // Display token usage summary.
+    if config.verbose && cumulative_usage.total_tokens > 0 {
+        let cost = cumulative_usage.estimate_cost_usd(&config.fixer_llm.model);
+        let _ = ui::status::info(&format!(
+            "[Tokens] Total: {} (prompt: {}, completion: {}) — est. cost: ${:.4}",
+            cumulative_usage.total_tokens,
+            cumulative_usage.prompt_tokens,
+            cumulative_usage.completion_tokens,
+            cost,
+        ));
+    }
+
     Ok(total_fixed)
+}
+
+/// Accumulate token usage from an API call into a running total.
+fn accumulate_usage(total: &mut TokenUsage, usage: Option<&TokenUsage>) {
+    if let Some(u) = usage {
+        total.prompt_tokens += u.prompt_tokens;
+        total.completion_tokens += u.completion_tokens;
+        total.total_tokens += u.total_tokens;
+    }
 }

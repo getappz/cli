@@ -54,6 +54,7 @@ appz-studio = { path = "../studio" }
 sandbox = { path = "../sandbox" }
 deployer = { path = "../deployer" }
 checker = { path = "../checker" }
+init = { path = "../init" }
 
 [features]
 default = ["self_update"]

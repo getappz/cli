@@ -40,3 +40,21 @@ pub struct MigrationConfig {
     pub static_export: bool,
 }
 
+/// Severity level for SSG verification warnings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SsgSeverity {
+    /// Will cause the build to fail.
+    Error,
+    /// May cause runtime issues or unexpected behaviour.
+    Warning,
+}
+
+/// A single SSG compatibility issue found during verification.
+#[derive(Debug, Clone)]
+pub struct SsgWarning {
+    pub severity: SsgSeverity,
+    pub message: String,
+    /// Relative file path where the issue was found (if applicable).
+    pub file: Option<String>,
+}
+

@@ -4,6 +4,7 @@ use miette::miette;
 use sandbox::{create_sandbox, SandboxConfig, SandboxSettings};
 use ssg_migrator::{
     analyze_project, generate_astro_project, generate_nextjs_project, MigrationConfig,
+    SsgSeverity,
 };
 use starbase::AppResult;
 use std::path::PathBuf;
@@ -116,8 +117,30 @@ pub async fn migrate(
 
             let fs = sandbox.fs();
 
-            generate_nextjs_project(&config, &analysis, fs)
+            let ssg_warnings = generate_nextjs_project(&config, &analysis, fs)
                 .map_err(|e| miette!("Failed to generate Next.js project: {}", e))?;
+
+            // Print SSG verification results before install
+            if !ssg_warnings.is_empty() {
+                let errors = ssg_warnings.iter().filter(|w| w.severity == SsgSeverity::Error).count();
+                let warns = ssg_warnings.iter().filter(|w| w.severity == SsgSeverity::Warning).count();
+                let _ = ui::status::info(&format!(
+                    "SSG verification: {} error(s), {} warning(s)",
+                    errors, warns
+                ));
+                for w in &ssg_warnings {
+                    let prefix = match w.severity {
+                        SsgSeverity::Error => "ERROR",
+                        SsgSeverity::Warning => "WARN",
+                    };
+                    let loc = w.file.as_deref().unwrap_or("");
+                    if loc.is_empty() {
+                        let _ = ui::status::warning(&format!("[{}] {}", prefix, w.message));
+                    } else {
+                        let _ = ui::status::warning(&format!("[{}] {} ({})", prefix, w.message, loc));
+                    }
+                }
+            }
 
             let _ = ui::status::info("Installing dependencies...");
             let install_out = sandbox

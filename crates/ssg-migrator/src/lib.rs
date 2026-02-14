@@ -14,4 +14,4 @@ pub use common::{copy_from_external, copy_public_assets, copy_tailwind_config, f
 pub use generator::generate_astro_project;
 pub use nextjs_generator::generate_nextjs_project;
 pub use transformer::{transform_component_to_astro, transform_route_to_astro_page, transform_to_astro_simple};
-pub use types::{ComponentInfo, MigrationConfig, ProjectAnalysis, RouteInfo};
+pub use types::{ComponentInfo, MigrationConfig, ProjectAnalysis, RouteInfo, SsgSeverity, SsgWarning};

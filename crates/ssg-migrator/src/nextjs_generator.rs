@@ -3,7 +3,7 @@
 //! Ports the lovable-nextjs (noxtable) flow to pure Rust. All file I/O uses `ScopedFs`.
 
 use crate::common::{copy_public_assets, copy_tailwind_config, filter_deps};
-use crate::types::{MigrationConfig, ProjectAnalysis, RouteInfo};
+use crate::types::{MigrationConfig, ProjectAnalysis, RouteInfo, SsgSeverity, SsgWarning};
 use camino::Utf8PathBuf;
 use miette::{miette, Result};
 use regex::Regex;
@@ -33,6 +33,29 @@ static RE_PAGE_IMPORT: LazyLock<Regex> = LazyLock::new(|| {
 });
 /// Word-boundary match for standalone "App" (function name, export, etc.)
 static RE_APP_WORD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bApp\b").unwrap());
+/// Detect default image imports: `import varName from "path/to/image.ext"`
+static RE_IMAGE_IMPORT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"import\s+(\w+)\s+from\s+["'][^"']+\.(png|jpe?g|gif|svg|webp|ico|bmp|avif)["']"#)
+        .unwrap()
+});
+
+// Verification regexes
+static RE_NEXT_HEADERS_IMPORT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"import\s+\{[^}]*\b(cookies|headers)\b[^}]*\}\s+from\s+["']next/headers["']"#)
+        .unwrap()
+});
+static RE_NEXT_CACHE_IMPORT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"import\s+\{[^}]*\b(revalidatePath|revalidateTag)\b[^}]*\}\s+from\s+["']next/cache["']"#)
+        .unwrap()
+});
+static RE_REDIRECT_IMPORT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"import\s+\{[^}]*\bredirect\b[^}]*\}\s+from\s+["']next/navigation["']"#)
+        .unwrap()
+});
+static RE_USE_SERVER: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?m)^["']use server["'];?"#).unwrap());
+static RE_USE_SEARCH_PARAMS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\buseSearchParams\b").unwrap());
 
 // ── Templates ───────────────────────────────────────────────────────────
 
@@ -133,11 +156,14 @@ export default function PAGENAME() {
 // ── Main entry point ────────────────────────────────────────────────────
 
 /// Generate a Next.js App Router project from a Lovable React SPA.
+///
+/// Returns a list of SSG compatibility warnings (empty when `static_export` is false
+/// or the generated project passes all checks).
 pub fn generate_nextjs_project(
     config: &MigrationConfig,
     analysis: &ProjectAnalysis,
     fs: &ScopedFs,
-) -> Result<()> {
+) -> Result<Vec<SsgWarning>> {
     let source_dir = &config.source_dir;
 
     fs.create_dir_all("src/app")?;
@@ -179,7 +205,14 @@ pub fn generate_nextjs_project(
     // 10. Copy public
     copy_public_assets(source_dir, fs, "public")?;
 
-    Ok(())
+    // 11. Verify SSG compatibility (only when static export is enabled)
+    let warnings = if config.static_export {
+        verify_static_export(fs)?
+    } else {
+        Vec::new()
+    };
+
+    Ok(warnings)
 }
 
 // ── Single-pass file transforms ─────────────────────────────────────────
@@ -218,11 +251,21 @@ fn transform_client_files(fs: &ScopedFs, client_rel: &str) -> Result<()> {
             "tsx" | "jsx" => {
                 let mut c = add_use_client_directive(&content);
                 c = replace_react_router(&c);
+                c = fix_image_imports(&c);
                 Some(c)
             }
             "ts" | "js" => {
-                if RE_REACT_ROUTER.is_match(&content) {
-                    Some(replace_react_router(&content))
+                let has_router = RE_REACT_ROUTER.is_match(&content);
+                let has_images = RE_IMAGE_IMPORT.is_match(&content);
+                if has_router || has_images {
+                    let mut c = content.clone();
+                    if has_router {
+                        c = replace_react_router(&c);
+                    }
+                    if has_images {
+                        c = fix_image_imports(&c);
+                    }
+                    Some(c)
                 } else {
                     None
                 }
@@ -297,6 +340,38 @@ fn add_use_client_directive(content: &str) -> String {
 fn replace_react_router(content: &str) -> String {
     RE_REACT_ROUTER
         .replace_all(content, "@App/useRouter")
+        .to_string()
+}
+
+/// Fix image imports for Next.js compatibility.
+///
+/// In Vite, `import img from './hero.jpg'` yields a string URL.
+/// In Next.js, the same import yields a `StaticImageData` object.
+///
+/// Rather than patching every usage site, we rewrite the import itself:
+///   `import hero from "./hero.jpg";`
+/// becomes:
+///   `import _hero_img from "./hero.jpg";`
+///   `const hero = _hero_img.src;`
+///
+/// This keeps the variable as a plain string everywhere it's used (JSX src attrs,
+/// object literals, function args, etc.), matching Vite's behaviour.
+fn fix_image_imports(content: &str) -> String {
+    if !RE_IMAGE_IMPORT.is_match(content) {
+        return content.to_string();
+    }
+
+    RE_IMAGE_IMPORT
+        .replace_all(content, |caps: &regex::Captures| {
+            let full_match = caps.get(0).unwrap().as_str();
+            let var_name = caps.get(1).unwrap().as_str();
+            // Build the private import name
+            let private_name = format!("_{var_name}_img");
+            // Replace the variable name in the original import statement
+            let new_import = full_match.replacen(var_name, &private_name, 1);
+            // Add a const that extracts the .src string
+            format!("{new_import}\nconst {var_name} = {private_name}.src;")
+        })
         .to_string()
 }
 
@@ -583,4 +658,182 @@ export default nextConfig;
             .map_err(|e| miette!("Failed to write components.json: {}", e))?;
     }
     Ok(())
+}
+
+// ── SSG verification ────────────────────────────────────────────────────
+
+/// Verify that the generated Next.js project is compatible with static export.
+///
+/// Runs five checks against the generated files and returns a list of warnings/errors.
+fn verify_static_export(fs: &ScopedFs) -> Result<Vec<SsgWarning>> {
+    let mut warnings: Vec<SsgWarning> = Vec::new();
+    let root = fs.root();
+
+    // ── Check 1: next.config.ts has output:"export" and images:{unoptimized:true} ──
+    let config_path = root.join("next.config.ts");
+    if config_path.exists() {
+        let config_content = std::fs::read_to_string(&config_path)
+            .map_err(|e| miette!("Failed to read next.config.ts: {}", e))?;
+        if !config_content.contains("output:") || !config_content.contains("export") {
+            warnings.push(SsgWarning {
+                severity: SsgSeverity::Error,
+                message: "next.config.ts is missing `output: \"export\"` — static build will produce SSR output instead of static HTML".to_string(),
+                file: Some("next.config.ts".to_string()),
+            });
+        }
+        if !config_content.contains("unoptimized") {
+            warnings.push(SsgWarning {
+                severity: SsgSeverity::Error,
+                message: "next.config.ts is missing `images: { unoptimized: true }` — image optimization requires a Node server and is incompatible with static export".to_string(),
+                file: Some("next.config.ts".to_string()),
+            });
+        }
+    } else {
+        warnings.push(SsgWarning {
+            severity: SsgSeverity::Error,
+            message: "next.config.ts not found — cannot verify static export configuration".to_string(),
+            file: None,
+        });
+    }
+
+    // ── Check 2: Dynamic route pages have generateStaticParams ──
+    let app_dir = root.join("src/app");
+    if app_dir.exists() {
+        for entry in WalkDir::new(&app_dir)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if name != "page.tsx" {
+                continue;
+            }
+            // Check if any ancestor directory is a dynamic segment [param]
+            let rel = path
+                .strip_prefix(&root)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            if !rel.contains('[') {
+                continue;
+            }
+            let content = std::fs::read_to_string(path)
+                .map_err(|e| miette!("Failed to read {}: {}", rel, e))?;
+            if !content.contains("generateStaticParams") {
+                warnings.push(SsgWarning {
+                    severity: SsgSeverity::Error,
+                    message: format!(
+                        "Dynamic route page is missing `generateStaticParams()` — static export requires this to know which paths to pre-render"
+                    ),
+                    file: Some(rel),
+                });
+            }
+        }
+    }
+
+    // ── Checks 3-5: Scan all src/ files in one pass ──
+    let src_dir = root.join("src");
+    if src_dir.exists() {
+        for entry in WalkDir::new(&src_dir)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            if !matches!(ext, "ts" | "tsx" | "jsx" | "js") {
+                continue;
+            }
+            let rel = path
+                .strip_prefix(&root)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            let content = match std::fs::read_to_string(path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            // Check 3: Unsupported server APIs
+            if RE_NEXT_HEADERS_IMPORT.is_match(&content) {
+                let cap = RE_NEXT_HEADERS_IMPORT.captures(&content).unwrap();
+                let api = cap.get(1).map(|m| m.as_str()).unwrap_or("cookies/headers");
+                warnings.push(SsgWarning {
+                    severity: SsgSeverity::Warning,
+                    message: format!(
+                        "Imports `{api}` from `next/headers` — this server-only API is not available in static export"
+                    ),
+                    file: Some(rel.clone()),
+                });
+            }
+            if RE_NEXT_CACHE_IMPORT.is_match(&content) {
+                let cap = RE_NEXT_CACHE_IMPORT.captures(&content).unwrap();
+                let api = cap.get(1).map(|m| m.as_str()).unwrap_or("revalidatePath/revalidateTag");
+                warnings.push(SsgWarning {
+                    severity: SsgSeverity::Warning,
+                    message: format!(
+                        "Imports `{api}` from `next/cache` — revalidation is not available in static export"
+                    ),
+                    file: Some(rel.clone()),
+                });
+            }
+            if RE_REDIRECT_IMPORT.is_match(&content) {
+                warnings.push(SsgWarning {
+                    severity: SsgSeverity::Warning,
+                    message: "Imports `redirect` from `next/navigation` — server-side redirect is not available in static export; use client-side `useRouter().push()` instead".to_string(),
+                    file: Some(rel.clone()),
+                });
+            }
+            if RE_USE_SERVER.is_match(&content) {
+                warnings.push(SsgWarning {
+                    severity: SsgSeverity::Warning,
+                    message: "Contains `\"use server\"` directive — server actions are not available in static export".to_string(),
+                    file: Some(rel.clone()),
+                });
+            }
+
+            // Check 4: Residual raw image imports (transform should have rewritten them)
+            // After the transform, image imports look like `import _var_img from "..."`
+            // If we still see raw `import var from "...ext"`, the transform was missed.
+            if RE_IMAGE_IMPORT.is_match(&content) {
+                let raw_vars: Vec<String> = RE_IMAGE_IMPORT
+                    .captures_iter(&content)
+                    .filter_map(|cap| {
+                        let var = cap.get(1)?.as_str();
+                        // If the variable already starts with _ and ends with _img, it was transformed
+                        if var.starts_with('_') && var.ends_with("_img") {
+                            None
+                        } else {
+                            Some(var.to_string())
+                        }
+                    })
+                    .collect();
+                for var in &raw_vars {
+                    warnings.push(SsgWarning {
+                        severity: SsgSeverity::Warning,
+                        message: format!(
+                            "Image import `{var}` was not rewritten — Next.js image imports return StaticImageData (not a string). Re-run migration or manually add `.src` where `{var}` is used"
+                        ),
+                        file: Some(rel.clone()),
+                    });
+                }
+            }
+
+            // Check 5: useSearchParams without Suspense
+            if RE_USE_SEARCH_PARAMS.is_match(&content) && !content.contains("Suspense") {
+                warnings.push(SsgWarning {
+                    severity: SsgSeverity::Warning,
+                    message: "Uses `useSearchParams` without a `<Suspense>` boundary — static export requires wrapping useSearchParams in Suspense to avoid build errors".to_string(),
+                    file: Some(rel.clone()),
+                });
+            }
+        }
+    }
+
+    Ok(warnings)
 }

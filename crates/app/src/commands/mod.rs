@@ -14,6 +14,7 @@ pub mod list;
 pub mod login;
 pub mod logout;
 pub mod ls;
+pub mod mcp_server;
 pub mod migrate;
 pub mod plan;
 pub mod preview;

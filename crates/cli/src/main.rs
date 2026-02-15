@@ -159,6 +159,7 @@ async fn main() -> MainResult {
                 Commands::Skills { command } => {
                     app::commands::skills::run(session, command).await
                 }
+                Commands::McpServer => app::commands::mcp_server::mcp_server(session).await,
                 // NOTE: Migrate command is now a downloadable plugin.
                 // It is handled by Commands::External below.
                 #[cfg(feature = "self_update")]

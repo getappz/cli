@@ -30,6 +30,7 @@ testResults.xml
 .env
 .env.local
 *.local
+.dev.vars
 
 # Temporary files
 *.tmp

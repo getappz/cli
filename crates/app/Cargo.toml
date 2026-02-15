@@ -56,6 +56,7 @@ deployer = { path = "../deployer" }
 checker = { path = "../checker" }
 init = { path = "../init" }
 site-builder = { path = "../site-builder" }
+mcp-server = { path = "../mcp-server" }
 
 [features]
 default = ["self_update"]

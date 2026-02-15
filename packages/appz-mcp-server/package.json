@@ -1,0 +1,28 @@
+{
+  "name": "appz-mcp-server",
+  "version": "0.1.0",
+  "description": "MCP server for appz CLI - expose appz commands to AI assistants (Cursor, Claude, etc.)",
+  "license": "MIT",
+  "bin": {
+    "appz-mcp-server": "bin/mcp-server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "bin",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/getappz/cli",
+    "directory": "packages/appz-mcp-server"
+  },
+  "keywords": [
+    "appz",
+    "mcp",
+    "model-context-protocol",
+    "cursor",
+    "claude"
+  ]
+}

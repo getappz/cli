@@ -337,6 +337,8 @@ pub enum Commands {
         #[command(subcommand)]
         command: crate::commands::skills::SkillsCommands,
     },
+    /// Run the MCP (Model Context Protocol) server for AI assistants (Cursor, Claude, etc.)
+    McpServer,
     // NOTE: The `migrate` command has been extracted to a downloadable plugin.
     // It is now handled by the External(Vec<String>) variant below.
     // Users run `appz migrate ...` which triggers the plugin system.

@@ -155,17 +155,12 @@ async fn main() -> MainResult {
                 Commands::DeployList { provider } => {
                     app::commands::deploy_list(session, provider).await
                 }
-                Commands::Check { fix, ai_fix, strict, changed, staged, format, json, watch, checker, jobs, init, max_attempts, ai_verify, verbose_ai } => {
-                    app::commands::check(session, fix, ai_fix, strict, changed, staged, format, json, watch, checker, jobs, init, max_attempts, ai_verify, verbose_ai).await
+                // Check and site commands are now downloadable plugins (handled by External)
+                Commands::Skills { command } => {
+                    app::commands::skills::run(session, command).await
                 }
-                Commands::Site { command } => {
-                    app::commands::site::run(session, command).await
-                }
-                Commands::Migrate { source, output, args, name, force, target, static_export } => {
-                    let resolved_source = source.or_else(|| args.first().cloned());
-                    let resolved_output = output.or_else(|| args.get(1).cloned());
-                    app::commands::migrate(session, resolved_source, resolved_output, name, force, target, static_export).await
-                }
+                // NOTE: Migrate command is now a downloadable plugin.
+                // It is handled by Commands::External below.
                 #[cfg(feature = "self_update")]
                 Commands::SelfUpdate { version, force, yes } => {
                     use app::commands::SelfUpdate;
@@ -176,6 +171,9 @@ async fn main() -> MainResult {
                 #[cfg(not(feature = "self_update"))]
                 Commands::SelfUpdate { .. } => {
                     unreachable!("SelfUpdate command should not be available when self_update feature is disabled")
+                }
+                Commands::External(args) => {
+                    app::commands::external::run(session, args).await
                 }
             }
         })

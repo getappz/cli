@@ -43,6 +43,7 @@ yarn.lock
 
 # Project specific
 .mise/
+scripts/signing_key.key
 megalinter-reports/
 .dev/
 comment.md

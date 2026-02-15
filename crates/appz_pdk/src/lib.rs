@@ -36,6 +36,7 @@
 //! ```
 
 pub mod prelude;
+pub mod security;
 pub mod types;
 
 // Re-export types at crate root for macros
@@ -44,3 +45,5 @@ pub use types::*;
 // Re-export macros at crate root
 #[macro_use]
 mod macros;
+#[macro_use]
+mod plugin_macros;

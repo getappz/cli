@@ -210,8 +210,9 @@ impl SandboxProvider for LocalProvider {
             canonical.display()
         ));
 
-        // Set up scoped filesystem.
-        self.scoped_fs = Some(ScopedFs::new(&canonical)?);
+        // Set up scoped filesystem (with optional read-allowed paths).
+        let read_allowed = config.settings.read_allowed_paths.clone();
+        self.scoped_fs = Some(ScopedFs::new_with_allowed(&canonical, read_allowed)?);
 
         // Set up mise manager.
         let mise = MiseManager::new(&canonical);

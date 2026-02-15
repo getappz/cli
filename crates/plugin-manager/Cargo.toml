@@ -1,0 +1,39 @@
+[package]
+name = "plugin-manager"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "On-demand WASM plugin manager with signing, entitlements, and sandbox isolation"
+
+[dependencies]
+sandbox = { path = "../sandbox" }
+api = { path = "../api" }
+common = { path = "../common" }
+ui = { path = "../ui" }
+
+# Core
+serde = { workspace = true }
+serde_json = { workspace = true }
+miette = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = "0.1"
+
+# Crypto
+ed25519-dalek = { version = "2.1", features = ["std"] }
+sha2 = "0.10"
+hmac = "0.12"
+rand = { workspace = true }
+hex = "0.4"
+
+# HTTP (for downloads)
+reqwest = { workspace = true }
+
+# Versioning
+semver = "1.0"
+
+# Directories
+dirs = "5.0"
+
+[dev-dependencies]
+tempfile = { workspace = true }

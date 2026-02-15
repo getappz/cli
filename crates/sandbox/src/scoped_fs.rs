@@ -69,9 +69,14 @@ use crate::error::{SandboxError, SandboxResult};
 ///
 /// Every operation resolves paths relative to `root` and validates that the
 /// resulting absolute path stays within the sandbox boundary.
+///
+/// Optionally, [`read_allowed`](Self::read_allowed) paths permit reading from
+/// directories outside the root (e.g. `~/.appz/skills`).
 #[derive(Debug, Clone)]
 pub struct ScopedFs {
     root: PathBuf,
+    /// Canonicalized paths the sandbox may read from (in addition to root).
+    read_allowed: Vec<PathBuf>,
 }
 
 /// A lightweight directory entry returned by [`ScopedFs::list_dir`].
@@ -99,13 +104,39 @@ impl ScopedFs {
     /// The root path is canonicalized immediately so that all subsequent
     /// containment checks are reliable.
     pub fn new(root: impl Into<PathBuf>) -> SandboxResult<Self> {
+        Self::new_with_allowed(root, Vec::<PathBuf>::new())
+    }
+
+    /// Create a new `ScopedFs` with optional read-allowed paths.
+    ///
+    /// `read_allowed` are directories outside the root that the sandbox may
+    /// read from via [`read_allowed`](Self::read_allowed) and
+    /// [`list_dir_allowed`](Self::list_dir_allowed).
+    pub fn new_with_allowed(
+        root: impl Into<PathBuf>,
+        read_allowed: impl IntoIterator<Item = impl Into<PathBuf>>,
+    ) -> SandboxResult<Self> {
         let raw: PathBuf = root.into();
         let root = if raw.exists() {
             raw.canonicalize().map_err(SandboxError::Io)?
         } else {
             normalize_path(&raw)
         };
-        Ok(Self { root })
+        let allowed: Vec<PathBuf> = read_allowed
+            .into_iter()
+            .map(Into::into)
+            .filter_map(|p| {
+                if p.exists() {
+                    p.canonicalize().ok()
+                } else {
+                    Some(normalize_path(&p))
+                }
+            })
+            .collect();
+        Ok(Self {
+            root,
+            read_allowed: allowed,
+        })
     }
 
     /// Return the canonical root path.
@@ -362,6 +393,103 @@ impl ScopedFs {
                 is_dir: ft.is_dir(),
                 is_file: ft.is_file(),
                 name: entry.file_name().to_string_lossy().into_owned(),
+            });
+        }
+        Ok(entries)
+    }
+
+    // ------------------------------------------------------------------
+    // Read-allowed operations (paths outside the sandbox root)
+    // ------------------------------------------------------------------
+
+    /// Check if an absolute path is under one of the read-allowed directories.
+    pub fn is_path_allowed(&self, path: &Path) -> bool {
+        let candidate = if path.exists() {
+            path.canonicalize().ok()
+        } else {
+            Some(normalize_path(path))
+        };
+        let Some(candidate) = candidate else {
+            return false;
+        };
+        self.read_allowed
+            .iter()
+            .any(|allowed| candidate.starts_with(allowed))
+    }
+
+    /// Read a file from a whitelisted path (outside the sandbox root).
+    ///
+    /// The path must be absolute and contained under one of the
+    /// `read_allowed` directories configured at construction.
+    pub fn read_allowed(&self, path: impl AsRef<Path>) -> SandboxResult<String> {
+        let path = path.as_ref();
+        if !path.is_absolute() {
+            return Err(SandboxError::PathEscape {
+                path: path.display().to_string(),
+            });
+        }
+        let abs = if path.exists() {
+            path.canonicalize().map_err(SandboxError::Io)?
+        } else {
+            normalize_path(path)
+        };
+        if !self.is_path_allowed(&abs) {
+            return Err(SandboxError::PathEscape {
+                path: path.display().to_string(),
+            });
+        }
+        if !abs.exists() {
+            return Err(SandboxError::FileNotFound {
+                path: path.display().to_string(),
+            });
+        }
+        Ok(starbase_fs::read_file(&abs)?)
+    }
+
+    /// List directory entries from a whitelisted path (outside the sandbox root).
+    ///
+    /// The path must be absolute and contained under one of the
+    /// `read_allowed` directories. Returns `DirEntry` with `rel_path` relative
+    /// to the allowed directory.
+    pub fn list_dir_allowed(&self, path: impl AsRef<Path>) -> SandboxResult<Vec<DirEntry>> {
+        let path = path.as_ref();
+        if !path.is_absolute() {
+            return Err(SandboxError::PathEscape {
+                path: path.display().to_string(),
+            });
+        }
+        let abs = if path.exists() {
+            path.canonicalize().map_err(SandboxError::Io)?
+        } else {
+            return Err(SandboxError::DirectoryNotFound {
+                path: path.display().to_string(),
+            });
+        };
+        if !self.is_path_allowed(&abs) {
+            return Err(SandboxError::PathEscape {
+                path: path.display().to_string(),
+            });
+        }
+        if !abs.is_dir() {
+            return Err(SandboxError::DirectoryNotFound {
+                path: path.display().to_string(),
+            });
+        }
+
+        let rd = std::fs::read_dir(&abs).map_err(SandboxError::Io)?;
+        let raw: Vec<_> = rd.collect::<Result<Vec<_>, _>>().map_err(SandboxError::Io)?;
+        let mut entries = Vec::with_capacity(raw.len());
+        for entry in raw {
+            let abs_path = entry.path();
+            let ft = entry.file_type().map_err(SandboxError::Io)?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let rel_path = PathBuf::from(&name);
+            entries.push(DirEntry {
+                rel_path,
+                abs_path,
+                is_dir: ft.is_dir(),
+                is_file: ft.is_file(),
+                name,
             });
         }
         Ok(entries)

@@ -6,6 +6,7 @@ pub mod deployment_utils;
 pub mod dev;
 pub mod dev_server;
 pub mod domains;
+pub mod external;
 pub mod gen;
 pub mod init;
 pub mod link;
@@ -25,6 +26,7 @@ pub mod run;
 #[cfg_attr(not(feature = "self_update"), path = "self_upgrade_stub.rs")]
 pub mod self_upgrade;
 pub mod site;
+pub mod skills;
 pub mod switch;
 pub mod teams;
 pub mod unlink;
@@ -43,7 +45,7 @@ pub use list::list;
 pub use login::login;
 pub use logout::logout;
 pub use ls::ls;
-pub use migrate::migrate;
+// migrate is now a downloadable plugin; no public exports needed
 pub use plan::plan;
 pub use preview::preview;
 pub use projects::{resolve_project_id, run as projects_run, ProjectsCommands};
@@ -56,6 +58,7 @@ pub use run::run;
 pub use self_upgrade::{append_self_update_instructions, upgrade_instructions_text};
 #[cfg(feature = "self_update")]
 pub use self_upgrade::{append_self_update_instructions, upgrade_instructions_text, SelfUpdate};
+pub use skills::SkillsCommands;
 pub use switch::switch;
 pub use teams::{resolve_team_id, run as teams_run, TeamsCommands};
 pub use unlink::unlink;

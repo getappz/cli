@@ -299,3 +299,289 @@ pub struct OptionInput {
     pub description: Option<String>,
     pub default: Option<serde_json::Value>, // Can be string, int, bool, array
 }
+
+// ============================================================================
+// Plugin Filesystem Types (ScopedFs-backed)
+// ============================================================================
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PluginFsReadInput {
+    pub path: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PluginFsReadOutput {
+    pub success: bool,
+    pub content: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PluginFsReadBytesOutput {
+    pub success: bool,
+    /// Base64-encoded bytes
+    pub content: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PluginFsWriteInput {
+    pub path: String,
+    pub content: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PluginFsWriteOutput {
+    pub success: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PluginFsWalkInput {
+    pub path: String,
+    pub glob: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PluginFsWalkOutput {
+    pub success: bool,
+    pub paths: Vec<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PluginFsExistsOutput {
+    pub exists: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PluginFsCopyInput {
+    pub source: String,
+    pub destination: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PluginFsListDirOutput {
+    pub success: bool,
+    pub entries: Vec<PluginFsDirEntry>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PluginFsDirEntry {
+    pub name: String,
+    pub is_file: bool,
+    pub is_dir: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PluginFsJsonInput {
+    pub path: String,
+    pub content: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PluginFsJsonOutput {
+    pub success: bool,
+    pub content: Option<serde_json::Value>,
+    pub error: Option<String>,
+}
+
+// ============================================================================
+// Plugin Git Types
+// ============================================================================
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PluginGitFilesOutput {
+    pub success: bool,
+    pub files: Vec<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PluginGitIsRepoOutput {
+    pub is_repo: bool,
+}
+
+// ============================================================================
+// Plugin Sandbox Exec Types
+// ============================================================================
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PluginSandboxExecInput {
+    pub command: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PluginSandboxExecOutput {
+    pub success: bool,
+    pub stdout: Option<String>,
+    pub stderr: Option<String>,
+    pub exit_code: Option<i32>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PluginSandboxToolInput {
+    pub tool: String,
+    pub version: Option<String>,
+    pub command: Option<String>,
+}
+
+// ============================================================================
+// Plugin AST Types
+// ============================================================================
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PluginAstTransformInput {
+    pub code: String,
+    pub rules: Vec<PluginAstRule>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PluginAstRule {
+    /// Rule type (e.g., "replace_import", "rename_component", "remove_import")
+    pub rule_type: String,
+    /// Rule-specific parameters
+    pub params: HashMap<String, String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PluginAstTransformOutput {
+    pub success: bool,
+    pub code: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PluginAstParseInput {
+    pub code: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PluginAstParseOutput {
+    pub success: bool,
+    pub ast: Option<serde_json::Value>,
+    pub error: Option<String>,
+}
+
+// ============================================================================
+// Plugin Handshake Types
+// ============================================================================
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PluginHandshakeChallenge {
+    pub nonce: String,
+    pub cli_version: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PluginHandshakeResponse {
+    pub hmac: String,
+}
+
+// ============================================================================
+// Plugin Info / Execute Types
+// ============================================================================
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PluginInfo {
+    pub name: String,
+    pub version: String,
+    pub commands: Vec<PluginCommandDef>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PluginCommandDef {
+    pub name: String,
+    pub about: String,
+    #[serde(default)]
+    pub args: Vec<PluginArgDef>,
+    #[serde(default)]
+    pub subcommands: Vec<PluginCommandDef>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PluginArgDef {
+    pub name: String,
+    #[serde(default)]
+    pub short: Option<char>,
+    #[serde(default)]
+    pub long: Option<String>,
+    #[serde(default)]
+    pub help: Option<String>,
+    #[serde(default)]
+    pub required: bool,
+    #[serde(default)]
+    pub default: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PluginExecuteInput {
+    pub command: String,
+    pub args: HashMap<String, serde_json::Value>,
+    pub working_dir: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PluginExecuteOutput {
+    pub exit_code: i32,
+    pub message: Option<String>,
+}
+
+// ============================================================================
+// Plugin Check Run Types (for appz_pcheck_run host function)
+// ============================================================================
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PluginCheckRunInput {
+    pub working_dir: String,
+    pub fix: bool,
+    pub ai_fix: bool,
+    pub strict: bool,
+    pub changed: bool,
+    pub staged: bool,
+    pub format: bool,
+    pub json: bool,
+    pub checker: Option<String>,
+    pub jobs: Option<usize>,
+    pub init: bool,
+    pub max_attempts: u32,
+    pub ai_verify: Option<bool>,
+    pub verbose_ai: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PluginCheckRunOutput {
+    pub exit_code: i32,
+    pub message: Option<String>,
+}
+
+// ============================================================================
+// Plugin Site Run Types (for appz_psite_run host function)
+// ============================================================================
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PluginSiteRunInput {
+    pub working_dir: String,
+    pub subcommand: String,
+    pub url: Option<String>,
+    pub prompt: Option<String>,
+    pub output: Option<String>,
+    pub theme: Option<String>,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub transform_content: bool,
+    pub no_build: bool,
+    pub resume: bool,
+    pub dry_run: bool,
+    pub pages: Option<Vec<String>>,
+    pub all: bool,
+    pub create: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PluginSiteRunOutput {
+    pub exit_code: i32,
+    pub message: Option<String>,
+}

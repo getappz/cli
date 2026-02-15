@@ -1,8 +1,14 @@
 pub mod context;
 pub mod execution;
+pub mod plugin_check;
+pub mod plugin_site;
 pub mod filesystem;
 pub mod helpers;
 pub mod host;
 pub mod interaction;
+pub mod plugin_ast;
+pub mod plugin_fs;
+pub mod plugin_git;
+pub mod plugin_sandbox;
 pub mod registry;
 pub mod utils;

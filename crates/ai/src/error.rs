@@ -50,4 +50,11 @@ pub enum AiError {
     )]
     #[error("Tools and agents are not supported for provider: {provider}")]
     ToolsNotSupported { provider: String },
+
+    #[diagnostic(
+        code(ai::skill_error),
+        help("Check that the skill directory exists and contains a valid SKILL.md with name and description in the YAML frontmatter.")
+    )]
+    #[error("Skill error: {reason}")]
+    SkillError { reason: String },
 }

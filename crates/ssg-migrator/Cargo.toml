@@ -4,27 +4,45 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
-[dependencies]
-# Biome crates for parsing and AST manipulation
-biome_js_parser = { path = "../../../code-ref/biome/crates/biome_js_parser" }
-biome_js_syntax = { path = "../../../code-ref/biome/crates/biome_js_syntax" }
-biome_rowan = { path = "../../../code-ref/biome/crates/biome_rowan" }
-biome_fs = { path = "../../../code-ref/biome/crates/biome_fs" }
-biome_glob = { path = "../../../code-ref/biome/crates/biome_glob" }
+[features]
+default = ["native"]
+# Native mode: uses direct filesystem, Biome, git2, sandbox. For local dev/testing.
+native = [
+    "dep:biome_js_parser",
+    "dep:biome_js_syntax",
+    "dep:biome_rowan",
+    "dep:biome_fs",
+    "dep:biome_glob",
+    "dep:walkdir",
+    "dep:ast-grep-core",
+    "dep:ast-grep-language",
+    "dep:sandbox",
+    "dep:git2",
+]
+# WASM mode: replaces native deps with host function calls via appz_pdk.
+wasm = ["dep:appz_pdk"]
 
-# Core dependencies
+[dependencies]
+# Core dependencies (always needed)
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 miette = { workspace = true }
 thiserror = { workspace = true }
-walkdir = "2"
 regex = { workspace = true }
 camino = "1.2"
 
-# ast-grep for efficient pattern matching
-ast-grep-core = "0.39.7"
-ast-grep-language = "0.39.7"
+# -- Native-only dependencies --
+# Biome crates for parsing and AST manipulation
+biome_js_parser = { path = "../../../code-ref/biome/crates/biome_js_parser", optional = true }
+biome_js_syntax = { path = "../../../code-ref/biome/crates/biome_js_syntax", optional = true }
+biome_rowan = { path = "../../../code-ref/biome/crates/biome_rowan", optional = true }
+biome_fs = { path = "../../../code-ref/biome/crates/biome_fs", optional = true }
+biome_glob = { path = "../../../code-ref/biome/crates/biome_glob", optional = true }
+walkdir = { version = "2", optional = true }
+ast-grep-core = { version = "0.39.7", optional = true }
+ast-grep-language = { version = "0.39.7", optional = true }
+sandbox = { path = "../sandbox", optional = true }
+git2 = { version = "0.19", optional = true }
 
-# Sandbox for path-safe file I/O and JSON merge
-sandbox = { path = "../sandbox" }
-
+# -- WASM-only dependencies --
+appz_pdk = { path = "../appz_pdk", optional = true }

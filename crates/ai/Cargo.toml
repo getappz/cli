@@ -8,7 +8,10 @@ description = "Shared LLM client abstraction for OpenAI, Anthropic, and Ollama"
 [dependencies]
 aisdk = { version = "0.4", features = ["openai", "anthropic", "groq", "google"] }
 common = { path = "../common" }
+sandbox = { path = "../sandbox" }
 ui = { path = "../ui" }
+schemars = "1.0"
+serde_yaml = { workspace = true }
 miette = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }

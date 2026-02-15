@@ -19,6 +19,11 @@ members = [
     "crates/checker",
     "crates/init",
     "crates/site-builder",
+    "crates/plugin-manager",
+    "crates/plugins/ssg-migrator",
+    "crates/plugins/check",
+    "crates/plugins/site",
+    "crates/plugin-build",
 ]
 resolver = "2"
 
@@ -39,8 +44,12 @@ app = { path = "crates/app", features = ["self_update"] }
 common = { path = "crates/common" }
 ui = { path = "crates/ui" }
 env_var = { path = "crates/env_var" }
+plugin-manager = { path = "crates/plugin-manager" }
+sandbox = { path = "crates/sandbox" }
+api = { path = "crates/api" }
 clap = { workspace = true }
 miette = { workspace = true }
+serde_json = { workspace = true }
 starbase = "0.10"
 starbase_styles = "0.6"
 starbase_utils = { workspace = true }

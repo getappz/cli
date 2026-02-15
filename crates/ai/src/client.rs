@@ -7,9 +7,13 @@
 //! - SSE streaming for real-time progress
 //! - Token usage tracking from API responses
 
+use std::path::PathBuf;
 use std::time::Duration;
 
+use sandbox::SandboxProvider;
+
 use crate::error::{AiError, AiResult};
+use crate::skills::{build_skills_prompt, create_load_skill_tool, discover_skills, SkillDir};
 use crate::types::{ChatMessage, LlmConfig, LlmResponse, RetryPolicy};
 
 // ---------------------------------------------------------------------------
@@ -181,6 +185,49 @@ pub async fn call_llm_with_tools(
         });
     }
     call_llm_with_tools_once(config, messages, tools, max_steps).await
+}
+
+/// Default skill directories for a sandbox: project `.agents/skills` and user `~/.appz/skills`.
+pub fn skill_directories_for_sandbox(_sandbox: &dyn SandboxProvider) -> Vec<SkillDir> {
+    let mut dirs = vec![SkillDir::Relative(PathBuf::from(".agents/skills"))];
+    if let Some(appz_dir) = common::user_config::user_appz_dir() {
+        let skills_path = appz_dir.join("skills");
+        if skills_path.exists() {
+            if let Ok(canonical) = skills_path.canonicalize() {
+                dirs.push(SkillDir::Allowed(canonical));
+            }
+        }
+    }
+    dirs
+}
+
+/// Call an LLM with skills support: discovers skills from the sandbox, injects a skills prompt,
+/// adds a loadSkill tool, and runs the agent loop.
+pub async fn call_llm_with_skills(
+    config: &LlmConfig,
+    messages: &[ChatMessage],
+    sandbox: &dyn SandboxProvider,
+    base_tools: impl IntoIterator<Item = aisdk::core::Tool>,
+    max_steps: u32,
+) -> AiResult<LlmResponse> {
+    let skill_dirs = skill_directories_for_sandbox(sandbox);
+    let skills = discover_skills(sandbox.fs(), &skill_dirs)?;
+    let skills_prompt = build_skills_prompt(&skills);
+    let load_skill_tool = create_load_skill_tool(skills, sandbox.fs());
+
+    let mut msgs = messages.to_vec();
+    if !skills_prompt.is_empty() {
+        if let Some(first) = msgs.iter_mut().find(|m| m.role == "system") {
+            first.content = format!("{}{}", skills_prompt, first.content);
+        } else {
+            msgs.insert(0, ChatMessage::system(skills_prompt));
+        }
+    }
+
+    let tools: Vec<aisdk::core::Tool> = std::iter::once(load_skill_tool)
+        .chain(base_tools)
+        .collect();
+    call_llm_with_tools(config, &msgs, tools, max_steps).await
 }
 
 async fn call_llm_with_tools_once(

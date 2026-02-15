@@ -50,6 +50,7 @@ pub fn copy_from_external(
 }
 
 /// Dependencies to **exclude** when migrating (build tools, bundlers, routers, dev-only).
+/// Entries are prefix-matched: `"vite"` blocks `vite`, `vite-plugin-foo`, etc.
 const DEP_DENYLIST: &[&str] = &[
     "vite",
     "@vitejs/",

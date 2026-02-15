@@ -1,0 +1,36 @@
+# Plugin build configuration
+# Used by: cargo run -p plugin-build -- package
+
+cdn_base_url = "https://cdn.appz.dev/plugins/v1"
+
+# S3/R2 configuration (optional - use env vars for CI)
+# s3_bucket = "appz-plugins"
+# s3_region = "auto"
+# s3_endpoint = "https://<account_id>.r2.cloudflarestorage.com"
+
+[[plugins]]
+crate_name = "check-plugin"
+plugin_id = "check"
+name = "Check"
+description = "Check code for errors, lint issues, formatting, and secrets"
+tier = "free"
+commands = ["check"]
+min_cli_version = "0.1.0"
+
+[[plugins]]
+crate_name = "ssg-migrator-plugin"
+plugin_id = "ssg-migrator"
+name = "SSG Migrator"
+description = "Migrate React SPA to Astro or Next.js"
+tier = "free"
+commands = ["migrate"]
+min_cli_version = "0.1.0"
+
+[[plugins]]
+crate_name = "site-plugin"
+plugin_id = "site"
+name = "Site"
+description = "AI-powered website creation, redesign, and cloning"
+tier = "pro"
+commands = ["site"]
+min_cli_version = "0.1.0"

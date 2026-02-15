@@ -10,7 +10,7 @@ pub mod http {
 
 pub use client::Client;
 pub use endpoints::{
-    Aliases, Auth, Deployments, Domains, Gen, OAuthPollError, Projects, Teams, Users,
+    Aliases, Auth, Deployments, Domains, Gen, OAuthPollError, Plugins, Projects, Teams, Users,
 };
 pub use error::ApiError;
 pub use models::*;
@@ -54,5 +54,10 @@ impl Client {
     /// Get gen (AI code generation) endpoints
     pub fn gen(&self) -> Gen<'_> {
         Gen::new(self)
+    }
+
+    /// Get plugin management endpoints
+    pub fn plugins(&self) -> Plugins<'_> {
+        Plugins::new(self)
     }
 }

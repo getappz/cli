@@ -71,7 +71,7 @@ impl SandboxConfig {
 /// Settings that control sandbox behaviour.
 ///
 /// All fields have sensible defaults via [`Default`]. Use the builder methods
-/// (`with_tool`, `with_env`, `with_dotenv`, `quiet`) to customise.
+/// (`with_tool`, `with_env`, `with_dotenv`, `with_read_allowed`, `quiet`) to customise.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SandboxSettings {
     /// Automatically install mise if not present on the system. Default: true.
@@ -82,6 +82,8 @@ pub struct SandboxSettings {
     pub env: HashMap<String, String>,
     /// Optional .env file path (relative to project root) to load.
     pub dotenv: Option<PathBuf>,
+    /// Directories the sandbox may read from in addition to the project root (e.g. ~/.appz/skills).
+    pub read_allowed_paths: Vec<PathBuf>,
     /// Suppress all progress indicators and status messages. Default: false.
     pub quiet: bool,
 }
@@ -93,6 +95,7 @@ impl Default for SandboxSettings {
             mise_tools: Vec::new(),
             env: HashMap::new(),
             dotenv: None,
+            read_allowed_paths: Vec::new(),
             quiet: false,
         }
     }
@@ -117,6 +120,22 @@ impl SandboxSettings {
     /// Builder: set the dotenv file path.
     pub fn with_dotenv(mut self, path: impl Into<PathBuf>) -> Self {
         self.dotenv = Some(path.into());
+        self
+    }
+
+    /// Builder: add a directory the sandbox may read from (outside the project root).
+    pub fn with_read_allowed(mut self, path: impl Into<PathBuf>) -> Self {
+        self.read_allowed_paths.push(path.into());
+        self
+    }
+
+    /// Builder: add multiple directories the sandbox may read from.
+    pub fn with_read_allowed_paths(
+        mut self,
+        paths: impl IntoIterator<Item = impl Into<PathBuf>>,
+    ) -> Self {
+        self.read_allowed_paths
+            .extend(paths.into_iter().map(Into::into));
         self
     }
 

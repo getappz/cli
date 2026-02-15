@@ -328,93 +328,18 @@ pub enum Commands {
         /// Provider to list deployments from
         provider: Option<String>,
     },
-    /// Check code for errors, lint issues, formatting problems, and secrets
-    Check {
-        /// Auto-fix safe issues (like biome --fix)
-        #[arg(long)]
-        fix: bool,
-
-        /// Use AI to suggest fixes for complex errors (human-in-loop)
-        #[arg(long)]
-        ai_fix: bool,
-
-        /// Treat warnings as errors (non-zero exit)
-        #[arg(long)]
-        strict: bool,
-
-        /// Only check files changed since last commit
-        #[arg(long)]
-        changed: bool,
-
-        /// Only check git-staged files
-        #[arg(long)]
-        staged: bool,
-
-        /// Check and fix formatting
-        #[arg(long)]
-        format: bool,
-
-        /// Output results as JSON (for CI/CD)
-        #[arg(long)]
-        json: bool,
-
-        /// Watch for changes and re-check
-        #[arg(long)]
-        watch: bool,
-
-        /// Specific checker to run (biome, tsc, ruff, clippy, phpstan, stylelint, secrets)
-        #[arg(long)]
-        checker: Option<String>,
-
-        /// Number of parallel jobs (default: num_cpus)
-        #[arg(long, short)]
-        jobs: Option<usize>,
-
-        /// Initialize checker config files for detected frameworks
-        #[arg(long)]
-        init: bool,
-
-        /// Maximum AI fix retry attempts (default: 3)
-        #[arg(long, default_value = "3")]
-        max_attempts: u32,
-
-        /// Verify AI patches before applying (default: true in interactive)
-        #[arg(long)]
-        ai_verify: Option<bool>,
-
-        /// Print AI reasoning and confidence scores
-        #[arg(long)]
-        verbose_ai: bool,
-    },
-    /// AI-powered website creation, redesign, and cloning
-    Site {
+    // NOTE: The `check` command has been extracted to a downloadable plugin.
+    // It is now handled by the External(Vec<String>) variant below.
+    // NOTE: The `site` command has been extracted to a downloadable plugin (pro tier).
+    // It is now handled by the External(Vec<String>) variant below.
+    /// Manage Agent Skills (install, list, remove)
+    Skills {
         #[command(subcommand)]
-        command: crate::commands::site::SiteCommands,
+        command: crate::commands::skills::SkillsCommands,
     },
-    /// Migrate React SPA to Astro or Next.js
-    Migrate {
-        /// Source React SPA directory (default: current directory)
-        #[arg(short, long, value_name = "SOURCE")]
-        source: Option<std::path::PathBuf>,
-        /// Output directory for migrated project
-        #[arg(short, long, value_name = "OUTPUT")]
-        output: Option<std::path::PathBuf>,
-        /// SOURCE and OUTPUT as positional args (e.g. `migrate academy-connect academy-connect-nextjs`)
-        #[arg(value_name = "SOURCE OUTPUT", index = 1, num_args = 0..=2)]
-        args: Vec<std::path::PathBuf>,
-        /// Project name for migrated app
-        #[arg(short, long)]
-        name: Option<String>,
-        /// Overwrite existing directory
-        #[arg(long)]
-        force: bool,
-        /// Migration target: astro (default) or nextjs
-        #[arg(long, default_value = "astro")]
-        target: String,
-        /// Generate a static-export Next.js project (output: 'export')
-        #[arg(long, alias = "static")]
-        static_export: bool,
-    },
+    // NOTE: The `migrate` command has been extracted to a downloadable plugin.
+    // It is now handled by the External(Vec<String>) variant below.
+    // Users run `appz migrate ...` which triggers the plugin system.
     /// Update appz itself to the latest version
     #[cfg(feature = "self_update")]
     SelfUpdate {
@@ -427,4 +352,7 @@ pub enum Commands {
         #[arg(long, short)]
         yes: bool,
     },
+    /// Commands provided by downloadable plugins
+    #[command(external_subcommand)]
+    External(Vec<String>),
 }

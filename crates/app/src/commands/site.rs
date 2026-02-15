@@ -8,7 +8,8 @@ use starbase::AppResult;
 use tracing::instrument;
 
 use crate::session::AppzSession;
-use site_builder::config::{AiConfig, SiteBuilderConfig, SiteMode};
+use crate::wasm::types::PluginSiteRunInput;
+use site_builder::config::{AiConfig, SiteBuilderConfig};
 use site_builder::pipeline;
 
 /// Subcommands for the `appz site` command group.
@@ -223,6 +224,105 @@ pub async fn run(session: AppzSession, command: SiteCommands) -> AppResult {
     }
 
     Ok(None)
+}
+
+/// Run the site builder from plugin input. Used by the site plugin host function.
+pub async fn run_site_with_config(
+    input: &PluginSiteRunInput,
+) -> Result<(), miette::Report> {
+    let working_dir = PathBuf::from(&input.working_dir);
+    let output_dir = resolve_output_from_input(input)?;
+
+    let mut config = match input.subcommand.as_str() {
+        "redesign" => {
+            let url = input.url.as_ref().ok_or_else(|| {
+                miette!("URL is required for redesign. Use --url <url> or pass URL as argument.")
+            })?;
+            SiteBuilderConfig::redesign(url.clone(), output_dir)
+        }
+        "create" => {
+            let prompt = input
+                .prompt
+                .as_ref()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| miette!("Prompt is required for create. Describe the website you want."))?;
+            SiteBuilderConfig::create(prompt, output_dir)
+        }
+        "clone" => {
+            let url = input.url.as_ref().ok_or_else(|| {
+                miette!("URL is required for clone. Use --url <url> or pass URL as argument.")
+            })?;
+            SiteBuilderConfig::clone_site(url.clone(), output_dir)
+        }
+        "generate-page" => {
+            let page_filter = if input.all {
+                vec!["*".to_string()]
+            } else if let Some(ref p) = input.pages {
+                if p.is_empty() {
+                    return Err(miette!(
+                        "Specify at least one --page <path> or use --all to generate all remaining pages"
+                    ));
+                }
+                p.clone()
+            } else {
+                return Err(miette!(
+                    "Specify at least one --page <path> or use --all to generate all remaining pages"
+                ));
+            };
+
+            let mut c = if input.create {
+                let mut cfg = SiteBuilderConfig::create(String::new(), output_dir);
+                cfg.prompt = None;
+                cfg
+            } else {
+                let url = input.url.as_ref().ok_or_else(|| {
+                    miette!("--url is required for redesign/clone projects")
+                })?;
+                SiteBuilderConfig::redesign(url.clone(), output_dir)
+            };
+            c.pages = Some(page_filter);
+            c.resume = true;
+            c
+        }
+        other => return Err(miette!("Unknown site subcommand: {}", other)),
+    };
+
+    config.theme = input.theme.clone();
+    config.build = !input.no_build;
+    config.resume = config.resume || input.resume;
+    config.dry_run = input.dry_run;
+    config.transform_content = input.transform_content;
+    config.ai = resolve_ai_config(input.provider.clone(), input.model.clone());
+    config.firecrawl_api_key = std::env::var("FIRECRAWL_API_KEY").ok();
+
+    pipeline::run(&config).await.map_err(|e| miette!("{}", e))
+}
+
+fn resolve_output_from_input(input: &PluginSiteRunInput) -> miette::Result<PathBuf> {
+    if let Some(ref o) = input.output {
+        return Ok(PathBuf::from(o));
+    }
+    match input.subcommand.as_str() {
+        "redesign" | "clone" => {
+            let url = input
+                .url
+                .as_ref()
+                .map(|s| s.as_str())
+                .unwrap_or("site-output");
+            let domain = url::Url::parse(url)
+                .ok()
+                .and_then(|u| u.host_str().map(|h| h.to_string()))
+                .unwrap_or_else(|| "site-output".to_string());
+            let dir_name = domain.replace("www.", "").replace('.', "-");
+            Ok(PathBuf::from(&input.working_dir).join(dir_name))
+        }
+        "create" => Ok(PathBuf::from(&input.working_dir).join("site-output")),
+        "generate-page" => Err(miette!(
+            "--output is required for generate-page. Specify the existing project directory."
+        )),
+        _ => Ok(PathBuf::from(&input.working_dir).join("site-output")),
+    }
 }
 
 /// Resolve the output directory from CLI args or derive from the URL.

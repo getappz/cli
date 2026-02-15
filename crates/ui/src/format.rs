@@ -86,9 +86,9 @@ pub fn timestamp_relative(timestamp: i64) -> String {
 pub fn status_badge(status: &str) -> String {
     let status_lower = status.to_lowercase();
     match status_lower.as_str() {
-        "active" | "success" | "completed" | "ready" => status.green().to_string(),
-        "pending" | "processing" | "queued" => status.yellow().to_string(),
-        "failed" | "error" | "cancelled" => status.red().to_string(),
+        "active" | "success" | "completed" | "ready" | "safe" => status.green().to_string(),
+        "pending" | "processing" | "queued" | "low" | "medium" => status.yellow().to_string(),
+        "failed" | "error" | "cancelled" | "high" | "critical" => status.red().to_string(),
         "inactive" | "stopped" => status.bright_black().to_string(),
         _ => status.to_string(),
     }

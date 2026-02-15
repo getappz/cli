@@ -329,3 +329,278 @@ pub struct OptionInput {
 pub struct TestOutput {
     pub result: u8, // 1 = true, 0 = false
 }
+
+// ============================================================================
+// Plugin Handshake Types
+// ============================================================================
+
+/// Handshake challenge sent from host to plugin.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginHandshakeChallenge {
+    pub nonce: String,
+    pub cli_version: String,
+}
+
+/// Handshake response from plugin to host.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginHandshakeResponse {
+    pub hmac: String,
+}
+
+// ============================================================================
+// Plugin Info / Execute Types
+// ============================================================================
+
+/// Plugin metadata returned by `appz_plugin_info()`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginInfo {
+    pub name: String,
+    pub version: String,
+    pub commands: Vec<PluginCommandDef>,
+}
+
+/// Describes a CLI command provided by a plugin.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginCommandDef {
+    pub name: String,
+    pub about: String,
+    #[serde(default)]
+    pub args: Vec<PluginArgDef>,
+    #[serde(default)]
+    pub subcommands: Vec<PluginCommandDef>,
+}
+
+/// Describes a CLI argument for a plugin command.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginArgDef {
+    pub name: String,
+    #[serde(default)]
+    pub short: Option<char>,
+    #[serde(default)]
+    pub long: Option<String>,
+    #[serde(default)]
+    pub help: Option<String>,
+    #[serde(default)]
+    pub required: bool,
+    #[serde(default)]
+    pub default: Option<String>,
+}
+
+/// Input to `appz_plugin_execute()`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginExecuteInput {
+    pub command: String,
+    pub args: HashMap<String, serde_json::Value>,
+    pub working_dir: String,
+}
+
+/// Output from `appz_plugin_execute()`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginExecuteOutput {
+    pub exit_code: i32,
+    pub message: Option<String>,
+}
+
+// ============================================================================
+// Plugin Filesystem Types (for host function calls)
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginFsReadInput {
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginFsReadOutput {
+    pub success: bool,
+    pub content: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginFsWriteInput {
+    pub path: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginFsWriteOutput {
+    pub success: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginFsWalkInput {
+    pub path: String,
+    pub glob: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginFsWalkOutput {
+    pub success: bool,
+    pub paths: Vec<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginFsExistsOutput {
+    pub exists: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginFsCopyInput {
+    pub source: String,
+    pub destination: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginFsJsonInput {
+    pub path: String,
+    pub content: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginFsJsonOutput {
+    pub success: bool,
+    pub content: Option<serde_json::Value>,
+    pub error: Option<String>,
+}
+
+// ============================================================================
+// Plugin Git Types
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginGitFilesOutput {
+    pub success: bool,
+    pub files: Vec<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginGitIsRepoOutput {
+    pub is_repo: bool,
+}
+
+// ============================================================================
+// Plugin Sandbox Exec Types
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginSandboxExecInput {
+    pub command: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginSandboxExecOutput {
+    pub success: bool,
+    pub stdout: Option<String>,
+    pub stderr: Option<String>,
+    pub exit_code: Option<i32>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginSandboxToolInput {
+    pub tool: String,
+    pub version: Option<String>,
+    pub command: Option<String>,
+}
+
+// ============================================================================
+// Plugin AST Types
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginAstTransformInput {
+    pub code: String,
+    pub rules: Vec<PluginAstRule>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginAstRule {
+    pub rule_type: String,
+    pub params: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginAstTransformOutput {
+    pub success: bool,
+    pub code: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginAstParseInput {
+    pub code: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginAstParseOutput {
+    pub success: bool,
+    pub ast: Option<serde_json::Value>,
+    pub error: Option<String>,
+}
+
+// ============================================================================
+// Plugin Check Run Types (for appz_pcheck_run host function)
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginCheckRunInput {
+    pub working_dir: String,
+    pub fix: bool,
+    pub ai_fix: bool,
+    pub strict: bool,
+    pub changed: bool,
+    pub staged: bool,
+    pub format: bool,
+    pub json: bool,
+    pub checker: Option<String>,
+    pub jobs: Option<usize>,
+    pub init: bool,
+    pub max_attempts: u32,
+    pub ai_verify: Option<bool>,
+    pub verbose_ai: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginCheckRunOutput {
+    pub exit_code: i32,
+    pub message: Option<String>,
+}
+
+// ============================================================================
+// Plugin Site Run Types (for appz_psite_run host function)
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginSiteRunInput {
+    pub working_dir: String,
+    /// Subcommand: "redesign" | "create" | "clone" | "generate-page"
+    pub subcommand: String,
+    /// For redesign/clone: source URL
+    pub url: Option<String>,
+    /// For create: natural-language prompt
+    pub prompt: Option<String>,
+    /// Output directory
+    pub output: Option<String>,
+    pub theme: Option<String>,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub transform_content: bool,
+    pub no_build: bool,
+    pub resume: bool,
+    pub dry_run: bool,
+    /// For generate-page: page paths or ["*"] for all
+    pub pages: Option<Vec<String>>,
+    pub all: bool,
+    /// For generate-page: create-mode project (no URL)
+    pub create: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginSiteRunOutput {
+    pub exit_code: i32,
+    pub message: Option<String>,
+}

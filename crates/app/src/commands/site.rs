@@ -230,7 +230,7 @@ pub async fn run(session: AppzSession, command: SiteCommands) -> AppResult {
 pub async fn run_site_with_config(
     input: &PluginSiteRunInput,
 ) -> Result<(), miette::Report> {
-    let working_dir = PathBuf::from(&input.working_dir);
+    let _working_dir = PathBuf::from(&input.working_dir);
     let output_dir = resolve_output_from_input(input)?;
 
     let mut config = match input.subcommand.as_str() {

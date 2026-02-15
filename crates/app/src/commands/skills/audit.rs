@@ -473,6 +473,12 @@ pub async fn audit(
     };
 
     let mut all_results: Vec<(String, SecurityAuditResult)> = Vec::new();
+    let show_spinner = skills_to_audit.len() > 1 && !json_output;
+    let _audit_spinner = if show_spinner {
+        Some(ui::progress::spinner("Auditing skills..."))
+    } else {
+        None
+    };
     for (name, skill_dir) in &skills_to_audit {
         let skill_file = skill_dir.join("SKILL.md");
         let content = match std::fs::read_to_string(&skill_file) {

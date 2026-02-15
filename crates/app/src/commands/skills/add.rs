@@ -15,13 +15,21 @@ pub async fn add(
     yes: bool,
     skill_filter: Option<String>,
 ) -> AppResult {
+    let _ = ui::layout::blank_line();
     let target_dir = resolve_target_dir(&session, global, project)?;
     starbase_fs::create_dir_all(&target_dir)
         .map_err(|e| miette::miette!("Failed to create skills directory: {}", e))?;
 
     let source_dir = if is_git_source(&source) {
-        download_git(&source, None, None, !session.cli.verbose).await
-            .map_err(|e| miette::miette!("Failed to download skill: {}", e))?
+        let _ = ui::status::info(&format!("Downloading skill from {}...", source));
+        download_git(&source, None, None, !session.cli.verbose, Some("Downloading skill...")).await.map_err(|e| {
+            let msg = e.to_string();
+            miette::miette!(
+                "Could not download skill from \"{}\".\n\n{}\n\nCheck your network connection and that the repository exists. For GitHub you can use: owner/repo or a full URL (e.g. .../tree/main/path/to/skill).",
+                source,
+                msg
+            )
+        })?
     } else if is_local_path(&source) {
         let cwd = session.working_dir.as_path();
         let path = if source.starts_with('/') || (source.len() >= 2 && &source[1..2] == ":") {
@@ -65,9 +73,24 @@ pub async fn add(
         .into());
     }
 
+    let _ = ui::status::info(&format!(
+        "Found {} skill(s). Installing to {}",
+        to_install.len(),
+        target_dir.display()
+    ));
+    let _ = ui::layout::blank_line();
+
+    let show_install_spinner = to_install.len() > 1 && !session.cli.verbose;
+    let mut install_spinner: Option<ui::progress::SpinnerHandle> = if show_install_spinner {
+        Some(ui::progress::spinner("Installing skills..."))
+    } else {
+        None
+    };
+
     for (name, path) in &to_install {
         let dest = target_dir.join(name);
         if dest.exists() && !yes {
+            install_spinner = None;
             let overwrite = inquire::Confirm::new(&format!(
                 "Skill '{}' already exists. Overwrite?",
                 name
@@ -76,17 +99,30 @@ pub async fn add(
             .prompt()
             .map_err(|e| miette::miette!("Prompt failed: {}", e))?;
             if !overwrite {
+                if show_install_spinner {
+                    install_spinner = Some(ui::progress::spinner("Installing skills..."));
+                }
                 continue;
+            }
+            if show_install_spinner {
+                install_spinner = Some(ui::progress::spinner("Installing skills..."));
             }
         }
         copy_skill_dir(path, &dest)?;
         let _ = ui::status::success(&format!("Installed skill: {}", name));
     }
 
+    let _ = ui::layout::blank_line();
+    let _ = ui::status::success(&format!(
+        "Done. {} skill(s) installed to {}",
+        to_install.len(),
+        target_dir.display()
+    ));
+
     Ok(None)
 }
 
-fn resolve_target_dir(session: &AppzSession, global: bool, project: bool) -> Result<PathBuf, miette::Report> {
+fn resolve_target_dir(session: &AppzSession, _global: bool, project: bool) -> Result<PathBuf, miette::Report> {
     if project {
         let dir = session.working_dir.join(".agents").join("skills");
         Ok(dir)
@@ -117,8 +153,14 @@ fn is_local_path(s: &str) -> bool {
 }
 
 /// Find directories containing SKILL.md (returns (skill_name, path)).
+/// If root itself contains SKILL.md (e.g. when URL points at a single skill folder), it is included.
 fn find_skill_dirs(root: &Path) -> Vec<(String, PathBuf)> {
     let mut results = Vec::new();
+    if root.join("SKILL.md").exists() {
+        if let Some(name) = root.file_name() {
+            results.push((name.to_string_lossy().to_string(), root.to_path_buf()));
+        }
+    }
     let Ok(entries) = std::fs::read_dir(root) else {
         return results;
     };

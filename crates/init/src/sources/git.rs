@@ -88,7 +88,17 @@ fn parse_branch_subfolder(path: &str) -> InitResult<(String, Option<String>, Opt
         }
     } else {
         let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-        if parts.len() > 2 {
+        if parts.len() >= 4 && parts[2] == "tree" {
+            // GitHub /tree/BRANCH/PATH (e.g. user/repo/tree/main/skills/dwsy/project-planner)
+            let base = format!("{}/{}", parts[0], parts[1]);
+            let branch = Some(parts[3].to_string());
+            let subfolder = if parts.len() > 4 {
+                Some(parts[4..].join("/"))
+            } else {
+                None
+            };
+            Ok((base, branch, subfolder))
+        } else if parts.len() > 2 {
             let base = format!("{}/{}", parts[0], parts[1]);
             let subfolder = parts[2..].join("/");
             Ok((base, None, Some(subfolder)))
@@ -183,11 +193,13 @@ async fn detect_github_default_branch(user: &str, repo: &str) -> InitResult<Stri
 }
 
 /// Download and extract a git repository.
+/// `progress_label` is used for the download progress bar (e.g. "Downloading template..." or "Downloading skill...").
 pub async fn download_git(
     source: &str,
     subfolder: Option<&str>,
     branch: Option<&str>,
     quiet: bool,
+    progress_label: Option<&str>,
 ) -> InitResult<PathBuf> {
     let parsed = parse_git_source(source)?;
     let subfolder = subfolder.or(parsed.subfolder.as_deref());
@@ -208,6 +220,7 @@ pub async fn download_git(
         vec!["main".to_string(), "master".to_string()]
     };
 
+    let label = progress_label.unwrap_or("Downloading template...");
     let mut last_error: Option<InitError> = None;
     for ref_name in &branches_to_try {
         match try_download_archive(
@@ -217,6 +230,7 @@ pub async fn download_git(
             ref_name,
             subfolder,
             quiet,
+            label,
         )
         .await
         {
@@ -247,6 +261,7 @@ async fn try_download_archive(
     ref_name: &str,
     subfolder: Option<&str>,
     quiet: bool,
+    progress_label: &str,
 ) -> InitResult<PathBuf> {
     let format = if platform == "bitbucket.org" {
         "zip" // Bitbucket uses zip
@@ -268,7 +283,7 @@ async fn try_download_archive(
         .map_err(|e| InitError::FsError(format!("Failed to create temp dir: {}", e)))?;
 
     let archive_file = temp_dir.join("archive.zip");
-    download_with_progress(&archive_url, &archive_file, "Downloading template...", quiet).await?;
+    download_with_progress(&archive_url, &archive_file, progress_label, quiet).await?;
 
     let extracted_dir = temp_dir.join("extracted");
     fs::create_dir_all(&extracted_dir)

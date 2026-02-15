@@ -24,7 +24,10 @@ pub async fn list(session: AppzSession) -> AppResult {
     }
 
     if skills.is_empty() {
-        let _ = ui::status::warning("No skills installed. Run `appz skills add <source>` to add skills.");
+        ui::empty::display(
+            "No skills installed",
+            Some("Run `appz skills add <source>` to add a skill (e.g. owner/repo or a GitHub URL)."),
+        )?;
         return Ok(None);
     }
 
@@ -39,12 +42,14 @@ pub async fn list(session: AppzSession) -> AppResult {
         }
     }
 
-    println!("\nInstalled skills:\n");
+    let _ = ui::layout::blank_line();
+    let _ = ui::layout::section_title("Installed skills");
+    let _ = ui::layout::blank_line();
     for (name, description, path, scope) in displayed {
-        println!("  {} ({})", name, scope);
-        println!("    {}", description);
-        println!("    {}", path.display());
-        println!();
+        let _ = ui::status::info(&format!("{} ({})", name, scope));
+        let _ = ui::layout::indented(&description, 1);
+        let _ = ui::layout::indented(&path.display().to_string(), 1);
+        let _ = ui::layout::blank_line();
     }
 
     Ok(None)

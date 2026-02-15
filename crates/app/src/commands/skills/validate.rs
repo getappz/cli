@@ -239,6 +239,12 @@ pub async fn validate(
     };
 
     let mut all_results: Vec<(String, PathBuf, ValidationResult)> = Vec::new();
+    let show_spinner = skills_to_validate.len() > 1 && !json_output;
+    let _validate_spinner = if show_spinner {
+        Some(ui::progress::spinner("Validating skills..."))
+    } else {
+        None
+    };
     for (name, skill_dir) in &skills_to_validate {
         let skill_file = skill_dir.join("SKILL.md");
         if !skill_file.exists() {

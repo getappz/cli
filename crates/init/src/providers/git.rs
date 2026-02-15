@@ -29,7 +29,7 @@ impl InitProvider for GitProvider {
 
         ui::section_title(&ctx.options, "Downloading from Git repository...");
 
-        let template_dir = download_git(&ctx.source, None, None, quiet).await?;
+        let template_dir = download_git(&ctx.source, None, None, quiet, None).await?;
 
         ui::info(&ctx.options, "Copying files to project...");
 

@@ -27,15 +27,24 @@ pub async fn remove(session: AppzSession, name: String, yes: bool) -> AppResult 
     }
 
     if to_remove.is_empty() {
-        return Err(miette::miette!("Skill '{}' not found", name).into());
+        let _ = ui::status::error(&format!("Skill '{}' not found", name));
+        return Err(miette::miette!(
+            "Skill '{}' not found in project or global skills. Use `appz skills list` to see installed skills.",
+            name
+        )
+        .into());
     }
 
     if !yes {
-        println!("\nThe following skill(s) will be removed:");
+        let _ = ui::layout::blank_line();
+        let _ = ui::layout::section_title("Remove skill");
+        let _ = ui::status::info("The following skill(s) will be removed:");
         for (path, scope) in &to_remove {
-            println!("  - {} ({})", path.display(), scope);
+            let _ = ui::layout::indented(&format!("{} ({})", path.display(), scope), 1);
         }
+        let _ = ui::layout::blank_line();
         if !confirm("Continue?", false)? {
+            let _ = ui::status::info("Canceled.");
             return Ok(None);
         }
     }
@@ -45,6 +54,9 @@ pub async fn remove(session: AppzSession, name: String, yes: bool) -> AppResult 
             .map_err(|e| miette::miette!("Failed to remove skill: {}", e))?;
         let _ = ui::status::success(&format!("Removed skill '{}' ({})", name, scope));
     }
+
+    let _ = ui::layout::blank_line();
+    let _ = ui::status::success(&format!("Done. Skill '{}' removed.", name));
 
     Ok(None)
 }

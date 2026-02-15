@@ -24,7 +24,10 @@ pub async fn download_with_progress(
         .map_err(|e| InitError::DownloadFailed(format!("Failed to create HTTP client: {}", e)))?;
 
     let mut response = client.get(url).send().await.map_err(|e| {
-        InitError::DownloadFailed(format!("HTTP request failed: {}", e))
+        InitError::DownloadFailed(format!(
+            "HTTP request failed for {}: {}",
+            url, e
+        ))
     })?;
 
     if !response.status().is_success() {

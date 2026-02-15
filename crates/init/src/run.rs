@@ -75,7 +75,10 @@ pub async fn run(
     if !json_output {
         ui::blank_line(&ctx.options);
         ui::success(&ctx.options, "Project initialized successfully!");
-        ui::info(&ctx.options, &format!("  Location: {}", output.project_path.display()));
+        ui::info(
+            &ctx.options,
+            &format!("  Location: {}", common::user_config::path_for_display(&output.project_path)),
+        );
         if let Some(ref fw) = output.framework {
             ui::info(&ctx.options, &format!("  Framework: {}", fw));
         }

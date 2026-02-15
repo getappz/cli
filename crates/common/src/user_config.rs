@@ -135,6 +135,27 @@ pub fn user_appz_file(relative: &str) -> Option<PathBuf> {
     user_appz_dir().map(|d| d.join(relative))
 }
 
+/// Return a path string suitable for user-facing display: paths under the user's home
+/// are shown with a `~` prefix (e.g. `~/.appz/skills` instead of `/home/user/.appz/skills`).
+pub fn path_for_display(path: &Path) -> String {
+    let home = match dirs::home_dir() {
+        Some(h) => h,
+        None => return path.display().to_string(),
+    };
+    match path.strip_prefix(&home) {
+        Ok(suffix) => {
+            let s = suffix.display().to_string();
+            let s = s.replace('\\', "/");
+            if s.is_empty() || s == "." {
+                "~".to_string()
+            } else {
+                format!("~/{}", s.trim_start_matches('/'))
+            }
+        }
+        Err(_) => path.display().to_string(),
+    }
+}
+
 /// List files in a subdirectory of `~/.appz/`.
 ///
 /// Returns an empty vec if the directory doesn't exist.

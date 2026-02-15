@@ -109,7 +109,7 @@ pub fn load_auth() -> Result<AuthConfig> {
             }
             Err(miette::miette!(
                 "Failed to read/parse auth file {}: {}",
-                auth_path.display(),
+                common::user_config::path_for_display(&auth_path),
                 e
             ))
         }
@@ -128,12 +128,21 @@ pub fn save_auth(config: &AuthConfig) -> Result<()> {
     // Create .appz directory if it doesn't exist
     if !auth_dir.exists() {
         fs::create_dir_all(auth_dir).map_err(|e| {
-            miette::miette!("Failed to create directory {}: {}", auth_dir.display(), e)
+            miette::miette!(
+                "Failed to create directory {}: {}",
+                common::user_config::path_for_display(auth_dir),
+                e
+            )
         })?;
     }
 
-    json::write_file(&auth_path, config, true)
-        .map_err(|e| miette::miette!("Failed to write auth file {}: {}", auth_path.display(), e))?;
+    json::write_file(&auth_path, config, true).map_err(|e| {
+        miette::miette!(
+            "Failed to write auth file {}: {}",
+            common::user_config::path_for_display(&auth_path),
+            e
+        )
+    })?;
 
     Ok(())
 }

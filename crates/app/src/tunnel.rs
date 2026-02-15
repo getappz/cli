@@ -130,7 +130,10 @@ impl CloudflaredTunnel {
         // Make executable on Unix
         fs::make_executable(&binary_path)?;
 
-        info!("✓ cloudflared installed to: {}", binary_path.display());
+        info!(
+            "✓ cloudflared installed to: {}",
+            common::user_config::path_for_display(&binary_path)
+        );
         self.binary_path = Some(binary_path.clone());
         Ok(binary_path)
     }

@@ -48,7 +48,7 @@ pub async fn list(session: AppzSession) -> AppResult {
     for (name, description, path, scope) in displayed {
         let _ = ui::status::info(&format!("{} ({})", name, scope));
         let _ = ui::layout::indented(&description, 1);
-        let _ = ui::layout::indented(&path.display().to_string(), 1);
+        let _ = ui::layout::indented(&common::user_config::path_for_display(&path), 1);
         let _ = ui::layout::blank_line();
     }
 

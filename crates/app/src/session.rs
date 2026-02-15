@@ -238,7 +238,11 @@ impl AppSession for AppzSession {
             if let Err(e) = plugin_manager.load_plugin(&mut reg, plugin_id.clone(), plugin_path) {
                 eprintln!("Warning: Failed to load plugin: {}", e);
             } else {
-                eprintln!("Loaded plugin '{}' from {}", plugin_id, plugin_path);
+                eprintln!(
+                    "Loaded plugin '{}' from {}",
+                    plugin_id,
+                    common::user_config::path_for_display(std::path::Path::new(plugin_path))
+                );
             }
         }
 

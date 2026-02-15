@@ -76,7 +76,7 @@ pub async fn add(
     let _ = ui::status::info(&format!(
         "Found {} skill(s). Installing to {}",
         to_install.len(),
-        target_dir.display()
+        common::user_config::path_for_display(&target_dir)
     ));
     let _ = ui::layout::blank_line();
 
@@ -116,7 +116,7 @@ pub async fn add(
     let _ = ui::status::success(&format!(
         "Done. {} skill(s) installed to {}",
         to_install.len(),
-        target_dir.display()
+        common::user_config::path_for_display(&target_dir)
     ));
 
     Ok(None)

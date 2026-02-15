@@ -414,7 +414,7 @@ fn find_skill_by_name_or_path(
             let name = canon.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "skill".to_string());
             (canon.join("SKILL.md"), name)
         } else {
-            return Err(miette::miette!("No SKILL.md at {}", path.display()).into());
+            return Err(miette::miette!("No SKILL.md at {}", common::user_config::path_for_display(path)).into());
         };
         return Ok(vec![(name, skill_file.parent().unwrap().to_path_buf())]);
     }

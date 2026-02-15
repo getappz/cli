@@ -40,7 +40,10 @@ pub async fn remove(session: AppzSession, name: String, yes: bool) -> AppResult 
         let _ = ui::layout::section_title("Remove skill");
         let _ = ui::status::info("The following skill(s) will be removed:");
         for (path, scope) in &to_remove {
-            let _ = ui::layout::indented(&format!("{} ({})", path.display(), scope), 1);
+            let _ = ui::layout::indented(
+                &format!("{} ({})", common::user_config::path_for_display(path), scope),
+                1,
+            );
         }
         let _ = ui::layout::blank_line();
         if !confirm("Continue?", false)? {

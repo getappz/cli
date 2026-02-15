@@ -288,7 +288,7 @@ pub async fn validate(
 
     for (name, path, result) in &all_results {
         let _ = ui::layout::section_title(name);
-        let _ = ui::status::info(&path.join("SKILL.md").display().to_string());
+        let _ = ui::status::info(&common::user_config::path_for_display(&path.join("SKILL.md")));
 
         for err in &result.errors {
             let _ = ui::status::error(&format!("  {}", err));

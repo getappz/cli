@@ -27,68 +27,69 @@ mod transform;
 pub use classifier::{StaticSafety, StaticSafetyClassifier, StaticSafetyResult, UnsafeReason};
 
 use crate::types::{MigrationConfig, ProjectAnalysis};
+use crate::vfs::Vfs;
 use miette::{miette, Result};
-use std::fs;
 
 /// Generate an Astro project from a React SPA.
-pub fn generate_astro_project(config: &MigrationConfig, analysis: &ProjectAnalysis) -> Result<()> {
-    if config.output_dir.exists() && !config.force {
+pub fn generate_astro_project(
+    vfs: &dyn Vfs,
+    config: &MigrationConfig,
+    analysis: &ProjectAnalysis,
+) -> Result<()> {
+    let out = &config.output_dir;
+
+    if vfs.exists(out.as_str()) && !config.force {
         return Err(miette!(
             "Output directory already exists. Use --force to overwrite."
         ));
     }
-    if config.output_dir.exists() && config.force {
-        fs::remove_dir_all(&config.output_dir)
+    if vfs.exists(out.as_str()) && config.force {
+        vfs.remove_dir_all(out.as_str())
             .map_err(|e| miette!("Failed to remove existing directory: {}", e))?;
     }
-    fs::create_dir_all(&config.output_dir)
+    vfs.create_dir_all(out.as_str())
         .map_err(|e| miette!("Failed to create output directory: {}", e))?;
 
-    let src_dir = config.output_dir.join("src");
+    let src_dir = out.join("src");
     let pages_dir = src_dir.join("pages");
     let components_dir = src_dir.join("components");
     let layouts_dir = src_dir.join("layouts");
-    let public_dir = config.output_dir.join("public");
+    let public_dir = out.join("public");
 
-    fs::create_dir_all(&pages_dir)
-        .map_err(|e| miette!("Failed to create pages directory: {}", e))?;
-    fs::create_dir_all(&components_dir)
-        .map_err(|e| miette!("Failed to create components directory: {}", e))?;
-    fs::create_dir_all(&layouts_dir)
-        .map_err(|e| miette!("Failed to create layouts directory: {}", e))?;
-    fs::create_dir_all(&public_dir)
-        .map_err(|e| miette!("Failed to create public directory: {}", e))?;
+    vfs.create_dir_all(pages_dir.as_str())?;
+    vfs.create_dir_all(components_dir.as_str())?;
+    vfs.create_dir_all(layouts_dir.as_str())?;
+    vfs.create_dir_all(public_dir.as_str())?;
 
-    config::generate_astro_config(&config.output_dir, analysis)?;
-    config::generate_package_json(&config.output_dir, &config.project_name, analysis)?;
-    config::generate_tsconfig(&config.output_dir)?;
+    config::generate_astro_config(vfs, out, analysis)?;
+    config::generate_package_json(vfs, out, &config.project_name, analysis)?;
+    config::generate_tsconfig(vfs, out)?;
 
     if analysis.has_tailwind {
-        files::copy_tailwind_config(&analysis.source_dir, &config.output_dir)?;
+        files::copy_tailwind_config(vfs, &analysis.source_dir, out)?;
     }
 
-    files::copy_public_assets(&analysis.source_dir, &public_dir)?;
+    files::copy_public_assets(vfs, &analysis.source_dir, &public_dir)?;
 
     let lib_dir = src_dir.join("lib");
     let source_lib_dir = analysis.source_dir.join("src/lib");
-    if source_lib_dir.exists() {
-        fs::create_dir_all(&lib_dir)
-            .map_err(|e| miette!("Failed to create lib directory: {}", e))?;
-        files::copy_dir_all(&source_lib_dir, &lib_dir)?;
+    if vfs.exists(source_lib_dir.as_str()) {
+        vfs.create_dir_all(lib_dir.as_str())?;
+        files::copy_dir_all(vfs, &source_lib_dir, &lib_dir)?;
     }
 
     let source_assets_dir = analysis.source_dir.join("src/assets");
-    if source_assets_dir.exists() {
+    if vfs.exists(source_assets_dir.as_str()) {
         let assets_dir = src_dir.join("assets");
-        files::copy_dir_all(&source_assets_dir, &assets_dir)?;
+        files::copy_dir_all(vfs, &source_assets_dir, &assets_dir)?;
     }
 
-    files::copy_css_files(&analysis.source_dir.join("src"), &src_dir)?;
+    files::copy_css_files(vfs, &analysis.source_dir.join("src"), &src_dir)?;
 
-    layout::generate_layout(&layouts_dir)?;
-    components::generate_components(&components_dir, analysis)?;
-    pages::generate_pages(&pages_dir, analysis)?;
-    readme::generate_readme(&config.output_dir, &config.project_name)?;
+    layout::generate_layout(vfs, &layouts_dir, &src_dir)?;
+    components::generate_components(vfs, &components_dir, analysis)?;
+    pages::generate_pages(vfs, &pages_dir, analysis)?;
+    readme::generate_readme(vfs, out, &config.project_name)?;
 
     Ok(())
 }

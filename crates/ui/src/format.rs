@@ -131,6 +131,29 @@ pub fn truncate(s: &str, max_len: usize) -> String {
     }
 }
 
+/// Format a unified diff string with colors for easier reading.
+/// - Red for removed lines (-)
+/// - Green for added lines (+)
+/// - Cyan for hunk headers (@@)
+/// Respects NO_COLOR environment variable.
+pub fn colored_diff(plain: &str) -> String {
+    if std::env::var("NO_COLOR").is_ok() {
+        return plain.to_string();
+    }
+    let mut out = String::new();
+    for line in plain.lines() {
+        let colored = match line.chars().next() {
+            Some('-') if !line.starts_with("---") => format!("{}", line.red()),
+            Some('+') if !line.starts_with("+++") => format!("{}", line.green()),
+            Some('@') => format!("{}", line.cyan()),
+            _ => line.to_string(),
+        };
+        out.push_str(&colored);
+        out.push('\n');
+    }
+    out
+}
+
 /// Format a duration in seconds to a human-readable string.
 ///
 /// # Arguments
@@ -195,5 +218,14 @@ mod tests {
         assert_eq!(duration(30), "30s");
         assert_eq!(duration(90), "1m 30s");
         assert_eq!(duration(3665), "1h 1m 5s");
+    }
+
+    #[test]
+    fn test_colored_diff() {
+        let plain = "--- a/file\n+++ b/file\n@@ -1,3 +1,3 @@\n-old\n+new\n same\n";
+        let result = colored_diff(plain);
+        assert!(result.contains("old"));
+        assert!(result.contains("new"));
+        assert!(result.contains("same"));
     }
 }

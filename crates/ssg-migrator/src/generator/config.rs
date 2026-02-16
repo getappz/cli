@@ -2,18 +2,16 @@
 
 use crate::common::filter_deps;
 use crate::types::ProjectAnalysis;
+use crate::vfs::Vfs;
 use camino::Utf8PathBuf;
 use miette::{miette, Result};
-use std::fs;
-use std::io::Write;
 
 pub(super) fn generate_astro_config(
+    vfs: &dyn Vfs,
     output_dir: &Utf8PathBuf,
     analysis: &ProjectAnalysis,
 ) -> Result<()> {
     let config_path = output_dir.join("astro.config.mjs");
-    let mut file = fs::File::create(&config_path)
-        .map_err(|e| miette!("Failed to create astro.config.mjs: {}", e))?;
 
     let mut config = String::from(
         "import { defineConfig } from 'astro/config';\nimport react from '@astrojs/react';\n",
@@ -40,12 +38,13 @@ pub(super) fn generate_astro_config(
     config.push_str("  },\n");
     config.push_str("});\n");
 
-    file.write_all(config.as_bytes())
+    vfs.write_string(config_path.as_str(), &config)
         .map_err(|e| miette!("Failed to write astro.config.mjs: {}", e))?;
     Ok(())
 }
 
 pub(super) fn generate_package_json(
+    vfs: &dyn Vfs,
     output_dir: &Utf8PathBuf,
     project_name: &str,
     analysis: &ProjectAnalysis,
@@ -97,22 +96,16 @@ pub(super) fn generate_package_json(
     });
 
     let package_path = output_dir.join("package.json");
-    let mut file = fs::File::create(&package_path)
-        .map_err(|e| miette!("Failed to create package.json: {}", e))?;
-
     let formatted = serde_json::to_string_pretty(&package_json)
         .map_err(|e| miette!("Failed to serialize package.json: {}", e))?;
 
-    file.write_all(formatted.as_bytes())
+    vfs.write_string(package_path.as_str(), &formatted)
         .map_err(|e| miette!("Failed to write package.json: {}", e))?;
     Ok(())
 }
 
-pub(super) fn generate_tsconfig(output_dir: &Utf8PathBuf) -> Result<()> {
+pub(super) fn generate_tsconfig(vfs: &dyn Vfs, output_dir: &Utf8PathBuf) -> Result<()> {
     let tsconfig_path = output_dir.join("tsconfig.json");
-    let mut file = fs::File::create(&tsconfig_path)
-        .map_err(|e| miette!("Failed to create tsconfig.json: {}", e))?;
-
     let tsconfig = r#"{
   "extends": "astro/tsconfigs/strict",
   "compilerOptions": {
@@ -123,7 +116,7 @@ pub(super) fn generate_tsconfig(output_dir: &Utf8PathBuf) -> Result<()> {
   }
 }
 "#;
-    file.write_all(tsconfig.as_bytes())
+    vfs.write_string(tsconfig_path.as_str(), tsconfig)
         .map_err(|e| miette!("Failed to write tsconfig.json: {}", e))?;
     Ok(())
 }

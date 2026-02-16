@@ -604,3 +604,51 @@ pub struct PluginSiteRunOutput {
     pub exit_code: i32,
     pub message: Option<String>,
 }
+
+// ============================================================================
+// Plugin Migrate Run Types (for appz_pmigrate_run host function)
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MigrateRunInput {
+    pub working_dir: String,
+    pub source_dir: String,
+    pub output_dir: String,
+    pub target: String,
+    pub force: bool,
+    pub dry_run: bool,
+    pub install: bool,
+    pub yes: bool,
+    #[serde(default)]
+    pub transforms: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MigrateRunOutput {
+    pub exit_code: i32,
+    pub message: Option<String>,
+}
+
+// ============================================================================
+// Plugin Convert Run Types (for appz_pconvert_run host function)
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConvertRunInput {
+    pub working_dir: String,
+    pub files: Vec<String>,
+    pub dry_run: bool,
+    pub force: bool,
+    pub output: Option<String>,
+    pub target: String,
+    pub transform: Option<String>,
+    pub list: bool,
+    pub client_directive: Option<String>,
+    pub slot_style: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConvertRunOutput {
+    pub exit_code: i32,
+    pub message: Option<String>,
+}

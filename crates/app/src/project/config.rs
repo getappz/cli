@@ -23,9 +23,11 @@ pub struct LocalConfig {
     #[serde(rename = "rootDirectory")]
     pub root_directory: Option<String>,
     /// Deployment configuration for hosting providers.
+    #[cfg(feature = "deploy")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deploy: Option<deployer::DeployConfig>,
     /// Check/lint configuration.
+    #[cfg(feature = "check")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check: Option<checker::CheckConfig>,
 }

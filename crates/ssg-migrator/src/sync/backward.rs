@@ -1,30 +1,26 @@
 //! Backward sync: output → source (copy-only paths only).
 
-use crate::sync::SyncManifest;
+use crate::sync::{SyncManifest, SyncResult};
+use crate::vfs::Vfs;
 use miette::{miette, Result};
-use std::fs;
-use std::path::Path;
-
-/// Result of a backward sync.
-#[derive(Debug, Default)]
-pub struct SyncResult {
-    pub synced: Vec<String>,
-    pub skipped_unsafe: Vec<String>,
-}
 
 /// Backward sync: copy changed output files (that are copy-only) back to source.
 pub fn sync_backward(
+    vfs: &dyn Vfs,
     manifest: &SyncManifest,
     changed_output_files: &[String],
 ) -> Result<SyncResult> {
-    let output_dir = Path::new(&manifest.output_dir);
-    let source_dir = Path::new(&manifest.source_dir);
-
-    if !output_dir.exists() {
-        return Err(miette!("Output directory does not exist: {}", manifest.output_dir));
+    if !vfs.exists(&manifest.output_dir) {
+        return Err(miette!(
+            "Output directory does not exist: {}",
+            manifest.output_dir
+        ));
     }
-    if !source_dir.exists() {
-        return Err(miette!("Source directory does not exist: {}", manifest.source_dir));
+    if !vfs.exists(&manifest.source_dir) {
+        return Err(miette!(
+            "Source directory does not exist: {}",
+            manifest.source_dir
+        ));
     }
 
     // Reverse mapping: output path -> source path (for copy-only entries)
@@ -38,15 +34,11 @@ pub fn sync_backward(
 
     for out_rel in changed_output_files {
         if let Some(src_rel) = output_to_source.get(out_rel) {
-            let src_path = source_dir.join(src_rel);
-            let out_path = output_dir.join(out_rel);
+            let src_path = format!("{}/{}", manifest.source_dir, src_rel);
+            let out_path = format!("{}/{}", manifest.output_dir, out_rel);
 
-            if out_path.exists() && out_path.is_file() {
-                if let Some(parent) = src_path.parent() {
-                    fs::create_dir_all(parent)
-                        .map_err(|e| miette!("Failed to create dir for {}: {}", src_rel, e))?;
-                }
-                fs::copy(&out_path, &src_path)
+            if vfs.exists(&out_path) && vfs.is_file(&out_path) {
+                vfs.copy_file(&out_path, &src_path)
                     .map_err(|e| miette!("Failed to copy {} -> {}: {}", out_rel, src_rel, e))?;
                 result.synced.push(out_rel.clone());
             }

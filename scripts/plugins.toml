@@ -21,9 +21,9 @@ min_cli_version = "0.1.0"
 crate_name = "ssg-migrator-plugin"
 plugin_id = "ssg-migrator"
 name = "SSG Migrator"
-description = "Migrate React SPA to Astro or Next.js"
+description = "Migrate React SPA to Astro or Next.js; convert files to Astro/Next.js"
 tier = "free"
-commands = ["migrate"]
+commands = ["migrate", "convert"]
 min_cli_version = "0.1.0"
 
 [[plugins]]

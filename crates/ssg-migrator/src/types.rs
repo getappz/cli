@@ -38,6 +38,8 @@ pub struct MigrationConfig {
     pub force: bool,
     /// When true, generate a static-export Next.js project (`output: 'export'` in next.config).
     pub static_export: bool,
+    /// Comma-separated transforms: router, client, helmet, context, image, all (default when None)
+    pub transforms: Option<String>,
 }
 
 /// Severity level for SSG verification warnings.

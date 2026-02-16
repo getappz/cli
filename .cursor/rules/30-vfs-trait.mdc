@@ -1,0 +1,54 @@
+# Vfs Trait Usage
+
+## When to Use `&dyn Vfs`
+
+Use `&dyn Vfs` instead of `std::fs` in any module that must compile for **both native and WASM targets**. This applies to all code in `crates/ssg-migrator/` (except `vfs_native.rs` which is native-only).
+
+Code that only runs on the host side (e.g. `crates/app/`, `crates/sandbox/`) can use `std::fs` or `starbase_utils::fs` directly.
+
+## Trait Contract
+
+- **Paths are `&str`**, not `&Path` — this avoids `std::path::Path` incompatibilities across platforms
+- **Errors are `miette::Result`** — use `miette!()` for error creation
+- **Path separators**: always use `/` in paths passed to Vfs methods
+
+## Path Handling Pattern
+
+Use `camino::Utf8PathBuf` for path computation internally, then pass `.as_str()` to Vfs methods:
+
+```rust
+fn my_function(vfs: &dyn Vfs, base_dir: &Utf8PathBuf) -> Result<()> {
+    let config_path = base_dir.join("src/config.ts");
+    if vfs.exists(config_path.as_str()) {
+        let content = vfs.read_to_string(config_path.as_str())?;
+        // ...
+    }
+    Ok(())
+}
+```
+
+## Implementations
+
+| Struct | Location | Backed by | When used |
+|--------|----------|-----------|-----------|
+| `NativeFs` | `ssg-migrator/src/vfs_native.rs` | `std::fs`, `walkdir`, `git2` | Host-side native execution |
+| `WasmFs` | `plugins/ssg-migrator/src/vfs_wasm.rs` | PDK host functions (`appz_pfs_*`, `appz_pgit_*`) | Inside WASM plugin |
+
+## Adding a New Vfs Method
+
+1. Add method to `trait Vfs` in `crates/ssg-migrator/src/vfs.rs`
+2. Implement in `NativeFs` using `std::fs` / `walkdir` / `git2`
+3. Implement in `WasmFs` using the `host_call!` macro
+4. If a new host function is needed on the CLI side:
+   a. Add types to `appz_pdk/src/types.rs`
+   b. Implement host function in `app/src/wasm/host_functions/`
+   c. Register in `plugin.rs`
+   d. Declare in plugin `lib.rs` extern block
+5. Verify compilation: `cargo check -p ssg-migrator --features native && cargo check -p ssg-migrator --no-default-features`
+
+## Do NOT
+
+- Pass `std::path::Path` or `PathBuf` to Vfs methods — use `&str`
+- Use `walkdir::WalkDir` directly in always-compiled modules — use `vfs.walk_dir()`
+- Use `git2` directly in always-compiled modules — use `vfs.git_changed_files()` etc.
+- Call `std::fs::*` in always-compiled modules — use Vfs methods

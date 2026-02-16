@@ -3,13 +3,18 @@
 use super::regex::{
     RE_APP_WORD, RE_BROWSER_ROUTER, RE_PAGE_IMPORT, RE_ROUTER_IMPORT,
 };
+use crate::vfs::Vfs;
 use camino::Utf8PathBuf;
 use miette::{miette, Result};
-use sandbox::ScopedFs;
 
-pub(super) fn create_providers(fs: &ScopedFs, source_dir: &Utf8PathBuf) -> Result<()> {
+pub(super) fn create_providers(
+    vfs: &dyn Vfs,
+    output_dir: &Utf8PathBuf,
+    source_dir: &Utf8PathBuf,
+) -> Result<()> {
     let app_path = source_dir.join("src/App.tsx");
-    let content = std::fs::read_to_string(app_path.as_path())
+    let content = vfs
+        .read_to_string(app_path.as_str())
         .map_err(|e| miette!("Failed to read App.tsx: {}", e))?;
 
     let mut pc = RE_BROWSER_ROUTER.replace_all(&content, "{children}").to_string();
@@ -34,7 +39,10 @@ pub(super) fn create_providers(fs: &ScopedFs, source_dir: &Utf8PathBuf) -> Resul
     pc = RE_PAGE_IMPORT.replace_all(&pc, "").to_string();
 
     let with_directive = format!("\"use client\";\n{}", pc);
-    fs.write_string("src/app/providers.tsx", &with_directive)
-        .map_err(|e| miette!("Failed to write providers.tsx: {}", e))?;
+    vfs.write_string(
+        output_dir.join("src/app/providers.tsx").as_str(),
+        &with_directive,
+    )
+    .map_err(|e| miette!("Failed to write providers.tsx: {}", e))?;
     Ok(())
 }

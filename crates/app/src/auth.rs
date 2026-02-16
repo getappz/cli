@@ -238,21 +238,25 @@ pub fn clear_token() -> Result<()> {
 
 /// Determine if a command requires authentication
 pub fn requires_auth(command: &crate::app::Commands) -> bool {
-    matches!(
-        command,
-        crate::app::Commands::Ls
-            | crate::app::Commands::Run { .. }
-            | crate::app::Commands::Plan { .. }
-            | crate::app::Commands::Switch { .. }
-            | crate::app::Commands::Teams { .. }
-            | crate::app::Commands::Projects { .. }
-            | crate::app::Commands::Aliases { .. }
-            | crate::app::Commands::Domains { .. }
-            | crate::app::Commands::Promote { .. }
-            | crate::app::Commands::Rollback { .. }
-            | crate::app::Commands::Remove { .. }
-            | crate::app::Commands::Gen { .. }
-    )
+    use crate::app::Commands;
+    match command {
+        Commands::Ls
+        | Commands::Run { .. }
+        | Commands::Plan { .. }
+        | Commands::Switch { .. }
+        | Commands::Teams { .. }
+        | Commands::Projects { .. }
+        | Commands::Aliases { .. }
+        | Commands::Domains { .. }
+        | Commands::Promote { .. }
+        | Commands::Rollback { .. }
+        | Commands::Remove { .. } => true,
+        #[cfg(feature = "gen")]
+        Commands::Gen { .. } => true,
+        #[cfg(feature = "deploy")]
+        Commands::Deploy { .. } => true,
+        _ => false,
+    }
 }
 
 /// Get OAuth 2.0 Device Flow client ID from environment variable or use default

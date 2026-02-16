@@ -21,6 +21,7 @@ pub mod entitlements;
 pub mod error;
 pub mod manifest;
 pub mod security;
+pub mod update_check;
 
 use api::Client;
 use cache::PluginCache;
@@ -184,5 +185,98 @@ impl PluginManager {
     /// Get the plugins directory path.
     pub fn plugins_dir(&self) -> &Path {
         &self.plugins_dir
+    }
+
+    /// Force-refresh the manifest from CDN, bypassing the cache TTL.
+    pub async fn force_refresh_manifest(&mut self) -> PluginResult<()> {
+        // Remove the cached manifest so the next load hits the CDN
+        let cache_path = PluginManifest::cache_path(&self.plugins_dir);
+        if cache_path.exists() {
+            std::fs::remove_file(&cache_path)?;
+        }
+        self.manifest = PluginManifest::load(&self.plugins_dir).await?;
+        Ok(())
+    }
+
+    /// Update a single plugin (or all plugins if `name` is None).
+    ///
+    /// Re-downloads even if the cached version matches the manifest.
+    /// Returns a list of what was updated.
+    pub async fn update_plugins(
+        &self,
+        name: Option<&str>,
+    ) -> PluginResult<Vec<update_check::InstalledPlugin>> {
+        let mut results = Vec::new();
+
+        let entries: Vec<(String, PluginEntry)> = if let Some(name) = name {
+            // Find the specific plugin
+            let entry = self
+                .manifest
+                .plugins
+                .get(name)
+                .cloned()
+                .ok_or_else(|| PluginError::PluginNotFound {
+                    command: name.to_string(),
+                })?;
+            vec![(name.to_string(), entry)]
+        } else {
+            // All plugins
+            self.manifest
+                .plugins
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect()
+        };
+
+        for (plugin_name, entry) in entries {
+            let old_versions = self.cache.list_versions(&plugin_name).unwrap_or_default();
+            let old_version = old_versions.first().cloned().unwrap_or_default();
+            let has_update = !old_version.is_empty() && old_version != entry.version;
+
+            // Always re-download to get the latest
+            if self.cache.get(&plugin_name, &entry.version).is_none() || has_update {
+                let _ = self.downloader.download(&plugin_name, &entry).await?;
+                let _ = self.cache.cleanup_old_versions(&plugin_name, &entry.version);
+            }
+
+            results.push(update_check::InstalledPlugin {
+                name: plugin_name,
+                version: entry.version.clone(),
+                manifest_version: entry.version,
+                has_update,
+            });
+        }
+
+        Ok(results)
+    }
+
+    /// List all installed (cached) plugins with their versions.
+    pub fn installed_plugins(&self) -> Vec<update_check::InstalledPlugin> {
+        let mut results = Vec::new();
+
+        for (plugin_name, entry) in &self.manifest.plugins {
+            let versions = self.cache.list_versions(plugin_name).unwrap_or_default();
+            let installed_version = versions.first().cloned().unwrap_or_else(|| "—".to_string());
+            let has_update =
+                installed_version != "—" && installed_version != entry.version;
+
+            results.push(update_check::InstalledPlugin {
+                name: plugin_name.clone(),
+                version: installed_version,
+                manifest_version: entry.version.clone(),
+                has_update,
+            });
+        }
+
+        results.sort_by(|a, b| a.name.cmp(&b.name));
+        results
+    }
+
+    /// Get the default cache directory (~/.appz/cache/).
+    pub fn default_cache_dir() -> PluginResult<PathBuf> {
+        let home = dirs::home_dir().ok_or_else(|| {
+            PluginError::Other("Could not determine home directory".to_string())
+        })?;
+        Ok(home.join(".appz").join("cache"))
     }
 }

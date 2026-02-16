@@ -105,8 +105,10 @@ async fn main() -> MainResult {
                     app::commands::recipe_validate(session, path).await
                 }
                 Commands::Dev { .. } => app::commands::dev(session).await,
+                #[cfg(feature = "dev-server")]
                 Commands::DevServer { .. } => app::commands::dev_server(session).await,
                 Commands::Build => app::commands::build(session).await,
+                #[cfg(feature = "dev-server")]
                 Commands::Preview { .. } => app::commands::preview(session).await,
                 Commands::Ls => app::commands::ls(session).await,
                 Commands::Link { project, team } => {
@@ -143,15 +145,19 @@ async fn main() -> MainResult {
                 Commands::Remove { resources, yes, safe } => {
                     app::commands::remove(session, resources, yes, safe).await
                 }
+                #[cfg(feature = "gen")]
                 Commands::Gen { prompt, output, name, model } => {
                     app::commands::gen::run(session, prompt, output, name, model).await
                 }
+                #[cfg(feature = "deploy")]
                 Commands::Deploy { provider, preview, no_build, dry_run, json, all, yes } => {
                     app::commands::deploy(session, provider, preview, no_build, dry_run, json, all, yes).await
                 }
+                #[cfg(feature = "deploy")]
                 Commands::DeployInit { provider } => {
                     app::commands::deploy_init(session, provider).await
                 }
+                #[cfg(feature = "deploy")]
                 Commands::DeployList { provider } => {
                     app::commands::deploy_list(session, provider).await
                 }
@@ -159,8 +165,12 @@ async fn main() -> MainResult {
                 Commands::Skills { command } => {
                     app::commands::skills::run(session, command).await
                 }
+                Commands::Plugin { command } => {
+                    app::commands::plugin::run(session, command).await
+                }
+                #[cfg(feature = "mcp")]
                 Commands::McpServer => app::commands::mcp_server::mcp_server(session).await,
-                // NOTE: Migrate command is now a downloadable plugin.
+                // NOTE: Convert and Migrate commands are now downloadable plugins.
                 // It is handled by Commands::External below.
                 #[cfg(feature = "self_update")]
                 Commands::SelfUpdate { version, force, yes } => {
@@ -168,10 +178,6 @@ async fn main() -> MainResult {
                     let cmd = SelfUpdate::new(version, force, yes);
                     cmd.run().await.map_err(|e| miette::miette!("{}", e))?;
                     Ok(None)
-                }
-                #[cfg(not(feature = "self_update"))]
-                Commands::SelfUpdate { .. } => {
-                    unreachable!("SelfUpdate command should not be available when self_update feature is disabled")
                 }
                 Commands::External(args) => {
                     app::commands::external::run(session, args).await

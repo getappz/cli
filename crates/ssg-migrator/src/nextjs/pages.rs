@@ -3,23 +3,26 @@
 use super::regex::RE_DYNAMIC_PARAM;
 use super::templates::PAGE_TEMPLATE;
 use crate::types::{ProjectAnalysis, RouteInfo};
+use crate::vfs::Vfs;
+use camino::Utf8PathBuf;
 use miette::{miette, Result};
 use regex::Regex;
-use sandbox::ScopedFs;
 
 pub(super) fn create_app_router_pages(
-    fs: &ScopedFs,
+    vfs: &dyn Vfs,
+    output_dir: &Utf8PathBuf,
     analysis: &ProjectAnalysis,
     static_export: bool,
 ) -> Result<()> {
     for route in &analysis.routes {
         let (app_segment, page_name, component) = route_to_page_info(route)?;
         let page_path = if app_segment.is_empty() {
-            format!("src/app/{}", page_name)
+            output_dir.join(format!("src/app/{}", page_name))
         } else {
-            fs.create_dir_all(&format!("src/app/{}", app_segment))
+            let dir = output_dir.join(format!("src/app/{}", app_segment));
+            vfs.create_dir_all(dir.as_str())
                 .map_err(|e| miette!("Failed to create dir: {}", e))?;
-            format!("src/app/{}/{}", app_segment, page_name)
+            output_dir.join(format!("src/app/{}/{}", app_segment, page_name))
         };
 
         let has_dynamic = app_segment.contains('[');
@@ -31,7 +34,7 @@ pub(super) fn create_app_router_pages(
             PAGE_TEMPLATE.replace("PAGENAME", &component)
         };
 
-        fs.write_string(&page_path, &content)
+        vfs.write_string(page_path.as_str(), &content)
             .map_err(|e| miette!("Failed to write {}: {}", page_path, e))?;
     }
     Ok(())
@@ -65,15 +68,21 @@ export function generateStaticParams() {{
 }}"#, fields.join(", "))
 }
 
-pub(super) fn cleanup_client_files(fs: &ScopedFs) -> Result<()> {
+pub(super) fn cleanup_client_files(vfs: &dyn Vfs, output_dir: &Utf8PathBuf) -> Result<()> {
     for rel in &["src/client/main.tsx", "src/client/App.tsx"] {
-        if fs.exists(rel) {
-            fs.remove_file(rel).map_err(|e| miette!("Failed to remove {}: {}", rel, e))?;
+        let path = output_dir.join(rel);
+        if vfs.exists(path.as_str()) {
+            vfs.remove_file(path.as_str())
+                .map_err(|e| miette!("Failed to remove {}: {}", rel, e))?;
         }
     }
-    for rel in &fs.glob("src/client/*vite*").map_err(|e| miette!("Glob failed: {}", e))? {
-        if fs.is_file(rel) {
-            fs.remove_file(rel).map_err(|e| miette!("Failed to remove: {}", e))?;
+    // Find vite-related files in src/client
+    let client_dir = output_dir.join("src/client");
+    if vfs.exists(client_dir.as_str()) {
+        for entry in vfs.list_dir(client_dir.as_str()).unwrap_or_default() {
+            if entry.is_file && entry.path.contains("vite") {
+                let _ = vfs.remove_file(&entry.path);
+            }
         }
     }
     Ok(())

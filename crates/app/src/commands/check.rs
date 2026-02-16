@@ -100,7 +100,12 @@ pub async fn run_check_with_sandbox(
         format,
         strict: effective_strict,
         json_output,
-        is_ci: deployer::is_ci_environment(),
+        is_ci: {
+            #[cfg(feature = "deploy")]
+            { deployer::is_ci_environment() }
+            #[cfg(not(feature = "deploy"))]
+            { std::env::var("CI").is_ok() || std::env::var("CONTINUOUS_INTEGRATION").is_ok() }
+        },
         file_filter,
         checker: checker_slug,
         jobs,

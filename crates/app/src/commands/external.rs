@@ -79,5 +79,14 @@ pub async fn run(session: AppzSession, args: Vec<String>) -> AppResult {
 
     runner.execute_command(&command_name, &remaining_args, &working_dir)?;
 
+    // After successful execution, show a periodic update hint (7-day TTL).
+    if let Ok(cache_dir) = plugin_manager::PluginManager::default_cache_dir() {
+        let checker = plugin_manager::update_check::PluginUpdateChecker::new(&cache_dir);
+        if checker.should_show_hint() {
+            plugin_manager::update_check::PluginUpdateChecker::show_hint();
+            checker.record_hint_shown();
+        }
+    }
+
     Ok(None)
 }

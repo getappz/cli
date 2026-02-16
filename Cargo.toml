@@ -41,7 +41,7 @@ name = "appz"
 path = "crates/cli/src/main.rs"
 
 [dependencies]
-app = { path = "crates/app", features = ["self_update"] }
+app = { path = "crates/app", default-features = false }
 common = { path = "crates/common" }
 ui = { path = "crates/ui" }
 env_var = { path = "crates/env_var" }
@@ -58,8 +58,22 @@ tokio = { workspace = true }
 tracing = "0.1"
 
 [features]
-default = ["self_update"]
-self_update = []
+default = ["full"]
+
+# Build with all bundled modules. Plugin-only features (check, site)
+# are excluded — those plugins work via the External command handler.
+# Note: migrate has been removed entirely — the ssg-migrator plugin is
+# self-contained and no longer needs host-side migration code.
+full = ["dev-server", "deploy", "mcp", "gen", "self_update"]
+
+# Individual feature flags — forwarded to the `app` crate.
+dev-server = ["app/dev-server"]
+deploy = ["app/deploy"]
+check = ["app/check"]
+site = ["app/site"]
+mcp = ["app/mcp"]
+gen = ["app/gen"]
+self_update = ["app/self_update"]
 
 [workspace.package]
 version = "0.1.0"

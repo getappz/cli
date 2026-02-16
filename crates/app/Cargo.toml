@@ -40,7 +40,6 @@ ui = { path = "../ui" }
 common = { path = "../common" }
 atty = { workspace = true }
 starbase_archive = { workspace = true }
-dev-server = { path = "../dev-server" }
 tempfile = { workspace = true }
 tokio-retry = { workspace = true }
 url = { workspace = true }
@@ -49,15 +48,36 @@ self_update = { workspace = true, optional = true }
 webbrowser = "1.0"
 toml = "0.8"
 camino = "1.2"
-appz-studio = { path = "../studio" }
 sandbox = { path = "../sandbox" }
 plugin-manager = { path = "../plugin-manager" }
-deployer = { path = "../deployer" }
-checker = { path = "../checker" }
 init = { path = "../init" }
-site-builder = { path = "../site-builder" }
-mcp-server = { path = "../mcp-server" }
 
+# Optional heavy dependencies — gated behind feature flags so the core CLI
+# can be kept small as an orchestration / delegator tool.
+dev-server = { path = "../dev-server", optional = true }
+deployer = { path = "../deployer", optional = true }
+checker = { path = "../checker", optional = true }
+site-builder = { path = "../site-builder", optional = true }
+appz-studio = { path = "../studio", optional = true }
+mcp-server = { path = "../mcp-server", optional = true }
 [features]
-default = ["self_update"]
+default = ["self_update", "dev-server", "deploy", "mcp", "gen"]
+
+# Bundled dev server (appz dev-server, appz preview)
+dev-server = ["dep:dev-server"]
+
+# Third-party deployment providers (appz deploy, deploy-init, deploy-list)
+deploy = ["dep:deployer"]
+
+# Code quality checker (plugin host function for appz check)
+check = ["dep:checker"]
+
+# AI-powered site builder (plugin host function for appz site)
+site = ["dep:site-builder"]
+
+# MCP protocol server for AI assistants (appz mcp-server)
+mcp = ["dep:mcp-server"]
+
+# AI website generation (appz gen)
+gen = ["dep:appz-studio"]
 

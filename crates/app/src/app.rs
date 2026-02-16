@@ -151,6 +151,7 @@ pub enum Commands {
         port: Option<u16>,
     },
     /// Start a local development server with hot reloading
+    #[cfg(feature = "dev-server")]
     DevServer {
         /// Port to bind to (default: 3000)
         #[arg(short, long, default_value = "3000")]
@@ -168,6 +169,7 @@ pub enum Commands {
     /// Build the project (install dependencies and build)
     Build,
     /// Preview the built project by serving static files from output directory
+    #[cfg(feature = "dev-server")]
     Preview {
         /// Port to bind to (default: 3000)
         #[arg(short, long, default_value = "3000")]
@@ -274,6 +276,7 @@ pub enum Commands {
         safe: bool,
     },
     /// Generate a website from a natural-language prompt (AI)
+    #[cfg(feature = "gen")]
     Gen {
         /// Natural-language prompt describing the website to generate
         #[arg(required = true, trailing_var_arg = true)]
@@ -289,6 +292,7 @@ pub enum Commands {
         model: Option<String>,
     },
     /// Deploy to a hosting provider (Vercel, Netlify, Cloudflare Pages, etc.)
+    #[cfg(feature = "deploy")]
     Deploy {
         /// Target provider (vercel, netlify, cloudflare-pages, github-pages, etc.)
         /// Auto-detected if not specified.
@@ -319,11 +323,13 @@ pub enum Commands {
         yes: bool,
     },
     /// Set up deployment configuration for a provider
+    #[cfg(feature = "deploy")]
     DeployInit {
         /// Target provider to configure (vercel, netlify, etc.)
         provider: Option<String>,
     },
     /// List recent deployments
+    #[cfg(feature = "deploy")]
     DeployList {
         /// Provider to list deployments from
         provider: Option<String>,
@@ -337,8 +343,16 @@ pub enum Commands {
         #[command(subcommand)]
         command: crate::commands::skills::SkillsCommands,
     },
+    /// Manage downloadable plugins (list, update)
+    Plugin {
+        #[command(subcommand)]
+        command: crate::commands::plugin::PluginCommands,
+    },
     /// Run the MCP (Model Context Protocol) server for AI assistants (Cursor, Claude, etc.)
+    #[cfg(feature = "mcp")]
     McpServer,
+    // NOTE: The `convert` command has been extracted to the ssg-migrator plugin.
+    // It is now handled by the External(Vec<String>) variant below.
     // NOTE: The `migrate` command has been extracted to a downloadable plugin.
     // It is now handled by the External(Vec<String>) variant below.
     // Users run `appz migrate ...` which triggers the plugin system.

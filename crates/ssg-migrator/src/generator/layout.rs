@@ -1,21 +1,19 @@
 //! Layout generation for Astro projects.
 
+use crate::vfs::Vfs;
 use camino::Utf8PathBuf;
 use miette::{miette, Result};
-use std::fs;
-use std::io::Write;
 
-pub(super) fn generate_layout(layouts_dir: &Utf8PathBuf) -> Result<()> {
+pub(super) fn generate_layout(
+    vfs: &dyn Vfs,
+    layouts_dir: &Utf8PathBuf,
+    src_dir: &Utf8PathBuf,
+) -> Result<()> {
     let layout_path = layouts_dir.join("Layout.astro");
-    let mut file = fs::File::create(&layout_path)
-        .map_err(|e| miette!("Failed to create Layout.astro: {}", e))?;
 
-    let src_dir = layouts_dir
-        .parent()
-        .ok_or_else(|| miette!("Invalid layout directory"))?;
     let mut css_imports = String::new();
     for css_file in ["index.css", "App.css"] {
-        if src_dir.join(css_file).exists() {
+        if vfs.exists(src_dir.join(css_file).as_str()) {
             css_imports.push_str(&format!("import '../{}';\n", css_file));
         }
     }
@@ -43,7 +41,7 @@ const {{ title = "Migrated Astro App" }} = Astro.props;
         css_imports
     );
 
-    file.write_all(layout.as_bytes())
+    vfs.write_string(layout_path.as_str(), &layout)
         .map_err(|e| miette!("Failed to write Layout.astro: {}", e))?;
     Ok(())
 }

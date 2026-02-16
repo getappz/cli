@@ -5,23 +5,25 @@ use crate::generator::generate_astro_project;
 use crate::nextjs::generate_nextjs_project;
 use crate::sync::SyncManifest;
 use crate::types::{MigrationConfig, SsgWarning};
+use crate::vfs::Vfs;
+use camino::Utf8PathBuf;
 use miette::{miette, Result};
-use sandbox::{create_sandbox, SandboxConfig, SandboxSettings};
 
 /// Forward sync: re-run migration for changed source files.
 /// v1: full re-migration when any source file changes.
-pub async fn sync_forward(
+pub fn sync_forward(
+    vfs: &dyn Vfs,
     manifest: &SyncManifest,
     _changed_source_files: &[String],
 ) -> Result<Vec<SsgWarning>> {
-    let source_dir = camino::Utf8PathBuf::from(manifest.source_dir.as_str());
-    let output_dir = camino::Utf8PathBuf::from(manifest.output_dir.as_str());
+    let source_dir = Utf8PathBuf::from(manifest.source_dir.as_str());
+    let output_dir = Utf8PathBuf::from(manifest.output_dir.as_str());
 
-    if !source_dir.exists() {
+    if !vfs.exists(source_dir.as_str()) {
         return Err(miette!("Source directory does not exist: {}", source_dir));
     }
 
-    let analysis = analyze_project(&source_dir)?;
+    let analysis = analyze_project(vfs, &source_dir)?;
 
     let project_name = output_dir
         .file_name()
@@ -39,27 +41,19 @@ pub async fn sync_forward(
         output_dir: output_dir.clone(),
         project_name: project_name.clone(),
         force: true,
-        static_export: false, // sync manifest doesn't store this; default
+        static_export: false,
+        transforms: None,
     };
 
     match manifest.target.as_str() {
         "nextjs" => {
-            let sandbox_config = SandboxConfig::new(output_dir.as_path())
-                .with_settings(SandboxSettings::default().with_tool("bun", Some("latest")));
-
-            let sandbox = create_sandbox(sandbox_config)
-                .await
-                .map_err(|e| miette!("Failed to create sandbox: {}", e))?;
-
-            let fs = sandbox.fs();
             let warnings =
-                generate_nextjs_project(&config, &analysis, fs)
+                generate_nextjs_project(vfs, &config, &analysis, &output_dir)
                     .map_err(|e| miette!("Failed to generate Next.js project: {}", e))?;
-
             Ok(warnings)
         }
         _ => {
-            generate_astro_project(&config, &analysis)
+            generate_astro_project(vfs, &config, &analysis)
                 .map_err(|e| miette!("Failed to generate Astro project: {}", e))?;
             Ok(Vec::new())
         }

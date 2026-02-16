@@ -5,17 +5,20 @@ use super::regex::{
     RE_USE_SEARCH_PARAMS, RE_USE_SERVER,
 };
 use crate::types::{SsgSeverity, SsgWarning};
+use crate::vfs::Vfs;
+use camino::Utf8PathBuf;
 use miette::{miette, Result};
-use sandbox::ScopedFs;
-use walkdir::WalkDir;
 
-pub(super) fn verify_static_export(fs: &ScopedFs) -> Result<Vec<SsgWarning>> {
+pub(super) fn verify_static_export(
+    vfs: &dyn Vfs,
+    output_dir: &Utf8PathBuf,
+) -> Result<Vec<SsgWarning>> {
     let mut warnings: Vec<SsgWarning> = Vec::new();
-    let root = fs.root();
 
-    let config_path = root.join("next.config.ts");
-    if config_path.exists() {
-        let config_content = std::fs::read_to_string(&config_path)
+    let config_path = output_dir.join("next.config.ts");
+    if vfs.exists(config_path.as_str()) {
+        let config_content = vfs
+            .read_to_string(config_path.as_str())
             .map_err(|e| miette!("Failed to read next.config.ts: {}", e))?;
         if !config_content.contains("output:") || !config_content.contains("export") {
             warnings.push(SsgWarning {
@@ -39,22 +42,27 @@ pub(super) fn verify_static_export(fs: &ScopedFs) -> Result<Vec<SsgWarning>> {
         });
     }
 
-    let app_dir = root.join("src/app");
-    if app_dir.exists() {
-        for entry in WalkDir::new(&app_dir).into_iter().filter_map(|e| e.ok()) {
-            let path = entry.path();
-            if !path.is_file() || path.file_name().and_then(|n| n.to_str()) != Some("page.tsx") {
+    let app_dir = output_dir.join("src/app");
+    if vfs.exists(app_dir.as_str()) {
+        for entry in vfs.walk_dir(app_dir.as_str())? {
+            if !entry.is_file {
                 continue;
             }
-            let rel = path
-                .strip_prefix(&root)
-                .unwrap_or(path)
-                .to_string_lossy()
+            let path = Utf8PathBuf::from(&entry.path);
+            if path.file_name() != Some("page.tsx") {
+                continue;
+            }
+            let rel = entry
+                .path
+                .strip_prefix(output_dir.as_str())
+                .unwrap_or(&entry.path)
+                .trim_start_matches('/')
                 .replace('\\', "/");
             if !rel.contains('[') {
                 continue;
             }
-            let content = std::fs::read_to_string(path)
+            let content = vfs
+                .read_to_string(&entry.path)
                 .map_err(|e| miette!("Failed to read {}: {}", rel, e))?;
             if !content.contains("generateStaticParams") {
                 warnings.push(SsgWarning {
@@ -66,23 +74,24 @@ pub(super) fn verify_static_export(fs: &ScopedFs) -> Result<Vec<SsgWarning>> {
         }
     }
 
-    let src_dir = root.join("src");
-    if src_dir.exists() {
-        for entry in WalkDir::new(&src_dir).into_iter().filter_map(|e| e.ok()) {
-            let path = entry.path();
-            if !path.is_file() {
+    let src_dir = output_dir.join("src");
+    if vfs.exists(src_dir.as_str()) {
+        for entry in vfs.walk_dir(src_dir.as_str())? {
+            if !entry.is_file {
                 continue;
             }
-            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            let path = Utf8PathBuf::from(&entry.path);
+            let ext = path.extension().unwrap_or("");
             if !matches!(ext, "ts" | "tsx" | "jsx" | "js") {
                 continue;
             }
-            let rel = path
-                .strip_prefix(&root)
-                .unwrap_or(path)
-                .to_string_lossy()
+            let rel = entry
+                .path
+                .strip_prefix(output_dir.as_str())
+                .unwrap_or(&entry.path)
+                .trim_start_matches('/')
                 .replace('\\', "/");
-            let content = match std::fs::read_to_string(path) {
+            let content = match vfs.read_to_string(&entry.path) {
                 Ok(c) => c,
                 Err(_) => continue,
             };

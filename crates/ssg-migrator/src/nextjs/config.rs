@@ -2,14 +2,14 @@
 
 use crate::common::{copy_tailwind_config, filter_deps};
 use crate::types::ProjectAnalysis;
+use crate::vfs::Vfs;
 use camino::Utf8PathBuf;
 use miette::{miette, Result};
-use sandbox::json_ops;
-use sandbox::ScopedFs;
 use serde_json::{json, Map, Value};
 
 pub(super) fn write_package_json(
-    fs: &ScopedFs,
+    vfs: &dyn Vfs,
+    output_dir: &Utf8PathBuf,
     analysis: &ProjectAnalysis,
     project_name: &str,
     static_export: bool,
@@ -68,13 +68,16 @@ pub(super) fn write_package_json(
         "devDependencies": dev_dependencies
     });
 
-    json_ops::write_json_value(fs, "package.json", &package)
+    let formatted = serde_json::to_string_pretty(&package)
+        .map_err(|e| miette!("Failed to serialize package.json: {}", e))?;
+    vfs.write_string(output_dir.join("package.json").as_str(), &formatted)
         .map_err(|e| miette!("Failed to write package.json: {}", e))?;
     Ok(())
 }
 
 pub(super) fn copy_config_files(
-    fs: &ScopedFs,
+    vfs: &dyn Vfs,
+    output_dir: &Utf8PathBuf,
     source_dir: &Utf8PathBuf,
     static_export: bool,
 ) -> Result<()> {
@@ -99,7 +102,7 @@ const nextConfig: NextConfig = {{{static_lines}
 export default nextConfig;
 "#
     );
-    fs.write_string("next.config.ts", &next_config)
+    vfs.write_string(output_dir.join("next.config.ts").as_str(), &next_config)
         .map_err(|e| miette!("Failed to write next.config.ts: {}", e))?;
 
     let tsconfig = r#"{
@@ -127,29 +130,39 @@ export default nextConfig;
   "exclude": ["node_modules"]
 }
 "#;
-    fs.write_string("tsconfig.json", tsconfig)
+    vfs.write_string(output_dir.join("tsconfig.json").as_str(), tsconfig)
         .map_err(|e| miette!("Failed to write tsconfig.json: {}", e))?;
 
-    copy_tailwind_config(source_dir, fs)?;
+    copy_tailwind_config(vfs, source_dir, output_dir.as_str())?;
 
     let postcss_ts = source_dir.join("postcss.config.ts");
-    if postcss_ts.exists() {
-        fs.copy_from_external(postcss_ts.as_path(), "postcss.config.ts")
-            .map_err(|e| miette!("Failed to copy postcss.config.ts: {}", e))?;
+    if vfs.exists(postcss_ts.as_str()) {
+        vfs.copy_file(
+            postcss_ts.as_str(),
+            output_dir.join("postcss.config.ts").as_str(),
+        )
+        .map_err(|e| miette!("Failed to copy postcss.config.ts: {}", e))?;
     }
     let postcss_js = source_dir.join("postcss.config.js");
-    if postcss_js.exists() {
-        fs.copy_from_external(postcss_js.as_path(), "postcss.config.js")
-            .map_err(|e| miette!("Failed to copy postcss.config.js: {}", e))?;
+    if vfs.exists(postcss_js.as_str()) {
+        vfs.copy_file(
+            postcss_js.as_str(),
+            output_dir.join("postcss.config.js").as_str(),
+        )
+        .map_err(|e| miette!("Failed to copy postcss.config.js: {}", e))?;
     }
 
     let components_json = source_dir.join("components.json");
-    if components_json.exists() {
-        let content = std::fs::read_to_string(components_json.as_path())
+    if vfs.exists(components_json.as_str()) {
+        let content = vfs
+            .read_to_string(components_json.as_str())
             .map_err(|e| miette!("Failed to read components.json: {}", e))?;
         let rewritten = content.replace("src/", "src/client/");
-        fs.write_string("components.json", &rewritten)
-            .map_err(|e| miette!("Failed to write components.json: {}", e))?;
+        vfs.write_string(
+            output_dir.join("components.json").as_str(),
+            &rewritten,
+        )
+        .map_err(|e| miette!("Failed to write components.json: {}", e))?;
     }
     Ok(())
 }

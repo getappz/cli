@@ -48,8 +48,14 @@ use crate::wasm::host_functions::plugin_sandbox::{
 use crate::wasm::host_functions::plugin_ast::{
     appz_past_transform, appz_past_parse_jsx,
 };
+#[cfg(feature = "check")]
 use crate::wasm::host_functions::plugin_check::appz_pcheck_run;
+#[cfg(not(feature = "check"))]
+use crate::wasm::host_functions::stubs::appz_pcheck_run_stub;
+#[cfg(feature = "site")]
 use crate::wasm::host_functions::plugin_site::appz_psite_run;
+#[cfg(not(feature = "site"))]
+use crate::wasm::host_functions::stubs::appz_psite_run_stub;
 use crate::wasm::types::{
     PluginHandshakeChallenge, PluginHandshakeResponse,
     PluginInfo, PluginExecuteInput, PluginExecuteOutput,
@@ -767,11 +773,22 @@ fn register_plugin_host_functions<'a>(
     builder = builder.with_function("appz_past_transform", [PTR], [PTR], user_data.clone(), appz_past_transform);
     builder = builder.with_function("appz_past_parse_jsx", [PTR], [PTR], user_data.clone(), appz_past_parse_jsx);
 
-    // Check plugin host function
-    builder = builder.with_function("appz_pcheck_run", [PTR], [PTR], user_data.clone(), appz_pcheck_run);
+    // Check plugin host function (stub when feature disabled)
+    #[cfg(feature = "check")]
+    { builder = builder.with_function("appz_pcheck_run", [PTR], [PTR], user_data.clone(), appz_pcheck_run); }
+    #[cfg(not(feature = "check"))]
+    { builder = builder.with_function("appz_pcheck_run", [PTR], [PTR], user_data.clone(), appz_pcheck_run_stub); }
 
-    // Site plugin host function
-    builder = builder.with_function("appz_psite_run", [PTR], [PTR], user_data.clone(), appz_psite_run);
+    // Site plugin host function (stub when feature disabled)
+    #[cfg(feature = "site")]
+    { builder = builder.with_function("appz_psite_run", [PTR], [PTR], user_data.clone(), appz_psite_run); }
+    #[cfg(not(feature = "site"))]
+    { builder = builder.with_function("appz_psite_run", [PTR], [PTR], user_data.clone(), appz_psite_run_stub); }
+
+    // Note: migrate/convert host functions have been removed entirely.
+    // The ssg-migrator plugin is now self-contained and calls ssg-migrator
+    // directly through the Vfs trait, using only the generic pfs/pgit host
+    // functions for I/O.
 
     builder
 }

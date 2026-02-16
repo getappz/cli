@@ -1,15 +1,7 @@
 //! Next.js App Router generator for React SPA migration.
-//!
-//! Modular structure:
-//! - regex: pre-compiled regexes
-//! - templates: USE_ROUTER_TEMPLATE, LAYOUT_TEMPLATE, PAGE_TEMPLATE
-//! - transform: CSS, TS/TSX transforms, image imports
-//! - providers: create_providers from App.tsx
-//! - pages: create_app_router_pages, cleanup_client_files
-//! - config: write_package_json, copy_config_files
-//! - verify: verify_static_export
 
 mod config;
+mod convert;
 mod pages;
 mod providers;
 mod regex;
@@ -17,10 +9,13 @@ mod templates;
 mod transform;
 mod verify;
 
+pub use convert::{convert_to_nextjs, parse_transforms, NextJsTransform};
+
 use crate::common::copy_public_assets;
 use crate::types::{MigrationConfig, ProjectAnalysis, SsgWarning};
+use crate::vfs::Vfs;
+use camino::Utf8PathBuf;
 use miette::{miette, Result};
-use sandbox::ScopedFs;
 
 use self::config::copy_config_files;
 use self::config::write_package_json;
@@ -32,40 +27,47 @@ use self::verify::verify_static_export;
 
 /// Generate a Next.js App Router project from a React SPA.
 pub fn generate_nextjs_project(
+    vfs: &dyn Vfs,
     config: &MigrationConfig,
     analysis: &ProjectAnalysis,
-    fs: &ScopedFs,
+    output_dir: &Utf8PathBuf,
 ) -> Result<Vec<SsgWarning>> {
     let source_dir = &config.source_dir;
 
-    fs.create_dir_all("src/app")?;
-    fs.create_dir_all("src/client")?;
+    vfs.create_dir_all(output_dir.join("src/app").as_str())?;
+    vfs.create_dir_all(output_dir.join("src/client").as_str())?;
 
     let source_src = source_dir.join("src");
-    if source_src.exists() {
-        fs.copy_from_external(source_src.as_path(), "src/client")
+    if vfs.exists(source_src.as_str()) {
+        vfs.copy_dir(source_src.as_str(), output_dir.join("src/client").as_str())
             .map_err(|e| miette!("Failed to copy src: {}", e))?;
     }
 
-    transform_client_files(fs, "src/client")?;
-    create_providers(fs, source_dir)?;
+    transform_client_files(vfs, output_dir, "src/client", config.transforms.as_deref())?;
+    create_providers(vfs, output_dir, source_dir)?;
 
-    fs.write_string("src/app/layout.tsx", LAYOUT_TEMPLATE)
-        .map_err(|e| miette!("Failed to write layout.tsx: {}", e))?;
+    vfs.write_string(
+        output_dir.join("src/app/layout.tsx").as_str(),
+        LAYOUT_TEMPLATE,
+    )
+    .map_err(|e| miette!("Failed to write layout.tsx: {}", e))?;
 
-    fs.write_string("src/app/useRouter.tsx", USE_ROUTER_TEMPLATE)
-        .map_err(|e| miette!("Failed to write useRouter.tsx: {}", e))?;
+    vfs.write_string(
+        output_dir.join("src/app/useRouter.tsx").as_str(),
+        USE_ROUTER_TEMPLATE,
+    )
+    .map_err(|e| miette!("Failed to write useRouter.tsx: {}", e))?;
 
-    create_app_router_pages(fs, analysis, config.static_export)?;
-    cleanup_client_files(fs)?;
+    create_app_router_pages(vfs, output_dir, analysis, config.static_export)?;
+    cleanup_client_files(vfs, output_dir)?;
 
-    write_package_json(fs, analysis, &config.project_name, config.static_export)?;
-    copy_config_files(fs, source_dir, config.static_export)?;
+    write_package_json(vfs, output_dir, analysis, &config.project_name, config.static_export)?;
+    copy_config_files(vfs, output_dir, source_dir, config.static_export)?;
 
-    copy_public_assets(source_dir, fs, "public")?;
+    copy_public_assets(vfs, source_dir, output_dir.join("public").as_str())?;
 
     let warnings = if config.static_export {
-        verify_static_export(fs)?
+        verify_static_export(vfs, output_dir)?
     } else {
         Vec::new()
     };

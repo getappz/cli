@@ -1,51 +1,38 @@
 //! Shared migration helpers used by both Astro and Next.js generators.
-//!
-//! All file I/O uses `ScopedFs` for path safety. Source reads use absolute paths
-//! (outside sandbox); writes go to fs-relative paths.
 
+use crate::vfs::Vfs;
 use camino::Utf8PathBuf;
 use miette::{miette, Result};
-use sandbox::ScopedFs;
 use std::collections::HashMap;
-use std::path::Path;
 
-/// Copy `public/` from source directory into sandbox at `public`.
+/// Copy `public/` from source directory into output at `{dst_rel}`.
 pub fn copy_public_assets(
+    vfs: &dyn Vfs,
     source_dir: &Utf8PathBuf,
-    fs: &ScopedFs,
-    dst_rel: &str,
+    dst_dir: &str,
 ) -> Result<()> {
     let source_public = source_dir.join("public");
-    if source_public.exists() {
-        fs.copy_from_external(source_public.as_path(), dst_rel)
+    if vfs.exists(source_public.as_str()) {
+        vfs.copy_dir(source_public.as_str(), dst_dir)
             .map_err(|e| miette!("Failed to copy public assets: {}", e))?;
     }
     Ok(())
 }
 
-/// Copy tailwind.config.ts or tailwind.config.js from source to sandbox root.
-pub fn copy_tailwind_config(source_dir: &Utf8PathBuf, fs: &ScopedFs) -> Result<()> {
-    let source_ts = source_dir.join("tailwind.config.ts");
-    if source_ts.exists() {
-        fs.copy_from_external(source_ts.as_path(), "tailwind.config.ts")
-            .map_err(|e| miette!("Failed to copy tailwind.config.ts: {}", e))?;
-    }
-    let source_js = source_dir.join("tailwind.config.js");
-    if source_js.exists() {
-        fs.copy_from_external(source_js.as_path(), "tailwind.config.js")
-            .map_err(|e| miette!("Failed to copy tailwind.config.js: {}", e))?;
-    }
-    Ok(())
-}
-
-/// Copy a directory tree from an external absolute path into the sandbox.
-pub fn copy_from_external(
-    fs: &ScopedFs,
-    src_abs: impl AsRef<Path>,
-    dst_rel: impl AsRef<Path>,
+/// Copy tailwind.config.ts or tailwind.config.js from source to output root.
+pub fn copy_tailwind_config(
+    vfs: &dyn Vfs,
+    source_dir: &Utf8PathBuf,
+    output_dir: &str,
 ) -> Result<()> {
-    fs.copy_from_external(src_abs, dst_rel)
-        .map_err(|e| miette!("Failed to copy from external: {}", e))?;
+    for ext in ["ts", "js"] {
+        let src = source_dir.join(format!("tailwind.config.{ext}"));
+        if vfs.exists(src.as_str()) {
+            let dst = format!("{}/tailwind.config.{ext}", output_dir);
+            vfs.copy_file(src.as_str(), &dst)
+                .map_err(|e| miette!("Failed to copy tailwind.config.{}: {}", ext, e))?;
+        }
+    }
     Ok(())
 }
 
@@ -69,16 +56,14 @@ const DEP_DENYLIST: &[&str] = &[
 /// Exact dependency names to exclude (react, react-dom are pinned by the generator).
 const DEP_DENYLIST_EXACT: &[&str] = &["react", "react-dom"];
 
-/// Filter dependencies for Next.js migration using a denylist approach:
+/// Filter dependencies for migration using a denylist approach:
 /// keep everything the user had, except build tools, bundlers, and router packages.
 pub fn filter_deps(deps: &HashMap<String, String>) -> HashMap<String, String> {
     let mut out = HashMap::new();
     'outer: for (dep, version) in deps {
-        // Exact matches
         if DEP_DENYLIST_EXACT.contains(&dep.as_str()) {
             continue;
         }
-        // Prefix matches
         for prefix in DEP_DENYLIST {
             if dep.starts_with(prefix) {
                 continue 'outer;
@@ -89,5 +74,4 @@ pub fn filter_deps(deps: &HashMap<String, String>) -> HashMap<String, String> {
     out
 }
 
-// Keep the old name as an alias so the Astro generator (which still uses it) compiles.
 pub use filter_deps as filter_lovable_deps;

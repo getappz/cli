@@ -1,14 +1,15 @@
 //! README generation for migrated Astro projects.
 
+use crate::vfs::Vfs;
 use camino::Utf8PathBuf;
 use miette::{miette, Result};
-use std::fs;
-use std::io::Write;
 
-pub(super) fn generate_readme(output_dir: &Utf8PathBuf, project_name: &str) -> Result<()> {
+pub(super) fn generate_readme(
+    vfs: &dyn Vfs,
+    output_dir: &Utf8PathBuf,
+    project_name: &str,
+) -> Result<()> {
     let readme_path = output_dir.join("README.md");
-    let mut file = fs::File::create(&readme_path)
-        .map_err(|e| miette!("Failed to create README.md: {}", e))?;
 
     let readme = format!(
         r#"# {}
@@ -41,7 +42,7 @@ npm run build
         project_name
     );
 
-    file.write_all(readme.as_bytes())
+    vfs.write_string(readme_path.as_str(), &readme)
         .map_err(|e| miette!("Failed to write README.md: {}", e))?;
     Ok(())
 }

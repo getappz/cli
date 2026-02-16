@@ -1,6 +1,8 @@
 pub mod context;
 pub mod execution;
+#[cfg(feature = "check")]
 pub mod plugin_check;
+#[cfg(feature = "site")]
 pub mod plugin_site;
 pub mod filesystem;
 pub mod helpers;
@@ -11,4 +13,5 @@ pub mod plugin_fs;
 pub mod plugin_git;
 pub mod plugin_sandbox;
 pub mod registry;
+pub mod stubs;
 pub mod utils;

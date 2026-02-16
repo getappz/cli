@@ -585,3 +585,8 @@ pub struct PluginSiteRunOutput {
     pub exit_code: i32,
     pub message: Option<String>,
 }
+
+// Note: MigrateRunInput/Output and ConvertRunInput/Output have been removed.
+// The ssg-migrator plugin is now self-contained and no longer uses dedicated
+// host functions for migration/conversion. It uses the generic pfs/pgit host
+// functions for I/O instead.

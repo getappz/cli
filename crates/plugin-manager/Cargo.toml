@@ -35,5 +35,8 @@ semver = "1.0"
 # Directories
 dirs = "5.0"
 
+# TTY detection (for update hints)
+atty = { workspace = true }
+
 [dev-dependencies]
 tempfile = { workspace = true }

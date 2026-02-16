@@ -1,5 +1,5 @@
 use crate::types::{ComponentInfo, ProjectAnalysis, RouteInfo};
-use biome_fs::BiomePath;
+use crate::vfs::Vfs;
 use biome_js_parser::{parse, JsParserOptions};
 use biome_js_syntax::{JsFileSource, JsImport, JsSyntaxNode};
 use biome_rowan::AstNode;
@@ -9,7 +9,6 @@ use regex::Regex;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::LazyLock;
-use walkdir::WalkDir;
 
 // ── Pre-compiled regexes ────────────────────────────────────────────────
 
@@ -49,23 +48,23 @@ static BROWSER_PATTERNS: LazyLock<Vec<(&str, &Regex)>> = LazyLock::new(|| {
 
 // ── Public API ──────────────────────────────────────────────────────────
 
-pub fn analyze_project(source_dir: &Utf8PathBuf) -> Result<ProjectAnalysis> {
+pub fn analyze_project(vfs: &dyn Vfs, source_dir: &Utf8PathBuf) -> Result<ProjectAnalysis> {
     let app_path = source_dir.join("src/App.tsx");
     let package_json_path = source_dir.join("package.json");
 
-    let routes = if app_path.exists() {
-        parse_routes(&app_path)?
+    let routes = if vfs.exists(app_path.as_str()) {
+        parse_routes(vfs, &app_path)?
     } else {
         vec![]
     };
 
-    let components = analyze_components(source_dir)?;
-    let dependencies = parse_dependencies(&package_json_path)?;
+    let components = analyze_components(vfs, source_dir)?;
+    let dependencies = parse_dependencies(vfs, &package_json_path)?;
 
-    let has_vite_config = source_dir.join("vite.config.ts").exists()
-        || source_dir.join("vite.config.js").exists();
-    let has_tailwind = source_dir.join("tailwind.config.ts").exists()
-        || source_dir.join("tailwind.config.js").exists();
+    let has_vite_config = vfs.exists(source_dir.join("vite.config.ts").as_str())
+        || vfs.exists(source_dir.join("vite.config.js").as_str());
+    let has_tailwind = vfs.exists(source_dir.join("tailwind.config.ts").as_str())
+        || vfs.exists(source_dir.join("tailwind.config.js").as_str());
 
     Ok(ProjectAnalysis {
         routes,
@@ -79,10 +78,9 @@ pub fn analyze_project(source_dir: &Utf8PathBuf) -> Result<ProjectAnalysis> {
 
 // ── Routes ──────────────────────────────────────────────────────────────
 
-fn parse_routes(app_path: &Utf8PathBuf) -> Result<Vec<RouteInfo>> {
-    let path = BiomePath::new(app_path.clone());
-    let content = path
-        .read_to_string()
+fn parse_routes(vfs: &dyn Vfs, app_path: &Utf8PathBuf) -> Result<Vec<RouteInfo>> {
+    let content = vfs
+        .read_to_string(app_path.as_str())
         .map_err(|e| miette!("Failed to read App.tsx: {}", e))?;
 
     let mut routes = Vec::new();
@@ -105,7 +103,6 @@ fn parse_routes(app_path: &Utf8PathBuf) -> Result<Vec<RouteInfo>> {
         });
     }
 
-    // Also check for catch-all route
     if (content.contains(r#"path="*""#) || content.contains(r#"path='*'"#))
         && !routes.iter().any(|r| r.is_catch_all)
     {
@@ -116,7 +113,6 @@ fn parse_routes(app_path: &Utf8PathBuf) -> Result<Vec<RouteInfo>> {
         });
     }
 
-    // If no routes found, add default index route
     if routes.is_empty() {
         routes.push(RouteInfo {
             path: "/".to_string(),
@@ -130,30 +126,34 @@ fn parse_routes(app_path: &Utf8PathBuf) -> Result<Vec<RouteInfo>> {
 
 // ── Components ──────────────────────────────────────────────────────────
 
-fn analyze_components(source_dir: &Utf8PathBuf) -> Result<Vec<ComponentInfo>> {
+fn analyze_components(vfs: &dyn Vfs, source_dir: &Utf8PathBuf) -> Result<Vec<ComponentInfo>> {
     let mut components = Vec::new();
     let components_dir = source_dir.join("src/components");
     let pages_dir = source_dir.join("src/pages");
 
-    if components_dir.exists() {
-        analyze_directory(&components_dir, &mut components)?;
+    if vfs.exists(components_dir.as_str()) {
+        analyze_directory(vfs, &components_dir, &mut components)?;
     }
-    if pages_dir.exists() {
-        analyze_directory(&pages_dir, &mut components)?;
+    if vfs.exists(pages_dir.as_str()) {
+        analyze_directory(vfs, &pages_dir, &mut components)?;
     }
 
     propagate_context_boundaries(&mut components);
     Ok(components)
 }
 
-fn analyze_directory(dir: &Utf8PathBuf, components: &mut Vec<ComponentInfo>) -> Result<()> {
-    for entry in WalkDir::new(dir) {
-        let entry = entry.map_err(|e| miette!("Failed to read directory: {}", e))?;
-        let path = Utf8PathBuf::from_path_buf(entry.path().to_path_buf())
-            .map_err(|_| miette!("Invalid UTF-8 path"))?;
-
+fn analyze_directory(
+    vfs: &dyn Vfs,
+    dir: &Utf8PathBuf,
+    components: &mut Vec<ComponentInfo>,
+) -> Result<()> {
+    for entry in vfs.walk_dir(dir.as_str())? {
+        if !entry.is_file {
+            continue;
+        }
+        let path = Utf8PathBuf::from(&entry.path);
         if path.extension() == Some("tsx") || path.extension() == Some("jsx") {
-            if let Ok(component_info) = analyze_component_file(&path) {
+            if let Ok(component_info) = analyze_component_file(vfs, &path) {
                 components.push(component_info);
             }
         }
@@ -161,10 +161,9 @@ fn analyze_directory(dir: &Utf8PathBuf, components: &mut Vec<ComponentInfo>) -> 
     Ok(())
 }
 
-fn analyze_component_file(file_path: &Utf8PathBuf) -> Result<ComponentInfo> {
-    let path = BiomePath::new(file_path.clone());
-    let content = path
-        .read_to_string()
+fn analyze_component_file(vfs: &dyn Vfs, file_path: &Utf8PathBuf) -> Result<ComponentInfo> {
+    let content = vfs
+        .read_to_string(file_path.as_str())
         .map_err(|e| miette!("Failed to read component file: {}", e))?;
 
     let parsed = parse(&content, JsFileSource::tsx(), JsParserOptions::default());
@@ -216,14 +215,16 @@ fn detect_client_features(content: &str) -> (Vec<String>, Vec<String>) {
 
 // ── Dependencies ────────────────────────────────────────────────────────
 
-fn parse_dependencies(package_json_path: &Utf8PathBuf) -> Result<HashMap<String, String>> {
-    if !package_json_path.exists() {
+fn parse_dependencies(
+    vfs: &dyn Vfs,
+    package_json_path: &Utf8PathBuf,
+) -> Result<HashMap<String, String>> {
+    if !vfs.exists(package_json_path.as_str()) {
         return Ok(HashMap::new());
     }
 
-    let path = BiomePath::new(package_json_path.clone());
-    let content = path
-        .read_to_string()
+    let content = vfs
+        .read_to_string(package_json_path.as_str())
         .map_err(|e| miette!("Failed to read package.json: {}", e))?;
 
     let package_json: Value =
@@ -231,12 +232,10 @@ fn parse_dependencies(package_json_path: &Utf8PathBuf) -> Result<HashMap<String,
 
     let mut deps = HashMap::new();
 
-    // Read both dependencies and devDependencies
     for section in ["dependencies", "devDependencies"] {
         if let Some(obj) = package_json.get(section).and_then(|v| v.as_object()) {
             for (key, value) in obj {
                 if let Some(version) = value.as_str() {
-                    // dependencies take precedence over devDependencies
                     deps.entry(key.clone()).or_insert_with(|| version.to_string());
                 }
             }
@@ -313,7 +312,6 @@ fn extract_component_imports(syntax: &JsSyntaxNode) -> Vec<String> {
 // ── Context boundary propagation ────────────────────────────────────────
 
 fn propagate_context_boundaries(components: &mut Vec<ComponentInfo>) {
-    // Build lookup once, update values in place
     let mut client_flags: HashMap<String, bool> = components
         .iter()
         .map(|c| {

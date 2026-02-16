@@ -5,7 +5,7 @@
 
 use clap::{Parser, Subcommand};
 use miette::Result;
-use plugin_build::{build, inject_header, package, publish, sign, Config};
+use plugin_build::{build, inject_header, package, publish, release, sign, Config};
 
 #[derive(Parser)]
 #[command(name = "plugin-build")]
@@ -80,6 +80,22 @@ enum Commands {
         #[arg(long)]
         dry_run: bool,
     },
+
+    /// Bump version, package, and publish (full release workflow)
+    Release {
+        /// Specific plugin to release (default: all)
+        #[arg(short, long)]
+        plugin: Option<String>,
+        /// Bump version before package (requires cargo set-version)
+        #[arg(long, value_parser = ["patch", "minor", "major"])]
+        bump: Option<String>,
+        /// Skip upload, only package and update manifest locally
+        #[arg(long)]
+        dry_run: bool,
+        /// Skip wasm-opt optimization
+        #[arg(long)]
+        no_wasm_opt: bool,
+    },
 }
 
 #[tokio::main]
@@ -135,6 +151,22 @@ async fn main() -> Result<()> {
         }
         Commands::Publish { plugin, dry_run } => {
             publish(&config, &output_dir, plugin.as_deref(), dry_run).await?
+        }
+        Commands::Release {
+            plugin,
+            bump,
+            dry_run,
+            no_wasm_opt,
+        } => {
+            release(
+                &config,
+                &output_dir,
+                plugin.as_deref(),
+                bump.as_deref(),
+                dry_run,
+                no_wasm_opt,
+            )
+            .await?
         }
     }
 

@@ -327,6 +327,38 @@ pub fn package(
     Ok(())
 }
 
+/// Full release: optionally bump version, package, then publish.
+pub async fn release(
+    config: &Config,
+    output_dir: &Path,
+    plugin_filter: Option<&str>,
+    bump: Option<&str>,
+    dry_run: bool,
+    no_wasm_opt: bool,
+) -> Result<()> {
+    if let Some(bump_type) = bump {
+        run_version_bump(bump_type)?;
+    }
+    package(config, output_dir, plugin_filter, no_wasm_opt)?;
+    publish(config, output_dir, plugin_filter, dry_run).await
+}
+
+fn run_version_bump(bump_type: &str) -> Result<()> {
+    let root = find_workspace_root()?;
+    let status = Command::new("cargo")
+        .args(["set-version", "--bump", bump_type, "-p", "appz"])
+        .current_dir(&root)
+        .status()
+        .into_diagnostic()?;
+    if !status.success() {
+        return Err(miette::miette!(
+            "Version bump failed. Install cargo set-version: cargo install cargo-set-version"
+        ));
+    }
+    println!("Bumped version ({})", bump_type);
+    Ok(())
+}
+
 /// Upload packaged plugins to CDN and optionally update manifest.
 pub async fn publish(
     config: &Config,

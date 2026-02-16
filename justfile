@@ -3,7 +3,7 @@ set windows-shell := ["pwsh.exe", "-NoLogo", "-Command"]
 
 init:
 	cargo install cargo-binstall
-	cargo binstall cargo-insta cargo-nextest cargo-llvm-cov cargo-machete
+	cargo binstall cargo-insta cargo-nextest cargo-llvm-cov cargo-machete cargo-set-version
 
 # BUILDING
 
@@ -56,7 +56,7 @@ lint-fix:
 # Find unused dependencies across the workspace.
 # Run `cargo install cargo-machete` first if not installed.
 machete:
-	cargo machete --with-metadata
+	cargo machete --with-metadata 
 
 # Pre-commit hook
 install-pre-commit:
@@ -94,6 +94,21 @@ bump-interactive:
 
 release:
 	node ./scripts/version/applyAndTagVersions.mjs
+
+# PLUGINS
+
+# Build + inject + sign plugins (output to dist/plugins)
+plugin-package plugin="" no_wasm_opt="false":
+	cargo run -p plugin-build -- package --output dist/plugins {{if plugin != "" { "--plugin " + plugin } else { "" }}} {{if no_wasm_opt == "true" { "--no-wasm-opt" } else { "" }}}
+
+# Package + upload to CDN (requires S3/R2 env vars)
+plugin-publish plugin="" dry_run="false" no_wasm_opt="false":
+	cargo run -p plugin-build -- package --output dist/plugins {{if plugin != "" { "--plugin " + plugin } else { "" }}} {{if no_wasm_opt == "true" { "--no-wasm-opt" } else { "" }}}
+	cargo run -p plugin-build -- publish --output dist/plugins {{if plugin != "" { "--plugin " + plugin } else { "" }}} {{if dry_run == "true" { "--dry-run" } else { "" }}}
+
+# Full release: bump version, package, publish (requires cargo set-version for bump)
+plugin-release plugin="" bump="" dry_run="false" no_wasm_opt="false":
+	cargo run -p plugin-build -- release --output dist/plugins {{if plugin != "" { "--plugin " + plugin } else { "" }}} {{if bump != "" { "--bump " + bump } else { "" }}} {{if dry_run == "true" { "--dry-run" } else { "" }}} {{if no_wasm_opt == "true" { "--no-wasm-opt" } else { "" }}}
 
 # OTHER
 

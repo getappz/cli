@@ -34,7 +34,7 @@ pub async fn download_remote_archive(url: &str, quiet: bool) -> InitResult<PathB
         .unpack_from_ext()
         .map_err(|e| InitError::Archive(format!("Extract failed: {:?}", e)))?;
 
-    let _ = std::fs::remove_file(&archive_file);
+    let _ = starbase_utils::fs::remove_file(&archive_file);
 
     let extracted_repo_dir = fs::read_dir(&extracted_dir)
         .map_err(|e| InitError::FsError(format!("Read dir: {}", e)))?

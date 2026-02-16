@@ -163,7 +163,7 @@ impl TemplateService {
             .map_err(|e| TemplateError::Archive(format!("Failed to extract archive: {:?}", e)))?;
 
         // Clean up archive file
-        let _ = std::fs::remove_file(&archive_file);
+        let _ = fs::remove_file(&archive_file);
 
         // Find the extracted directory (usually repo-name-branch)
         let extracted_repo_dir = fs::read_dir(&extracted_dir)
@@ -270,7 +270,7 @@ impl TemplateService {
             })?;
 
         // Clean up tarball
-        let _ = std::fs::remove_file(&tarball_file);
+        let _ = fs::remove_file(&tarball_file);
 
         Ok(extracted_dir)
     }

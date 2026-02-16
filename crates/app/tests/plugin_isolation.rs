@@ -20,7 +20,7 @@ async fn test_plugin_runner_rejects_wasm_from_other_apps() {
     let temp = tempdir().unwrap();
     let project_dir = temp.path();
     let wasm_path = project_dir.join("evil.wasm");
-    std::fs::write(&wasm_path, &wasm).unwrap();
+    starbase_utils::fs::write_file(&wasm_path, &wasm).unwrap();
 
     let config = SandboxConfig::new(project_dir).with_settings(SandboxSettings {
         auto_install_mise: false,
@@ -50,7 +50,7 @@ async fn test_plugin_runner_rejects_plugin_swap() {
     let temp = tempdir().unwrap();
     let project_dir = temp.path();
     let wasm_path = project_dir.join("check.wasm");
-    std::fs::write(&wasm_path, &wasm).unwrap();
+    starbase_utils::fs::write_file(&wasm_path, &wasm).unwrap();
 
     let config = SandboxConfig::new(project_dir).with_settings(SandboxSettings {
         auto_install_mise: false,
@@ -80,7 +80,7 @@ async fn test_plugin_runner_rejects_arbitrary_wasm() {
     let temp = tempdir().unwrap();
     let project_dir = temp.path();
     let wasm_path = project_dir.join("arbitrary.wasm");
-    std::fs::write(&wasm_path, &wasm).unwrap();
+    starbase_utils::fs::write_file(&wasm_path, &wasm).unwrap();
 
     let config = SandboxConfig::new(project_dir).with_settings(SandboxSettings {
         auto_install_mise: false,

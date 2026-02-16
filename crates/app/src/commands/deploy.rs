@@ -645,11 +645,11 @@ fn write_ci_output(output: &DeployOutput) {
 /// Resolve the build output directory from session and config.
 fn resolve_output_dir(session: &AppzSession) -> String {
     // Try to read outputDirectory from appz.json
-    if let Ok(content) = std::fs::read_to_string(session.working_dir.join("appz.json")) {
-        if let Ok(root) = serde_json::from_str::<serde_json::Value>(&content) {
-            if let Some(dir) = root.get("outputDirectory").and_then(|v| v.as_str()) {
-                return dir.to_string();
-            }
+    if let Ok(root) = starbase_utils::json::read_file::<serde_json::Value>(
+        session.working_dir.join("appz.json"),
+    ) {
+        if let Some(dir) = root.get("outputDirectory").and_then(|v| v.as_str()) {
+            return dir.to_string();
         }
     }
 

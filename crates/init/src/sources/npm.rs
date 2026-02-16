@@ -113,7 +113,7 @@ pub async fn download_npm(package: &str, quiet: bool) -> InitResult<PathBuf> {
         .unpack_from_ext()
         .map_err(|e| InitError::Archive(format!("Extract failed: {:?}", e)))?;
 
-    let _ = std::fs::remove_file(&tarball_file);
+    let _ = starbase_utils::fs::remove_file(&tarball_file);
 
     Ok(extracted_dir)
 }

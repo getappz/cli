@@ -6,6 +6,7 @@
 use crate::error::{PluginError, PluginResult};
 use reqwest::header::{HeaderValue, REFERER};
 use serde::{Deserialize, Serialize};
+use starbase_utils::fs;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -87,8 +88,8 @@ impl PluginManifest {
             return Ok(None);
         }
 
-        let data = std::fs::read_to_string(cache_path)?;
-        let cached: CachedManifest = serde_json::from_str(&data)?;
+        let cached: CachedManifest = starbase_utils::json::read_file(cache_path)
+            .map_err(|e| PluginError::ManifestError { reason: e.to_string() })?;
 
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -180,7 +181,7 @@ impl PluginManifest {
     /// Save manifest to local cache.
     fn save_to_cache(cache_path: &Path, manifest: &PluginManifest) -> PluginResult<()> {
         if let Some(parent) = cache_path.parent() {
-            std::fs::create_dir_all(parent)?;
+            fs::create_dir_all(parent).map_err(|e| PluginError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
         }
 
         let cached = CachedManifest {
@@ -191,8 +192,8 @@ impl PluginManifest {
             manifest: manifest.clone(),
         };
 
-        let data = serde_json::to_string_pretty(&cached)?;
-        std::fs::write(cache_path, data)?;
+        starbase_utils::json::write_file(cache_path, &cached)
+            .map_err(|e| PluginError::ManifestError { reason: e.to_string() })?;
         Ok(())
     }
 

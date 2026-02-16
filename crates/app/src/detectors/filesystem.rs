@@ -14,7 +14,7 @@ pub trait DetectorFilesystem: Send + Sync {
     async fn read_file(&self, path: &str) -> Result<String, std::io::Error>;
 }
 
-/// Standard filesystem implementation using std::fs
+/// Standard filesystem implementation using starbase_utils::fs
 pub struct StdFilesystem {
     base_path: Option<std::path::PathBuf>,
 }
@@ -54,9 +54,10 @@ impl DetectorFilesystem for StdFilesystem {
 
     async fn read_file(&self, path: &str) -> Result<String, std::io::Error> {
         let resolved = self.resolve_path(path);
-        // Use tokio::task::spawn_blocking for file I/O
-        tokio::task::spawn_blocking(move || std::fs::read_to_string(resolved))
-            .await
-            .map_err(|e| std::io::Error::other(format!("Task join error: {}", e)))?
+        tokio::task::spawn_blocking(move || {
+            starbase_utils::fs::read_file(resolved).map_err(|e| std::io::Error::other(e.to_string()))
+        })
+        .await
+        .map_err(|e| std::io::Error::other(format!("Task join error: {}", e)))?
     }
 }

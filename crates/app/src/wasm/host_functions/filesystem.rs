@@ -1,5 +1,5 @@
 use extism::{convert::Json, host_fn};
-use std::fs;
+use starbase_utils::fs;
 use std::path::Path;
 
 use crate::shell::copy_path_recursive;

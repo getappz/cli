@@ -128,10 +128,12 @@ Version checks run on every command execution but only hit the network once per 
 
 ## Conventions
 
-- Error handling: miette::Result<T>, thiserror for library errors
-- Filesystem: starbase_utils::fs (not std::fs directly)
-- JSON: starbase_utils::json for file I/O
-- Logging: tracing crate
-- Async: tokio runtime, wrap blocking ops with tokio::task::spawn_blocking
-- CLI parsing: clap derive macros
-- Session framework: starbase::App + starbase::AppSession trait
+- **Filesystem:** `starbase_utils::fs` (re-export via `app::utils::fs` where convenient). Use for `read_file`, `write_file`, `read_dir`, `create_dir_all`, `remove_file`, `remove_dir_all`, `metadata`, `exists`. Use `std::fs` only for operations starbase_utils does not expose (e.g. executable bits via `PermissionsExt`).
+- **JSON:** `starbase_utils::json` for file I/O (`read_file`, `write_file`) instead of manual `serde_json::from_str` + `fs::read_file`.
+- **Config/cache paths:** `starbase_utils::dirs` (`home_dir`, `cache_dir`, `config_dir`, `data_dir`).
+- **Error handling:** `miette::Result`, `thiserror` for library errors, `starbase::AppResult` for command handlers.
+- **Tracing:** `tracing` crate, `#[tracing::instrument]` on command handlers.
+- **Session:** `AppSession` with startup → analyze → execute → shutdown (aligned with Moon/Starbase phases).
+- **Async:** tokio runtime, wrap blocking ops with `tokio::task::spawn_blocking`.
+- **CLI parsing:** clap derive macros.
+- **Session framework:** `starbase::App` + `starbase::AppSession` trait.

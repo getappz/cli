@@ -4,8 +4,9 @@
 //! `appz plugin update`. The hint is suppressed for 7 days (or in CI) so
 //! it doesn't annoy users on every run.
 
-use crate::error::PluginResult;
+use crate::error::{PluginError, PluginResult};
 use serde::{Deserialize, Serialize};
+use starbase_utils::fs;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -73,18 +74,15 @@ impl PluginUpdateChecker {
     // ── internal ──────────────────────────────────────────────────────
 
     fn load_state(&self) -> UpdateState {
-        std::fs::read_to_string(&self.state_path)
-            .ok()
-            .and_then(|data| serde_json::from_str(&data).ok())
-            .unwrap_or_default()
+        starbase_utils::json::read_file(&self.state_path).unwrap_or_default()
     }
 
     fn save_state(&self, state: &UpdateState) -> PluginResult<()> {
         if let Some(parent) = self.state_path.parent() {
-            std::fs::create_dir_all(parent)?;
+            fs::create_dir_all(parent).map_err(|e| PluginError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
         }
-        let json = serde_json::to_string_pretty(state)?;
-        std::fs::write(&self.state_path, json)?;
+        starbase_utils::json::write_file(&self.state_path, state)
+            .map_err(|e| PluginError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
         Ok(())
     }
 }

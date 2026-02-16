@@ -1,7 +1,8 @@
 //! Plugin cache: manages locally stored WASM plugins, version tracking,
 //! and cleanup of old versions.
 
-use crate::error::PluginResult;
+use crate::error::{PluginError, PluginResult};
+use starbase_utils::fs;
 use std::path::{Path, PathBuf};
 
 /// Manages the local plugin cache at `~/.appz/plugins/`.
@@ -47,9 +48,9 @@ impl PluginCache {
         }
 
         let mut versions = Vec::new();
-        for entry in std::fs::read_dir(&plugin_dir)? {
-            let entry = entry?;
-            if entry.file_type()?.is_dir() {
+        let entries = fs::read_dir(&plugin_dir).map_err(|e| PluginError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+        for entry in entries {
+            if entry.file_type().map_err(|e| PluginError::Io(e))?.is_dir() {
                 if let Some(name) = entry.file_name().to_str() {
                     // Check that the version directory actually contains a plugin
                     let wasm_path = entry.path().join("plugin.wasm");
@@ -79,7 +80,7 @@ impl PluginCache {
                     plugin_name,
                     version
                 );
-                std::fs::remove_dir_all(&version_dir)?;
+                fs::remove_dir_all(&version_dir).map_err(|e| PluginError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
             }
         }
 
@@ -90,7 +91,7 @@ impl PluginCache {
     pub fn remove(&self, plugin_name: &str) -> PluginResult<()> {
         let plugin_dir = self.plugins_dir.join(plugin_name);
         if plugin_dir.exists() {
-            std::fs::remove_dir_all(&plugin_dir)?;
+            fs::remove_dir_all(&plugin_dir).map_err(|e| PluginError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
             tracing::debug!("Removed plugin '{}' from cache", plugin_name);
         }
         Ok(())
@@ -98,7 +99,7 @@ impl PluginCache {
 
     /// Ensure the plugins directory exists.
     pub fn ensure_dir(&self) -> PluginResult<()> {
-        std::fs::create_dir_all(&self.plugins_dir)?;
+        fs::create_dir_all(&self.plugins_dir).map_err(|e| PluginError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
         Ok(())
     }
 }

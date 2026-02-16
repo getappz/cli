@@ -65,8 +65,8 @@ pub async fn remove(session: AppzSession, name: String, yes: bool) -> AppResult 
 }
 
 fn find_skill_by_name(root: &std::path::Path, name: &str) -> Option<PathBuf> {
-    let entries = std::fs::read_dir(root).ok()?;
-    for entry in entries.flatten() {
+    let entries = starbase_fs::read_dir(root).ok()?;
+    for entry in entries {
         let path = entry.path();
         if path.is_dir() {
             let skill_file = path.join("SKILL.md");

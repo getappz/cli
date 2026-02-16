@@ -205,7 +205,8 @@ impl ScopedFs {
     /// Read a file's contents as raw bytes.
     pub fn read_bytes(&self, rel_path: impl AsRef<Path>) -> SandboxResult<Vec<u8>> {
         let abs = self.resolve_existing(&rel_path)?;
-        std::fs::read(&abs).map_err(SandboxError::Io)
+        starbase_fs::read_file_bytes(&abs)
+            .map_err(|e| SandboxError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))
     }
 
     /// Read multiple files in parallel.
@@ -355,6 +356,7 @@ impl ScopedFs {
     // ------------------------------------------------------------------
 
     /// Create a single directory (parent must exist).
+    /// Uses std::fs::create_dir: starbase_utils only has create_dir_all.
     pub fn create_dir(&self, rel_path: impl AsRef<Path>) -> SandboxResult<()> {
         let abs = self.resolve(&rel_path)?;
         std::fs::create_dir(&abs).map_err(SandboxError::Io)
@@ -376,9 +378,8 @@ impl ScopedFs {
             });
         }
 
-        let rd = std::fs::read_dir(&abs).map_err(SandboxError::Io)?;
-        // Collect raw entries first, then build DirEntry structs.
-        let raw: Vec<_> = rd.collect::<Result<Vec<_>, _>>().map_err(SandboxError::Io)?;
+        let raw = starbase_fs::read_dir(&abs)
+            .map_err(|e| SandboxError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
         let mut entries = Vec::with_capacity(raw.len());
         for entry in raw {
             let abs_path = entry.path();
@@ -476,8 +477,8 @@ impl ScopedFs {
             });
         }
 
-        let rd = std::fs::read_dir(&abs).map_err(SandboxError::Io)?;
-        let raw: Vec<_> = rd.collect::<Result<Vec<_>, _>>().map_err(SandboxError::Io)?;
+        let raw = starbase_fs::read_dir(&abs)
+            .map_err(|e| SandboxError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
         let mut entries = Vec::with_capacity(raw.len());
         for entry in raw {
             let abs_path = entry.path();
@@ -545,6 +546,7 @@ impl ScopedFs {
     /// Remove an empty directory.
     pub fn remove_dir(&self, rel_path: impl AsRef<Path>) -> SandboxResult<()> {
         let abs = self.resolve_existing(&rel_path)?;
+        // starbase_utils has remove_dir_all but not remove_dir; std::fs::remove_dir for empty dirs
         std::fs::remove_dir(&abs).map_err(SandboxError::Io)
     }
 
@@ -635,7 +637,8 @@ impl ScopedFs {
         if let Some(parent) = dst.parent() {
             starbase_fs::create_dir_all(parent)?;
         }
-        std::fs::rename(&src, &dst).map_err(SandboxError::Io)
+        starbase_fs::rename(&src, &dst)
+            .map_err(|e| SandboxError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))
     }
 
     /// Copy a file or directory tree from an external absolute path into the sandbox.
@@ -657,7 +660,8 @@ impl ScopedFs {
             if let Some(parent) = dst.parent() {
                 starbase_fs::create_dir_all(parent)?;
             }
-            std::fs::copy(src, dst).map_err(SandboxError::Io)?;
+            starbase_fs::copy_file(src, dst)
+                .map_err(|e| SandboxError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
             return Ok(());
         }
 
@@ -679,7 +683,11 @@ impl ScopedFs {
 
         let errors: Vec<SandboxError> = files
             .par_iter()
-            .filter_map(|(from, to)| std::fs::copy(from, to).map_err(SandboxError::Io).err())
+            .filter_map(|(from, to)| {
+            starbase_fs::copy_file(from, to)
+                .map_err(|e| SandboxError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))
+                .err()
+        })
             .collect();
 
         if let Some(first_err) = errors.into_iter().next() {
@@ -766,7 +774,8 @@ where
         if let Some(parent) = dst.parent() {
             starbase_fs::create_dir_all(parent)?;
         }
-        std::fs::copy(src, dst).map_err(SandboxError::Io)?;
+        starbase_fs::copy_file(src, dst)
+            .map_err(|e| SandboxError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
         if let Some(cb) = on_each {
             cb();
         }
@@ -791,7 +800,8 @@ where
     let errors: Vec<SandboxError> = files
         .par_iter()
         .filter_map(|(from, to)| {
-            let result = std::fs::copy(from, to).map_err(SandboxError::Io);
+            let result = starbase_fs::copy_file(from, to)
+                .map_err(|e| SandboxError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
             if let Some(cb) = on_each {
                 cb();
             }
@@ -815,8 +825,9 @@ fn collect_tree(
     files: &mut Vec<(PathBuf, PathBuf)>,
 ) -> SandboxResult<()> {
     dirs.push(dst.to_path_buf());
-    for entry in std::fs::read_dir(src).map_err(SandboxError::Io)? {
-        let entry = entry.map_err(SandboxError::Io)?;
+    let entries = starbase_fs::read_dir(src)
+        .map_err(|e| SandboxError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+    for entry in entries {
         let from = entry.path();
         let to = dst.join(entry.file_name());
         let ft = entry.file_type().map_err(SandboxError::Io)?;
@@ -839,8 +850,9 @@ fn collect_tree_external(
     dirs: &mut Vec<PathBuf>,
     files: &mut Vec<(PathBuf, PathBuf)>,
 ) -> SandboxResult<()> {
-    for entry in std::fs::read_dir(src).map_err(SandboxError::Io)? {
-        let entry = entry.map_err(SandboxError::Io)?;
+    let entries = starbase_fs::read_dir(src)
+        .map_err(|e| SandboxError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+    for entry in entries {
         let from = entry.path();
         let rel_suffix = from.strip_prefix(src).map_err(|_| {
             SandboxError::Other("template path outside source directory".to_string())

@@ -1,4 +1,5 @@
 use extism::{convert::Json, Manifest, Plugin, PluginBuilder, UserData, Wasm, PTR};
+use starbase_utils::fs;
 use miette::{IntoDiagnostic, Result};
 use sandbox::{ScopedFs, SandboxProvider};
 use std::collections::HashMap;
@@ -93,7 +94,7 @@ impl PluginManager {
         id: String,
         wasm_path: P,
     ) -> Result<()> {
-        let wasm_data = std::fs::read(wasm_path.as_ref()).into_diagnostic()?;
+        let wasm_data = fs::read_file_bytes(wasm_path.as_ref()).map_err(|e| miette::miette!("{}", e))?;
 
         let local_registry = Arc::new(Mutex::new(TaskRegistry::new()));
         let host_data = PluginHostData {
@@ -532,7 +533,7 @@ impl PluginRunner {
         wasm_path: &std::path::Path,
         plugin_name: &str,
     ) -> Result<()> {
-        let wasm_data = std::fs::read(wasm_path).into_diagnostic()?;
+        let wasm_data = fs::read_file_bytes(wasm_path).map_err(|e| miette::miette!("{}", e))?;
 
         // Validate header: reject WASM from other apps/plugins (plugin_id must match)
         plugin_manager::security::PluginSecurity::validate_header(&wasm_data, plugin_name)

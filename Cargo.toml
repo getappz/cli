@@ -121,7 +121,7 @@ chrono = { version = "0.4", features = ["serde"] }
 # Align starbase_utils 0.12 with starbase_archive (eliminates duplicate starbase_utils)
 starbase = "0.10"
 starbase_styles = "0.6"
-starbase_utils = { version = "0.12", features = ["json"] }
+starbase_utils = { version = "0.12", features = ["json", "glob"] }
 starbase_archive = { version = "0.12", features = ["zip-all"] }
 tempfile = "3.10"
 tokio-retry = "0.3"

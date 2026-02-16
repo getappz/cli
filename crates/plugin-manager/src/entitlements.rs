@@ -5,6 +5,7 @@
 use crate::error::{PluginError, PluginResult};
 use api::Client;
 use serde::{Deserialize, Serialize};
+use starbase_utils::fs;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -88,8 +89,7 @@ impl EntitlementChecker {
             return Ok(None);
         }
 
-        let data = std::fs::read_to_string(cache_path)?;
-        let cached: CachedEntitlements = match serde_json::from_str(&data) {
+        let cached: CachedEntitlements = match starbase_utils::json::read_file(cache_path) {
             Ok(c) => c,
             Err(_) => return Ok(None), // corrupt cache, re-fetch
         };
@@ -122,7 +122,7 @@ impl EntitlementChecker {
     /// Save entitlements to local cache.
     fn save_to_cache(cache_path: &Path, tiers: &[String]) -> PluginResult<()> {
         if let Some(parent) = cache_path.parent() {
-            std::fs::create_dir_all(parent)?;
+            fs::create_dir_all(parent).map_err(|e| PluginError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
         }
 
         let cached = CachedEntitlements {
@@ -133,8 +133,8 @@ impl EntitlementChecker {
             tiers: tiers.to_vec(),
         };
 
-        let data = serde_json::to_string_pretty(&cached)?;
-        std::fs::write(cache_path, data)?;
+        starbase_utils::json::write_file(cache_path, &cached)
+            .map_err(|e| PluginError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
         Ok(())
     }
 }

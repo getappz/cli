@@ -8,6 +8,7 @@
 
 use crate::error::{PluginError, PluginResult};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use starbase_utils::fs;
 use hmac::{Hmac, Mac};
 use rand::Rng;
 use sha2::Sha256;
@@ -67,8 +68,9 @@ impl PluginSecurity {
     pub fn verify_signature(wasm_path: &Path, plugin_name: &str) -> PluginResult<()> {
         let sig_path = wasm_path.with_extension("wasm.sig");
 
-        let wasm_bytes = std::fs::read(wasm_path)?;
-        let sig_bytes = std::fs::read(&sig_path).map_err(|_| PluginError::SignatureInvalid {
+        let wasm_bytes = fs::read_file_bytes(wasm_path)
+            .map_err(|e| PluginError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+        let sig_bytes = fs::read_file_bytes(&sig_path).map_err(|_| PluginError::SignatureInvalid {
             plugin: plugin_name.to_string(),
         })?;
 
@@ -103,7 +105,7 @@ impl PluginSecurity {
     ) -> PluginResult<()> {
         use sha2::Digest;
 
-        let wasm_bytes = std::fs::read(wasm_path)?;
+        let wasm_bytes = fs::read_file_bytes(wasm_path).map_err(|e| PluginError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
         let hash = Sha256::digest(&wasm_bytes);
         let actual = hex::encode(hash);
 

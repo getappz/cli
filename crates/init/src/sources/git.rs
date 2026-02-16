@@ -293,7 +293,7 @@ async fn try_download_archive(
         .unpack_from_ext()
         .map_err(|e| InitError::Archive(format!("Failed to extract: {:?}", e)))?;
 
-    let _ = std::fs::remove_file(&archive_file);
+    let _ = starbase_utils::fs::remove_file(&archive_file);
 
     // Find extracted dir (repo-branch for GitHub, project-ref for GitLab, etc.)
     let extracted_repo_dir = fs::read_dir(&extracted_dir)

@@ -188,8 +188,8 @@ fn link_skills_into_agent_dirs(
 fn create_skill_symlink(target: &Path, link_path: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::symlink;
     if link_path.exists() {
-        let _ = std::fs::remove_file(link_path);
-        let _ = std::fs::remove_dir_all(link_path);
+        let _ = starbase_fs::remove_file(link_path);
+        let _ = starbase_fs::remove_dir_all(link_path);
     }
     let target_canon = target.canonicalize().unwrap_or_else(|_| target.to_path_buf());
     symlink(target_canon, link_path)
@@ -199,8 +199,8 @@ fn create_skill_symlink(target: &Path, link_path: &Path) -> std::io::Result<()> 
 fn create_skill_symlink(target: &Path, link_path: &Path) -> std::io::Result<()> {
     use std::os::windows::fs::symlink_dir;
     if link_path.exists() {
-        let _ = std::fs::remove_file(link_path);
-        let _ = std::fs::remove_dir_all(link_path);
+        let _ = starbase_fs::remove_file(link_path);
+        let _ = starbase_fs::remove_dir_all(link_path);
     }
     let target_canon = target.canonicalize().unwrap_or_else(|_| target.to_path_buf());
     symlink_dir(target_canon, link_path)
@@ -270,10 +270,10 @@ fn find_skill_dirs(root: &Path) -> Vec<(String, PathBuf)> {
             results.push((name.to_string_lossy().to_string(), root.to_path_buf()));
         }
     }
-    let Ok(entries) = std::fs::read_dir(root) else {
+    let Ok(entries) = starbase_fs::read_dir(root) else {
         return results;
     };
-    for entry in entries.flatten() {
+    for entry in entries {
         let path = entry.path();
         if path.is_dir() {
             let skill_file = path.join("SKILL.md");
@@ -298,9 +298,9 @@ fn copy_skill_dir(src: &Path, dest: &Path) -> Result<(), miette::Report> {
     starbase_fs::create_dir_all(dest)
         .map_err(|e| miette::miette!("Failed to create directory: {}", e))?;
 
-    let entries = std::fs::read_dir(src)
+    let entries = starbase_fs::read_dir(src)
         .map_err(|e| miette::miette!("Failed to read source: {}", e))?;
-    for entry in entries.flatten() {
+    for entry in entries {
         let path = entry.path();
         let name = path.file_name().unwrap();
         let dest_path = dest.join(name);

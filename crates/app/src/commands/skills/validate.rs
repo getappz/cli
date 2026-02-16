@@ -7,6 +7,7 @@ use regex::Regex;
 use serde::Deserialize;
 use serde::Serialize;
 use starbase::AppResult;
+use starbase_utils::fs;
 use std::path::{Path, PathBuf};
 
 /// Result of validating a skill.
@@ -28,7 +29,7 @@ struct SkillFrontmatter {
 /// Validate a skill by path. Returns ValidationResult and the skill name for display.
 pub fn validate_skill_at_path(path: &Path) -> Result<(ValidationResult, String), miette::Report> {
     let (skill_file, skill_name) = resolve_skill_path(path)?;
-    let content = std::fs::read_to_string(&skill_file)
+    let content = fs::read_file(&skill_file)
         .map_err(|e| miette::miette!("Failed to read {}: {}", skill_file.display(), e))?;
     let (frontmatter, body) = parse_frontmatter_and_body(&content)?;
     let result = validate_skill(&frontmatter, &body);
@@ -172,15 +173,15 @@ fn collect_skill_paths(session: &AppzSession) -> Vec<(String, PathBuf)> {
 }
 
 fn collect_skills_from_dir(dir: &Path, out: &mut Vec<(String, PathBuf)>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
+    let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
-    for entry in entries.flatten() {
+    for entry in entries {
         let path = entry.path();
         if path.is_dir() {
             let skill_file = path.join("SKILL.md");
             if skill_file.exists() {
-                if let Ok(content) = std::fs::read_to_string(&skill_file) {
+                if let Ok(content) = fs::read_file(&skill_file) {
                     if let Ok((name, _)) = parse_name_desc(&content) {
                         out.push((name, path));
                     }
@@ -250,7 +251,7 @@ pub async fn validate(
         if !skill_file.exists() {
             continue;
         }
-        let content = match std::fs::read_to_string(&skill_file) {
+        let content = match fs::read_file(&skill_file) {
             Ok(c) => c,
             Err(_) => continue,
         };

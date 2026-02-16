@@ -6,6 +6,7 @@ use crate::session::AppzSession;
 use regex::RegexBuilder;
 use serde::Serialize;
 use starbase::AppResult;
+use starbase_utils::fs;
 use std::path::PathBuf;
 
 /// Risk indicator for a security pattern category.
@@ -363,15 +364,15 @@ fn collect_skill_paths(session: &AppzSession) -> Vec<(String, PathBuf)> {
 }
 
 fn collect_skills_from_dir(dir: &std::path::Path, out: &mut Vec<(String, PathBuf)>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
+    let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
-    for entry in entries.flatten() {
+    for entry in entries {
         let path = entry.path();
         if path.is_dir() {
             let skill_file = path.join("SKILL.md");
             if skill_file.exists() {
-                if let Ok(content) = std::fs::read_to_string(&skill_file) {
+                if let Ok(content) = fs::read_file(&skill_file) {
                     if let Ok(name) = parse_skill_name(&content) {
                         out.push((name, path));
                     }
@@ -481,7 +482,7 @@ pub async fn audit(
     };
     for (name, skill_dir) in &skills_to_audit {
         let skill_file = skill_dir.join("SKILL.md");
-        let content = match std::fs::read_to_string(&skill_file) {
+        let content = match fs::read_file(&skill_file) {
             Ok(c) => c,
             Err(_) => continue,
         };

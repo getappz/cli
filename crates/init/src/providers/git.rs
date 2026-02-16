@@ -51,21 +51,19 @@ impl InitProvider for GitProvider {
 pub(crate) fn detect_framework(project_path: &std::path::Path) -> InitResult<Option<String>> {
     let package_json = project_path.join("package.json");
     if package_json.exists() {
-        if let Ok(content) = std::fs::read_to_string(&package_json) {
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
-                let deps = json.get("dependencies").and_then(|d| d.as_object());
-                let framework_names = [
-                    ("astro", "Astro"),
-                    ("next", "Next.js"),
-                    ("vite", "Vite"),
-                    ("@sveltejs/kit", "SvelteKit"),
-                    ("nuxt", "Nuxt"),
-                    ("@remix-run/react", "Remix"),
-                ];
-                for (pkg, name) in framework_names {
-                    if deps.map(|d| d.contains_key(pkg)).unwrap_or(false) {
-                        return Ok(Some(name.to_string()));
-                    }
+        if let Ok(json) = starbase_utils::json::read_file::<serde_json::Value>(&package_json) {
+            let deps = json.get("dependencies").and_then(|d| d.as_object());
+            let framework_names = [
+                ("astro", "Astro"),
+                ("next", "Next.js"),
+                ("vite", "Vite"),
+                ("@sveltejs/kit", "SvelteKit"),
+                ("nuxt", "Nuxt"),
+                ("@remix-run/react", "Remix"),
+            ];
+            for (pkg, name) in framework_names {
+                if deps.map(|d| d.contains_key(pkg)).unwrap_or(false) {
+                    return Ok(Some(name.to_string()));
                 }
             }
         }

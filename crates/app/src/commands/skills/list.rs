@@ -3,6 +3,7 @@
 use crate::session::AppzSession;
 use serde::Deserialize;
 use starbase::AppResult;
+use starbase_utils::fs;
 use std::path::{Path, PathBuf};
 
 /// List skills from user global and project directories.
@@ -61,15 +62,15 @@ fn collect_skills_from_dir(
     scope: &'static str,
     out: &mut Vec<(String, String, PathBuf, &'static str)>,
 ) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
+    let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
-    for entry in entries.flatten() {
+    for entry in entries {
         let path = entry.path();
         if path.is_dir() {
             let skill_file = path.join("SKILL.md");
             if skill_file.exists() {
-                if let Ok(content) = std::fs::read_to_string(&skill_file) {
+                if let Ok(content) = fs::read_file(&skill_file) {
                     if let Ok((name, desc)) = parse_skill_frontmatter(&content) {
                         out.push((name, desc, path, scope));
                     }

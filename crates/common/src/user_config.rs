@@ -24,6 +24,7 @@
 //! max_attempts = 5
 //! ```
 
+use starbase_utils::{dirs, fs};
 use std::path::{Path, PathBuf};
 
 /// The directory name under the user's home.
@@ -54,7 +55,7 @@ pub fn read_user_config_raw() -> Option<serde_json::Value> {
         return None;
     }
 
-    let content = std::fs::read_to_string(&path).ok()?;
+    let content = fs::read_file(&path).ok()?;
     let toml_value: toml::Value = toml::from_str(&content).ok()?;
 
     // Convert TOML → JSON value for uniform merging.
@@ -126,7 +127,7 @@ pub fn ensure_user_appz_dir() -> std::io::Result<PathBuf> {
     let dir = user_appz_dir().ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::NotFound, "Could not determine home directory")
     })?;
-    std::fs::create_dir_all(&dir)?;
+    fs::create_dir_all(&dir).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
     Ok(dir)
 }
 
@@ -167,14 +168,9 @@ pub fn list_user_appz_dir(subdir: &str) -> Vec<PathBuf> {
     if !dir.is_dir() {
         return Vec::new();
     }
-    std::fs::read_dir(dir)
+    fs::read_dir(dir)
         .ok()
-        .map(|entries| {
-            entries
-                .filter_map(|e| e.ok())
-                .map(|e| e.path())
-                .collect()
-        })
+        .map(|entries| entries.into_iter().map(|e| e.path()).collect())
         .unwrap_or_default()
 }
 
@@ -184,7 +180,7 @@ pub fn read_layered_file(project_dir: &Path, relative: &str) -> Option<String> {
     // 1. Project-level.
     let project_file = project_dir.join(".appz").join(relative);
     if project_file.exists() {
-        if let Ok(content) = std::fs::read_to_string(&project_file) {
+        if let Ok(content) = fs::read_file(&project_file) {
             return Some(content);
         }
     }
@@ -192,7 +188,7 @@ pub fn read_layered_file(project_dir: &Path, relative: &str) -> Option<String> {
     // 2. User-level.
     if let Some(user_file) = user_appz_file(relative) {
         if user_file.exists() {
-            if let Ok(content) = std::fs::read_to_string(&user_file) {
+            if let Ok(content) = fs::read_file(&user_file) {
                 return Some(content);
             }
         }

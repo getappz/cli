@@ -45,7 +45,7 @@ pub async fn run(
     }
 
     if project_path.exists() && force {
-        std::fs::remove_dir_all(&project_path)
+        starbase_utils::fs::remove_dir_all(&project_path)
             .map_err(|e| InitError::FsError(format!("Failed to remove existing dir: {}", e)))?;
     }
 

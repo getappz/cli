@@ -5,6 +5,7 @@ use crate::error::{PluginError, PluginResult};
 use crate::manifest::PluginEntry;
 use crate::security::PluginSecurity;
 use grab::{download_to_path, DownloadOptions};
+use starbase_utils::fs;
 use reqwest::header::{HeaderMap, HeaderValue, REFERER, USER_AGENT};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -38,7 +39,7 @@ impl PluginDownloader {
     /// Returns the path to the downloaded WASM file.
     pub async fn download(&self, plugin_name: &str, entry: &PluginEntry) -> PluginResult<PathBuf> {
         let plugin_dir = self.plugins_dir.join(plugin_name).join(&entry.version);
-        std::fs::create_dir_all(&plugin_dir)?;
+        fs::create_dir_all(&plugin_dir).map_err(|e| PluginError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
 
         let wasm_path = plugin_dir.join("plugin.wasm");
         let sig_path = plugin_dir.join("plugin.wasm.sig");

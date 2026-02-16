@@ -1,5 +1,6 @@
 //! Environment variable and platform detection utilities.
 
+use starbase_utils::dirs;
 use std::env;
 
 /// Get an environment variable or return a default value
@@ -69,15 +70,15 @@ pub fn home_dir() -> Option<std::path::PathBuf> {
 
 /// Get the cache directory for the application
 pub fn cache_dir() -> Option<std::path::PathBuf> {
-    dirs::cache_dir().map(|p| p.join(crate::consts::APP_NAME))
+    dirs::cache_dir().map(|p: std::path::PathBuf| p.join(crate::consts::APP_NAME))
 }
 
 /// Get the config directory for the application
 pub fn config_dir() -> Option<std::path::PathBuf> {
-    dirs::config_dir().map(|p| p.join(crate::consts::CONFIG_DIRNAME))
+    dirs::config_dir().map(|p: std::path::PathBuf| p.join(crate::consts::CONFIG_DIRNAME))
 }
 
 /// Get the data directory for the application
 pub fn data_dir() -> Option<std::path::PathBuf> {
-    dirs::data_dir().map(|p| p.join(crate::consts::APP_NAME))
+    dirs::data_dir().map(|p: std::path::PathBuf| p.join(crate::consts::APP_NAME))
 }

@@ -6,8 +6,8 @@ license.workspace = true
 publish = false
 
 [dependencies]
-dirs = "6.0"
 libc = "0.2"
+starbase_utils = { workspace = true }
 miette = { workspace = true }
 relative-path = { version = "2.0", features = ["serde"] }
 regex = { workspace = true }

@@ -2,6 +2,7 @@
 name = "ssg-migrator-plugin"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 publish = false
 description = "WASM plugin entry point for the SSG Migrator"
 

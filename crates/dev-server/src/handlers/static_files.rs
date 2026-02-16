@@ -35,8 +35,8 @@ pub async fn handle_static_file(
             if let Some(fallback_path) = try_html_fallback(root_dir, request_path).await? {
                 return serve_file(&fallback_path).await;
             }
-            // Try SPA fallback
-            if spa_fallback {
+            // Try SPA fallback (only for route-like paths, not missing assets)
+            if spa_fallback && is_spa_navigation_path(request_path) {
                 return handle_spa_fallback(root_dir).await;
             }
             return Ok(not_found());
@@ -68,6 +68,10 @@ pub async fn handle_static_file(
         let index_path = path.join("index.html");
         if fs::metadata(&index_path).await.is_ok() {
             return serve_file(&index_path).await;
+        }
+        // SPA fallback: dir exists but no index.html (e.g. /dashboard with client-side routing)
+        if spa_fallback && is_spa_navigation_path(request_path) {
+            return handle_spa_fallback(root_dir).await;
         }
         return Ok(not_found());
     }
@@ -244,6 +248,12 @@ fn create_redirect(location: &str) -> Response<Full<Bytes>> {
         )
         .body(Full::new(Bytes::new()))
         .unwrap()
+}
+
+/// Check if path looks like a SPA route (no file extension) vs a static asset request
+fn is_spa_navigation_path(path: &str) -> bool {
+    let path = path.trim_start_matches('/');
+    !path.is_empty() && !path.contains('.')
 }
 
 /// Try HTML fallback logic: try demo.html first, then demo/index.html

@@ -3,7 +3,7 @@ name = "mcp-server"
 version = "0.1.0"
 edition = "2021"
 description = "MCP server exposing appz CLI commands as tools"
-license = "MIT"
+license.workspace = true
 
 [lib]
 name = "mcp_server"

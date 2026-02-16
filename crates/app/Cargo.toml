@@ -2,6 +2,7 @@
 name = "app"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 publish = false
 
 [dependencies]
@@ -16,7 +17,7 @@ shell-words = { workspace = true }
 starbase_utils = { workspace = true }
 chrono = { workspace = true }
 regex = { workspace = true }
-itertools = "0.13"
+itertools = "0.14"
 walkdir = "2"
 task = { path = "../task" }
 command = { path = "../command" }
@@ -29,9 +30,9 @@ futures = { workspace = true }
 extism = { workspace = true }
 thiserror = { workspace = true }
 reqwest = { workspace = true, features = ["json", "gzip", "zstd", "blocking"] }
-ssh = { package = "ssh-rs", workspace = true }
-starbase = "0.10"
-starbase_styles = "0.6"
+ssh = { workspace = true }
+starbase = { workspace = true }
+starbase_styles = { workspace = true }
 starbase_events = "0.7"
 starbase_shell = "0.10"
 tracing = "0.1"

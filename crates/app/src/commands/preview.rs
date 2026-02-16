@@ -31,6 +31,13 @@ pub async fn preview(session: AppzSession) -> AppResult {
         false
     };
 
+    let spa_fallback =
+        if let crate::app::Commands::Preview { spa_fallback, .. } = &session.cli.command {
+            *spa_fallback
+        } else {
+            false
+        };
+
     // Use the working directory from session (already respects --cwd)
     let project_path = session.working_dir.clone();
 
@@ -141,7 +148,7 @@ pub async fn preview(session: AppzSession) -> AppResult {
         upload_dir: None,
         cors: true,
         directory_listing: false,
-        spa_fallback: true,
+        spa_fallback,
     };
 
     println!("Starting preview server on http://127.0.0.1:{}", port);

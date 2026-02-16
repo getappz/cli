@@ -2,6 +2,7 @@
 name = "wp2md-plugin"
 version = "0.1.2"
 edition = "2021"
+license.workspace = true
 publish = false
 description = "WASM plugin entry point for the WordPress-to-Markdown converter"
 

@@ -165,6 +165,9 @@ pub enum Commands {
         /// Enable form data processing
         #[arg(long)]
         enable_forms: bool,
+        /// Enable SPA mode: serve index.html for route-like 404s
+        #[arg(long)]
+        spa_fallback: bool,
     },
     /// Build the project (install dependencies and build)
     Build,
@@ -180,6 +183,9 @@ pub enum Commands {
         /// Share the preview server with a public URL using cloudflared
         #[arg(long)]
         share: bool,
+        /// Enable SPA mode: serve index.html for route-like 404s
+        #[arg(long)]
+        spa_fallback: bool,
     },
     /// List all deployments
     Ls,

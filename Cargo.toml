@@ -54,8 +54,8 @@ api = { path = "crates/api" }
 clap = { workspace = true }
 miette = { workspace = true }
 serde_json = { workspace = true }
-starbase = "0.10"
-starbase_styles = "0.6"
+starbase = { workspace = true }
+starbase_styles = { workspace = true }
 starbase_utils = { workspace = true }
 tokio = { workspace = true }
 tracing = "0.1"
@@ -108,32 +108,36 @@ futures-util = "0.3"
 
 # CLI and UI
 clap = { version = "4.5", features = ["derive", "env"] }
-inquire = "0.7"
-indicatif = "0.17"
+inquire = "0.9"
+indicatif = "0.18"
 atty = "0.2"
 shell-words = "1.1"
-which = "6.0"
+which = "8.0"
 
 # Utilities
 regex = "1.10"
-rustc-hash = "1.1"
+rustc-hash = "2.1"
 chrono = { version = "0.4", features = ["serde"] }
-starbase_utils = { version = "0.10", features = ["json"] }
-starbase_archive = { version = "0.12.0", features = ["zip-all"] }
+# Align starbase_utils 0.12 with starbase_archive (eliminates duplicate starbase_utils)
+starbase = "0.10"
+starbase_styles = "0.6"
+starbase_utils = { version = "0.12", features = ["json"] }
+starbase_archive = { version = "0.12", features = ["zip-all"] }
 tempfile = "3.10"
 tokio-retry = "0.3"
 url = "2.5"
 urlencoding = "2.1"
 
 # HTTP and networking
-reqwest = { version = "0.12", features = ["json", "gzip", "zstd", "blocking", "stream"] }
+reqwest = { version = "0.13", features = ["json", "gzip", "zstd", "blocking", "stream"] }
+reqwest-middleware = "0.5"
 hyper = "1.3"
 hyper-util = { version = "0.1", features = ["full"] }
 http-body-util = "0.1"
-notify = "6.1"
+notify = "8.2"
 mime_guess = "2.0"
 multer = "3.0"
-tokio-tungstenite = "0.24"
+tokio-tungstenite = "0.28"
 
 # WASM and plugins
 extism = "1.0"
@@ -148,7 +152,7 @@ rand = "0.8"
 toml = "0.8"
 
 # Concurrency
-scc = "2.1"
+scc = "3.6"
 
 # Self-update
 self_update = { version = "0.42", default-features = false, features = ["rustls", "signatures"] }

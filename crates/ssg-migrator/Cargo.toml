@@ -2,6 +2,7 @@
 name = "ssg-migrator"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 publish = false
 
 [features]
@@ -31,6 +32,6 @@ biome_rowan = { path = "../../../code-ref/biome/crates/biome_rowan" }
 
 # Native-only dependencies
 walkdir = { version = "2", optional = true }
-git2 = { version = "0.19", optional = true }
-ast-grep-core = { version = "0.39.7", optional = true }
-ast-grep-language = { version = "0.39.7", optional = true }
+git2 = { version = "0.20", optional = true }
+ast-grep-core = { version = "0.40", optional = true }
+ast-grep-language = { version = "0.40", optional = true }

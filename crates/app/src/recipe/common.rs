@@ -36,6 +36,7 @@ pub fn depends_on_many(task: Task, deps: &[&str]) -> Task {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
     #[test]
     fn adds_all_dependencies_in_order() {
         let t = depends_on_many(

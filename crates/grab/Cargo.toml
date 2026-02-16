@@ -2,7 +2,7 @@
 name = "grab"
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
+license.workspace = true
 description = "Async file download with optional parallel chunk downloads and progress"
 
 [dependencies]

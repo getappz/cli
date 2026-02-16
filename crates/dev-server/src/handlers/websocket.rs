@@ -68,7 +68,7 @@ async fn handle_websocket_connection(
     // Send initial connection message
     let _ = ws_sender
         .send(Message::Text(
-            r#"{"type":"connected","message":"Hot reload enabled"}"#.to_string(),
+            r#"{"type":"connected","message":"Hot reload enabled"}"#.to_string().into(),
         ))
         .await;
 
@@ -123,7 +123,7 @@ async fn handle_websocket_connection(
                             }
                         };
 
-                        if ws_sender.send(Message::Text(message)).await.is_err() {
+                        if ws_sender.send(Message::Text(message.into())).await.is_err() {
                             debug!("WebSocket client disconnected");
                             break;
                         }

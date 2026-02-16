@@ -524,12 +524,19 @@ impl PluginRunner {
     }
 
     /// Load a verified plugin WASM binary, perform handshake, and get plugin info.
+    ///
+    /// Defense in depth: validates the WASM header so that even direct callers
+    /// (e.g. APPZ_DEV_PLUGIN) cannot load WASM from other apps/plugins.
     pub fn load_verified_plugin(
         &mut self,
         wasm_path: &std::path::Path,
         plugin_name: &str,
     ) -> Result<()> {
         let wasm_data = std::fs::read(wasm_path).into_diagnostic()?;
+
+        // Validate header: reject WASM from other apps/plugins (plugin_id must match)
+        plugin_manager::security::PluginSecurity::validate_header(&wasm_data, plugin_name)
+            .map_err(|e| miette::miette!("{}", e))?;
 
         // Create host data with sandbox fields
         let host_data = PluginHostData {

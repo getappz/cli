@@ -332,6 +332,57 @@ impl PluginSecurity {
     }
 }
 
+/// Build minimal WASM bytes with appz_header for integration tests.
+/// Used to verify plugin isolation: attackers cannot load WASM from other apps.
+#[doc(hidden)]
+pub fn build_test_wasm_with_header(plugin_id: &str, min_cli_version: &str) -> Vec<u8> {
+    let magic = APPZ_PLUGIN_MAGIC;
+    let plugin_id_bytes = plugin_id.as_bytes();
+    let min_ver_bytes = min_cli_version.as_bytes();
+
+    let mut payload = Vec::new();
+    payload.extend_from_slice(magic);
+    payload.extend_from_slice(&(plugin_id_bytes.len() as u16).to_be_bytes());
+    payload.extend_from_slice(plugin_id_bytes);
+    payload.extend_from_slice(&(min_ver_bytes.len() as u16).to_be_bytes());
+    payload.extend_from_slice(min_ver_bytes);
+
+    let section_name = b"appz_header";
+    let mut section_content = Vec::new();
+    section_content.extend_from_slice(&encode_leb128(section_name.len() as u64));
+    section_content.extend_from_slice(section_name);
+    section_content.extend_from_slice(&payload);
+
+    let section_size = section_content.len();
+    let mut custom_section = Vec::new();
+    custom_section.push(0); // section_id for custom section
+    custom_section.extend_from_slice(&encode_leb128(section_size as u64));
+    custom_section.extend_from_slice(&section_content);
+
+    let mut wasm = Vec::new();
+    wasm.extend_from_slice(&[0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00]); // WASM magic + version
+    wasm.extend_from_slice(&custom_section);
+
+    wasm
+}
+
+/// Encode an unsigned integer as LEB128. Returns bytes.
+fn encode_leb128(mut n: u64) -> Vec<u8> {
+    let mut out = Vec::new();
+    loop {
+        let mut byte = (n & 0x7F) as u8;
+        n >>= 7;
+        if n != 0 {
+            byte |= 0x80;
+        }
+        out.push(byte);
+        if n == 0 {
+            break;
+        }
+    }
+    out
+}
+
 /// Read a LEB128-encoded unsigned integer. Returns (value, bytes_consumed).
 fn read_leb128(bytes: &[u8]) -> Option<(u64, usize)> {
     let mut result: u64 = 0;
@@ -351,7 +402,97 @@ fn read_leb128(bytes: &[u8]) -> Option<(u64, usize)> {
 
 #[cfg(test)]
 mod tests {
+    use super::{build_test_wasm_with_header as build_wasm_with_appz_header, *};
+
     use super::*;
+
+    /// Attack simulation: loading WASM from another app (different plugin_id)
+    /// must be rejected. Hackers might try to substitute check.wasm when
+    /// running migrate, or load arbitrary third-party WASM.
+    #[test]
+    fn test_validate_header_rejects_wrong_plugin_id() {
+        // WASM claims to be "evil-app" / "other-product"
+        let wasm = build_wasm_with_appz_header("evil-app", "0.1.0");
+
+        let result = PluginSecurity::validate_header(&wasm, "ssg-migrator");
+        assert!(
+            result.is_err(),
+            "Must reject WASM from other apps - plugin_id mismatch"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, PluginError::HeaderInvalid { .. }),
+            "Expected HeaderInvalid, got {:?}",
+            err
+        );
+    }
+
+    /// Attack simulation: loading one appz plugin while pretending to run another
+    #[test]
+    fn test_validate_header_rejects_plugin_swap() {
+        // WASM is check plugin, but attacker claims it's ssg-migrator
+        let wasm = build_wasm_with_appz_header("check", "0.1.0");
+
+        let result = PluginSecurity::validate_header(&wasm, "ssg-migrator");
+        assert!(
+            result.is_err(),
+            "Must reject plugin swap - cannot use check WASM for migrate command"
+        );
+    }
+
+    /// Attack simulation: arbitrary WASM with no appz header (e.g. from npm, other product)
+    #[test]
+    fn test_validate_header_rejects_wasm_without_appz_header() {
+        // Minimal valid WASM - no custom section at all
+        let wasm: Vec<u8> = vec![0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00];
+
+        let result = PluginSecurity::validate_header(&wasm, "ssg-migrator");
+        assert!(
+            result.is_err(),
+            "Must reject arbitrary WASM without appz header"
+        );
+    }
+
+    /// Attack simulation: WASM with custom section but wrong magic (forged header)
+    #[test]
+    fn test_validate_header_rejects_wrong_magic() {
+        // Build section with wrong magic - parse_appz_header returns None
+        let section_name = b"appz_header";
+        let wrong_payload: Vec<u8> = vec![
+            b'W', b'R', b'O', b'N', b'G', b'_', b'M', b'A', b'G', b'I', b'C', b'_', b'V', b'1',
+            // rest doesn't matter - fails at magic check
+        ];
+
+        let mut section_content = Vec::new();
+        section_content.extend_from_slice(&encode_leb128(section_name.len() as u64));
+        section_content.extend_from_slice(section_name);
+        section_content.extend_from_slice(&wrong_payload);
+
+        let mut wasm = Vec::new();
+        wasm.extend_from_slice(&[0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00]);
+        wasm.push(0);
+        wasm.extend_from_slice(&encode_leb128(section_content.len() as u64));
+        wasm.extend_from_slice(&section_content);
+
+        let result = PluginSecurity::validate_header(&wasm, "ssg-migrator");
+        assert!(
+            result.is_err(),
+            "Must reject WASM with forged/non-appz header"
+        );
+    }
+
+    /// Legitimate case: correct plugin_id matches expected
+    #[test]
+    fn test_validate_header_accepts_matching_plugin() {
+        let wasm = build_wasm_with_appz_header("ssg-migrator", "0.1.0");
+
+        let result = PluginSecurity::validate_header(&wasm, "ssg-migrator");
+        assert!(
+            result.is_ok(),
+            "Must accept valid appz plugin with matching ID: {:?}",
+            result
+        );
+    }
 
     #[test]
     fn test_handshake_roundtrip() {

@@ -19,7 +19,7 @@ mod systems;
 mod templates;
 mod tunnel;
 mod utils;
-mod wasm;
+pub mod wasm;
 
 pub use app::*;
 pub use app_error::*;

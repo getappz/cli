@@ -36,6 +36,13 @@ pub async fn dev_server(session: AppzSession) -> AppResult {
             false
         };
 
+    let spa_fallback =
+        if let crate::app::Commands::DevServer { spa_fallback, .. } = &session.cli.command {
+            *spa_fallback
+        } else {
+            false
+        };
+
     // Check if path exists
     if !dir.exists() {
         return Err(miette::miette!("Path does not exist: {}", dir.display()));
@@ -58,7 +65,7 @@ pub async fn dev_server(session: AppzSession) -> AppResult {
         upload_dir: None,
         cors: true,
         directory_listing: false,
-        spa_fallback: true,
+        spa_fallback,
     };
 
     println!("Starting dev server on http://127.0.0.1:{}", port);
@@ -71,6 +78,9 @@ pub async fn dev_server(session: AppzSession) -> AppResult {
     }
     if enable_forms {
         println!("Form data processing enabled");
+    }
+    if spa_fallback {
+        println!("SPA fallback enabled");
     }
 
     // Create and start the server

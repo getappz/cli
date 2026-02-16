@@ -2,6 +2,7 @@
 name = "site-plugin"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 publish = false
 description = "WASM plugin for AI-powered website creation, redesign, and cloning"
 

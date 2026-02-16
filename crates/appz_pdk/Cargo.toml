@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 authors = ["saasctl contributors"]
 description = "Plugin Development Kit for saasctl WASM plugins"
-license = "MIT"
+license.workspace = true
 repository = "https://github.com/saasctl/saasctl"
 
 [lib]

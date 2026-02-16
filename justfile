@@ -56,7 +56,12 @@ lint-fix:
 # Find unused dependencies across the workspace.
 # Run `cargo install cargo-machete` first if not installed.
 machete:
-	cargo machete --with-metadata 
+	cargo machete --with-metadata
+
+# Find duplicate crate versions. Run `cargo install cargo-deny` for full checks.
+cargo-dedupe:
+	cargo tree --duplicates
+	cargo deny check bans 2>/dev/null || true
 
 # Pre-commit hook
 install-pre-commit:

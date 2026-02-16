@@ -2,7 +2,7 @@
 name = "init"
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
+license.workspace = true
 description = "Project initialization from git, templates, and framework create commands"
 
 [dependencies]

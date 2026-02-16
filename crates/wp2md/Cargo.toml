@@ -2,6 +2,7 @@
 name = "wp2md"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 publish = false
 description = "Convert WordPress WXR export XML to Markdown files"
 
@@ -18,8 +19,8 @@ regex = { workspace = true }
 chrono = { workspace = true }
 url = { workspace = true }
 urlencoding = { workspace = true }
-quick-xml = { version = "0.37", features = ["serde", "serialize"] }
-htmd = "0.1"
+quick-xml = { version = "0.39", features = ["serde", "serialize"] }
+htmd = "0.5"
 
 # Native-only dependencies
 reqwest = { workspace = true, optional = true }

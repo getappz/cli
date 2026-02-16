@@ -10,7 +10,9 @@ init:
 build:
 	cargo build -p cli
 	sudo cp ./target/debug/appz ~/.local/bin/appz
-
+build-rel:
+	cargo build -p cli --release
+	sudo cp ./target/release/appz ~/.local/bin/appz
 build-pageflare:
 	cargo build -p pageflare
 	sudo cp ./target/debug/pageflare ~/.local/bin/pageflare

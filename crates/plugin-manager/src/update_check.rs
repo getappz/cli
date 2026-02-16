@@ -81,7 +81,7 @@ impl PluginUpdateChecker {
         if let Some(parent) = self.state_path.parent() {
             fs::create_dir_all(parent).map_err(|e| PluginError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
         }
-        starbase_utils::json::write_file(&self.state_path, state)
+        starbase_utils::json::write_file(&self.state_path, state, true)
             .map_err(|e| PluginError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
         Ok(())
     }

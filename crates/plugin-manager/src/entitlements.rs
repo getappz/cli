@@ -133,7 +133,7 @@ impl EntitlementChecker {
             tiers: tiers.to_vec(),
         };
 
-        starbase_utils::json::write_file(cache_path, &cached)
+        starbase_utils::json::write_file(cache_path, &cached, true)
             .map_err(|e| PluginError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
         Ok(())
     }

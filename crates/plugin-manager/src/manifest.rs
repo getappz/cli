@@ -192,7 +192,7 @@ impl PluginManifest {
             manifest: manifest.clone(),
         };
 
-        starbase_utils::json::write_file(cache_path, &cached)
+        starbase_utils::json::write_file(cache_path, &cached, true)
             .map_err(|e| PluginError::ManifestError { reason: e.to_string() })?;
         Ok(())
     }

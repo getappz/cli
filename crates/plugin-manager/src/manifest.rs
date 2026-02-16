@@ -4,6 +4,7 @@
 //! `~/.appz/plugins/manifest.json`.
 
 use crate::error::{PluginError, PluginResult};
+use reqwest::header::{HeaderValue, REFERER};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -12,7 +13,7 @@ use std::path::{Path, PathBuf};
 const MANIFEST_CACHE_TTL_SECS: u64 = 3600; // 1 hour
 
 /// Default CDN URL for the plugin manifest.
-const DEFAULT_MANIFEST_URL: &str = "https://cdn.appz.dev/plugins/v1/plugins.json";
+const DEFAULT_MANIFEST_URL: &str = "https://get.appz.dev/plugins/plugins.json";
 
 /// Top-level manifest structure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,18 +106,67 @@ impl PluginManifest {
 
     /// Fetch manifest from a remote URL.
     async fn fetch_from_url(url: &str) -> PluginResult<Self> {
-        let response = reqwest::get(url).await.map_err(|e| PluginError::ManifestError {
+        let client = reqwest::Client::builder()
+            .user_agent(
+                HeaderValue::from_static("Mozilla/5.0 (compatible; Appz-CLI/0.1.0; +https://appz.dev)")
+            )
+            .default_headers({
+                let mut h = reqwest::header::HeaderMap::new();
+                h.insert(REFERER, HeaderValue::from_static("https://appz.dev/"));
+                h
+            })
+            .build()
+            .map_err(|e| PluginError::ManifestError {
+                reason: format!("Failed to build HTTP client: {}", e),
+            })?;
+
+        let response = client.get(url).send().await.map_err(|e| PluginError::ManifestError {
             reason: format!("Failed to fetch manifest from {}: {}", url, e),
         })?;
 
         if !response.status().is_success() {
-            return Err(PluginError::ManifestError {
-                reason: format!(
-                    "Manifest fetch returned HTTP {}: {}",
-                    response.status().as_u16(),
+            let status = response.status();
+            let headers: Vec<_> = response
+                .headers()
+                .iter()
+                .map(|(k, v)| format!("  {}: {:?}", k.as_str(), v.to_str().unwrap_or("(binary)")))
+                .collect();
+            let cf_challenge = response
+                .headers()
+                .get("cf-mitigated")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s == "challenge")
+                .unwrap_or(false);
+            let body = response.text().await.unwrap_or_else(|_| "(failed to read body)".to_string());
+            let cf_challenge = cf_challenge || body.contains("Just a moment");
+
+            let debug = format!(
+                "HTTP {} {}\nHeaders:\n{}\nBody:\n{}",
+                status.as_u16(),
+                url,
+                headers.join("\n"),
+                if body.len() > 500 {
+                    format!("{}... (truncated)", &body[..500])
+                } else {
+                    body
+                }
+            );
+            eprintln!("{}", debug);
+
+            let reason = if cf_challenge {
+                format!(
+                    "Manifest fetch returned HTTP {}: {}. \
+                    Cloudflare is blocking this request with a bot challenge. \
+                    Configure Cloudflare (Security > WAF) to allow User-Agent containing \"Appz-CLI\", \
+                    or disable Bot Fight Mode for get.appz.dev.",
+                    status.as_u16(),
                     url
-                ),
-            });
+                )
+            } else {
+                format!("Manifest fetch returned HTTP {}: {}", status.as_u16(), url)
+            };
+
+            return Err(PluginError::ManifestError { reason });
         }
 
         let manifest: PluginManifest =

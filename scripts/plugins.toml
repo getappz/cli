@@ -4,7 +4,7 @@
 # wasm_opt = true   # Run Binaryen wasm-opt for smaller output (default). Set false if not installed.
 #                   # Or use: APPZ_SKIP_WASM_OPT=1 or --no-wasm-opt
 
-cdn_base_url = "https://cdn.appz.dev/plugins/v1"
+cdn_base_url = "https://get.appz.dev/plugins"
 
 # S3/R2 configuration (optional - use env vars for CI)
 # s3_bucket = "appz-plugins"

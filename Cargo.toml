@@ -79,7 +79,7 @@ gen = ["app/gen"]
 self_update = ["app/self_update"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "MIT"
 authors = ["Appz Contributors"]

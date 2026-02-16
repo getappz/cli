@@ -5,8 +5,20 @@ use crate::error::{PluginError, PluginResult};
 use crate::manifest::PluginEntry;
 use crate::security::PluginSecurity;
 use grab::{download_to_path, DownloadOptions};
+use reqwest::header::{HeaderMap, HeaderValue, REFERER, USER_AGENT};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+/// HTTP headers for CDN requests (User-Agent, Referer) to avoid Cloudflare blocking.
+fn cdn_headers() -> HeaderMap {
+    let mut h = HeaderMap::new();
+    h.insert(
+        USER_AGENT,
+        HeaderValue::from_static("Mozilla/5.0 (compatible; Appz-CLI/0.1.0; +https://appz.dev)"),
+    );
+    h.insert(REFERER, HeaderValue::from_static("https://appz.dev/"));
+    h
+}
 
 /// Downloads plugin WASM binaries from CDN and stores them locally.
 pub struct PluginDownloader {
@@ -40,12 +52,12 @@ impl PluginDownloader {
 
         let options = DownloadOptions {
             timeout: Duration::from_secs(120),
-            user_agent: "appz-cli".to_string(),
+            user_agent: "Mozilla/5.0 (compatible; Appz-CLI/0.1.0; +https://appz.dev)".to_string(),
             parallel_threshold_bytes: 5 * 1024 * 1024,
             max_concurrent_chunks: 4,
             chunk_size: 1024 * 1024,
             resume: false,
-            headers: None,
+            headers: Some(cdn_headers()),
         };
 
         download_to_path(&entry.wasm_url, &wasm_path, options.clone(), None).await.map_err(

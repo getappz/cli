@@ -47,7 +47,7 @@ pub struct Config {
     /// Plugins to build
     #[serde(default)]
     pub plugins: Vec<PluginDef>,
-    /// CDN base URL (e.g. https://cdn.appz.dev/plugins/v1)
+    /// CDN base URL (e.g. https://get.appz.dev/plugins)
     #[serde(default = "default_cdn_base")]
     pub cdn_base_url: String,
     /// S3/R2 bucket for upload (when using publish)
@@ -65,8 +65,11 @@ fn default_wasm_opt() -> bool {
     true
 }
 
+/// R2/S3 key prefix for all plugin files (e.g. plugins/check/0.1.0/plugin.wasm)
+const PLUGINS_PREFIX: &str = "plugins/";
+
 fn default_cdn_base() -> String {
-    "https://get.appz.dev/plugins/v1".to_string()
+    "https://get.appz.dev/plugins".to_string()
 }
 
 impl Default for Config {
@@ -344,18 +347,70 @@ pub async fn release(
 }
 
 fn run_version_bump(bump_type: &str) -> Result<()> {
+    use semver::Version;
+
     let root = find_workspace_root()?;
-    let status = Command::new("cargo")
-        .args(["set-version", "--bump", bump_type, "-p", "appz"])
-        .current_dir(&root)
-        .status()
-        .into_diagnostic()?;
-    if !status.success() {
-        return Err(miette::miette!(
-            "Version bump failed. Install cargo set-version: cargo install cargo-set-version"
-        ));
+    let cargo_path = root.join("Cargo.toml");
+    let content = std::fs::read_to_string(&cargo_path).into_diagnostic()?;
+
+    let current = get_version()?;
+    let mut ver = Version::parse(&current)
+        .into_diagnostic()
+        .context("Failed to parse workspace version")?;
+
+    match bump_type {
+        "patch" => {
+            ver.patch += 1;
+            ver.pre = semver::Prerelease::EMPTY;
+            ver.build = semver::BuildMetadata::EMPTY;
+        }
+        "minor" => {
+            ver.minor += 1;
+            ver.patch = 0;
+            ver.pre = semver::Prerelease::EMPTY;
+            ver.build = semver::BuildMetadata::EMPTY;
+        }
+        "major" => {
+            ver.major += 1;
+            ver.minor = 0;
+            ver.patch = 0;
+            ver.pre = semver::Prerelease::EMPTY;
+            ver.build = semver::BuildMetadata::EMPTY;
+        }
+        _ => {
+            return Err(miette::miette!("Invalid bump type: {} (use patch, minor, or major)", bump_type));
+        }
     }
-    println!("Bumped version ({})", bump_type);
+
+    let new_version = ver.to_string();
+
+    // Replace version in [workspace.package] section only
+    let mut in_workspace_package = false;
+    let new_content: String = content
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim();
+            if trimmed == "[workspace.package]" {
+                in_workspace_package = true;
+            } else if trimmed.starts_with('[') {
+                in_workspace_package = false;
+            }
+
+            let should_replace = in_workspace_package
+                && trimmed.starts_with("version = ")
+                && !trimmed.contains("workspace");
+
+            if should_replace {
+                let quote = if trimmed.contains('"') { '"' } else { '\'' };
+                format!("version = {quote}{new_version}{quote}\n")
+            } else {
+                format!("{line}\n")
+            }
+        })
+        .collect();
+
+    std::fs::write(&cargo_path, new_content).into_diagnostic()?;
+    println!("Bumped version {} -> {} ({})", current, new_version, bump_type);
     Ok(())
 }
 
@@ -405,14 +460,13 @@ pub async fn publish(
 
         if !dry_run {
             if let Some(ref bucket) = bucket {
-                let prefix = format!("{}/{}", plugin_id, version);
-                upload_to_s3(
-                    &wasm_path,
-                    bucket,
-                    &format!("{}/plugin.wasm", prefix),
-                    config,
-                )
-                .await?;
+                let key = format!("{}{}/{}/plugin.wasm", PLUGINS_PREFIX, plugin_id, version);
+                upload_to_s3(&wasm_path, bucket, &key, config).await?;
+                let sig_path = version_dir.join("plugin.wasm.sig");
+                if sig_path.exists() {
+                    let sig_key = format!("{}{}/{}/plugin.wasm.sig", PLUGINS_PREFIX, plugin_id, version);
+                    upload_to_s3(&sig_path, bucket, &sig_key, config).await?;
+                }
             }
         }
 
@@ -438,7 +492,8 @@ pub async fn publish(
 
         if !dry_run {
             if let Some(ref bucket) = bucket {
-                upload_to_s3(&manifest_path, bucket, "plugins.json", config).await?;
+                let key = format!("{}plugins.json", PLUGINS_PREFIX);
+                upload_to_s3(&manifest_path, bucket, &key, config).await?;
             }
         }
     }

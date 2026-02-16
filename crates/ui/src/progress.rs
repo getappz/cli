@@ -195,6 +195,20 @@ impl ProgressBarHandle {
     }
 }
 
+impl grab::Progress for ProgressBarHandle {
+    fn set_length(&self, len: u64) {
+        ProgressBarHandle::set_length(self, len);
+    }
+
+    fn inc(&self, n: u64) {
+        self.inc_by(n);
+    }
+
+    fn finish(&self) {
+        ProgressBarHandle::finish(self);
+    }
+}
+
 impl Drop for ProgressBarHandle {
     fn drop(&mut self) {
         self.pb.finish();

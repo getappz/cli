@@ -6,6 +6,7 @@ license.workspace = true
 description = "On-demand WASM plugin manager with signing, entitlements, and sandbox isolation"
 
 [dependencies]
+grab = { path = "../grab" }
 sandbox = { path = "../sandbox" }
 api = { path = "../api" }
 common = { path = "../common" }

@@ -5,6 +5,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
+grab = { path = "../grab" }
 tabled = "0.15"
 indicatif = "0.17"
 inquire = { workspace = true }

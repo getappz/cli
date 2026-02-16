@@ -119,11 +119,8 @@ impl CloudflaredTunnel {
 
         info!("Downloading cloudflared from: {}", download_url);
 
-        // Create progress bar (using existing ui::progress module)
-        let pb = progress::progress_bar(0, "Downloading cloudflared");
-
-        // Download using our HTTP client with progress reporting
-        HTTP.download_file(&download_url, &binary_path, Some(&pb))
+        let pb = std::sync::Arc::new(progress::progress_bar(0, "Downloading cloudflared"));
+        HTTP.download_file(&download_url, &binary_path, Some(pb))
             .await
             .map_err(|e| miette::miette!("Failed to download cloudflared: {}", e))?;
 

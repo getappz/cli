@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/app",
+    "crates/grab",
     "crates/mcp-server",
     "crates/ai",
     "crates/api",

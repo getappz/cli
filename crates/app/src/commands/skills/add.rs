@@ -1,10 +1,16 @@
 //! Add (install) a skill from GitHub, URL, or local path.
+//!
+//! When installing globally, if the current directory has agent dirs (e.g. `.cursor`, `.claude`),
+//! creates symlinks so the installed skill is visible to those agents (e.g. `.cursor/skills/<name>`).
 
 use crate::session::AppzSession;
-use init::sources::git::download_git;
+use init::sources::git::{download_git, parse_git_source};
 use starbase::AppResult;
 use std::path::{Path, PathBuf};
 use starbase_utils::fs as starbase_fs;
+
+/// Agent config dirs that may contain a `skills/` subdir. If present in cwd, we symlink installed skills there.
+const AGENT_DIRS: &[&str] = &[".cursor", ".claude"];
 
 /// Install a skill from the given source.
 pub async fn add(
@@ -21,15 +27,22 @@ pub async fn add(
         .map_err(|e| miette::miette!("Failed to create skills directory: {}", e))?;
 
     let source_dir = if is_git_source(&source) {
-        let _ = ui::status::info(&format!("Downloading skill from {}...", source));
-        download_git(&source, None, None, !session.cli.verbose, Some("Downloading skill...")).await.map_err(|e| {
-            let msg = e.to_string();
-            miette::miette!(
-                "Could not download skill from \"{}\".\n\n{}\n\nCheck your network connection and that the repository exists. For GitHub you can use: owner/repo or a full URL (e.g. .../tree/main/path/to/skill).",
-                source,
-                msg
-            )
-        })?
+        // If URL points to a single skill and it's already installed, skip download
+        let use_existing = try_existing_skill_from_git_url(&source, &target_dir, skill_filter.as_deref());
+        if let Some(existing_path) = use_existing {
+            let _ = ui::status::info("Skill already installed; skipping download.");
+            existing_path
+        } else {
+            let _ = ui::status::info(&format!("Downloading skill from {}...", source));
+            download_git(&source, None, None, !session.cli.verbose, Some("Downloading skill...")).await.map_err(|e| {
+                let msg = e.to_string();
+                miette::miette!(
+                    "Could not download skill from \"{}\".\n\n{}\n\nCheck your network connection and that the repository exists. For GitHub you can use: owner/repo or a full URL (e.g. .../tree/main/path/to/skill).",
+                    source,
+                    msg
+                )
+            })?
+        }
     } else if is_local_path(&source) {
         let cwd = session.working_dir.as_path();
         let path = if source.starts_with('/') || (source.len() >= 2 && &source[1..2] == ":") {
@@ -89,6 +102,10 @@ pub async fn add(
 
     for (name, path) in &to_install {
         let dest = target_dir.join(name);
+        if path.as_path() == dest.as_path() {
+            let _ = ui::status::success(&format!("Already installed: {}", name));
+            continue;
+        }
         if dest.exists() && !yes {
             install_spinner = None;
             let overwrite = inquire::Confirm::new(&format!(
@@ -112,6 +129,11 @@ pub async fn add(
         let _ = ui::status::success(&format!("Installed skill: {}", name));
     }
 
+    // When installing globally, symlink into project agent dirs (.cursor, .claude) if present
+    if !project {
+        link_skills_into_agent_dirs(&session.working_dir, &target_dir, &to_install)?;
+    }
+
     let _ = ui::layout::blank_line();
     let _ = ui::status::success(&format!(
         "Done. {} skill(s) installed to {}",
@@ -120,6 +142,93 @@ pub async fn add(
     ));
 
     Ok(None)
+}
+
+/// For each agent dir (e.g. .cursor, .claude) present in cwd, create skills subdir and symlink each installed skill.
+fn link_skills_into_agent_dirs(
+    cwd: &Path,
+    installed_skills_dir: &Path,
+    installed: &[(String, PathBuf)],
+) -> Result<(), miette::Report> {
+    for &agent_dir_name in AGENT_DIRS {
+        let agent_dir = cwd.join(agent_dir_name);
+        if !agent_dir.is_dir() {
+            continue;
+        }
+        let skills_dir = agent_dir.join("skills");
+        starbase_fs::create_dir_all(&skills_dir)
+            .map_err(|e| miette::miette!("Failed to create {}: {}", skills_dir.display(), e))?;
+
+        for (name, _) in installed {
+            let dest = installed_skills_dir.join(name);
+            let link_path = skills_dir.join(name);
+            if !dest.exists() {
+                continue;
+            }
+            if let Err(e) = create_skill_symlink(&dest, &link_path) {
+                let _ = ui::status::warning(&format!(
+                    "Could not link {} into {}: {}",
+                    name,
+                    agent_dir_name,
+                    e
+                ));
+            } else {
+                let _ = ui::status::success(&format!(
+                    "Linked {} into {}/skills/",
+                    name,
+                    agent_dir_name
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn create_skill_symlink(target: &Path, link_path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::symlink;
+    if link_path.exists() {
+        let _ = std::fs::remove_file(link_path);
+        let _ = std::fs::remove_dir_all(link_path);
+    }
+    let target_canon = target.canonicalize().unwrap_or_else(|_| target.to_path_buf());
+    symlink(target_canon, link_path)
+}
+
+#[cfg(target_os = "windows")]
+fn create_skill_symlink(target: &Path, link_path: &Path) -> std::io::Result<()> {
+    use std::os::windows::fs::symlink_dir;
+    if link_path.exists() {
+        let _ = std::fs::remove_file(link_path);
+        let _ = std::fs::remove_dir_all(link_path);
+    }
+    let target_canon = target.canonicalize().unwrap_or_else(|_| target.to_path_buf());
+    symlink_dir(target_canon, link_path)
+}
+
+/// If the git URL points to a single skill and that skill is already installed at target_dir, return its path so we skip download.
+fn try_existing_skill_from_git_url(
+    source: &str,
+    target_dir: &Path,
+    skill_filter: Option<&str>,
+) -> Option<PathBuf> {
+    let parsed = parse_git_source(source).ok()?;
+    let subfolder = parsed.subfolder.as_deref()?;
+    let name = subfolder.split('/').last()?.to_string();
+    if name.is_empty() {
+        return None;
+    }
+    if let Some(filter) = skill_filter {
+        if !name.eq_ignore_ascii_case(filter) {
+            return None;
+        }
+    }
+    let existing = target_dir.join(&name);
+    if existing.is_dir() && existing.join("SKILL.md").exists() {
+        Some(existing)
+    } else {
+        None
+    }
 }
 
 fn resolve_target_dir(session: &AppzSession, _global: bool, project: bool) -> Result<PathBuf, miette::Report> {

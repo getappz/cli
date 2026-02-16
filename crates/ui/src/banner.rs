@@ -4,7 +4,7 @@ use owo_colors::OwoColorize;
 use std::io::{self, Write};
 
 /// Display a compact banner with app name and version.
-/// Single line, minimal space usage.
+/// Single line, minimal and professional.
 ///
 /// # Arguments
 /// * `name` - Application name
@@ -14,19 +14,19 @@ use std::io::{self, Write};
 /// # Returns
 /// `io::Result` indicating success or failure
 pub fn display(name: &str, version: &str, tagline: Option<&str>) -> io::Result<()> {
-    // Check if we should display colors
     let use_colors = std::env::var("NO_COLOR").is_err();
 
     if let Some(tagline) = tagline {
         if use_colors {
             println!(
-                "{} {}  {}",
+                "{} {}  {}  {}",
                 name.bold().cyan(),
                 version.bright_black(),
+                "·".bright_black(),
                 tagline.bright_black()
             );
         } else {
-            println!("{} {}  {}", name, version, tagline);
+            println!("{} {}  ·  {}", name, version, tagline);
         }
     } else if use_colors {
         println!("{} {}", name.bold().cyan(), version.bright_black());
@@ -34,8 +34,6 @@ pub fn display(name: &str, version: &str, tagline: Option<&str>) -> io::Result<(
         println!("{} {}", name, version);
     }
 
-    // Add two blank lines after banner
-    println!();
     println!();
 
     io::stdout().flush()

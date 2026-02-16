@@ -6,6 +6,7 @@ license = "MIT"
 description = "Project initialization from git, templates, and framework create commands"
 
 [dependencies]
+grab = { path = "../grab" }
 sandbox = { path = "../sandbox" }
 command = { path = "../command" }
 common = { path = "../common" }

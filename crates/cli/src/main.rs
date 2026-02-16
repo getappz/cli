@@ -51,7 +51,7 @@ async fn main() -> MainResult {
 
             // Show banner before help/version if appropriate
             if banner::should_display() && (is_help || is_version) {
-                let _ = banner::display("appz", &version, Some("Task Runner CLI"));
+                let _ = banner::display("appz", &version, Some("Orchestration & plugin CLI for web apps"));
             }
 
             // Print the error (help or version)
@@ -91,7 +91,7 @@ async fn main() -> MainResult {
 
     // Display compact banner if appropriate (only for actual commands)
     if banner::should_display() {
-        let _ = banner::display("appz", &version, Some("Task Runner CLI"));
+        let _ = banner::display("appz", &version, Some("Orchestration & plugin CLI for web apps"));
     }
 
     // Run the CLI with starbase session lifecycle

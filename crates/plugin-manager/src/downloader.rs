@@ -4,7 +4,9 @@
 use crate::error::{PluginError, PluginResult};
 use crate::manifest::PluginEntry;
 use crate::security::PluginSecurity;
+use grab::{download_to_path, DownloadOptions};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// Downloads plugin WASM binaries from CDN and stores them locally.
 pub struct PluginDownloader {
@@ -36,41 +38,33 @@ impl PluginDownloader {
             entry.size_bytes
         );
 
-        // Download WASM binary
-        Self::download_file(&entry.wasm_url, &wasm_path, plugin_name).await?;
+        let options = DownloadOptions {
+            timeout: Duration::from_secs(120),
+            user_agent: "appz-cli".to_string(),
+            parallel_threshold_bytes: 5 * 1024 * 1024,
+            max_concurrent_chunks: 4,
+            chunk_size: 1024 * 1024,
+            resume: false,
+            headers: None,
+        };
 
-        // Download signature
-        Self::download_file(&entry.sig_url, &sig_path, plugin_name).await?;
+        download_to_path(&entry.wasm_url, &wasm_path, options.clone(), None).await.map_err(
+            |e| PluginError::DownloadFailed {
+                plugin: plugin_name.to_string(),
+                reason: format!("WASM download failed: {}", e),
+            },
+        )?;
 
-        // Verify checksum
+        download_to_path(&entry.sig_url, &sig_path, options, None).await.map_err(|e| {
+            PluginError::DownloadFailed {
+                plugin: plugin_name.to_string(),
+                reason: format!("Signature download failed: {}", e),
+            }
+        })?;
+
         PluginSecurity::verify_checksum(&wasm_path, &entry.checksum, plugin_name)?;
 
         tracing::info!("Plugin '{}' downloaded and verified", plugin_name);
         Ok(wasm_path)
-    }
-
-    /// Download a single file from a URL.
-    async fn download_file(url: &str, dest: &Path, plugin_name: &str) -> PluginResult<()> {
-        let response = reqwest::get(url).await.map_err(|e| PluginError::DownloadFailed {
-            plugin: plugin_name.to_string(),
-            reason: format!("HTTP request failed: {}", e),
-        })?;
-
-        if !response.status().is_success() {
-            return Err(PluginError::DownloadFailed {
-                plugin: plugin_name.to_string(),
-                reason: format!("HTTP {}: {}", response.status().as_u16(), url),
-            });
-        }
-
-        let bytes = response.bytes().await.map_err(|e| PluginError::DownloadFailed {
-            plugin: plugin_name.to_string(),
-            reason: format!("Failed to read response body: {}", e),
-        })?;
-
-        std::fs::write(dest, &bytes)?;
-
-        tracing::debug!("Downloaded {} bytes to {:?}", bytes.len(), dest);
-        Ok(())
     }
 }

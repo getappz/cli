@@ -59,7 +59,7 @@ pub struct Config {
 }
 
 fn default_cdn_base() -> String {
-    "https://cdn.appz.dev/plugins/v1".to_string()
+    "https://get.appz.dev/plugins/v1".to_string()
 }
 
 impl Default for Config {

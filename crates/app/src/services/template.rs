@@ -1,9 +1,11 @@
 use crate::services::template_error::TemplateError;
 use crate::templates::get_builtin_template;
+use grab::{download_to_path, DownloadOptions, GrabError};
 use serde_json;
 use starbase_archive::Archiver;
 use starbase_utils::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::timeout;
 use tracing::{debug, error, instrument};
@@ -122,7 +124,6 @@ impl TemplateService {
 
         debug!(archive_url = %archive_url, "Downloading GitHub archive");
 
-        // Create temp directory for extraction
         let temp_dir = std::env::temp_dir().join(format!(
             "appz-template-{}",
             std::time::SystemTime::now()
@@ -135,33 +136,20 @@ impl TemplateService {
         })?;
 
         let archive_file = temp_dir.join("archive.zip");
+        let pb = Arc::new(progress::progress_bar(0, "Downloading template..."));
+        let options = DownloadOptions {
+            timeout: Duration::from_secs(300),
+            user_agent: "appz-cli".to_string(),
+            parallel_threshold_bytes: 5 * 1024 * 1024,
+            max_concurrent_chunks: 4,
+            chunk_size: 1024 * 1024,
+            resume: false,
+            headers: None,
+        };
 
-        // Download with progress bar
-        let pb = progress::progress_bar(0, "Downloading template...");
-        let download_result = timeout(
-            Duration::from_secs(300), // 5 minute timeout
-            Self::download_with_progress(&archive_url, &archive_file, &pb),
-        )
-        .await;
-
-        match download_result {
-            Ok(Ok(_)) => {
-                pb.finish_with_message("✓ Download complete");
-            }
-            Ok(Err(e)) => {
-                pb.finish();
-                error!(error = %e, branch = %ref_name, "Failed to download archive");
-                return Err(TemplateError::DownloadFailed(format!(
-                    "Download failed: {}",
-                    e
-                )));
-            }
-            Err(_) => {
-                pb.finish();
-                return Err(TemplateError::DownloadFailed(
-                    "Download timeout".to_string(),
-                ));
-            }
+        if let Err(e) = download_to_path(&archive_url, &archive_file, options, Some(pb)).await {
+            error!(error = %e, branch = %ref_name, "Failed to download archive");
+            return Err(template_error_from_grab(e));
         }
 
         // Extract archive
@@ -252,33 +240,20 @@ impl TemplateService {
         })?;
 
         let tarball_file = temp_dir.join("package.tgz");
+        let pb = Arc::new(progress::progress_bar(0, "Downloading npm package..."));
+        let options = DownloadOptions {
+            timeout: Duration::from_secs(300),
+            user_agent: "appz-cli".to_string(),
+            parallel_threshold_bytes: 5 * 1024 * 1024,
+            max_concurrent_chunks: 4,
+            chunk_size: 1024 * 1024,
+            resume: false,
+            headers: None,
+        };
 
-        // Download with progress bar
-        let pb = progress::progress_bar(0, "Downloading npm package...");
-        let download_result = timeout(
-            Duration::from_secs(300),
-            Self::download_with_progress(&tarball_url, &tarball_file, &pb),
-        )
-        .await;
-
-        match download_result {
-            Ok(Ok(_)) => {
-                pb.finish_with_message("✓ Download complete");
-            }
-            Ok(Err(e)) => {
-                pb.finish();
-                error!(error = %e, "Failed to download npm package");
-                return Err(TemplateError::DownloadFailed(format!(
-                    "Download failed: {}",
-                    e
-                )));
-            }
-            Err(_) => {
-                pb.finish();
-                return Err(TemplateError::DownloadFailed(
-                    "Download timeout".to_string(),
-                ));
-            }
+        if let Err(e) = download_to_path(&tarball_url, &tarball_file, options, Some(pb)).await {
+            error!(error = %e, "Failed to download npm package");
+            return Err(template_error_from_grab(e));
         }
 
         // Extract tarball
@@ -592,71 +567,23 @@ impl TemplateService {
         })
     }
 
-    /// Download a file with progress bar
-    async fn download_with_progress(
-        url: &str,
-        file_path: &Path,
-        pb: &progress::ProgressBarHandle,
-    ) -> Result<(), TemplateError> {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(300))
-            .build()
-            .map_err(|e| {
-                TemplateError::DownloadFailed(format!("Failed to create HTTP client: {}", e))
-            })?;
+}
 
-        let mut response =
-            client.get(url).send().await.map_err(|e| {
-                TemplateError::DownloadFailed(format!("HTTP request failed: {}", e))
-            })?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_msg = if status == 404 {
-                format!(
-                    "HTTP error: {} Not Found - The repository or branch may not exist",
-                    status
-                )
-            } else {
-                format!("HTTP error: {}", status)
-            };
-            return Err(TemplateError::DownloadFailed(error_msg));
+fn template_error_from_grab(e: GrabError) -> TemplateError {
+    match e {
+        GrabError::Request(err) => {
+            TemplateError::DownloadFailed(format!("Download failed: {}", err))
         }
-
-        // Get content length for progress bar
-        let total_size = response.content_length().unwrap_or(0);
-
-        if total_size > 0 {
-            pb.set_length(total_size);
+        GrabError::HttpStatus(code) => TemplateError::DownloadFailed(format!(
+            "HTTP error: {} - The repository or branch may not exist",
+            code
+        )),
+        GrabError::NoRangeSupport => {
+            TemplateError::DownloadFailed("Server does not support range requests".to_string())
         }
-
-        // Create file and write with progress updates
-        use std::fs::File;
-        use std::io::Write;
-        let mut file = File::create(file_path)
-            .map_err(|e| TemplateError::FsError(format!("Failed to create file: {}", e)))?;
-
-        let mut downloaded: u64 = 0;
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|e| TemplateError::DownloadFailed(format!("Failed to read chunk: {}", e)))?
-        {
-            file.write_all(&chunk)
-                .map_err(|e| TemplateError::FsError(format!("Failed to write chunk: {}", e)))?;
-
-            downloaded += chunk.len() as u64;
-            if total_size > 0 {
-                pb.set_position(downloaded);
-            } else {
-                pb.inc_by(chunk.len() as u64);
-            }
-        }
-
-        file.flush()
-            .map_err(|e| TemplateError::FsError(format!("Failed to flush file: {}", e)))?;
-
-        Ok(())
+        GrabError::Io(err) => TemplateError::FsError(format!("IO error: {}", err)),
+        GrabError::Timeout(msg) => TemplateError::DownloadFailed(msg),
+        GrabError::Other(msg) => TemplateError::DownloadFailed(msg),
     }
 }
 

@@ -1,16 +1,16 @@
 //! HTTP client for downloading files with retry logic and progress reporting
 
+use grab::{download_to_path, DownloadOptions, GrabError};
 use miette::{IntoDiagnostic, Result};
 use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::{ClientBuilder, IntoUrl, Method, Response};
-use std::io::Write;
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::LazyLock as Lazy;
 use std::time::Duration;
 use tokio_retry::strategy::{jitter, ExponentialBackoff};
 use tokio_retry::Retry;
 use tracing::debug;
-use ui::progress::ProgressBarHandle;
 use url::Url;
 
 /// Default HTTP timeout (30 seconds)
@@ -55,12 +55,13 @@ impl Client {
             .zstd(true))
     }
 
-    /// Download a file from a URL to a local path with progress reporting
+    /// Download a file from a URL to a local path with progress reporting.
+    /// Uses the grab crate (HEAD + single or parallel chunk download).
     pub async fn download_file<U: IntoUrl>(
         &self,
         url: U,
         path: &Path,
-        pr: Option<&ProgressBarHandle>,
+        pr: Option<Arc<dyn grab::Progress>>,
     ) -> Result<()> {
         let url = url.into_url().into_diagnostic()?;
         let headers = github_headers(&url);
@@ -68,55 +69,43 @@ impl Client {
             .await
     }
 
-    /// Download a file with custom headers
+    /// Download a file with custom headers (uses grab crate).
     pub async fn download_file_with_headers<U: IntoUrl>(
         &self,
         url: U,
         path: &Path,
         headers: &HeaderMap,
-        pr: Option<&ProgressBarHandle>,
+        pr: Option<Arc<dyn grab::Progress>>,
     ) -> Result<()> {
         let url = url.into_url().into_diagnostic()?;
         debug!("Downloading {} to {}", &url, path.display());
 
-        let mut resp = self.get_async_with_headers(url.clone(), headers).await?;
-
-        // Set progress bar length if available
-        if let Some(length) = resp.content_length() {
-            if let Some(pr) = pr {
-                pr.set_length(length);
-            }
-        }
-
-        // Create parent directory if needed (using starbase_utils per workspace rules)
         if let Some(parent) = path.parent() {
             starbase_utils::fs::create_dir_all(parent)
                 .map_err(|e| miette::miette!("Failed to create directory: {}", e))?;
         }
 
-        // Write to temp file first for atomic operation
-        let mut file = tempfile::NamedTempFile::with_prefix_in(
-            path.file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("download"),
-            path.parent().unwrap_or_else(|| Path::new(".")),
-        )
-        .into_diagnostic()?;
+        let version = env!("CARGO_PKG_VERSION");
+        let options = DownloadOptions {
+            timeout: self.timeout,
+            user_agent: format!("appz/{}", version),
+            parallel_threshold_bytes: 5 * 1024 * 1024,
+            max_concurrent_chunks: 4,
+            chunk_size: 1024 * 1024,
+            resume: false,
+            headers: Some(headers.clone()),
+        };
 
-        // Stream response to file
-        while let Some(chunk) = resp.chunk().await.into_diagnostic()? {
-            file.write_all(&chunk).into_diagnostic()?;
-            if let Some(pr) = pr {
-                pr.inc_by(chunk.len() as u64);
+        let url_str = url.to_string();
+        let mut result =
+            download_to_path(&url_str, path, options.clone(), pr.clone()).await;
+        if let Err(GrabError::Request(ref e)) = result {
+            if (e.is_connect() || e.is_timeout()) && url_str.starts_with("http://") {
+                let https_url = url_str.replacen("http://", "https://", 1);
+                result = download_to_path(&https_url, path, options, pr).await;
             }
         }
-
-        // Atomically move temp file to final location
-        file.persist(path).into_diagnostic()?;
-
-        if let Some(pr) = pr {
-            pr.finish();
-        }
+        result.map_err(|e| miette::miette!("Download failed: {}", e))?;
 
         Ok(())
     }

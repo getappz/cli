@@ -1,10 +1,10 @@
-//! Download with progress bar.
+//! Download with progress bar (delegates to grab crate).
 
-use std::io::Write;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::time::timeout;
+use grab::{download_to_path, DownloadOptions, GrabError};
 
 use crate::error::{InitError, InitResult};
 
@@ -15,67 +15,36 @@ pub async fn download_with_progress(
     label: &str,
     quiet: bool,
 ) -> InitResult<()> {
-    use ui::progress;
-
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(300))
-        .user_agent("appz-cli")
-        .build()
-        .map_err(|e| InitError::DownloadFailed(format!("Failed to create HTTP client: {}", e)))?;
-
-    let mut response = client.get(url).send().await.map_err(|e| {
-        InitError::DownloadFailed(format!(
-            "HTTP request failed for {}: {}",
-            url, e
-        ))
-    })?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        return Err(InitError::DownloadFailed(format!(
-            "HTTP error: {} - {}",
-            status,
-            response.url()
-        )));
-    }
-
-    let total_size = response.content_length().unwrap_or(0);
-    let pb = if quiet {
+    let progress = if quiet {
         None
     } else {
-        Some(progress::progress_bar(0, label))
+        Some(Arc::new(ui::progress::progress_bar(0, label)) as Arc<dyn grab::Progress>)
     };
 
-    let mut file = std::fs::File::create(dest)
-        .map_err(|e| InitError::FsError(format!("Failed to create file: {}", e)))?;
+    let options = DownloadOptions {
+        timeout: Duration::from_secs(300),
+        user_agent: "appz-cli".to_string(),
+        parallel_threshold_bytes: 5 * 1024 * 1024, // 5 MiB
+        max_concurrent_chunks: 4,
+        chunk_size: 1024 * 1024,
+        resume: false,
+        headers: None,
+    };
 
-    let mut downloaded: u64 = 0;
-    while let Some(chunk) = timeout(
-        Duration::from_secs(60),
-        response.chunk(),
-    )
-    .await
-    .map_err(|_| InitError::DownloadFailed("Download timeout".to_string()))?
-    .map_err(|e| InitError::DownloadFailed(format!("Failed to read chunk: {}", e)))?
-    {
-        use std::io::Write;
-        file.write_all(&chunk)
-            .map_err(|e| InitError::FsError(format!("Failed to write: {}", e)))?;
-        downloaded += chunk.len() as u64;
-        if let Some(ref p) = pb {
-            if total_size > 0 {
-                p.set_length(total_size);
-                p.set_position(downloaded);
-            } else {
-                p.inc_by(chunk.len() as u64);
-            }
+    download_to_path(url, dest, options, progress).await.map_err(grab_error_to_init)
+}
+
+fn grab_error_to_init(e: GrabError) -> InitError {
+    match e {
+        GrabError::Request(err) => InitError::DownloadFailed(format!("HTTP request failed: {}", err)),
+        GrabError::HttpStatus(code) => {
+            InitError::DownloadFailed(format!("HTTP error: {} - check URL and network", code))
         }
+        GrabError::NoRangeSupport => {
+            InitError::DownloadFailed("Server does not support range requests".to_string())
+        }
+        GrabError::Io(err) => InitError::FsError(format!("IO error: {}", err)),
+        GrabError::Timeout(msg) => InitError::DownloadFailed(msg),
+        GrabError::Other(msg) => InitError::DownloadFailed(msg),
     }
-
-    drop(pb);
-
-    file.flush()
-        .map_err(|e| InitError::FsError(format!("Failed to flush: {}", e)))?;
-
-    Ok(())
 }

@@ -36,6 +36,7 @@ starbase_events = "0.7"
 starbase_shell = "0.10"
 tracing = "0.1"
 api = { path = "../api" }
+grab = { path = "../grab" }
 ui = { path = "../ui" }
 common = { path = "../common" }
 atty = { workspace = true }

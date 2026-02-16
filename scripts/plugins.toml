@@ -1,5 +1,8 @@
 # Plugin build configuration
 # Used by: cargo run -p plugin-build -- package
+#
+# wasm_opt = true   # Run Binaryen wasm-opt for smaller output (default). Set false if not installed.
+#                   # Or use: APPZ_SKIP_WASM_OPT=1 or --no-wasm-opt
 
 cdn_base_url = "https://cdn.appz.dev/plugins/v1"
 
@@ -24,6 +27,15 @@ name = "SSG Migrator"
 description = "Migrate React SPA to Astro or Next.js; convert files to Astro/Next.js"
 tier = "free"
 commands = ["migrate", "convert"]
+min_cli_version = "0.1.0"
+
+[[plugins]]
+crate_name = "wp2md-plugin"
+plugin_id = "wp2md"
+name = "WordPress to Markdown"
+description = "Convert WordPress WXR export to Markdown with frontmatter and images"
+tier = "free"
+commands = ["wp2md"]
 min_cli_version = "0.1.0"
 
 [[plugins]]

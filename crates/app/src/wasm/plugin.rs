@@ -42,6 +42,7 @@ use crate::wasm::host_functions::plugin_fs::{
 use crate::wasm::host_functions::plugin_git::{
     appz_pgit_changed_files, appz_pgit_staged_files, appz_pgit_is_repo,
 };
+use crate::wasm::host_functions::plugin_http::appz_phttp_download;
 use crate::wasm::host_functions::plugin_sandbox::{
     appz_psandbox_exec, appz_psandbox_exec_with_tool, appz_psandbox_ensure_tool,
 };
@@ -772,6 +773,9 @@ fn register_plugin_host_functions<'a>(
     // AST functions
     builder = builder.with_function("appz_past_transform", [PTR], [PTR], user_data.clone(), appz_past_transform);
     builder = builder.with_function("appz_past_parse_jsx", [PTR], [PTR], user_data.clone(), appz_past_parse_jsx);
+
+    // HTTP download function
+    builder = builder.with_function("appz_phttp_download", [PTR], [PTR], user_data.clone(), appz_phttp_download);
 
     // Check plugin host function (stub when feature disabled)
     #[cfg(feature = "check")]

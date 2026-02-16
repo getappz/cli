@@ -22,9 +22,11 @@ members = [
     "crates/init",
     "crates/site-builder",
     "crates/plugin-manager",
+    "crates/wp2md",
     "crates/plugins/ssg-migrator",
     "crates/plugins/check",
     "crates/plugins/site",
+    "crates/plugins/wp2md",
     "crates/plugin-build",
 ]
 resolver = "2"
@@ -81,6 +83,16 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 authors = ["Appz Contributors"]
+
+# Profile for WASM plugin builds: smaller output, DCE-friendly.
+# Use with: cargo build --profile release-wasm --target wasm32-wasip1 -p <plugin>
+[profile.release-wasm]
+inherits = "release"
+opt-level = "z"     # Optimize for size
+lto = true          # Link-time optimization
+codegen-units = 1   # Better optimization (slower build)
+panic = "abort"     # Smaller binary, no panic unwinding
+strip = "debuginfo" # Strip debug symbols
 
 [workspace.dependencies]
 # Core dependencies

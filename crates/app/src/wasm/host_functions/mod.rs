@@ -11,6 +11,7 @@ pub mod interaction;
 pub mod plugin_ast;
 pub mod plugin_fs;
 pub mod plugin_git;
+pub mod plugin_http;
 pub mod plugin_sandbox;
 pub mod registry;
 pub mod stubs;

@@ -3,7 +3,7 @@ set windows-shell := ["pwsh.exe", "-NoLogo", "-Command"]
 
 init:
 	cargo install cargo-binstall
-	cargo binstall cargo-insta cargo-nextest cargo-llvm-cov
+	cargo binstall cargo-insta cargo-nextest cargo-llvm-cov cargo-machete
 
 # BUILDING
 
@@ -52,6 +52,11 @@ lint-workspace:
 
 lint-fix:
 	cargo clippy --workspace --fix --allow-dirty --allow-staged
+
+# Find unused dependencies across the workspace.
+# Run `cargo install cargo-machete` first if not installed.
+machete:
+	cargo machete --with-metadata
 
 # Pre-commit hook
 install-pre-commit:

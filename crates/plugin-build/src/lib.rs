@@ -56,6 +56,13 @@ pub struct Config {
     pub s3_region: Option<String>,
     /// S3/R2 endpoint override (for R2: https://<account_id>.r2.cloudflarestorage.com)
     pub s3_endpoint: Option<String>,
+    /// Run wasm-opt (Binaryen) to optimize WASM size. Set to false if Binaryen is not installed.
+    #[serde(default = "default_wasm_opt")]
+    pub wasm_opt: bool,
+}
+
+fn default_wasm_opt() -> bool {
+    true
 }
 
 fn default_cdn_base() -> String {
@@ -70,6 +77,7 @@ impl Default for Config {
             s3_bucket: std::env::var("APPZ_PLUGIN_S3_BUCKET").ok(),
             s3_region: std::env::var("APPZ_PLUGIN_S3_REGION").ok(),
             s3_endpoint: std::env::var("APPZ_PLUGIN_S3_ENDPOINT").ok(),
+            wasm_opt: default_wasm_opt(),
         }
     }
 }
@@ -87,7 +95,12 @@ impl Config {
 }
 
 /// Compile plugins for wasm32-wasi.
-pub fn build(config: &Config, output_dir: &Path, plugin_filter: Option<&str>) -> Result<()> {
+pub fn build(
+    config: &Config,
+    output_dir: &Path,
+    plugin_filter: Option<&str>,
+    skip_wasm_opt: bool,
+) -> Result<()> {
     let workspace_root = find_workspace_root()?;
     std::fs::create_dir_all(output_dir).into_diagnostic()?;
 
@@ -114,12 +127,17 @@ pub fn build(config: &Config, output_dir: &Path, plugin_filter: Option<&str>) ->
         ));
     }
 
+    let skip_wasm_opt =
+        skip_wasm_opt || std::env::var("APPZ_SKIP_WASM_OPT").as_deref() == Ok("1");
+    let use_wasm_opt = config.wasm_opt && !skip_wasm_opt;
+
     for plugin in &plugins {
         println!("Building {}...", plugin.crate_name);
         let status = Command::new("cargo")
             .args([
                 "build",
-                "--release",
+                "--profile",
+                "release-wasm",
                 "--target",
                 &wasm_target,
                 "-p",
@@ -133,28 +151,63 @@ pub fn build(config: &Config, output_dir: &Path, plugin_filter: Option<&str>) ->
             return Err(miette::miette!("Failed to build plugin: {}", plugin.crate_name));
         }
 
-        // Copy WASM to output dir
         let wasm_name = plugin.crate_name.replace('-', "_");
         let src = workspace_root
             .join("target")
             .join(&wasm_target)
-            .join("release")
+            .join("release-wasm")
             .join(format!("{}.wasm", wasm_name));
         let dest_dir = output_dir.join(&plugin.plugin_id).join(&get_version()?);
         std::fs::create_dir_all(&dest_dir).into_diagnostic()?;
         let dest = dest_dir.join("plugin.wasm");
 
-        if src.exists() {
-            std::fs::copy(&src, &dest).into_diagnostic()?;
-            println!("  -> {}", dest.display());
-        } else {
+        if !src.exists() {
             return Err(miette::miette!(
                 "Build succeeded but WASM not found at {}",
                 src.display()
             ));
         }
+
+        if use_wasm_opt {
+            match run_wasm_opt(&src, &dest) {
+                Ok(()) => println!("  -> {} (wasm-opt)", dest.display()),
+                Err(e) => {
+                    println!("  Warning: wasm-opt failed ({}), copying unoptimized", e);
+                    std::fs::copy(&src, &dest).into_diagnostic()?;
+                    println!("  -> {}", dest.display());
+                }
+            }
+        } else {
+            std::fs::copy(&src, &dest).into_diagnostic()?;
+            println!("  -> {}", dest.display());
+        }
     }
 
+    Ok(())
+}
+
+/// Run wasm-opt (Binaryen) to optimize WASM size.
+///
+/// Uses -Oz for maximum size reduction and --strip-debug to remove debug sections.
+/// Requires Binaryen: https://github.com/WebAssembly/binaryen
+/// Install: apt install binaryen, brew install binaryen, or download from GitHub releases.
+fn run_wasm_opt(input: &Path, output: &Path) -> Result<()> {
+    let status = Command::new("wasm-opt")
+        .arg(input)
+        .arg("-o")
+        .arg(output)
+        .arg("-Oz")
+        .arg("--strip-debug")
+        .status()
+        .into_diagnostic()
+        .context("wasm-opt not found. Install Binaryen (apt install binaryen / brew install binaryen) or set wasm_opt = false in config / APPZ_SKIP_WASM_OPT=1")?;
+
+    if !status.success() {
+        return Err(miette::miette!(
+            "wasm-opt exited with {:?}",
+            status.code()
+        ));
+    }
     Ok(())
 }
 
@@ -191,8 +244,13 @@ pub fn sign(input: &Path, key_path: Option<&Path>) -> Result<()> {
 }
 
 /// Full package: build + inject + sign + checksum.
-pub fn package(config: &Config, output_dir: &Path, plugin_filter: Option<&str>) -> Result<()> {
-    build(config, output_dir, plugin_filter)?;
+pub fn package(
+    config: &Config,
+    output_dir: &Path,
+    plugin_filter: Option<&str>,
+    skip_wasm_opt: bool,
+) -> Result<()> {
+    build(config, output_dir, plugin_filter, skip_wasm_opt)?;
 
     let workspace_root = find_workspace_root()?;
     let key_path = std::env::var("APPZ_SIGNING_KEY")

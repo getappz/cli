@@ -30,6 +30,9 @@ enum Commands {
         /// Specific plugin to build (default: all)
         #[arg(short, long)]
         plugin: Option<String>,
+        /// Skip wasm-opt optimization (use if Binaryen not installed)
+        #[arg(long)]
+        no_wasm_opt: bool,
     },
 
     /// Inject appz_header custom section into WASM
@@ -63,6 +66,9 @@ enum Commands {
         /// Specific plugin to package (default: all)
         #[arg(short, long)]
         plugin: Option<String>,
+        /// Skip wasm-opt optimization (use if Binaryen not installed)
+        #[arg(long)]
+        no_wasm_opt: bool,
     },
 
     /// Upload packaged plugins to CDN
@@ -93,8 +99,8 @@ async fn main() -> Result<()> {
     let config = Config::load(&config_path).unwrap_or_default();
 
     match cli.command {
-        Commands::Build { plugin } => {
-            build(&config, &output_dir, plugin.as_deref())?;
+        Commands::Build { plugin, no_wasm_opt } => {
+            build(&config, &output_dir, plugin.as_deref(), no_wasm_opt)?;
         }
         Commands::Inject {
             input,
@@ -124,8 +130,8 @@ async fn main() -> Result<()> {
             sign(&input, key_path.as_deref())?;
             println!("Signed {}", input.display());
         }
-        Commands::Package { plugin } => {
-            package(&config, &output_dir, plugin.as_deref())?;
+        Commands::Package { plugin, no_wasm_opt } => {
+            package(&config, &output_dir, plugin.as_deref(), no_wasm_opt)?;
         }
         Commands::Publish { plugin, dry_run } => {
             publish(&config, &output_dir, plugin.as_deref(), dry_run).await?

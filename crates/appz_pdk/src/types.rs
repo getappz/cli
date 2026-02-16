@@ -652,3 +652,21 @@ pub struct ConvertRunOutput {
     pub exit_code: i32,
     pub message: Option<String>,
 }
+
+// ============================================================================
+// Plugin HTTP Download Types (for appz_phttp_download host function)
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginHttpDownloadInput {
+    pub url: String,
+    pub dest_path: String,
+    pub strict_ssl: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginHttpDownloadOutput {
+    pub success: bool,
+    pub bytes_written: Option<u64>,
+    pub error: Option<String>,
+}

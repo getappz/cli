@@ -160,7 +160,8 @@ pub fn build(
             .join(&wasm_target)
             .join("release-wasm")
             .join(format!("{}.wasm", wasm_name));
-        let dest_dir = output_dir.join(&plugin.plugin_id).join(&get_version()?);
+        let version = get_plugin_version(&plugin.plugin_id)?;
+        let dest_dir = output_dir.join(&plugin.plugin_id).join(&version);
         std::fs::create_dir_all(&dest_dir).into_diagnostic()?;
         let dest = dest_dir.join("plugin.wasm");
 
@@ -264,9 +265,9 @@ pub fn package(
         });
 
     let plugins = filter_plugins(&config.plugins, plugin_filter);
-    let version = get_version()?;
 
     for plugin in &plugins {
+        let version = get_plugin_version(&plugin.plugin_id)?;
         let plugin_dir = output_dir.join(&plugin.plugin_id).join(&version);
         let wasm_path = plugin_dir.join("plugin.wasm");
 
@@ -330,30 +331,40 @@ pub fn package(
     Ok(())
 }
 
-/// Full release: optionally bump version, package, then publish.
+/// Full release: bump plugin version, package, then publish. Requires a single plugin.
 pub async fn release(
     config: &Config,
     output_dir: &Path,
-    plugin_filter: Option<&str>,
+    plugin_id: &str,
     bump: Option<&str>,
     dry_run: bool,
     no_wasm_opt: bool,
 ) -> Result<()> {
     if let Some(bump_type) = bump {
-        run_version_bump(bump_type)?;
+        run_version_bump_plugin(plugin_id, bump_type)?;
     }
-    package(config, output_dir, plugin_filter, no_wasm_opt)?;
-    publish(config, output_dir, plugin_filter, dry_run).await
+    package(config, output_dir, Some(plugin_id), no_wasm_opt)?;
+    publish(config, output_dir, Some(plugin_id), dry_run).await
 }
 
-fn run_version_bump(bump_type: &str) -> Result<()> {
+fn run_version_bump_plugin(plugin_id: &str, bump_type: &str) -> Result<()> {
     use semver::Version;
 
     let root = find_workspace_root()?;
-    let cargo_path = root.join("Cargo.toml");
+    let cargo_path = root
+        .join("crates")
+        .join("plugins")
+        .join(plugin_id)
+        .join("Cargo.toml");
+    if !cargo_path.exists() {
+        return Err(miette::miette!(
+            "Plugin Cargo.toml not found at {}",
+            cargo_path.display()
+        ));
+    }
     let content = std::fs::read_to_string(&cargo_path).into_diagnostic()?;
 
-    let current = get_version()?;
+    let current = get_plugin_version(plugin_id)?;
     let mut ver = Version::parse(&current)
         .into_diagnostic()
         .context("Failed to parse workspace version")?;
@@ -384,33 +395,22 @@ fn run_version_bump(bump_type: &str) -> Result<()> {
 
     let new_version = ver.to_string();
 
-    // Replace version in [workspace.package] section only
-    let mut in_workspace_package = false;
-    let new_content: String = content
-        .lines()
-        .map(|line| {
-            let trimmed = line.trim();
-            if trimmed == "[workspace.package]" {
-                in_workspace_package = true;
-            } else if trimmed.starts_with('[') {
-                in_workspace_package = false;
-            }
+    // Replace version in [workspace.package] - match the exact current version to avoid touching deps
+    let version_pattern = format!("version = \"{}\"", current);
+    let version_replacement = format!("version = \"{}\"", new_version);
 
-            let should_replace = in_workspace_package
-                && trimmed.starts_with("version = ")
-                && !trimmed.contains("workspace");
+    if !content.contains(&version_pattern) {
+        return Err(miette::miette!(
+            "Could not find version = \"{}\" in {}",
+            current,
+            cargo_path.display()
+        ));
+    }
 
-            if should_replace {
-                let quote = if trimmed.contains('"') { '"' } else { '\'' };
-                format!("version = {quote}{new_version}{quote}\n")
-            } else {
-                format!("{line}\n")
-            }
-        })
-        .collect();
+    let new_content = content.replacen(&version_pattern, &version_replacement, 1);
+    std::fs::write(&cargo_path, &new_content).into_diagnostic()?;
 
-    std::fs::write(&cargo_path, new_content).into_diagnostic()?;
-    println!("Bumped version {} -> {} ({})", current, new_version, bump_type);
+    println!("Bumped {} version {} -> {} ({})", plugin_id, current, new_version, bump_type);
     Ok(())
 }
 
@@ -437,7 +437,6 @@ pub async fn publish(
         println!("Dry run - skipping upload");
     }
 
-    let version = get_version()?;
     let mut manifest_plugins: HashMap<String, serde_json::Value> = HashMap::new();
 
     for entry in std::fs::read_dir(output_dir).into_diagnostic()? {
@@ -450,6 +449,10 @@ pub async fn publish(
             }
         }
 
+        let version = match plugin_filter {
+            Some(_) => get_plugin_version(&plugin_id)?,
+            None => get_workspace_version()?,
+        };
         let version_dir = entry.path().join(&version);
         let wasm_path = version_dir.join("plugin.wasm");
         let manifest_path = version_dir.join("manifest_entry.json");
@@ -478,11 +481,39 @@ pub async fn publish(
     }
 
     if !manifest_plugins.is_empty() {
+        let manifest_path = output_dir.join("plugins.json");
+        // When publishing a single plugin, merge with existing manifest to avoid removing others
+        let mut all_plugins: HashMap<String, serde_json::Value> = HashMap::new();
+        if plugin_filter.is_some() {
+            let existing_content = if manifest_path.exists() {
+                std::fs::read_to_string(&manifest_path).ok()
+            } else if let Some(ref bucket) = bucket {
+                // Local manifest missing: fetch from S3 so we don't overwrite other plugins
+                let key = format!("{}plugins.json", PLUGINS_PREFIX);
+                download_from_s3(bucket, &key, config)
+                    .await
+                    .ok()
+                    .and_then(|b| String::from_utf8(b).ok())
+            } else {
+                None
+            };
+            if let Some(content) = existing_content {
+                if let Ok(existing) = serde_json::from_str::<serde_json::Value>(&content) {
+                    if let Some(plugins) = existing.get("plugins").and_then(|p| p.as_object()) {
+                        for (k, v) in plugins {
+                            all_plugins.insert(k.clone(), v.clone());
+                        }
+                    }
+                }
+            }
+        }
+        for (k, v) in manifest_plugins {
+            all_plugins.insert(k, v);
+        }
         let manifest = serde_json::json!({
             "version": 1,
-            "plugins": manifest_plugins,
+            "plugins": all_plugins,
         });
-        let manifest_path = output_dir.join("plugins.json");
         std::fs::write(
             &manifest_path,
             serde_json::to_string_pretty(&manifest).into_diagnostic()?,
@@ -558,6 +589,44 @@ async fn upload_to_s3(
     Ok(())
 }
 
+async fn download_from_s3(bucket: &str, key: &str, config: &Config) -> Result<Vec<u8>> {
+    use aws_config::environment::credentials::EnvironmentVariableCredentialsProvider;
+
+    let endpoint = config
+        .s3_endpoint
+        .clone()
+        .or_else(|| std::env::var("APPZ_PLUGIN_S3_ENDPOINT").ok());
+    let region = config
+        .s3_region
+        .clone()
+        .or_else(|| std::env::var("APPZ_PLUGIN_S3_REGION").ok())
+        .unwrap_or_else(|| "us-east-1".to_string());
+
+    let creds = EnvironmentVariableCredentialsProvider::new();
+    let mut loader = aws_config::defaults(aws_config::BehaviorVersion::latest())
+        .credentials_provider(creds);
+
+    if let Some(ref ep) = endpoint {
+        loader = loader.endpoint_url(ep);
+    }
+
+    loader = loader.region(aws_config::Region::new(region));
+
+    let aws_config = loader.load().await;
+    let client = aws_sdk_s3::Client::new(&aws_config);
+
+    let resp = client
+        .get_object()
+        .bucket(bucket)
+        .key(key)
+        .send()
+        .await
+        .into_diagnostic()?;
+
+    let body = resp.body.collect().await.into_diagnostic()?;
+    Ok(body.into_bytes().to_vec())
+}
+
 pub fn find_workspace_root() -> Result<PathBuf> {
     let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     loop {
@@ -575,14 +644,30 @@ pub fn find_workspace_root() -> Result<PathBuf> {
     }
 }
 
-fn get_version() -> Result<String> {
+/// Get version from workspace root Cargo.toml [workspace.package].
+fn get_workspace_version() -> Result<String> {
     let root = find_workspace_root()?;
-    let cargo = root.join("Cargo.toml");
-    let content = std::fs::read_to_string(&cargo).into_diagnostic()?;
+    read_version_from_cargo(&root.join("Cargo.toml"))
+}
 
+/// Get version from a plugin's Cargo.toml (crates/plugins/{plugin_id}/Cargo.toml).
+fn get_plugin_version(plugin_id: &str) -> Result<String> {
+    let root = find_workspace_root()?;
+    let cargo_path = root.join("crates").join("plugins").join(plugin_id).join("Cargo.toml");
+    if !cargo_path.exists() {
+        return Err(miette::miette!(
+            "Plugin Cargo.toml not found at {}",
+            cargo_path.display()
+        ));
+    }
+    read_version_from_cargo(&cargo_path)
+}
+
+fn read_version_from_cargo(cargo_path: &Path) -> Result<String> {
+    let content = std::fs::read_to_string(cargo_path).into_diagnostic()?;
     for line in content.lines() {
         let line = line.trim();
-        if line.starts_with("version = ") {
+        if line.starts_with("version = ") && !line.contains("version.workspace") {
             let version = line
                 .trim_start_matches("version = ")
                 .trim_matches(|c| c == '"' || c == '\'')
@@ -590,7 +675,6 @@ fn get_version() -> Result<String> {
             return Ok(version);
         }
     }
-
     Ok("0.1.0".to_string())
 }
 

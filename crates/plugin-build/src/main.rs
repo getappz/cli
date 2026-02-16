@@ -81,12 +81,12 @@ enum Commands {
         dry_run: bool,
     },
 
-    /// Bump version, package, and publish (full release workflow)
+    /// Bump version, package, and publish (full release workflow for a single plugin)
     Release {
-        /// Specific plugin to release (default: all)
+        /// Plugin to release (required: check, wp2md, ssg-migrator, site)
         #[arg(short, long)]
-        plugin: Option<String>,
-        /// Bump version before package (requires cargo set-version)
+        plugin: String,
+        /// Bump version before package
         #[arg(long, value_parser = ["patch", "minor", "major"])]
         bump: Option<String>,
         /// Skip upload, only package and update manifest locally
@@ -100,6 +100,9 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Load .env from current dir or parents (best-effort, ignored if missing)
+    let _ = dotenvy::dotenv();
+
     let cli = Cli::parse();
     let workspace_root = plugin_build::find_workspace_root().unwrap_or_else(|_| {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -161,7 +164,7 @@ async fn main() -> Result<()> {
             release(
                 &config,
                 &output_dir,
-                plugin.as_deref(),
+                &plugin,
                 bump.as_deref(),
                 dry_run,
                 no_wasm_opt,

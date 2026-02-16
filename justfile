@@ -106,10 +106,10 @@ plugin-publish plugin="" dry_run="false" no_wasm_opt="false":
 	cargo run -p plugin-build -- package --output dist/plugins {{if plugin != "" { "--plugin " + plugin } else { "" }}} {{if no_wasm_opt == "true" { "--no-wasm-opt" } else { "" }}}
 	cargo run -p plugin-build -- publish --output dist/plugins {{if plugin != "" { "--plugin " + plugin } else { "" }}} {{if dry_run == "true" { "--dry-run" } else { "" }}}
 
-# Full release: bump version, package, publish
-# Usage: just plugin-release patch | just plugin-release minor wp2md | just plugin-release "" "" true
-plugin-release bump="" plugin="" dry_run="false" no_wasm_opt="false":
-	cargo run -p plugin-build -- release --output dist/plugins {{if bump != "" { "--bump " + bump } else { "" }}} {{if plugin != "" { "--plugin " + plugin } else { "" }}} {{if dry_run == "true" { "--dry-run" } else { "" }}} {{if no_wasm_opt == "true" { "--no-wasm-opt" } else { "" }}}
+# Full release: bump plugin version, package, publish (single plugin only)
+# Usage: just plugin-release wp2md patch | just plugin-release check patch true
+plugin-release plugin bump="" dry_run="false" no_wasm_opt="false":
+	cargo run -p plugin-build -- release --plugin {{plugin}} --output dist/plugins {{if bump != "" { "--bump " + bump } else { "" }}} {{if dry_run == "true" { "--dry-run" } else { "" }}} {{if no_wasm_opt == "true" { "--no-wasm-opt" } else { "" }}}
 
 # OTHERp
 

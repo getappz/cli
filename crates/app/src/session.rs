@@ -22,11 +22,22 @@ pub struct AppzSession {
     task_registry: OnceLock<Arc<TaskRegistry>>,
     api_client: OnceLock<Arc<Client>>,
     project_context: OnceLock<Option<ProjectContext>>,
+
+    // Performance debugging (APPZ_DEBUG_TIMING=1); Arc for Clone, RwLock for Sync
+    timing: Option<std::sync::Arc<std::sync::RwLock<common::timing::TimingDebug>>>,
 }
 
 impl AppzSession {
     pub fn new(cli: Cli) -> Self {
         debug!("Creating new application session");
+
+        let timing = if common::timing::TimingDebug::new().enabled() {
+            Some(std::sync::Arc::new(std::sync::RwLock::new(
+                common::timing::TimingDebug::new(),
+            )))
+        } else {
+            None
+        };
 
         Self {
             working_dir: PathBuf::new(),
@@ -34,6 +45,7 @@ impl AppzSession {
             api_client: OnceLock::new(),
             project_context: OnceLock::new(),
             cli,
+            timing,
         }
     }
 
@@ -77,8 +89,16 @@ pub fn requires_project_context(command: &crate::app::Commands) -> bool {
 impl AppSession for AppzSession {
     /// Setup initial state for the session
     async fn startup(&mut self) -> AppResult {
+        if let Some(ref t) = self.timing {
+            t.write().unwrap().checkpoint("startup: get_working_dir (pre)");
+        }
+
         // Determine working directory (respects --cwd if provided)
         self.working_dir = crate::systems::startup::get_working_dir(&self.cli)?;
+
+        if let Some(ref t) = self.timing {
+            t.write().unwrap().checkpoint("startup: get_working_dir");
+        }
 
         // Resolve token from available sources (CLI > env > auth.json)
         // Do NOT prompt for login here - that happens in analyze() if needed
@@ -162,11 +182,18 @@ impl AppSession for AppzSession {
         // Store client in session (may be authenticated or unauthenticated)
         let _ = self.api_client.set(client_arc);
 
+        if let Some(ref t) = self.timing {
+            t.write().unwrap().checkpoint("startup: full");
+        }
+
         Ok(None)
     }
 
     /// Analyze the current state and build necessary components
     async fn analyze(&mut self) -> AppResult {
+        if let Some(ref t) = self.timing {
+            t.write().unwrap().checkpoint("analyze: (pre)");
+        }
         // Check if current command requires authentication
         if auth::requires_auth(&self.cli.command) {
             let client = self.get_api_client();
@@ -249,6 +276,10 @@ impl AppSession for AppzSession {
         // Store registry in session
         let _ = self.task_registry.set(Arc::new(reg));
 
+        if let Some(ref t) = self.timing {
+            t.write().unwrap().checkpoint("analyze: task_registry + recipes");
+        }
+
         // Load project context if command requires it
         // This will automatically link the project if not already linked
         if requires_project_context(&self.cli.command) {
@@ -271,19 +302,35 @@ impl AppSession for AppzSession {
             }
         }
 
+        if let Some(ref t) = self.timing {
+            t.write().unwrap().checkpoint("analyze: full");
+        }
+
         Ok(None)
     }
 
     async fn execute(&mut self) -> AppResult {
+        if let Some(ref t) = self.timing {
+            t.write().unwrap().checkpoint("execute: (pre)");
+        }
+
         // Check for new version (non-blocking, won't fail command execution)
         if let Err(e) = crate::systems::version_check::check_for_new_version().await {
             debug!("Failed to check for new version: {}", e);
+        }
+
+        if let Some(ref t) = self.timing {
+            t.write().unwrap().checkpoint("execute: version_check");
         }
 
         Ok(None)
     }
 
     async fn shutdown(&mut self) -> AppResult {
+        if let Some(ref t) = self.timing {
+            t.write().unwrap().checkpoint("shutdown");
+            t.read().unwrap().print();
+        }
         // Cleanup resources if needed
         Ok(None)
     }

@@ -6,6 +6,7 @@
 pub mod consts;
 pub mod env;
 pub mod hardening;
+pub mod timing;
 pub mod head_tail_buffer;
 pub mod id;
 pub mod path;

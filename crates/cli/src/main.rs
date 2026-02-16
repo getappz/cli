@@ -34,16 +34,24 @@ fn get_tracing_modules() -> Vec<String> {
 
 #[tokio::main]
 async fn main() -> MainResult {
+    let mut timing = common::timing::TimingDebug::new();
+
     // Apply security hardening before processing any input.
     common::hardening::harden_process();
+    timing.checkpoint("harden_process");
 
     // Detect info about the current process
     let version = get_version();
+    timing.checkpoint("get_version (incl. GlobalEnvBag)");
 
     // Try to parse CLI args - handle gracefully if no command provided
     let cli = match Cli::try_parse() {
-        Ok(cli) => cli,
+        Ok(cli) => {
+            timing.checkpoint("Cli::try_parse");
+            cli
+        }
         Err(e) => {
+            timing.checkpoint("Cli::try_parse");
             // Check if it's a help or version request
             let is_help = e.kind() == clap::error::ErrorKind::DisplayHelp
                 || e.kind() == clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand;
@@ -51,13 +59,17 @@ async fn main() -> MainResult {
 
             // Show banner before help/version if appropriate
             if banner::should_display() && (is_help || is_version) {
+                timing.checkpoint("banner::should_display");
                 let _ = banner::display("appz", &version, Some("Orchestration & plugin CLI for web apps"));
+                timing.checkpoint("banner::display");
             }
 
             // Print the error (help or version)
             if let Err(io_err) = e.print() {
                 eprintln!("Failed to print help: {}", io_err);
             }
+            timing.checkpoint("e.print (help/version)");
+            timing.print();
 
             // Exit with success for help/version, error for other cases
             return Ok(if is_help || is_version {
@@ -69,10 +81,12 @@ async fn main() -> MainResult {
     };
 
     cli.setup_env_vars();
+    timing.checkpoint("setup_env_vars");
 
     // Setup diagnostics and tracing
     let app = App::default();
     app.setup_diagnostics();
+    timing.checkpoint("App::default + setup_diagnostics");
 
     let _guard = app.setup_tracing(TracingOptions {
         dump_trace: cli.dump,
@@ -82,6 +96,7 @@ async fn main() -> MainResult {
         show_spans: cli.log.map(|l| l.is_verbose()).unwrap_or(false),
         ..TracingOptions::default()
     });
+    timing.checkpoint("setup_tracing");
 
     if let Ok(exe) = env::current_exe() {
         debug!("Running appz v{} (with {:?})", version, exe,);
@@ -93,8 +108,10 @@ async fn main() -> MainResult {
     if banner::should_display() {
         let _ = banner::display("appz", &version, Some("Orchestration & plugin CLI for web apps"));
     }
+    timing.checkpoint("banner (success path)");
 
     // Run the CLI with starbase session lifecycle
+    timing.checkpoint("pre app.run");
     let exit_code = app
         .run(AppzSession::new(cli), |session| async {
             match session.cli.command.clone() {
@@ -185,6 +202,9 @@ async fn main() -> MainResult {
             }
         })
         .await?;
+
+    timing.checkpoint("app.run (session + command)");
+    timing.print();
 
     Ok(ExitCode::from(exit_code))
 }

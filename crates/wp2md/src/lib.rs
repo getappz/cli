@@ -32,6 +32,7 @@ pub mod types;
 pub mod vfs;
 #[cfg(feature = "native")]
 pub mod vfs_native;
+pub mod wpjson;
 pub mod xml;
 mod writer;
 
@@ -40,24 +41,26 @@ use miette::Result;
 use types::ConvertResult;
 use vfs::Wp2mdVfs;
 
-/// Convert a WordPress WXR export to Markdown files.
+/// Convert a WordPress WXR export or wp-json API site to Markdown files.
 ///
-/// This is the main entry point for the library. It reads the XML
-/// export, parses posts, converts HTML to Markdown, generates
-/// frontmatter, and writes output files + images.
+/// Input can be either:
+/// - A file path to a WXR (XML) export
+/// - A WordPress site URL (e.g. `https://mysite.com`) to fetch via REST API
 pub fn convert_export(vfs: &dyn Wp2mdVfs, config: &Wp2mdConfig) -> Result<ConvertResult> {
-    // Read and parse the WXR XML
-    let xml_content = vfs.read_to_string(&config.input)?;
-    let rss = xml::parse_wxr(&xml_content)?;
+    let mut posts = if is_wpjson_url(&config.input) {
+        vfs.create_dir_all(&config.output)?;
+        wpjson::fetch_posts_from_wpjson(vfs, &config.input, config)?
+    } else {
+        let xml_content = vfs.read_to_string(&config.input)?;
+        let rss = xml::parse_wxr(&xml_content)?;
+        parser::collect_posts(&rss, config)?
+    };
 
-    // Collect and build posts
-    let mut posts = parser::collect_posts(&rss, config)?;
-
-    // Convert HTML content to Markdown
     translator::translate_posts(&mut posts);
+    writer::write_all(vfs, &posts, config)
+}
 
-    // Write markdown files and download images
-    let stats = writer::write_all(vfs, &posts, config)?;
-
-    Ok(stats)
+fn is_wpjson_url(input: &str) -> bool {
+    let trimmed = input.trim();
+    trimmed.starts_with("http://") || trimmed.starts_with("https://")
 }

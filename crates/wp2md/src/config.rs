@@ -5,10 +5,14 @@ use serde::{Deserialize, Serialize};
 /// Top-level configuration for the conversion process.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Wp2mdConfig {
-    /// Path to the WordPress WXR export XML file.
+    /// Path to the WordPress WXR export XML file, or WordPress site URL for wp-json.
     pub input: String,
     /// Output directory for generated files.
     pub output: String,
+    /// Posts per page when fetching from wp-json API (default 100).
+    pub wpjson_per_page: u32,
+    /// Whether to fetch pages in addition to posts when using wp-json (default true).
+    pub wpjson_include_pages: bool,
     /// Whether to create a separate folder for each post.
     pub post_folders: bool,
     /// Whether to prepend the date to post folder/file names.
@@ -39,6 +43,8 @@ impl Default for Wp2mdConfig {
         Self {
             input: "export.xml".to_string(),
             output: "output".to_string(),
+            wpjson_per_page: 100,
+            wpjson_include_pages: true,
             post_folders: true,
             prefix_date: false,
             date_folders: DateFolders::None,

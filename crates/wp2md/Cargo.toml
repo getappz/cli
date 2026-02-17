@@ -14,6 +14,7 @@ native = ["dep:reqwest"]
 [dependencies]
 # Core dependencies (always compiled — WASM-safe)
 serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 miette = { workspace = true }
 regex = { workspace = true }
 chrono = { workspace = true }

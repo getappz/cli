@@ -97,7 +97,7 @@ pub fn deep_merge_json(base: &serde_json::Value, overlay: &serde_json::Value) ->
 }
 
 /// Convert a TOML value to a JSON value.
-fn toml_to_json(toml_val: &toml::Value) -> serde_json::Value {
+pub fn toml_to_json(toml_val: &toml::Value) -> serde_json::Value {
     match toml_val {
         toml::Value::String(s) => serde_json::Value::String(s.clone()),
         toml::Value::Integer(i) => serde_json::json!(*i),

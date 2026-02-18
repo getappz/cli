@@ -26,6 +26,7 @@ members = [
     "crates/skills",
     "crates/plugin-manager",
     "crates/wp2md",
+    "crates/code-search",
     "crates/crawl-core",
     "crates/plugins/ssg-migrator",
     "crates/plugins/check",
@@ -49,6 +50,8 @@ name = "appz"
 path = "crates/cli/src/main.rs"
 
 [dependencies]
+# Fast allocator for allocation-heavy paths (M-MIMALLOC-APPS).
+mimalloc = "0.1"
 app = { path = "crates/app", default-features = false }
 common = { path = "crates/common" }
 ui = { path = "crates/ui" }
@@ -82,6 +85,7 @@ site = ["app/site"]
 mcp = ["app/mcp"]
 gen = ["app/gen"]
 self_update = ["app/self_update"]
+code-search = ["app/code-search"]
 tui = ["app/tui", "ui/tui"]
 
 [workspace.package]
@@ -89,6 +93,18 @@ version = "0.1.1"
 edition = "2021"
 license = "MIT"
 authors = ["Appz Contributors"]
+
+# Release profile: LTO and panic=abort for smaller, faster binaries.
+# See: https://gist.github.com/jFransham/369a86eff00e5f280ed25121454acec1
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+
+# Benchmark profile: debug symbols for profiling (perf, VTune, Superluminal).
+[profile.bench]
+inherits = "release"
+debug = 1
 
 # Profile for WASM plugin builds: smaller output, DCE-friendly.
 # Use with: cargo build --profile release-wasm --target wasm32-wasip1 -p <plugin>

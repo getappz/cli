@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 "use strict";
 
-// Launches `appz mcp-server`. Requires appz to be installed (cargo install appz, or from release).
+// Launches `appz mcp`. Requires appz to be installed (cargo install appz, or from release).
 const { spawn } = require("node:child_process");
 
 function main() {
-  const child = spawn("appz", ["mcp-server", ...process.argv.slice(2)], {
+  const child = spawn("appz", ["mcp", ...process.argv.slice(2)], {
     stdio: "inherit",
   });
 
@@ -24,7 +24,7 @@ function main() {
   });
 
   child.on("error", (err) => {
-    console.error("Failed to start appz mcp-server:", err.message);
+    console.error("Failed to start appz mcp:", err.message);
     console.error(
       "Ensure appz is installed: cargo install appz, or install from release."
     );

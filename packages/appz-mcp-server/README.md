@@ -2,7 +2,7 @@
 
 MCP (Model Context Protocol) server launcher for [appz](https://github.com/appz-dev/appz-cli). Exposes appz CLI commands and a sandboxed shell to AI assistants (Cursor, Claude Desktop, etc.).
 
-**Requires appz to be installed** — this package is a thin wrapper that runs `appz mcp-server`.
+**Requires appz to be installed** — this package is a thin wrapper that runs `appz mcp`.
 
 ## Install appz
 
@@ -46,7 +46,7 @@ Or use the appz binary directly (no npm package needed):
   "mcpServers": {
     "appz": {
       "command": "appz",
-      "args": ["mcp-server"]
+      "args": ["mcp"]
     }
   }
 }

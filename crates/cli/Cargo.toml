@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 app = { path = "../app", default-features = false }
+mimalloc = "0.1"
 common = { path = "../common" }
 ui = { path = "../ui" }
 env_var = { path = "../env_var" }

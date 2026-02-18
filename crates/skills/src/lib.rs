@@ -53,7 +53,7 @@ pub enum SkillsCommands {
         /// Working directory when using --code (default: current directory)
         #[arg(long, short = 'C')]
         workdir: Option<std::path::PathBuf>,
-        /// Skill name when using --code (default: project name from dir or package.json)
+        /// Skill name when using --code (reserved; currently always uses "code-ref")
         #[arg(long, short = 'n')]
         name: Option<String>,
         /// Install to ~/.appz/skills (user-global)

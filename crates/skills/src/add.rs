@@ -14,7 +14,6 @@ use sandbox::{create_sandbox, SandboxConfig, SandboxSettings};
 use starbase::AppResult;
 use std::path::{Path, PathBuf};
 use starbase_utils::{dirs, fs as starbase_fs};
-use tempfile::TempDir;
 
 /// Project-local AI agent skills subdirs to check for existing skills (relative to cwd).
 fn project_skills_subdirs() -> Vec<&'static str> {
@@ -433,7 +432,7 @@ async fn add_from_code(
     list_only: bool,
     _agent: &[String],
     workdir: Option<PathBuf>,
-    name: Option<String>,
+    _name: Option<String>,
 ) -> AppResult {
     let _ = ui::layout::blank_line();
 
@@ -442,20 +441,11 @@ async fn add_from_code(
         .canonicalize()
         .map_err(|e| miette::miette!("Invalid workdir: {}", e))?;
 
-    let skill_name = name
-        .map(|n| to_kebab_case(&n))
-        .unwrap_or_else(|| derive_skill_name(&workdir));
-
-    if skill_name.is_empty() {
-        return Err(miette::miette!("Skill name cannot be empty").into());
-    }
-
     let code_ref_path = workdir.join(CODE_REF_DIR);
 
     if list_only {
         let _ = ui::status::info(&format!(
-            "Would generate skill '{}' to {} and symlink into agent dirs (Repomix)",
-            skill_name,
+            "Would generate code-ref to {} and symlink into agent dirs (Repomix)",
             code_ref_path.display()
         ));
         let _ = ui::layout::blank_line();
@@ -473,29 +463,19 @@ async fn add_from_code(
         }
     }
 
-    let _ = ui::status::info(&format!(
-        "Generating skill '{}' from {} (Repomix)...",
-        skill_name,
-        workdir.display()
-    ));
-
-    let skill_path = repomix_skill_generate(&workdir, &skill_name).await?;
-
     starbase_fs::create_dir_all(code_ref_path.parent().unwrap_or(workdir.as_path()))
         .map_err(|e| miette::miette!("Failed to create docs dir: {}", e))?;
     if code_ref_path.exists() {
         starbase_fs::remove_dir_all(&code_ref_path)
             .map_err(|e| miette::miette!("Failed to remove existing {}: {}", code_ref_path.display(), e))?;
     }
-    copy_skill_dir(&skill_path, &code_ref_path)?;
 
-    // Remove temporary skill dir used for repomix output
-    let temp_parent = skill_path.parent();
-    if let Some(p) = temp_parent {
-        if p.ends_with("repomix-skill-temp") {
-            let _ = starbase_fs::remove_dir_all(p);
-        }
-    }
+    let _ = ui::status::info(&format!(
+        "Generating code-ref from {} (Repomix)...",
+        workdir.display()
+    ));
+
+    repomix_skill_generate(&workdir, &code_ref_path).await?;
 
     // Symlink docs/code-ref into project agent skill dirs (.cursor/skills, .claude/skills, etc.)
     let docs_dir = workdir.join("docs");
@@ -518,18 +498,17 @@ async fn add_from_code(
     Ok(None)
 }
 
-/// Run Repomix --skill-generate and return path to the generated skill folder.
+/// Run Repomix --skill-generate and write directly to docs/code-ref.
 /// Requires Node.js (mise). Uses sandbox at workdir.
-async fn repomix_skill_generate(workdir: &Path, skill_name: &str) -> Result<PathBuf, miette::Report> {
+async fn repomix_skill_generate(
+    workdir: &Path,
+    output_path: &Path,
+) -> Result<(), miette::Report> {
     let config = SandboxConfig::new(workdir)
         .with_settings(SandboxSettings::default().with_tool("node", Some("22")));
     let sandbox = create_sandbox(config)
         .await
         .map_err(|e| miette::miette!("Failed to create sandbox: {}", e))?;
-
-    let temp_dir = TempDir::new()
-        .map_err(|e| miette::miette!("Failed to create temp dir: {}", e))?;
-    let output_base = temp_dir.path();
 
     // Restrict to source, config, and docs - same patterns as code-search pack
     let include_patterns = "**/*.ts,**/*.tsx,**/*.astro,**/*.js,**/*.jsx,**/*.rs,**/*.py,**/*.go,**/*.md,**/*.mdx,**/astro.config.*,**/tailwind.config.*,**/vite.config.*,**/*.config.*,**/Cargo.toml,**/package.json";
@@ -537,46 +516,34 @@ async fn repomix_skill_generate(workdir: &Path, skill_name: &str) -> Result<Path
         ".claude/**,.cursor/**,.codex/**,.aider/**,.continue/**,.github/copilot/**,**/node_modules/**";
 
     let cmd = format!(
-        "npx repomix@latest --skill-generate {} --skill-output {} --force --include \"{}\" --ignore \"{}\" .",
-        skill_name,
-        output_base.display(),
+        "npx repomix@latest --skill-generate code-ref --skill-output {} --force --include \"{}\" --ignore \"{}\" .",
+        output_path.display(),
         include_patterns,
         ignore_patterns
     );
 
-    let out = sandbox
-        .exec(&cmd)
+    let status = sandbox
+        .exec_interactive(&cmd)
         .await
         .map_err(|e| miette::miette!("Repomix failed: {}", e))?;
 
-    if !out.success() {
+    if !status.success() {
         return Err(miette::miette!(
-            "Repomix failed: {}",
-            out.stderr().trim()
+            "Repomix exited with code {:?}",
+            status.code()
         )
         .into());
     }
 
-    let skill_path = output_base.join(skill_name);
-    if !skill_path.join("SKILL.md").exists() {
+    if !output_path.join("SKILL.md").exists() {
         return Err(miette::miette!(
-            "Repomix did not produce skill folder at {}. Output may have used a different name.",
-            skill_path.display()
+            "Repomix did not produce skill folder at {}",
+            output_path.display()
         )
         .into());
     }
 
-    // Persist beyond TempDir: copy to a stable location so caller can use it
-    let persist_dir = workdir.join(".appz").join("repomix-skill-temp");
-    starbase_fs::create_dir_all(&persist_dir)
-        .map_err(|e| miette::miette!("Failed to create temp skill dir: {}", e))?;
-    let final_path = persist_dir.join(skill_name);
-    if final_path.exists() {
-        let _ = starbase_fs::remove_dir_all(&final_path);
-    }
-    copy_skill_dir(&skill_path, &final_path)?;
-
-    Ok(final_path)
+    Ok(())
 }
 
 /// Install a skill from a direct URL or well-known endpoint via providers.

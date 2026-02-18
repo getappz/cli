@@ -11,7 +11,6 @@ chrono = { workspace = true }
 glob = "0.3"
 detectors = { path = "../detectors" }
 sandbox = { path = "../sandbox" }
-tempfile = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 common = { path = "../common" }
 init = { path = "../init" }

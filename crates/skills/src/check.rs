@@ -23,6 +23,12 @@ pub async fn check(ctx: &SkillsContext) -> AppResult {
     let mut errors: Vec<(String, String)> = Vec::new();
     let mut checked = 0u32;
 
+    let _check_spinner = if !ctx.verbose && skill_names.len() > 1 {
+        Some(ui::progress::spinner("Checking for updates..."))
+    } else {
+        None
+    };
+
     for name in &skill_names {
         let Some(entry) = lock.skills.get(name) else {
             continue;

@@ -1,6 +1,10 @@
 use app::{AppzSession, Cli, Commands};
 use clap::Parser;
 use env_var::GlobalEnvBag;
+use mimalloc::MiMalloc;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 use starbase::tracing::TracingOptions;
 use starbase::{App, MainResult};
 use std::env;
@@ -179,6 +183,10 @@ async fn main() -> MainResult {
                     app::commands::deploy_list(session, provider).await
                 }
                 // Check and site commands are now downloadable plugins (handled by External)
+                #[cfg(feature = "code-search")]
+                Commands::Code { command } => {
+                    app::commands::code::run(session, command).await
+                }
                 Commands::Skills { command } => {
                     app::commands::skills::run(session, command).await
                 }

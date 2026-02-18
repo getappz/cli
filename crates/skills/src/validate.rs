@@ -5,6 +5,7 @@
 use crate::context::SkillsContext;
 use regex::Regex;
 use serde::Deserialize;
+use std::sync::OnceLock;
 use serde::Serialize;
 use starbase::AppResult;
 use starbase_utils::fs;
@@ -90,7 +91,8 @@ fn validate_skill_name(name: &str) -> Vec<String> {
     if name.len() > 64 {
         errors.push("Name must be 64 characters or less".to_string());
     }
-    let re = Regex::new(r"^[a-z][a-z0-9-]*[a-z0-9]$|^[a-z]$").unwrap();
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| Regex::new(r"^[a-z][a-z0-9-]*[a-z0-9]$|^[a-z]$").unwrap());
     if !re.is_match(name) {
         errors.push("Name must contain only lowercase letters, numbers, and hyphens. Must start with a letter and not end with a hyphen".to_string());
     }

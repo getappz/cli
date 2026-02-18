@@ -4,6 +4,7 @@
 //! skills.sh URLs, direct skill.md URLs, well-known.
 
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 /// Result of parsing a source with optional skill filters (skillman-style).
 #[derive(Clone, Debug)]
@@ -262,24 +263,29 @@ fn is_well_known_url(input: &str) -> bool {
     false
 }
 
-fn regex_for_tree_path() -> regex::Regex {
-    regex::Regex::new(r"(?i)github\.com/([^/]+)/([^/]+)/tree/([^/]+)/(.+)").unwrap()
+fn regex_for_tree_path() -> &'static regex::Regex {
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    RE.get_or_init(|| regex::Regex::new(r"(?i)github\.com/([^/]+)/([^/]+)/tree/([^/]+)/(.+)").unwrap())
 }
 
-fn regex_for_at_skill() -> regex::Regex {
-    regex::Regex::new(r"^([^/]+)/([^/@]+)@(.+)$").unwrap()
+fn regex_for_at_skill() -> &'static regex::Regex {
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    RE.get_or_init(|| regex::Regex::new(r"^([^/]+)/([^/@]+)@(.+)$").unwrap())
 }
 
-fn regex_for_owner_repo() -> regex::Regex {
-    regex::Regex::new(r"^([^/]+)/([^/]+)(?:/(.+))?$").unwrap()
+fn regex_for_owner_repo() -> &'static regex::Regex {
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    RE.get_or_init(|| regex::Regex::new(r"^([^/]+)/([^/]+)(?:/(.+))?$").unwrap())
 }
 
-fn regex_for_github_url() -> regex::Regex {
-    regex::Regex::new(r"(?i)github\.com/([^/]+)/([^/]+?)(?:\.git)?/?").unwrap()
+fn regex_for_github_url() -> &'static regex::Regex {
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    RE.get_or_init(|| regex::Regex::new(r"(?i)github\.com/([^/]+)/([^/]+?)(?:\.git)?/?").unwrap())
 }
 
-fn regex_for_gitlab_tree() -> regex::Regex {
-    regex::Regex::new(r"^(https?)://([^/]+)/(.+?)/-/tree/([^/]+)(?:/(.+))?$").unwrap()
+fn regex_for_gitlab_tree() -> &'static regex::Regex {
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    RE.get_or_init(|| regex::Regex::new(r"^(https?)://([^/]+)/(.+?)/-/tree/([^/]+)(?:/(.+))?$").unwrap())
 }
 
 /// Parse skills.sh URLs: (?:https?://)?skills.sh/owner/repo or .../owner/repo/skill1/skill2

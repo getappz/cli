@@ -12,7 +12,7 @@ mod check;
 mod skill_lock;
 mod plugin_manifest;
 mod providers;
-mod source_parser;
+pub mod source_parser;
 mod context;
 mod find;
 mod init_cmd;
@@ -42,10 +42,20 @@ pub enum SkillsCommands {
         #[arg(long, short = 'a')]
         agent: Vec<String>,
     },
-    /// Install a skill from GitHub (owner/repo), URL, or local path
+    /// Install a skill from GitHub (owner/repo), URL, local path, or generate from code
     Add {
-        /// Skill source: owner/repo, https://..., or ./local-path
-        source: String,
+        /// Skill source: owner/repo, https://..., ./local-path, or omit with --code
+        #[arg(required_unless_present = "code")]
+        source: Option<String>,
+        /// Generate skill from current project via Repomix (codebase reference)
+        #[arg(long)]
+        code: bool,
+        /// Working directory when using --code (default: current directory)
+        #[arg(long, short = 'C')]
+        workdir: Option<std::path::PathBuf>,
+        /// Skill name when using --code (default: project name from dir or package.json)
+        #[arg(long, short = 'n')]
+        name: Option<String>,
         /// Install to ~/.appz/skills (user-global)
         #[arg(long, short = 'g')]
         global: bool,
@@ -172,6 +182,9 @@ pub async fn run(ctx: SkillsContext, command: SkillsCommands) -> AppResult {
         } => install::install(&ctx, global, agent, yes).await,
         SkillsCommands::Add {
             source,
+            code,
+            workdir,
+            name,
             global,
             project,
             yes,
@@ -181,7 +194,10 @@ pub async fn run(ctx: SkillsContext, command: SkillsCommands) -> AppResult {
             all: _all,
             full_depth,
             no_save,
-        } => add::add(&ctx, source, global, project, yes, skill, list, &agent, _all, full_depth, None, no_save).await,
+        } => {
+            let source = source.unwrap_or_else(|| ".".to_string());
+            add::add(&ctx, source, global, project, yes, skill, list, &agent, _all, full_depth, None, no_save, code, workdir, name).await
+        }
         SkillsCommands::List {
             global: global_only,
             project: project_only,

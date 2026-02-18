@@ -4,6 +4,7 @@
 
 use super::{parse_frontmatter, HostProvider, ProviderMatch, RemoteSkill};
 use serde::Deserialize;
+use std::sync::OnceLock;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct WellKnownSkillEntry {
@@ -65,7 +66,7 @@ impl HostProvider for WellKnownProvider {
         let parsed = url::Url::parse(url).ok()?;
         let path = parsed.path();
 
-        let skill_name = if let Some(m) = regex::Regex::new(r"/.well-known/skills/([^/]+)/?$").ok()?.captures(path) {
+        let skill_name = if let Some(m) = regex_well_known_skill_path().captures(path) {
             m.get(1).map(|x| x.as_str().to_string())
         } else if index.skills.len() == 1 {
             Some(index.skills[0].name.clone())
@@ -76,6 +77,11 @@ impl HostProvider for WellKnownProvider {
         let entry = index.skills.iter().find(|s| s.name == skill_name)?;
         self.fetch_skill_by_entry(&base_url, entry).await
     }
+}
+
+fn regex_well_known_skill_path() -> &'static regex::Regex {
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    RE.get_or_init(|| regex::Regex::new(r"/.well-known/skills/([^/]+)/?$").unwrap())
 }
 
 impl WellKnownProvider {

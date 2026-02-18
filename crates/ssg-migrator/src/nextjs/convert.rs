@@ -12,6 +12,7 @@ pub enum NextJsTransform {
     Helmet,
     Context,
     Image,
+    Env,
     All,
 }
 
@@ -25,6 +26,7 @@ pub fn parse_transforms(s: &str) -> Vec<NextJsTransform> {
             "helmet" => out.push(NextJsTransform::Helmet),
             "context" => out.push(NextJsTransform::Context),
             "image" => out.push(NextJsTransform::Image),
+            "env" => out.push(NextJsTransform::Env),
             "all" => return vec![NextJsTransform::All],
             _ => {}
         }
@@ -53,8 +55,16 @@ pub fn convert_to_nextjs(content: &str, transforms: &[NextJsTransform]) -> Resul
     if apply_all || transforms.contains(&NextJsTransform::Image) {
         result = fix_image_imports(&result);
     }
+    if apply_all || transforms.contains(&NextJsTransform::Env) {
+        result = replace_react_app_env(&result);
+    }
 
     Ok(result)
+}
+
+/// Replace REACT_APP_ with NEXT_PUBLIC_ for Next.js env var prefix.
+fn replace_react_app_env(content: &str) -> String {
+    content.replace("REACT_APP_", "NEXT_PUBLIC_")
 }
 
 /// Replace React Helmet with Next.js metadata pattern.

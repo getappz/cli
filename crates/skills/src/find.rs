@@ -76,6 +76,11 @@ pub async fn find(ctx: &SkillsContext, query: Option<String>) -> AppResult {
             .map_err(|e| miette::miette!("Prompt failed: {}", e))?;
         let search_q = search_q.trim();
         if search_q.len() >= 2 {
+            let _search_spinner = if !ctx.verbose {
+                Some(ui::progress::spinner("Searching skills.sh..."))
+            } else {
+                None
+            };
             let api_results = search_skills_api(search_q, 10).await;
             if !api_results.is_empty() {
                 let options: Vec<String> = api_results
@@ -107,6 +112,9 @@ pub async fn find(ctx: &SkillsContext, query: Option<String>) -> AppResult {
                                 false,
                                 None,
                                 false,
+                                false, // code
+                                None,  // workdir
+                                None,  // name
                             )
                             .await;
                         }
@@ -117,6 +125,11 @@ pub async fn find(ctx: &SkillsContext, query: Option<String>) -> AppResult {
     }
 
     if let Some(ref q) = query {
+        let _search_spinner = if !ctx.verbose {
+            Some(ui::progress::spinner("Searching skills.sh..."))
+        } else {
+            None
+        };
         let api_results = search_skills_api(q, 10).await;
         if !api_results.is_empty() {
             let _ = ui::layout::blank_line();

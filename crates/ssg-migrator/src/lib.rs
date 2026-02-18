@@ -2,7 +2,10 @@
 
 // Core types are always available
 mod types;
-pub use types::{ComponentInfo, MigrationConfig, ProjectAnalysis, RouteInfo, SsgSeverity, SsgWarning};
+pub use types::{
+    ComponentInfo, MigrationConfig, PreMigrationReport, ProjectAnalysis, RouteInfo, SsgSeverity,
+    SsgWarning,
+};
 
 // Virtual filesystem abstraction (always available)
 pub mod vfs;
@@ -23,7 +26,7 @@ mod nextjs;
 mod sync;
 mod transformer;
 
-pub use analyzer::analyze_project;
+pub use analyzer::{analyze_project, run_pre_migration_scan};
 pub use ast_transformer::transform_with_ast;
 pub use common::{copy_public_assets, copy_tailwind_config, filter_deps, filter_lovable_deps};
 pub use generator::generate_astro_project;

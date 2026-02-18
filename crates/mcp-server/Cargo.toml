@@ -13,6 +13,10 @@ path = "src/lib.rs"
 name = "appz-mcp-server"
 path = "src/main.rs"
 
+[features]
+default = []
+code-search = ["dep:code-search"]
+
 [dependencies]
 rmcp = { workspace = true, default-features = false, features = [
     "server",
@@ -25,4 +29,5 @@ sandbox = { path = "../sandbox" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 schemars = { version = "0.8", features = ["derive"] }
-which = "6.0"
+which = { workspace = true }
+code-search = { path = "../code-search", optional = true }

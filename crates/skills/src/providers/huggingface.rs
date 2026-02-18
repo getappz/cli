@@ -3,6 +3,7 @@
 //! URLs: huggingface.co/spaces/owner/repo/blob|raw/main/SKILL.md
 
 use super::{parse_frontmatter, HostProvider, ProviderMatch, RemoteSkill};
+use std::sync::OnceLock;
 
 pub struct HuggingFaceProvider;
 
@@ -85,9 +86,13 @@ impl HostProvider for HuggingFaceProvider {
     }
 }
 
+fn regex_hf_spaces() -> &'static regex::Regex {
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    RE.get_or_init(|| regex::Regex::new(r"/spaces/([^/]+)/([^/]+)").unwrap())
+}
+
 fn parse_hf_url(url: &str) -> Option<(&str, &str)> {
-    let re = regex::Regex::new(r"/spaces/([^/]+)/([^/]+)").ok()?;
-    let caps = re.captures(url)?;
+    let caps = regex_hf_spaces().captures(url)?;
     let owner = caps.get(1)?.as_str();
     let repo = caps.get(2)?.as_str();
     Some((owner, repo))

@@ -1,7 +1,24 @@
 //! App Router page creation and cleanup.
 
 use super::regex::RE_DYNAMIC_PARAM;
-use super::templates::PAGE_TEMPLATE;
+use super::templates::{ERROR_TEMPLATE, LOADING_TEMPLATE, PAGE_TEMPLATE};
+
+fn create_loading_error_stubs(
+    vfs: &dyn Vfs,
+    output_dir: &Utf8PathBuf,
+) -> Result<()> {
+    vfs.write_string(
+        output_dir.join("src/app/loading.tsx").as_str(),
+        LOADING_TEMPLATE,
+    )
+    .map_err(|e| miette!("Failed to write loading.tsx: {}", e))?;
+    vfs.write_string(
+        output_dir.join("src/app/error.tsx").as_str(),
+        ERROR_TEMPLATE,
+    )
+    .map_err(|e| miette!("Failed to write error.tsx: {}", e))?;
+    Ok(())
+}
 use crate::types::{ProjectAnalysis, RouteInfo};
 use crate::vfs::Vfs;
 use camino::Utf8PathBuf;
@@ -14,6 +31,8 @@ pub(super) fn create_app_router_pages(
     analysis: &ProjectAnalysis,
     static_export: bool,
 ) -> Result<()> {
+    create_loading_error_stubs(vfs, output_dir)?;
+
     for route in &analysis.routes {
         let (app_segment, page_name, component) = route_to_page_info(route)?;
         let page_path = if app_segment.is_empty() {
@@ -44,20 +63,39 @@ fn route_to_page_info(route: &RouteInfo) -> Result<(String, String, String)> {
     if route.component == "Index" {
         return Ok(("".into(), "page.tsx".into(), "Index".into()));
     }
-    if route.is_catch_all || route.component == "NotFound" {
+    if route.path == "*" && (route.is_catch_all || route.component == "NotFound") {
         return Ok(("".into(), "not-found.tsx".into(), route.component.clone()));
     }
     let path = route.path.trim_start_matches('/');
+    if route.is_optional_catch_all || (route.is_catch_all && path.contains("[...")) {
+        return Ok((path.to_string(), "page.tsx".into(), route.component.clone()));
+    }
     let segment = RE_DYNAMIC_PARAM.replace_all(path, "[$1]").to_string();
     Ok((segment, "page.tsx".into(), route.component.clone()))
 }
 
 fn extract_dynamic_params(segment: &str) -> Vec<String> {
-    Regex::new(r"\[(\w+)\]")
+    let mut params = Vec::new();
+    for cap in Regex::new(r"\[\[?\.\.\.(\w+)\]\]?")
         .unwrap()
         .captures_iter(segment)
-        .filter_map(|c| c.get(1).map(|m| m.as_str().to_string()))
-        .collect()
+    {
+        if let Some(m) = cap.get(1) {
+            let name = m.as_str().to_string();
+            if !params.contains(&name) {
+                params.push(name);
+            }
+        }
+    }
+    for cap in Regex::new(r"\[(\w+)\]").unwrap().captures_iter(segment) {
+        if let Some(m) = cap.get(1) {
+            let name = m.as_str().to_string();
+            if !params.contains(&name) {
+                params.push(name);
+            }
+        }
+    }
+    params
 }
 
 fn build_generate_static_params(params: &[String]) -> String {

@@ -70,6 +70,9 @@ pub async fn update(ctx: &SkillsContext) -> AppResult {
             false, // full_depth
             None,  // skill_filters_override
             true,  // no_save (update doesn't touch skills.json)
+            false, // code
+            None,  // workdir
+            None,  // name
         )
         .await
         {

@@ -7,7 +7,7 @@ MCP (Model Context Protocol) server that exposes appz CLI commands as tools for 
 ### Via appz subcommand
 
 ```bash
-appz mcp-server
+appz mcp
 ```
 
 ### Standalone binary
@@ -50,7 +50,7 @@ Add to your MCP config (e.g. Cursor settings):
   "mcpServers": {
     "appz": {
       "command": "appz",
-      "args": ["mcp-server"]
+      "args": ["mcp"]
     }
   }
 }
@@ -63,7 +63,7 @@ With token via env:
   "mcpServers": {
     "appz": {
       "command": "appz",
-      "args": ["mcp-server"],
+      "args": ["mcp"],
       "env": { "APPZ_API_TOKEN": "your-token-here" }
     }
   }

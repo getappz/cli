@@ -24,3 +24,10 @@ starbase_archive = { workspace = true }
 starbase_utils = { workspace = true }
 tempfile = { workspace = true }
 tracing = "0.1"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "parse_git"
+harness = false

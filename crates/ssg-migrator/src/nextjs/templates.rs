@@ -93,3 +93,35 @@ export default function PAGENAME() {
   return <PAGENAMEPage />;
 }
 "#;
+
+pub(super) const LOADING_TEMPLATE: &str = r#"export default function Loading() {
+  return (
+    <div className="flex min-h-screen items-center justify-center">
+      <div className="animate-pulse text-muted-foreground">Loading...</div>
+    </div>
+  );
+}
+"#;
+
+pub(super) const ERROR_TEMPLATE: &str = r#""use client";
+
+export default function Error({
+  error,
+  reset,
+}: {
+  error: Error & { digest?: string };
+  reset: () => void;
+}) {
+  return (
+    <div className="flex min-h-screen flex-col items-center justify-center gap-4">
+      <h2 className="text-lg font-semibold">Something went wrong</h2>
+      <button
+        onClick={() => reset()}
+        className="rounded-md border px-4 py-2 text-sm hover:bg-muted"
+      >
+        Try again
+      </button>
+    </div>
+  );
+}
+"#;

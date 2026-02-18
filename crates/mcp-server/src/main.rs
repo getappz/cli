@@ -1,6 +1,6 @@
 //! MCP server binary entry point.
 //!
-//! Can be run standalone as `appz-mcp-server` or via `appz mcp-server` subcommand.
+//! Can be run standalone as `appz-mcp-server` or via `appz mcp` subcommand.
 
 use mcp_server::run_server;
 

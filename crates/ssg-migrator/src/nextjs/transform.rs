@@ -66,6 +66,9 @@ pub(super) fn transform_client_files(
                 if should_apply(&transforms, NextJsTransform::Image) {
                     c = fix_image_imports(&c);
                 }
+                if should_apply(&transforms, NextJsTransform::Env) {
+                    c = replace_react_app_env(&c);
+                }
                 Some(c)
             }
             "ts" | "js" => {
@@ -76,7 +79,8 @@ pub(super) fn transform_client_files(
                 let has_context = content.contains("createContext")
                     || content.contains("useContext")
                     || content.contains("React.createContext");
-                if has_router || has_images || has_helmet || has_context {
+                let has_react_app = content.contains("REACT_APP_");
+                if has_router || has_images || has_helmet || has_context || has_react_app {
                     let mut c = content.clone();
                     if has_router && should_apply(&transforms, NextJsTransform::Router) {
                         c = replace_react_router(&c);
@@ -89,6 +93,9 @@ pub(super) fn transform_client_files(
                     }
                     if has_images && should_apply(&transforms, NextJsTransform::Image) {
                         c = fix_image_imports(&c);
+                    }
+                    if has_react_app && should_apply(&transforms, NextJsTransform::Env) {
+                        c = replace_react_app_env(&c);
                     }
                     Some(c)
                 } else {
@@ -207,6 +214,10 @@ fn replace_react_helmet(content: &str) -> String {
         .replace_all(&result, "/* React Helmet removed - add metadata in layout.tsx */")
         .to_string();
     result
+}
+
+fn replace_react_app_env(content: &str) -> String {
+    content.replace("REACT_APP_", "NEXT_PUBLIC_")
 }
 
 fn ensure_context_client(content: &str) -> String {

@@ -15,7 +15,7 @@ pub(super) fn write_package_json(
     static_export: bool,
 ) -> Result<()> {
     let mut dependencies = Map::new();
-    dependencies.insert("next".to_string(), json!("15.5.6"));
+    dependencies.insert("next".to_string(), json!("^16.0.0"));
     dependencies.insert("react".to_string(), json!("19.1.0"));
     dependencies.insert("react-dom".to_string(), json!("19.1.0"));
 
@@ -29,6 +29,8 @@ pub(super) fn write_package_json(
     dev_dependencies.insert("@types/react".to_string(), json!("^19"));
     dev_dependencies.insert("@types/react-dom".to_string(), json!("^19"));
     dev_dependencies.insert("typescript".to_string(), json!("^5"));
+    dev_dependencies.insert("eslint".to_string(), json!("^9"));
+    dev_dependencies.insert("eslint-config-next".to_string(), json!("^16"));
     if analysis.has_tailwind {
         let tw_ver = dependencies.remove("tailwindcss").unwrap_or_else(|| json!("^3.4.0"));
         let pc_ver = dependencies.remove("postcss").unwrap_or_else(|| json!("^8"));
@@ -79,24 +81,40 @@ pub(super) fn copy_config_files(
     vfs: &dyn Vfs,
     output_dir: &Utf8PathBuf,
     source_dir: &Utf8PathBuf,
+    analysis: &ProjectAnalysis,
     static_export: bool,
 ) -> Result<()> {
-    let static_lines = if static_export {
-        r#"
+    let mut config_parts = Vec::new();
+    if static_export {
+        config_parts.push(r#"
   output: "export",
-  images: { unoptimized: true },"#
-    } else {
-        ""
-    };
+  images: { unoptimized: true },"#.to_string());
+    }
+    if analysis.has_websocket_deps {
+        config_parts.push(r#"
+  webpack: (config, { isServer }) => {
+    if (isServer) {
+      config.externals = config.externals || [];
+      config.externals.push({ net: 'commonjs net', tls: 'commonjs tls' });
+    }
+    config.resolve = config.resolve || {};
+    config.resolve.fallback = { ...config.resolve.fallback, net: false, tls: false };
+    return config;
+  },"#.to_string());
+    }
+    config_parts.push(
+        r#"
+  turbopack: {
+    root: path.join(__dirname, "./"),
+  },"#.to_string(),
+    );
+    let extra_config = config_parts.join("");
 
     let next_config = format!(
         r#"import type {{ NextConfig }} from "next";
 import path from "path";
 
-const nextConfig: NextConfig = {{{static_lines}
-  turbopack: {{
-    root: path.join(__dirname, "./"),
-  }},
+const nextConfig: NextConfig = {{{extra_config}
 }};
 
 export default nextConfig;
@@ -164,5 +182,60 @@ export default nextConfig;
         )
         .map_err(|e| miette!("Failed to write components.json: {}", e))?;
     }
+
+    write_eslint_config(vfs, output_dir)?;
+    write_gitignore(vfs, output_dir)?;
+
+    Ok(())
+}
+
+fn write_eslint_config(vfs: &dyn Vfs, output_dir: &Utf8PathBuf) -> Result<()> {
+    let eslint_config = r#"{
+  "extends": ["next/core-web-vitals"]
+}
+"#;
+    vfs.write_string(output_dir.join("eslint.config.mjs").as_str(), eslint_config)
+        .map_err(|e| miette!("Failed to write eslint.config.mjs: {}", e))?;
+    Ok(())
+}
+
+fn write_gitignore(vfs: &dyn Vfs, output_dir: &Utf8PathBuf) -> Result<()> {
+    let gitignore = r#"# dependencies
+/node_modules
+/.pnp
+.pnp.js
+.yarn/install-state.gz
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# local env files
+.env*.local
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+"#;
+    vfs.write_string(output_dir.join(".gitignore").as_str(), gitignore)
+        .map_err(|e| miette!("Failed to write .gitignore: {}", e))?;
     Ok(())
 }

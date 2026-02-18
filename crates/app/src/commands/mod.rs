@@ -2,6 +2,8 @@ pub mod aliases;
 pub mod build;
 #[cfg(feature = "check")]
 pub mod check;
+#[cfg(feature = "code-search")]
+pub mod code;
 #[cfg(feature = "deploy")]
 pub mod deploy;
 pub mod deployment_utils;

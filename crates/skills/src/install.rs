@@ -99,6 +99,9 @@ pub async fn install(
             false,
             skill_filters,
             true, // no_save: skills already in config
+            false, // code
+            None,  // workdir
+            None,  // name
         )
         .await
         {

@@ -50,7 +50,7 @@ pub fn parse_git_source(source: &str) -> InitResult<GitSource> {
     }
 
     let user = parts[0].to_string();
-    let repo = parts[1].to_string();
+    let repo = parts[1].trim_end_matches(".git").to_string();
 
     Ok(GitSource {
         user,
@@ -321,4 +321,26 @@ async fn try_download_archive(
     };
 
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_git_source;
+
+    #[test]
+    fn parse_git_source_strips_dot_git_from_repo() {
+        // source_parser produces URLs with .git suffix; parse_git_source must strip it
+        // so the GitHub API receives "owner/repo" not "owner/repo.git"
+        let parsed = parse_git_source("https://github.com/astrolicious/agent-skills.git").unwrap();
+        assert_eq!(parsed.user, "astrolicious");
+        assert_eq!(parsed.repo, "agent-skills");
+        assert_eq!(parsed.platform, "github.com");
+    }
+
+    #[test]
+    fn parse_git_source_owner_repo_without_git() {
+        let parsed = parse_git_source("vercel-labs/skills").unwrap();
+        assert_eq!(parsed.user, "vercel-labs");
+        assert_eq!(parsed.repo, "skills");
+    }
 }

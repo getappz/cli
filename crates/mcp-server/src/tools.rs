@@ -32,6 +32,17 @@ const AUTH_REQUIRED_TOOLS: &[&str] = &[
     "promote", "rollback", "remove", "gen",
 ];
 
+fn resolve_workdir(workdir: Option<&str>) -> Result<PathBuf, McpError> {
+    let path = match workdir {
+        Some(d) => PathBuf::from(d),
+        None => std::env::current_dir()
+            .map_err(|e| McpError::invalid_params(format!("No workdir and current_dir failed: {}", e), None))?,
+    };
+    path.canonicalize().map_err(|e| {
+        McpError::invalid_params(format!("Invalid workdir '{}': {}", path.display(), e), None)
+    })
+}
+
 fn requires_auth(tool_name: &str) -> bool {
     AUTH_REQUIRED_TOOLS.contains(&tool_name)
 }
@@ -50,7 +61,7 @@ fn ensure_auth(tool_name: &str) -> Result<(), McpError> {
     ))
 }
 
-/// Resolve the appz binary path. When running as `appz mcp-server` subcommand, current_exe is appz.
+/// Resolve the appz binary path. When running as `appz mcp` subcommand, current_exe is appz.
 fn appz_binary() -> Result<PathBuf, McpError> {
     let exe = std::env::current_exe().map_err(|e| {
         McpError::internal_error(
@@ -59,7 +70,7 @@ fn appz_binary() -> Result<PathBuf, McpError> {
         )
     })?;
     let name = exe.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-    // When run as "appz mcp-server", current_exe is the appz binary
+    // When run as "appz mcp", current_exe is the appz binary
     if name == "appz" {
         return Ok(exe);
     }
@@ -67,7 +78,7 @@ fn appz_binary() -> Result<PathBuf, McpError> {
     which::which("appz").map_err(|e| {
         McpError::internal_error(
             format!(
-                "Could not find appz binary: {}. Install appz or run via 'appz mcp-server'",
+                "Could not find appz binary: {}. Install appz or run via 'appz mcp'",
                 e
             ),
             None,
@@ -203,6 +214,24 @@ pub struct SkillsRemoveParams {
     pub name: String,
     #[serde(default)]
     pub workdir: Option<String>,
+}
+
+// --- Code search ---
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct CodeIndexParams {
+    #[serde(default)]
+    pub workdir: Option<String>,
+    #[serde(default)]
+    pub force: bool,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct CodeSearchParams {
+    pub query: String,
+    #[serde(default)]
+    pub workdir: Option<String>,
+    #[serde(default)]
+    pub limit: Option<usize>,
 }
 
 // --- Shell (sandboxed) ---
@@ -403,6 +432,77 @@ impl AppzTool {
         Ok(CallToolResult::success(vec![Content::json(out)?]))
     }
 
+    #[cfg(feature = "code-search")]
+    #[tool]
+    async fn code_index(
+        &self,
+        _context: RequestContext<RoleServer>,
+        Parameters(params): Parameters<CodeIndexParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let workdir = resolve_workdir(params.workdir.as_deref())?;
+        let result = code_search::index(&workdir, params.force, None)
+            .await
+            .map_err(|e| McpError::internal_error(e.0, None))?;
+        let out = serde_json::json!({
+            "indexed_files": result.indexed_files,
+            "chunks": result.chunks,
+            "collection": result.collection,
+        });
+        Ok(CallToolResult::success(vec![Content::json(out)?]))
+    }
+
+    #[cfg(not(feature = "code-search"))]
+    #[tool]
+    async fn code_index(
+        &self,
+        _context: RequestContext<RoleServer>,
+        Parameters(_params): Parameters<CodeIndexParams>,
+    ) -> Result<CallToolResult, McpError> {
+        Err(McpError::invalid_params(
+            "code_index requires the code-search feature. Build appz with --features code-search.".to_string(),
+            None,
+        ))
+    }
+
+    #[cfg(feature = "code-search")]
+    #[tool]
+    async fn code_search(
+        &self,
+        _context: RequestContext<RoleServer>,
+        Parameters(params): Parameters<CodeSearchParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let workdir = resolve_workdir(params.workdir.as_deref())?;
+        let results = code_search::search(&workdir, &params.query, params.limit)
+            .await
+            .map_err(|e| McpError::internal_error(e.0, None))?;
+        let out: Vec<serde_json::Value> = results
+            .into_iter()
+            .map(|r| {
+                serde_json::json!({
+                    "path": r.path,
+                    "content": r.content,
+                    "score": r.score,
+                })
+            })
+            .collect();
+        Ok(CallToolResult::success(vec![Content::json(serde_json::json!({
+            "results": out
+        }))?]))
+    }
+
+    #[cfg(not(feature = "code-search"))]
+    #[tool]
+    async fn code_search(
+        &self,
+        _context: RequestContext<RoleServer>,
+        Parameters(_params): Parameters<CodeSearchParams>,
+    ) -> Result<CallToolResult, McpError> {
+        Err(McpError::invalid_params(
+            "code_search requires the code-search feature. Build appz with --features code-search.".to_string(),
+            None,
+        ))
+    }
+
     /// Run a shell command inside the appz sandbox (project-root scoped, mise environment).
     #[tool]
     async fn shell(
@@ -465,8 +565,9 @@ impl ServerHandler for AppzTool {
             server_info: Implementation::from_build_env(),
             instructions: Some(
                 "This server provides tools to run appz CLI commands: init, build, dev, deploy, run, \
-                 plan, ls, skills, and a sandboxed shell. Auth-required tools (run, plan, ls, etc.) \
-                 need 'appz login' or APPZ_API_TOKEN."
+                 plan, ls, skills, code_index, code_search, and a sandboxed shell. Auth-required tools \
+                 (run, plan, ls, etc.) need 'appz login' or APPZ_API_TOKEN. code_index indexes the \
+                 codebase with Repomix+Qdrant; code_search runs semantic search over it."
                     .to_string(),
             ),
         }

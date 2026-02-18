@@ -3,8 +3,10 @@
 //! Ported from aistudio/backend/server.py SECURITY_PATTERNS, SAFE_PATTERNS, audit_skill_security.
 
 use crate::context::SkillsContext;
+use regex::Regex;
 use regex::RegexBuilder;
 use serde::Serialize;
+use std::sync::OnceLock;
 use starbase::AppResult;
 use starbase_utils::fs;
 use std::path::PathBuf;
@@ -175,6 +177,32 @@ const SECURITY_CATEGORIES: &[SecurityCategory] = &[
     },
 ];
 
+struct AuditRegexCache {
+    security: Vec<Vec<Regex>>,
+    safe: Vec<Regex>,
+}
+
+static AUDIT_REGEXES: OnceLock<AuditRegexCache> = OnceLock::new();
+
+fn get_audit_regexes() -> &'static AuditRegexCache {
+    AUDIT_REGEXES.get_or_init(|| {
+        let security: Vec<Vec<Regex>> = SECURITY_CATEGORIES
+            .iter()
+            .map(|cat| {
+                cat.patterns
+                    .iter()
+                    .filter_map(|p| RegexBuilder::new(p).case_insensitive(true).build().ok())
+                    .collect()
+            })
+            .collect();
+        let safe: Vec<Regex> = SAFE_PATTERNS
+            .iter()
+            .filter_map(|p| RegexBuilder::new(p).case_insensitive(true).build().ok())
+            .collect();
+        AuditRegexCache { security, safe }
+    })
+}
+
 const SAFE_PATTERNS: &[&str] = &[
     r"##\s+",
     r"\*\*[^*]+\*\*",
@@ -226,19 +254,18 @@ pub fn audit_skill_security(content: &str) -> SecurityAuditResult {
     let lines: Vec<&str> = content.split('\n').collect();
     let mut total_severity_score: i32 = 0;
 
-    for cat in SECURITY_CATEGORIES {
+    let audit_regexes = get_audit_regexes();
+    for (cat, regexes) in SECURITY_CATEGORIES.iter().zip(audit_regexes.security.iter()) {
         let mut category_matches: Vec<String> = Vec::new();
         let mut matched_lines: Vec<u32> = Vec::new();
 
-        for pattern_str in cat.patterns {
-            if let Ok(re) = RegexBuilder::new(pattern_str).case_insensitive(true).build() {
-                for (line_num, line) in lines.iter().enumerate() {
-                    for cap in re.find_iter(line) {
-                        category_matches.push(cap.as_str().to_string());
-                        let ln = (line_num + 1) as u32;
-                        if !matched_lines.contains(&ln) {
-                            matched_lines.push(ln);
-                        }
+        for re in regexes {
+            for (line_num, line) in lines.iter().enumerate() {
+                for cap in re.find_iter(line) {
+                    category_matches.push(cap.as_str().to_string());
+                    let ln = (line_num + 1) as u32;
+                    if !matched_lines.contains(&ln) {
+                        matched_lines.push(ln);
                     }
                 }
             }
@@ -274,11 +301,9 @@ pub fn audit_skill_security(content: &str) -> SecurityAuditResult {
 
     // Safe patterns reduce risk
     let mut doc_score: i32 = 0;
-    for pattern_str in SAFE_PATTERNS {
-        if let Ok(re) = RegexBuilder::new(pattern_str).case_insensitive(true).build() {
-            if re.is_match(content) {
-                doc_score += 5;
-            }
+    for re in &audit_regexes.safe {
+        if re.is_match(content) {
+            doc_score += 5;
         }
     }
     total_severity_score = (total_severity_score - doc_score).max(0);

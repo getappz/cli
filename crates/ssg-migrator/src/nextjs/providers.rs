@@ -12,10 +12,16 @@ pub(super) fn create_providers(
     output_dir: &Utf8PathBuf,
     source_dir: &Utf8PathBuf,
 ) -> Result<()> {
-    let app_path = source_dir.join("src/App.tsx");
+    let app_path = if vfs.exists(source_dir.join("src/App.tsx").as_str()) {
+        source_dir.join("src/App.tsx")
+    } else if vfs.exists(source_dir.join("src/App.jsx").as_str()) {
+        source_dir.join("src/App.jsx")
+    } else {
+        return Err(miette!("Neither src/App.tsx nor src/App.jsx found"));
+    };
     let content = vfs
         .read_to_string(app_path.as_str())
-        .map_err(|e| miette!("Failed to read App.tsx: {}", e))?;
+        .map_err(|e| miette!("Failed to read App: {}", e))?;
 
     let mut pc = RE_BROWSER_ROUTER.replace_all(&content, "{children}").to_string();
 

@@ -344,6 +344,15 @@ pub enum Commands {
     // It is now handled by the External(Vec<String>) variant below.
     // NOTE: The `site` command has been extracted to a downloadable plugin (pro tier).
     // It is now handled by the External(Vec<String>) variant below.
+    /// Semantic code search over indexed codebase (Repomix + Qdrant)
+    ///
+    /// Requires Node.js (for Repomix) and Qdrant. Install Qdrant via:
+    /// `mise use -g ubi:qdrant/qdrant` or Docker: `docker run -p 6334:6334 qdrant/qdrant`
+    #[cfg(feature = "code-search")]
+    Code {
+        #[command(subcommand)]
+        command: crate::commands::code::CodeCommands,
+    },
     /// Manage Agent Skills (install, list, remove, validate, audit, find, init, create, check, update)
     Skills {
         #[command(subcommand)]
@@ -356,6 +365,7 @@ pub enum Commands {
     },
     /// Run the MCP (Model Context Protocol) server for AI assistants (Cursor, Claude, etc.)
     #[cfg(feature = "mcp")]
+    #[command(name = "mcp")]
     McpServer,
     // NOTE: The `convert` command has been extracted to the ssg-migrator plugin.
     // It is now handled by the External(Vec<String>) variant below.

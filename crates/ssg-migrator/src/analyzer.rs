@@ -1,4 +1,4 @@
-use crate::types::{ComponentInfo, ProjectAnalysis, RouteInfo};
+use crate::types::{ComponentInfo, PreMigrationReport, ProjectAnalysis, RouteInfo};
 use crate::vfs::Vfs;
 use biome_js_parser::{parse, JsParserOptions};
 use biome_js_syntax::{JsFileSource, JsImport, JsSyntaxNode};
@@ -36,6 +36,15 @@ static RE_IMPORT_NAMESPACE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"import\s+\*\s+as\s+(\w+)\s+from\s+['"]@/components/([^'"]+)['"]"#).unwrap()
 });
 
+static RE_REACT_APP: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"REACT_APP_[A-Za-z0-9_]+").unwrap());
+static RE_EXTRA_REDUCERS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"extraReducers\s*:").unwrap());
+static RE_SVG_REACT_COMPONENT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"ReactComponent").unwrap());
+static RE_APP_PATH_IN_NAV: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"["']/app/"#).unwrap());
+
 static BROWSER_PATTERNS: LazyLock<Vec<(&str, &Regex)>> = LazyLock::new(|| {
     vec![
         ("window", &RE_WINDOW),
@@ -48,12 +57,58 @@ static BROWSER_PATTERNS: LazyLock<Vec<(&str, &Regex)>> = LazyLock::new(|| {
 
 // ── Public API ──────────────────────────────────────────────────────────
 
+/// Run pre-migration scan and return analysis with recommended rule IDs.
+pub fn run_pre_migration_scan(
+    vfs: &dyn Vfs,
+    source_dir: &Utf8PathBuf,
+) -> Result<PreMigrationReport> {
+    let analysis = analyze_project(vfs, source_dir)?;
+    let recommended_rules = build_recommended_rules(&analysis);
+    Ok(PreMigrationReport {
+        analysis,
+        recommended_rules,
+    })
+}
+
+fn build_recommended_rules(analysis: &ProjectAnalysis) -> Vec<String> {
+    let mut rules = Vec::new();
+    if !analysis.react_app_vars.is_empty() {
+        rules.push("env-prefix-change".to_string());
+    }
+    if analysis.has_websocket_deps {
+        rules.push("gotchas-websocket-optional-deps".to_string());
+        rules.push("setup-next-config".to_string());
+    }
+    if analysis.has_scss_export {
+        rules.push("gotchas-turbopack".to_string());
+    }
+    if analysis.has_svg_react_component {
+        rules.push("assets-static-imports".to_string());
+    }
+    if analysis.has_extra_reducers_object {
+        rules.push("state-redux".to_string());
+    }
+    if analysis.has_app_path_in_nav {
+        rules.push("routing-route-groups".to_string());
+    }
+    rules
+}
+
 pub fn analyze_project(vfs: &dyn Vfs, source_dir: &Utf8PathBuf) -> Result<ProjectAnalysis> {
     let app_path = source_dir.join("src/App.tsx");
+    let app_path_jsx = source_dir.join("src/App.jsx");
     let package_json_path = source_dir.join("package.json");
 
-    let routes = if vfs.exists(app_path.as_str()) {
-        parse_routes(vfs, &app_path)?
+    let app_file = if vfs.exists(app_path.as_str()) {
+        app_path
+    } else if vfs.exists(app_path_jsx.as_str()) {
+        app_path_jsx
+    } else {
+        app_path.clone()
+    };
+
+    let routes = if vfs.exists(app_file.as_str()) {
+        parse_routes(vfs, &app_file)?
     } else {
         vec![]
     };
@@ -66,6 +121,18 @@ pub fn analyze_project(vfs: &dyn Vfs, source_dir: &Utf8PathBuf) -> Result<Projec
     let has_tailwind = vfs.exists(source_dir.join("tailwind.config.ts").as_str())
         || vfs.exists(source_dir.join("tailwind.config.js").as_str());
 
+    let is_cra = dependencies
+        .keys()
+        .any(|k| k == "react-scripts" || k.starts_with("react-scripts"));
+    let has_websocket_deps = dependencies
+        .keys()
+        .any(|k| k.contains("socket.io") || k == "ws");
+    let react_app_vars = scan_react_app_vars(vfs, source_dir)?;
+    let has_scss_export = scan_scss_export(vfs, source_dir)?;
+    let has_svg_react_component = scan_svg_react_component(vfs, source_dir)?;
+    let has_extra_reducers_object = scan_extra_reducers_object(vfs, source_dir)?;
+    let has_app_path_in_nav = scan_app_path_in_nav(vfs, source_dir)?;
+
     Ok(ProjectAnalysis {
         routes,
         components,
@@ -73,10 +140,44 @@ pub fn analyze_project(vfs: &dyn Vfs, source_dir: &Utf8PathBuf) -> Result<Projec
         has_vite_config,
         has_tailwind,
         source_dir: source_dir.clone(),
+        is_cra,
+        react_app_vars,
+        has_websocket_deps,
+        has_scss_export,
+        has_svg_react_component,
+        has_extra_reducers_object,
+        has_app_path_in_nav,
     })
 }
 
 // ── Routes ──────────────────────────────────────────────────────────────
+
+/// Normalize React Router path to canonical form and detect catch-all variants.
+/// - "/blog/*" -> ("/blog/[...slug]", true, false)
+/// - "/docs/[[...slug]]" -> ("/docs/[[...slug]]", false, true)
+/// - "/files/[...slug]" -> ("/files/[...slug]", true, false)
+/// - "*" -> ("*", true, false)
+fn normalize_route_path(path: &str) -> (String, bool, bool) {
+    let path = path.trim();
+    if path == "*" {
+        return ("*".to_string(), true, false);
+    }
+    if path.contains("[[...") && path.contains("]]") {
+        return (path.to_string(), false, true);
+    }
+    if path.contains("[...") && path.contains("]") {
+        return (path.to_string(), true, false);
+    }
+    if path.ends_with("/*") {
+        let prefix = path.trim_end_matches("/*").trim_end_matches('/');
+        if prefix.is_empty() {
+            return ("*".to_string(), true, false);
+        }
+        let next_segment = format!("{}/[...slug]", prefix.trim_start_matches('/'));
+        return (next_segment, true, false);
+    }
+    (path.to_string(), false, false)
+}
 
 fn parse_routes(vfs: &dyn Vfs, app_path: &Utf8PathBuf) -> Result<Vec<RouteInfo>> {
     let content = vfs
@@ -94,22 +195,25 @@ fn parse_routes(vfs: &dyn Vfs, app_path: &Utf8PathBuf) -> Result<Vec<RouteInfo>>
             .get(2)
             .map(|m| m.as_str().to_string())
             .unwrap_or_else(|| "NotFound".to_string());
-        let is_catch_all = path == "*";
+        let (path, is_catch_all, is_optional_catch_all) =
+            normalize_route_path(&path);
 
         routes.push(RouteInfo {
             path,
             component,
             is_catch_all,
+            is_optional_catch_all,
         });
     }
 
     if (content.contains(r#"path="*""#) || content.contains(r#"path='*'"#))
-        && !routes.iter().any(|r| r.is_catch_all)
+        && !routes.iter().any(|r| r.is_catch_all && r.path == "*")
     {
         routes.push(RouteInfo {
             path: "*".to_string(),
             component: "NotFound".to_string(),
             is_catch_all: true,
+            is_optional_catch_all: false,
         });
     }
 
@@ -118,6 +222,7 @@ fn parse_routes(vfs: &dyn Vfs, app_path: &Utf8PathBuf) -> Result<Vec<RouteInfo>>
             path: "/".to_string(),
             component: "Index".to_string(),
             is_catch_all: false,
+            is_optional_catch_all: false,
         });
     }
 
@@ -211,6 +316,150 @@ fn detect_client_features(content: &str) -> (Vec<String>, Vec<String>) {
     }
 
     (hooks, browser_apis)
+}
+
+// ── Pre-migration scans ──────────────────────────────────────────────────
+
+fn scan_react_app_vars(vfs: &dyn Vfs, source_dir: &Utf8PathBuf) -> Result<Vec<String>> {
+    let mut vars = std::collections::HashSet::new();
+    let src_dir = source_dir.join("src");
+    if !vfs.exists(src_dir.as_str()) {
+        return Ok(vec![]);
+    }
+    for entry in vfs.walk_dir(src_dir.as_str())? {
+        if !entry.is_file {
+            continue;
+        }
+        let path = Utf8PathBuf::from(&entry.path);
+        let ext = path.extension().unwrap_or("");
+        if !matches!(ext, "ts" | "tsx" | "js" | "jsx") {
+            continue;
+        }
+        let content = match vfs.read_to_string(&entry.path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        for cap in RE_REACT_APP.captures_iter(&content) {
+            if let Some(m) = cap.get(0) {
+                vars.insert(m.as_str().to_string());
+            }
+        }
+    }
+    for env_name in &[".env", ".env.local", ".env.development", ".env.production"] {
+        let env_path = source_dir.join(env_name);
+        if vfs.exists(env_path.as_str()) {
+            let content = match vfs.read_to_string(env_path.as_str()) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            for cap in RE_REACT_APP.captures_iter(&content) {
+                if let Some(m) = cap.get(0) {
+                    vars.insert(m.as_str().to_string());
+                }
+            }
+        }
+    }
+    let mut out: Vec<String> = vars.into_iter().collect();
+    out.sort();
+    Ok(out)
+}
+
+fn scan_scss_export(vfs: &dyn Vfs, source_dir: &Utf8PathBuf) -> Result<bool> {
+    let src_dir = source_dir.join("src");
+    if !vfs.exists(src_dir.as_str()) {
+        return Ok(false);
+    }
+    for entry in vfs.walk_dir(src_dir.as_str())? {
+        if !entry.is_file {
+            continue;
+        }
+        let path = Utf8PathBuf::from(&entry.path);
+        if path.extension() != Some("scss") && path.extension() != Some("sass") {
+            continue;
+        }
+        let content = match vfs.read_to_string(&entry.path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        if content.contains(":export") {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn scan_svg_react_component(vfs: &dyn Vfs, source_dir: &Utf8PathBuf) -> Result<bool> {
+    let src_dir = source_dir.join("src");
+    if !vfs.exists(src_dir.as_str()) {
+        return Ok(false);
+    }
+    for entry in vfs.walk_dir(src_dir.as_str())? {
+        if !entry.is_file {
+            continue;
+        }
+        let path = Utf8PathBuf::from(&entry.path);
+        if path.extension() != Some("ts") && path.extension() != Some("tsx") {
+            continue;
+        }
+        let content = match vfs.read_to_string(&entry.path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        if RE_SVG_REACT_COMPONENT.is_match(&content) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn scan_extra_reducers_object(vfs: &dyn Vfs, source_dir: &Utf8PathBuf) -> Result<bool> {
+    let src_dir = source_dir.join("src");
+    if !vfs.exists(src_dir.as_str()) {
+        return Ok(false);
+    }
+    for entry in vfs.walk_dir(src_dir.as_str())? {
+        if !entry.is_file {
+            continue;
+        }
+        let path = Utf8PathBuf::from(&entry.path);
+        let ext = path.extension().unwrap_or("");
+        if !matches!(ext, "js" | "jsx" | "ts" | "tsx") {
+            continue;
+        }
+        let content = match vfs.read_to_string(&entry.path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        if RE_EXTRA_REDUCERS.is_match(&content) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn scan_app_path_in_nav(vfs: &dyn Vfs, source_dir: &Utf8PathBuf) -> Result<bool> {
+    let src_dir = source_dir.join("src");
+    if !vfs.exists(src_dir.as_str()) {
+        return Ok(false);
+    }
+    for entry in vfs.walk_dir(src_dir.as_str())? {
+        if !entry.is_file {
+            continue;
+        }
+        let path = Utf8PathBuf::from(&entry.path);
+        let ext = path.extension().unwrap_or("");
+        if !matches!(ext, "js" | "jsx" | "ts" | "tsx") {
+            continue;
+        }
+        let content = match vfs.read_to_string(&entry.path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        if RE_APP_PATH_IN_NAV.is_match(&content) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 // ── Dependencies ────────────────────────────────────────────────────────

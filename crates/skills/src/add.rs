@@ -1,4 +1,4 @@
-//! Add (install) a skill from GitHub, URL, or local path.
+//! Add (install) a skill from GitHub, URL, local path, or generate from code.
 //!
 //! When installing globally, if the current directory has agent dirs (e.g. `.cursor`, `.claude`),
 //! creates symlinks so the installed skill is visible to those agents (e.g. `.cursor/skills/<name>`).
@@ -10,9 +10,11 @@ use crate::providers;
 use crate::skill_lock::{self, AddSkillLockInput};
 use crate::source_parser;
 use init::sources::git::{download_git, parse_git_source};
+use sandbox::{create_sandbox, SandboxConfig, SandboxSettings};
 use starbase::AppResult;
 use std::path::{Path, PathBuf};
 use starbase_utils::{dirs, fs as starbase_fs};
+use tempfile::TempDir;
 
 /// Project-local AI agent skills subdirs to check for existing skills (relative to cwd).
 fn project_skills_subdirs() -> Vec<&'static str> {
@@ -41,7 +43,17 @@ pub async fn add(
     full_depth: bool,
     skill_filters_override: Option<Vec<String>>, // from skills.json when installing from config
     no_save: bool, // skip writing to skills.json
+    code: bool,
+    workdir: Option<PathBuf>,
+    name: Option<String>,
 ) -> AppResult {
+    if code {
+        return add_from_code(
+            ctx, global, project, yes, list_only, agent, workdir, name,
+        )
+        .await;
+    }
+
     let _ = ui::layout::blank_line();
 
     // Parse source: owner/repo@skill, owner/repo:skill1,skill2, skills.sh URLs -> extract filters and base URL
@@ -147,8 +159,9 @@ pub async fn add(
             let _ = ui::status::info("Skill already installed; skipping download.");
             existing_path
         } else {
+            // Show progress bar when not verbose (quiet = verbose to avoid bar + debug fighting)
             let _ = ui::status::info(&format!("Downloading skill from {}...", source));
-            download_git(&source, None, None, !ctx.verbose, Some("Downloading skill...")).await.map_err(|e| {
+            download_git(&source, None, None, ctx.verbose, Some("Downloading skill...")).await.map_err(|e| {
                 let msg = e.to_string();
                 miette::miette!(
                     "Could not download skill from \"{}\".\n\n{}\n\nCheck your network connection and that the repository exists. For GitHub you can use: owner/repo or a full URL (e.g. .../tree/main/path/to/skill).",
@@ -174,7 +187,10 @@ pub async fn add(
         .into());
     };
 
-    let skill_dirs = find_skill_dirs(&source_dir, full_depth);
+    // Git/GitHub repos (vercel-labs/skills, astrolicious/agent-skills, etc.) use skills/ subdir.
+    // Use full depth for git sources to find nested skills, matching npx skills behavior.
+    let effective_full_depth = full_depth || is_git_source(&source);
+    let skill_dirs = find_skill_dirs(&source_dir, effective_full_depth);
 
     if skill_dirs.is_empty() {
         return Err(miette::miette!(
@@ -229,6 +245,7 @@ pub async fn add(
     let _ = ui::layout::blank_line();
 
     let show_install_spinner = to_install.len() > 1 && !ctx.verbose;
+    #[allow(unused_assignments)]
     let mut install_spinner: Option<ui::progress::SpinnerHandle> = if show_install_spinner {
         Some(ui::progress::spinner("Installing skills..."))
     } else {
@@ -352,6 +369,216 @@ pub async fn add(
     Ok(None)
 }
 
+/// Derive skill name from workdir: package.json name, Cargo.toml [package].name, or dir name.
+/// Returns kebab-case normalized name.
+fn derive_skill_name(workdir: &Path) -> String {
+    if let Some(name) = try_package_json_name(workdir) {
+        return to_kebab_case(&name);
+    }
+    if let Some(name) = try_cargo_toml_name(workdir) {
+        return to_kebab_case(&name);
+    }
+    workdir
+        .file_name()
+        .map(|n| to_kebab_case(&n.to_string_lossy()))
+        .unwrap_or_else(|| "repomix-reference".to_string())
+}
+
+fn try_package_json_name(workdir: &Path) -> Option<String> {
+    let pkg = workdir.join("package.json");
+    let content = starbase_fs::read_file(&pkg).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&content).ok()?;
+    json.get("name")?.as_str().map(String::from)
+}
+
+fn try_cargo_toml_name(workdir: &Path) -> Option<String> {
+    let cargo = workdir.join("Cargo.toml");
+    let content = starbase_fs::read_file(&cargo).ok()?;
+    let toml: toml::Value = toml::from_str(&content).ok()?;
+    toml.get("package")?
+        .get("name")?
+        .as_str()
+        .map(String::from)
+}
+
+fn to_kebab_case(s: &str) -> String {
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if c == '_' || c == ' ' {
+            if !out.is_empty() && !out.ends_with('-') {
+                out.push('-');
+            }
+        } else if c.is_ascii_uppercase() {
+            if i > 0 && !out.ends_with('-') {
+                out.push('-');
+            }
+            out.push(c.to_ascii_lowercase());
+        } else if c.is_ascii_alphanumeric() || c == '-' {
+            out.push(c.to_ascii_lowercase());
+        }
+    }
+    out.trim_matches('-').to_string().replace("--", "-")
+}
+
+/// Project-local path for code-ref skill (docs/code-ref).
+const CODE_REF_DIR: &str = "docs/code-ref";
+
+/// Generate a reference skill from the project codebase via Repomix.
+/// Writes to docs/code-ref in the project and symlinks into AI agent skill dirs.
+async fn add_from_code(
+    ctx: &SkillsContext,
+    _global: bool,
+    _project: bool,
+    yes: bool,
+    list_only: bool,
+    _agent: &[String],
+    workdir: Option<PathBuf>,
+    name: Option<String>,
+) -> AppResult {
+    let _ = ui::layout::blank_line();
+
+    let workdir = workdir
+        .unwrap_or_else(|| ctx.working_dir.clone())
+        .canonicalize()
+        .map_err(|e| miette::miette!("Invalid workdir: {}", e))?;
+
+    let skill_name = name
+        .map(|n| to_kebab_case(&n))
+        .unwrap_or_else(|| derive_skill_name(&workdir));
+
+    if skill_name.is_empty() {
+        return Err(miette::miette!("Skill name cannot be empty").into());
+    }
+
+    let code_ref_path = workdir.join(CODE_REF_DIR);
+
+    if list_only {
+        let _ = ui::status::info(&format!(
+            "Would generate skill '{}' to {} and symlink into agent dirs (Repomix)",
+            skill_name,
+            code_ref_path.display()
+        ));
+        let _ = ui::layout::blank_line();
+        return Ok(None);
+    }
+
+    if code_ref_path.exists() && !yes {
+        let overwrite = ui::confirm_interactive(
+            &format!("{} already exists. Overwrite?", code_ref_path.display()),
+            false,
+        )
+        .map_err(|e| miette::miette!("Prompt failed: {}", e))?;
+        if !overwrite {
+            return Ok(None);
+        }
+    }
+
+    let _ = ui::status::info(&format!(
+        "Generating skill '{}' from {} (Repomix)...",
+        skill_name,
+        workdir.display()
+    ));
+
+    let skill_path = repomix_skill_generate(&workdir, &skill_name).await?;
+
+    starbase_fs::create_dir_all(code_ref_path.parent().unwrap_or(workdir.as_path()))
+        .map_err(|e| miette::miette!("Failed to create docs dir: {}", e))?;
+    if code_ref_path.exists() {
+        starbase_fs::remove_dir_all(&code_ref_path)
+            .map_err(|e| miette::miette!("Failed to remove existing {}: {}", code_ref_path.display(), e))?;
+    }
+    copy_skill_dir(&skill_path, &code_ref_path)?;
+
+    // Remove temporary skill dir used for repomix output
+    let temp_parent = skill_path.parent();
+    if let Some(p) = temp_parent {
+        if p.ends_with("repomix-skill-temp") {
+            let _ = starbase_fs::remove_dir_all(p);
+        }
+    }
+
+    // Symlink docs/code-ref into project agent skill dirs (.cursor/skills, .claude/skills, etc.)
+    let docs_dir = workdir.join("docs");
+    let to_install = vec![(
+        "code-ref".to_string(),
+        code_ref_path.clone(),
+    )];
+    link_skills_into_agent_dirs(
+        ctx.working_dir.as_path(),
+        &docs_dir,
+        &to_install,
+    )?;
+
+    let _ = ui::layout::blank_line();
+    let _ = ui::status::success(&format!(
+        "Done. Skill written to {} and symlinked into agent dirs",
+        common::user_config::path_for_display(&code_ref_path)
+    ));
+
+    Ok(None)
+}
+
+/// Run Repomix --skill-generate and return path to the generated skill folder.
+/// Requires Node.js (mise). Uses sandbox at workdir.
+async fn repomix_skill_generate(workdir: &Path, skill_name: &str) -> Result<PathBuf, miette::Report> {
+    let config = SandboxConfig::new(workdir)
+        .with_settings(SandboxSettings::default().with_tool("node", Some("22")));
+    let sandbox = create_sandbox(config)
+        .await
+        .map_err(|e| miette::miette!("Failed to create sandbox: {}", e))?;
+
+    let temp_dir = TempDir::new()
+        .map_err(|e| miette::miette!("Failed to create temp dir: {}", e))?;
+    let output_base = temp_dir.path();
+
+    // Restrict to source, config, and docs - same patterns as code-search pack
+    let include_patterns = "**/*.ts,**/*.tsx,**/*.astro,**/*.js,**/*.jsx,**/*.rs,**/*.py,**/*.go,**/*.md,**/*.mdx,**/astro.config.*,**/tailwind.config.*,**/vite.config.*,**/*.config.*,**/Cargo.toml,**/package.json";
+    let ignore_patterns =
+        ".claude/**,.cursor/**,.codex/**,.aider/**,.continue/**,.github/copilot/**,**/node_modules/**";
+
+    let cmd = format!(
+        "npx repomix@latest --skill-generate {} --skill-output {} --force --include \"{}\" --ignore \"{}\" .",
+        skill_name,
+        output_base.display(),
+        include_patterns,
+        ignore_patterns
+    );
+
+    let out = sandbox
+        .exec(&cmd)
+        .await
+        .map_err(|e| miette::miette!("Repomix failed: {}", e))?;
+
+    if !out.success() {
+        return Err(miette::miette!(
+            "Repomix failed: {}",
+            out.stderr().trim()
+        )
+        .into());
+    }
+
+    let skill_path = output_base.join(skill_name);
+    if !skill_path.join("SKILL.md").exists() {
+        return Err(miette::miette!(
+            "Repomix did not produce skill folder at {}. Output may have used a different name.",
+            skill_path.display()
+        )
+        .into());
+    }
+
+    // Persist beyond TempDir: copy to a stable location so caller can use it
+    let persist_dir = workdir.join(".appz").join("repomix-skill-temp");
+    starbase_fs::create_dir_all(&persist_dir)
+        .map_err(|e| miette::miette!("Failed to create temp skill dir: {}", e))?;
+    let final_path = persist_dir.join(skill_name);
+    if final_path.exists() {
+        let _ = starbase_fs::remove_dir_all(&final_path);
+    }
+    copy_skill_dir(&skill_path, &final_path)?;
+
+    Ok(final_path)
+}
+
 /// Install a skill from a direct URL or well-known endpoint via providers.
 async fn add_from_provider(
     ctx: &SkillsContext,
@@ -366,7 +593,12 @@ async fn add_from_provider(
         miette::miette!("No provider found for URL. Use owner/repo or a supported direct URL (Mintlify, HuggingFace, well-known).")
     })?;
 
-    let _ = ui::status::info(&format!("Fetching skill from {}...", provider.id()));
+    let _fetch_spinner = if !ctx.verbose {
+        Some(ui::progress::spinner(&format!("Fetching skill from {}...", provider.id())))
+    } else {
+        let _ = ui::status::info(&format!("Fetching skill from {}...", provider.id()));
+        None
+    };
 
     let remote = provider.fetch_skill(url).await.ok_or_else(|| {
         miette::miette!("Could not fetch skill from URL. Check that the URL is valid and the skill has required frontmatter (name, description).")

@@ -1,0 +1,27 @@
+[package]
+name = "skills"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Agent skills management: install, list, remove, validate, audit, find, init, check, update"
+
+[dependencies]
+async-trait = "0.1"
+chrono = { workspace = true }
+glob = "0.3"
+detectors = { path = "../detectors" }
+clap = { workspace = true }
+common = { path = "../common" }
+init = { path = "../init" }
+miette = { workspace = true }
+regex = { workspace = true }
+reqwest = { workspace = true, features = ["json"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+starbase = { workspace = true }
+starbase_utils = { workspace = true }
+tokio = { workspace = true }
+ui = { path = "../ui" }
+url = { workspace = true }
+urlencoding = { workspace = true }

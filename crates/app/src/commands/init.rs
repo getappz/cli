@@ -5,7 +5,6 @@
 use crate::session::AppzSession;
 use tracing::instrument;
 use crate::templates::{get_builtin_template, BUILTIN_TEMPLATES};
-use inquire::{Select, Text};
 use miette::miette;
 use starbase::AppResult;
 use std::path::PathBuf;
@@ -91,53 +90,42 @@ fn resolve_template_and_name(
 }
 
 fn prompt_for_template() -> Result<String, miette::Report> {
-    let template_options_strings: Vec<String> = BUILTIN_TEMPLATES
+    let options: Vec<(String, String)> = BUILTIN_TEMPLATES
         .iter()
-        .map(|(slug, name, _, _)| format!("{} ({})", name, slug))
+        .map(|(slug, name, _, _)| (format!("{} ({})", name, slug), slug.to_string()))
         .collect();
 
-    let template_options: Vec<&str> = template_options_strings
-        .iter()
-        .map(|s| s.as_str())
-        .collect();
+    let selected = ui::select_template_interactive("Select a template (type to search or enter git/npm/path):", &options)
+        .map_err(|e| miette!("Failed to select template: {}", e))?
+        .ok_or_else(|| miette!("Selection cancelled"))?;
 
-    let mut options = vec!["Custom GitHub URL", "Custom npm package", "Local path"];
-    options.extend(template_options);
+    // selected is already the final value: slug, URL, npm:xx, or path
+    resolve_template_source(&selected)
+}
 
-    let selected = Select::new("Select a template:", options)
-        .prompt()
-        .map_err(|e| miette!("Failed to select template: {}", e))?;
-
-    if selected == "Custom GitHub URL" {
-        Text::new("Git repository (user/repo or full URL - GitHub, GitLab, Bitbucket):")
-            .prompt()
-            .map_err(|e| miette!("Failed to get URL: {}", e))
-    } else if selected == "Custom npm package" {
-        let pkg = Text::new("npm package name:")
-            .prompt()
-            .map_err(|e| miette!("Failed to get npm package: {}", e))?;
-        Ok(format!("npm:{}", pkg))
-    } else if selected == "Local path" {
-        Text::new("Local template path:")
-            .prompt()
-            .map_err(|e| miette!("Failed to get local path: {}", e))
+fn resolve_template_source(selected: &str) -> Result<String, miette::Report> {
+    // Already a custom source (URL, npm:, path)
+    if selected.starts_with("http://") || selected.starts_with("https://")
+        || selected.starts_with("npm:") || selected.starts_with("./")
+        || selected.starts_with("../") || selected.starts_with('/')
+    {
+        return Ok(selected.to_string());
+    }
+    // user/repo pattern
+    if selected.contains('/') && !selected.contains(' ') {
+        return Ok(selected.to_string());
+    }
+    // Built-in slug
+    let slug = selected;
+    if init::has_create_command(slug) {
+        Ok(slug.to_string())
+    } else if let Some((repo, subfolder)) = get_builtin_template(slug) {
+        let src = match subfolder {
+            Some(sf) => format!("{}/{}", repo, sf),
+            None => repo.to_string(),
+        };
+        Ok(src)
     } else {
-        let slug = selected
-            .split('(')
-            .nth(1)
-            .and_then(|s| s.strip_suffix(')'))
-            .unwrap_or(selected);
-        let slug = slug.to_string();
-        if init::has_create_command(&slug) {
-            Ok(slug)
-        } else if let Some((repo, subfolder)) = get_builtin_template(&slug) {
-            let src = match subfolder {
-                Some(sf) => format!("{}/{}", repo, sf),
-                None => repo.to_string(),
-            };
-            Ok(src)
-        } else {
-            Ok(slug)
-        }
+        Ok(slug.to_string())
     }
 }

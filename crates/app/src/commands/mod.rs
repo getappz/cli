@@ -72,7 +72,7 @@ pub use self_upgrade::{append_self_update_instructions, upgrade_instructions_tex
 #[cfg(feature = "self_update")]
 pub use self_upgrade::{append_self_update_instructions, upgrade_instructions_text, SelfUpdate};
 pub use plugin::PluginCommands;
-pub use skills::SkillsCommands;
+pub use skills_lib::SkillsCommands;
 pub use switch::switch;
 pub use teams::{resolve_team_id, run as teams_run, TeamsCommands};
 pub use unlink::unlink;

@@ -1,0 +1,14 @@
+[package]
+name = "appzcrawl-search"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+reqwest = { workspace = true }
+scraper = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+rand = { workspace = true }
+url = { workspace = true }
+urlencoding = { workspace = true }

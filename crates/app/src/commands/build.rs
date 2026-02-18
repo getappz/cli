@@ -1,7 +1,6 @@
-use crate::detectors::{
-    detect_framework_record, DetectFrameworkRecordOptions, StdFilesystem,
+use detectors::{
+    detect_framework_record, DetectFrameworkRecordOptions, DetectorFilesystem, StdFilesystem,
 };
-use crate::detectors::filesystem::DetectorFilesystem;
 use crate::sandbox_helpers::mise_tools_for_execution;
 use crate::session::AppzSession;
 use crate::shell::{command_exists, is_shell_script, run_local_with, RunOptions};
@@ -17,7 +16,7 @@ use tracing::instrument;
 
 /// Get default install command based on package manager
 fn get_default_install_command(
-    package_manager: &Option<crate::detectors::PackageManagerInfo>,
+    package_manager: &Option<detectors::PackageManagerInfo>,
 ) -> String {
     if let Some(ref pm) = package_manager {
         match pm.manager.as_str() {

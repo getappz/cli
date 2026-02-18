@@ -2,7 +2,7 @@
 //!
 //! Matches Vercel's edit-project-settings.ts functionality
 
-use crate::detectors::{detect_framework_record, DetectFrameworkRecordOptions, StdFilesystem};
+use detectors::{detect_framework_record, DetectFrameworkRecordOptions, StdFilesystem};
 use crate::project::ProjectSettings;
 use frameworks::frameworks;
 use miette::{miette, Result};

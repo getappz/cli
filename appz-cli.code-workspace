@@ -4,14 +4,13 @@
 			"path": "."
 		},
 		{
-			"path": "../open-lovable"
+			"path": "../lovable-ref"
 		},
 		{
 			"path": "../appz-ref"
-		},
-		{
-			"path": "../lovable-ref"
 		}
 	],
-	"settings": {}
+	"settings": {
+		"git.ignoreLimitWarning": true
+	}
 }

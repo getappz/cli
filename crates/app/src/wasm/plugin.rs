@@ -616,32 +616,41 @@ impl PluginRunner {
             .as_mut()
             .ok_or_else(|| miette::miette!("No plugin loaded"))?;
 
-        // Build args map from positional args
+        // Build args map from options; collect positional (excluding consumed option values)
         let mut args_map = HashMap::new();
-        for (i, arg) in args.iter().enumerate() {
+        let mut positional: Vec<serde_json::Value> = Vec::new();
+        let mut i = 0;
+        while i < args.len() {
+            let arg = &args[i];
             if arg.starts_with("--") {
-                let key = arg.trim_start_matches("--");
+                let key = arg.trim_start_matches("--").to_string();
                 if let Some(value) = args.get(i + 1) {
-                    if !value.starts_with("--") {
-                        args_map.insert(
-                            key.to_string(),
-                            serde_json::Value::String(value.clone()),
-                        );
-                    } else {
-                        args_map.insert(key.to_string(), serde_json::Value::Bool(true));
+                    if !value.starts_with("--") && !value.starts_with('-') {
+                        args_map.insert(key, serde_json::Value::String(value.clone()));
+                        i += 2;
+                        continue;
+                    } else if value.starts_with("--") {
+                        args_map.insert(key, serde_json::Value::Bool(true));
                     }
                 } else {
-                    args_map.insert(key.to_string(), serde_json::Value::Bool(true));
+                    args_map.insert(key, serde_json::Value::Bool(true));
                 }
+                i += 1;
+            } else if arg == "-o" || arg == "-i" {
+                let key = if arg == "-o" { "output" } else { "input" };
+                if let Some(value) = args.get(i + 1) {
+                    if !value.starts_with('-') {
+                        args_map.insert(key.to_string(), serde_json::Value::String(value.clone()));
+                        i += 2;
+                        continue;
+                    }
+                }
+                i += 1;
+            } else {
+                positional.push(serde_json::Value::String(arg.clone()));
+                i += 1;
             }
         }
-
-        // Add positional args
-        let positional: Vec<serde_json::Value> = args
-            .iter()
-            .filter(|a| !a.starts_with("--"))
-            .map(|a| serde_json::Value::String(a.clone()))
-            .collect();
         if !positional.is_empty() {
             args_map.insert("_positional".to_string(), serde_json::Value::Array(positional));
         }

@@ -1,0 +1,1 @@
+{"version":3,"file":"scrape-response-mapper.d.ts","sourceRoot":"","sources":["../../src/services/scrape-response-mapper.ts"],"names":[],"mappings":"AAAA;;GAEG;AAEH,OAAO,EAEL,KAAK,iBAAiB,EAEtB,KAAK,qBAAqB,EAE3B,MAAM,qBAAqB,CAAC;AAC7B,OAAO,KAAK,EAAE,oBAAoB,EAAE,MAAM,iBAAiB,CAAC;AA8B5D;;;GAGG;AACH,wBAAgB,sBAAsB,CACpC,QAAQ,EAAE,oBAAoB,EAC9B,OAAO,EAAE,iBAAiB,GACzB,qBAAqB,CAmGvB"}

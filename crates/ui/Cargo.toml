@@ -15,4 +15,10 @@ owo-colors = "4.0"
 thiserror = { workspace = true }
 serde = { workspace = true }
 miette = { workspace = true }
+atty = { workspace = true, optional = true }
+tui = { path = "../tui", optional = true }
+
+[features]
+default = []
+tui = ["dep:atty", "dep:tui"]
 

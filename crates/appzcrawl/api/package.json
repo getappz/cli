@@ -1,0 +1,49 @@
+{
+  "name": "@appzcrawl/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev:browser": "pnpm --filter @services/appz-browser dev:browser",
+    "dev:browser-service": "pnpm --filter @services/appz-browser dev",
+    "dev": "wrangler dev --config=wrangler.devel.jsonc",
+    "dev:full": "concurrently -n browser,browser-svc,crawl -c blue,cyan,green \"pnpm dev:browser\" \"pnpm dev:browser-service\" \"sleep 2 && pnpm dev\"",
+    "dev:remote": "wrangler dev --config=wrangler.devel.jsonc --remote",
+    "build:wasm": "cd ../containers/appzcrawl && cargo build -p firecrawl-wasm --target wasm32-unknown-unknown --release && wasm-bindgen --target web --no-typescript --out-dir crates/wasm/pkg target/wasm32-unknown-unknown/release/firecrawl_wasm.wasm && cp crates/wasm/pkg/firecrawl_wasm_bg.wasm crates/wasm/pkg/firecrawl_wasm_bg.js crates/wasm/pkg/firecrawl_wasm.js ../../api/src/wasm/",
+    "build:engine": "cd ../containers/appzcrawl/crates/worker-server && worker-build --release",
+    "deploy:engine": "cd ../containers/appzcrawl/crates/worker-server && npx wrangler deploy",
+    "build": "tsc -p tsconfig.worker.json",
+    "lint": "biome check . && tsc --noEmit -p tsconfig.worker.json",
+    "predeploy": "pnpm build:wasm",
+    "deploy": "wrangler deploy --config=wrangler.prod.jsonc --minify",
+    "cf-typegen": "wrangler types",
+    "db:generate": "drizzle-kit generate --config drizzle.config.ts",
+    "db:migrate:local": "wrangler d1 migrations apply appzcrawl-db --local --config=wrangler.devel.jsonc",
+    "db:reset:local": "rm -rf .wrangler/state/v3/d1 && echo 'Local D1 state cleared. Run db:migrate:local to reapply.'",
+    "db:migrate:prod": "wrangler d1 migrations apply appzcrawl-db --remote --config=wrangler.prod.jsonc",
+    "db:migrate:devel": "wrangler d1 migrations apply appzcrawl-db --remote --config=wrangler.devel.jsonc",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@cloudflare/containers": "^0.1.0",
+    "@hono/zod-validator": "^0.7.6",
+    "@services/appz-browser": "workspace:*",
+    "culori": "^4.0.2",
+    "drizzle-orm": "^0.45.1",
+    "fflate": "^0.8.2",
+    "hono": "^4.11.9",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "4.20260212.0",
+    "@types/culori": "^4.0.1",
+    "concurrently": "^9.2.1",
+    "drizzle-kit": "^0.31.9",
+    "esbuild": "^0.27.3",
+    "puppeteer": "^24.37.2",
+    "typescript": "~5.9.3",
+    "vitest": "^4.0.18",
+    "wrangler": "^4.65.0",
+    "ws": "^8.19.0"
+  }
+}

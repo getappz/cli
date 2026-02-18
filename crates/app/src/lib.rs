@@ -3,7 +3,6 @@ mod app_error;
 mod auth;
 pub mod commands;
 mod context;
-mod detectors;
 mod host;
 mod http;
 mod importer;

@@ -1,10 +1,12 @@
 //! HTTP download host function for downloadable plugins.
 //!
 //! Downloads a URL directly to a file within the ScopedFs sandbox.
-//! This is a generic host function useful for any plugin that needs
-//! to fetch remote binary content (images, archives, etc.).
+//! Uses the centralized grab crate for fetch logic.
 
 use extism::{convert::Json, host_fn};
+use grab::{fetch_bytes, FetchOptions};
+use std::time::Duration;
+use tokio::task;
 
 use crate::wasm::plugin::PluginHostData;
 use crate::wasm::types::*;
@@ -26,50 +28,28 @@ host_fn!(pub appz_phttp_download(
     };
 
     let strict_ssl = input.strict_ssl.unwrap_or(true);
+    let url = input.url.clone();
+    let dest_path = input.dest_path.clone();
+    let scoped_fs = scoped_fs.clone();
 
-    let client = reqwest::blocking::Client::builder()
-        .danger_accept_invalid_certs(!strict_ssl)
-        .build()
-        .map_err(|e| extism::Error::msg(format!("Failed to build HTTP client: {}", e)))?;
-
-    let response = match client.get(&input.url).send() {
-        Ok(r) => r,
-        Err(e) => {
-            return Ok(Json(PluginHttpDownloadOutput {
-                success: false,
-                bytes_written: None,
-                error: Some(format!("HTTP request failed for {}: {}", input.url, e)),
-            }));
-        }
+    let opts = FetchOptions {
+        timeout: Duration::from_secs(60),
+        danger_accept_invalid_certs: !strict_ssl,
+        ..Default::default()
     };
 
-    if !response.status().is_success() {
-        return Ok(Json(PluginHttpDownloadOutput {
-            success: false,
-            bytes_written: None,
-            error: Some(format!(
-                "HTTP {} for {}",
-                response.status(),
-                input.url
-            )),
-        }));
-    }
+    let result = task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            let bytes = fetch_bytes(&url, opts).await.map_err(|e| e.user_message())?;
+            scoped_fs
+                .write_file(&dest_path, &bytes)
+                .map_err(|e| format!("Failed to write {}: {}", dest_path, e))?;
+            Ok::<_, String>(bytes.len() as u64)
+        })
+    });
 
-    let bytes = match response.bytes() {
-        Ok(b) => b,
-        Err(e) => {
-            return Ok(Json(PluginHttpDownloadOutput {
-                success: false,
-                bytes_written: None,
-                error: Some(format!("Failed to read response body: {}", e)),
-            }));
-        }
-    };
-
-    let bytes_len = bytes.len() as u64;
-
-    match scoped_fs.write_file(&input.dest_path, &bytes) {
-        Ok(()) => Ok(Json(PluginHttpDownloadOutput {
+    match result {
+        Ok(bytes_len) => Ok(Json(PluginHttpDownloadOutput {
             success: true,
             bytes_written: Some(bytes_len),
             error: None,
@@ -77,7 +57,7 @@ host_fn!(pub appz_phttp_download(
         Err(e) => Ok(Json(PluginHttpDownloadOutput {
             success: false,
             bytes_written: None,
-            error: Some(format!("Failed to write {}: {}", input.dest_path, e)),
+            error: Some(e),
         })),
     }
 });

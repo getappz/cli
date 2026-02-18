@@ -1,0 +1,20 @@
+curl -sS -X POST "http://127.0.0.1:8797/v2/scrape" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer appzcrawl_local_dev_key_20260210" \
+  -d '{"url":"https://www.sanshok.com/contact" "formats": ["markdown"]}'
+
+
+
+  curl -sS -X POST "http://127.0.0.1:8797/dev/create-api-key"
+
+
+curl -sS -X POST "http://127.0.0.1:8797/v2/crawl" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer appzcrawl_local_dev_key_20260210" \
+  -d '{"url":"https://www.sanshok.com","formats: "["branding"]}'
+
+
+  curl -sS -X POST "http://127.0.0.1:8797/v2/scrape" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer appzcrawl_local_dev_key_20260210" \
+  -d '{"url":"https://www.sanshok.com/contact" "formats": ["markdown"]}'

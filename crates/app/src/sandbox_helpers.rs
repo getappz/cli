@@ -1,6 +1,6 @@
 //! Shared helpers for sandbox-based command execution (init, dev, build, etc.).
 
-use crate::detectors::PackageManagerInfo;
+use detectors::PackageManagerInfo;
 use crate::shell::ToolVersionInfo;
 use sandbox::SandboxSettings;
 

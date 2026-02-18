@@ -2,6 +2,7 @@
 
 use crate::error::{GrabError, GrabResult};
 use crate::progress::Progress;
+use bytes::Bytes;
 use reqwest::header::{HeaderMap, HeaderValue, RANGE};
 use reqwest::Client;
 use std::path::Path;
@@ -46,6 +47,60 @@ impl Default for DownloadOptions {
             headers: None,
         }
     }
+}
+
+/// Lightweight options for simple URL fetches (returns body bytes).
+#[derive(Clone, Debug)]
+pub struct FetchOptions {
+    pub timeout: Duration,
+    pub user_agent: String,
+    /// If true, accept invalid TLS certs (e.g. self-signed, expired).
+    pub danger_accept_invalid_certs: bool,
+    pub headers: Option<HeaderMap>,
+}
+
+impl Default for FetchOptions {
+    fn default() -> Self {
+        Self {
+            timeout: Duration::from_secs(60),
+            user_agent: "grab/1.0".to_string(),
+            danger_accept_invalid_certs: false,
+            headers: None,
+        }
+    }
+}
+
+/// Fetch a URL and return the response body as bytes.
+/// Use this when you need the raw body (e.g. to write to a custom sink like ScopedFs).
+pub async fn fetch_bytes(url: &str, options: impl Into<FetchOptions>) -> GrabResult<Bytes> {
+    let options = options.into();
+    let client = build_fetch_client(&options)?;
+
+    let response = timeout(options.timeout, client.get(url).send())
+        .await
+        .map_err(|_| GrabError::Timeout("Request timeout".to_string()))??;
+
+    if !response.status().is_success() {
+        return Err(GrabError::HttpStatus(response.status().as_u16()));
+    }
+
+    let bytes = response.bytes().await?;
+    Ok(bytes)
+}
+
+fn build_fetch_client(options: &FetchOptions) -> GrabResult<Client> {
+    let mut builder = Client::builder()
+        .timeout(options.timeout)
+        .connect_timeout(Duration::from_secs(30))
+        .user_agent(&options.user_agent)
+        .gzip(true)
+        .danger_accept_invalid_certs(options.danger_accept_invalid_certs);
+
+    if let Some(ref headers) = options.headers {
+        builder = builder.default_headers(headers.clone());
+    }
+
+    builder.build().map_err(|e| GrabError::Other(e.to_string()))
 }
 
 /// Download from `url` to `path`. Uses HEAD to decide single vs parallel;

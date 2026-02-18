@@ -1,0 +1,13 @@
+# Copy to .dev.vars and fill in your values
+# Wrangler loads these for local dev (wrangler dev)
+
+# DEV_CREATE_KEY - When set, /dev/create-api-key requires X-Dev-Create-Key header to match.
+# Use for remote access: curl -H "X-Dev-Create-Key: your-secret" -X POST https://...
+# DEV_CREATE_KEY=your-dev-create-secret
+
+# PDF parsing (optional, for document extraction)
+# SARVAM_API_KEY - Required for PDF formats: json (LLM extraction). Get from https://sarvam.ai
+# SARVAM_API_KEY=your-sarvam-api-key
+
+# LLAMAPARSE_API_KEY - Alternative for PDF html/markdown (does not support json)
+# LLAMAPARSE_API_KEY=your-llamaparse-api-key

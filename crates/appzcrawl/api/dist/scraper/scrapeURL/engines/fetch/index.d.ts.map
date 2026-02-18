@@ -1,0 +1,1 @@
+{"version":3,"file":"index.d.ts","sourceRoot":"","sources":["../../../../../src/scraper/scrapeURL/engines/fetch/index.ts"],"names":[],"mappings":"AACA,OAAO,EAAE,kBAAkB,EAAE,MAAM,IAAI,CAAC;AACxC,OAAO,EAAE,IAAI,EAAE,MAAM,OAAO,CAAC;AAU7B,wBAAsB,kBAAkB,CACtC,IAAI,EAAE,IAAI,GACT,OAAO,CAAC,kBAAkB,CAAC,CA0G7B;AAED,wBAAgB,sBAAsB,CAAC,IAAI,EAAE,IAAI,GAAG,MAAM,CAEzD"}

@@ -1,0 +1,3 @@
+src/scraper/
+migrations/
+src/lib/branding/branding-script.inject.ts

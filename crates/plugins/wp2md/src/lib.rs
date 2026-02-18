@@ -58,13 +58,16 @@ pub fn appz_plugin_info() -> FnResult<Json<PluginInfo>> {
         version: env!("CARGO_PKG_VERSION").to_string(),
         commands: vec![PluginCommandDef {
             name: "wp2md".to_string(),
-            about: "Convert WordPress export XML to Markdown files".to_string(),
+            about: "Convert WordPress export XML or wp-json site to Markdown files".to_string(),
             args: vec![
                 PluginArgDef {
                     name: "_positional".to_string(),
                     short: None,
                     long: None,
-                    help: Some("Path to WordPress WXR export XML file".to_string()),
+                    help: Some(
+                        "Path to WXR export file or WordPress site URL (e.g. https://mysite.com)"
+                            .to_string(),
+                    ),
                     required: false,
                     default: None,
                 },
@@ -72,7 +75,10 @@ pub fn appz_plugin_info() -> FnResult<Json<PluginInfo>> {
                     name: "input".to_string(),
                     short: Some('i'),
                     long: Some("input".to_string()),
-                    help: Some("Path to WordPress export XML file".to_string()),
+                    help: Some(
+                        "Path to WXR export file or WordPress site URL (e.g. https://mysite.com)"
+                            .to_string(),
+                    ),
                     required: false,
                     default: Some("export.xml".to_string()),
                 },
@@ -222,14 +228,21 @@ fn bool_arg(args: &HashMap<String, serde_json::Value>, key: &str) -> Option<bool
     })
 }
 
-fn resolve_path(working_dir: &str, path: &str) -> String {
+/// Resolve a path to a form suitable for the host ScopedFs.
+/// The host expects paths *relative* to working_dir (sandbox root), not absolute.
+fn to_vfs_path(working_dir: &str, path: &str) -> String {
+    let path = path.trim().trim_start_matches("./");
     if path.is_empty() || path == "." {
-        working_dir.to_string()
-    } else if path.starts_with('/') {
-        path.to_string()
-    } else {
-        format!("{}/{}", working_dir, path)
+        return ".".to_string();
     }
+    if path.starts_with('/') {
+        // Absolute path: strip working_dir prefix so host gets a relative path
+        let wd = working_dir.trim_end_matches('/');
+        if let Some(rel) = path.strip_prefix(wd) {
+            return rel.trim_start_matches('/').to_string();
+        }
+    }
+    path.to_string()
 }
 
 // ── Command Handler ───────────────────────────────────────────────────
@@ -240,14 +253,21 @@ fn handle_wp2md(
 ) -> FnResult<Json<PluginExecuteOutput>> {
     let vfs = WasmVfs;
 
-    // Resolve input path
+    // Resolve input path or URL
     let input_raw = get_positional(args, 0)
         .or_else(|| str_arg(args, "input"))
         .unwrap_or_else(|| "export.xml".to_string());
-    let input_path = resolve_path(working_dir, &input_raw);
+    let trimmed = input_raw.trim();
+    let is_url = trimmed.starts_with("http://")
+        || trimmed.starts_with("https://");
+    let input_path = if is_url {
+        trimmed.to_string()
+    } else {
+        to_vfs_path(working_dir, &input_raw)
+    };
 
-    // Check input file exists
-    if !vfs.exists(&input_path) {
+    // Check input file exists (skip for URL — we fetch from network)
+    if !is_url && !vfs.exists(&input_path) {
         return Ok(Json(PluginExecuteOutput {
             exit_code: 1,
             message: Some(format!(
@@ -257,9 +277,9 @@ fn handle_wp2md(
         }));
     }
 
-    // Resolve output path
+    // Output path must be relative to working_dir for host ScopedFs
     let output_raw = str_arg(args, "output").unwrap_or_else(|| "output".to_string());
-    let output_path = resolve_path(working_dir, &output_raw);
+    let output_path = to_vfs_path(working_dir, &output_raw);
 
     // Parse boolean options
     let post_folders = bool_arg(args, "post-folders").unwrap_or(true);
@@ -304,6 +324,8 @@ fn handle_wp2md(
     let config = Wp2mdConfig {
         input: input_path,
         output: output_path,
+        wpjson_per_page: 100,
+        wpjson_include_pages: true,
         post_folders,
         prefix_date,
         date_folders,

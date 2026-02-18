@@ -1,5 +1,6 @@
-use crate::detectors::{
-    detect_framework_record, detect_hugo_info, DetectFrameworkRecordOptions, StdFilesystem,
+use detectors::{
+    detect_framework_record, detect_hugo_info, DetectFrameworkRecordOptions, DetectorFilesystem,
+    StdFilesystem,
 };
 use crate::sandbox_helpers::mise_tools_for_execution;
 use crate::session::AppzSession;
@@ -63,7 +64,6 @@ pub async fn dev(session: AppzSession) -> AppResult {
     };
 
     // Create filesystem detector
-    use crate::detectors::filesystem::DetectorFilesystem;
     let fs: Arc<dyn DetectorFilesystem> =
         Arc::new(StdFilesystem::new(Some(project_path.clone())));
 
@@ -159,7 +159,7 @@ pub async fn dev(session: AppzSession) -> AppResult {
 
             // Detect Hugo-specific info if this is a Hugo project
             let tool_info = if framework.slug == Some("hugo") {
-                let fs_dyn: Arc<dyn crate::detectors::filesystem::DetectorFilesystem> =
+                let fs_dyn: Arc<dyn DetectorFilesystem> =
                     fs_for_hugo.clone();
                 match detect_hugo_info(&fs_dyn).await {
                     Ok(Some(hugo_info)) => {

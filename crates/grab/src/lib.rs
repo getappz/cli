@@ -7,7 +7,7 @@ mod download;
 mod error;
 mod progress;
 
-pub use download::{download_to_path, DownloadOptions};
+pub use download::{download_to_path, fetch_bytes, DownloadOptions, FetchOptions};
 pub use error::{GrabError, GrabResult};
 pub use progress::Progress;
 pub use reqwest::header::HeaderMap;

@@ -671,9 +671,9 @@ async fn prompt_provider_selection() -> Result<String> {
         .map(|p| format!("{} ({})", p.name(), p.slug()))
         .collect();
 
-    let selection = inquire::Select::new("Select a deployment provider:", options)
-        .prompt()
-        .map_err(|e| miette!("Selection cancelled: {}", e))?;
+    let selection = ui::select_interactive("Select a deployment provider:", &options)
+        .map_err(|e| miette!("Selection failed: {}", e))?
+        .ok_or_else(|| miette!("Selection cancelled"))?;
 
     // Extract slug from "Name (slug)" format
     let slug = selection
@@ -693,9 +693,9 @@ async fn prompt_detected_selection(detected: &[DetectedPlatform]) -> Result<Stri
         .map(|p| format!("{} (detected: {})", p.name, p.config_files.join(", ")))
         .collect();
 
-    let selection = inquire::Select::new("Multiple platforms detected. Select one:", options)
-        .prompt()
-        .map_err(|e| miette!("Selection cancelled: {}", e))?;
+    let selection = ui::select_interactive("Multiple platforms detected. Select one:", &options)
+        .map_err(|e| miette!("Selection failed: {}", e))?
+        .ok_or_else(|| miette!("Selection cancelled"))?;
 
     // Match back to slug
     for (i, option) in detected.iter().enumerate() {

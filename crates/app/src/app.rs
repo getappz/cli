@@ -344,10 +344,10 @@ pub enum Commands {
     // It is now handled by the External(Vec<String>) variant below.
     // NOTE: The `site` command has been extracted to a downloadable plugin (pro tier).
     // It is now handled by the External(Vec<String>) variant below.
-    /// Manage Agent Skills (install, list, remove)
+    /// Manage Agent Skills (install, list, remove, validate, audit, find, init, create, check, update)
     Skills {
         #[command(subcommand)]
-        command: crate::commands::skills::SkillsCommands,
+        command: skills_lib::SkillsCommands,
     },
     /// Manage downloadable plugins (list, update)
     Plugin {

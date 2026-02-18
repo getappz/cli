@@ -1,0 +1,32 @@
+[package]
+name = "appzcrawl-engine"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Cloudflare Workers SDK
+worker = "0.7"
+
+# Core HTML processing (no tokio, no PDF — pure WASM-safe)
+firecrawl_rs = { path = "../native", default-features = false }
+
+# Pure Rust HTML-to-markdown (replaces Go FFI)
+htmd = "0.1"
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Utilities
+regex = { workspace = true }
+url = { workspace = true }
+base64 = { workspace = true }
+once_cell = "1.20"
+getrandom = { version = "0.3", features = ["wasm_js"] }
+
+# Search (DDG HTML parsing via Workers fetch)
+scraper = { workspace = true }
+urlencoding = { workspace = true }

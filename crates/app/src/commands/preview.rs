@@ -1,6 +1,6 @@
 //! Preview command - serve static files from build output directory
 
-use crate::detectors::{detect_framework_record, DetectFrameworkRecordOptions, StdFilesystem};
+use detectors::{detect_framework_record, DetectFrameworkRecordOptions, StdFilesystem};
 use crate::session::AppzSession;
 use crate::tunnel::{CloudflaredTunnel, TunnelService};
 use dev_server::{DevServer, ServerConfig};

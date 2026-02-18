@@ -22,3 +22,21 @@ pub enum GrabError {
 }
 
 pub type GrabResult<T> = Result<T, GrabError>;
+
+impl GrabError {
+    /// Produce a user-friendly message, e.g. for connection/network issues.
+    pub fn user_message(&self) -> String {
+        match self {
+            GrabError::Request(e) => {
+                if e.is_connect() || e.is_timeout() {
+                    "Network error. Check your internet connection.".to_string()
+                } else {
+                    format!("HTTP request failed: {}", e)
+                }
+            }
+            GrabError::HttpStatus(code) => format!("HTTP error: {}", code),
+            GrabError::Timeout(s) => format!("Request timed out: {}", s),
+            _ => self.to_string(),
+        }
+    }
+}

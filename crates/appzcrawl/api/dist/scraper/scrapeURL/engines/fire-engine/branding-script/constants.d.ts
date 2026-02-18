@@ -1,0 +1,24 @@
+export declare const CONSTANTS: {
+    BUTTON_MIN_WIDTH: number;
+    BUTTON_MIN_HEIGHT: number;
+    BUTTON_MIN_PADDING_VERTICAL: number;
+    BUTTON_MIN_PADDING_HORIZONTAL: number;
+    MAX_PARENT_TRAVERSAL: number;
+    MAX_BACKGROUND_SAMPLES: number;
+    MIN_SIGNIFICANT_AREA: number;
+    MIN_LARGE_CONTAINER_AREA: number;
+    DUPLICATE_POSITION_THRESHOLD: number;
+    MIN_LOGO_SIZE: number;
+    MIN_ALPHA_THRESHOLD: number;
+    MAX_TRANSPARENT_ALPHA: number;
+    BUTTON_SELECTOR: string;
+    TASKBAR_TOP_THRESHOLD: number;
+    CONTAINER_TOP_THRESHOLD: number;
+    TASKBAR_LOGO_MAX_TOP: number;
+    TASKBAR_LOGO_MAX_LEFT: number;
+    TASKBAR_LOGO_MIN_WIDTH: number;
+    TASKBAR_LOGO_MIN_HEIGHT: number;
+    TOP_PAGE_THRESHOLD_PX: number;
+    BUTTON_CLASS_PATTERN: RegExp;
+};
+//# sourceMappingURL=constants.d.ts.map

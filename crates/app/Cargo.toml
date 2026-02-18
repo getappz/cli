@@ -21,6 +21,7 @@ itertools = "0.14"
 walkdir = "2"
 task = { path = "../task" }
 command = { path = "../command" }
+detectors = { path = "../detectors" }
 frameworks = { path = "../frameworks" }
 env_var = { path = "../env_var" }
 async-trait = "0.1"
@@ -53,6 +54,7 @@ camino = "1.2"
 sandbox = { path = "../sandbox" }
 plugin-manager = { path = "../plugin-manager" }
 init = { path = "../init" }
+skills_lib = { path = "../skills", package = "skills" }
 
 # Optional heavy dependencies — gated behind feature flags so the core CLI
 # can be kept small as an orchestration / delegator tool.
@@ -64,6 +66,9 @@ appz-studio = { path = "../studio", optional = true }
 mcp-server = { path = "../mcp-server", optional = true }
 [features]
 default = ["self_update", "dev-server", "deploy", "mcp", "gen"]
+
+# Situational TUI components (select, confirm) - used when commands need interactive input
+tui = ["ui/tui"]
 
 # Bundled dev server (appz dev-server, appz preview)
 dev-server = ["dep:dev-server"]

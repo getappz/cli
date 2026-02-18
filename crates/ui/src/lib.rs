@@ -15,8 +15,14 @@ pub mod prompt;
 pub mod status;
 pub mod table;
 
+pub mod interactive;
+
 // Re-export commonly used types
 pub use prompt::{
     checkbox, choose, choose_multiple, confirm, password, prompt, select_with_value,
     text_with_transformer, text_with_validation,
+};
+
+pub use interactive::{
+    confirm_interactive, select_interactive, select_template_interactive,
 };

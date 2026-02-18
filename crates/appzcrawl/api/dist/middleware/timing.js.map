@@ -1,0 +1,1 @@
+{"version":3,"file":"timing.js","sourceRoot":"","sources":["../../src/middleware/timing.ts"],"names":[],"mappings":"AAGA,MAAM,UAAU,uBAAuB,CAAC,OAAe;IACrD,OAAO,CAAC,CAAkB,EAAE,IAAU,EAAE,EAAE;QACxC,CAAC,CAAC,GAAG,CAAC,eAAe,EAAE,EAAE,SAAS,EAAE,IAAI,CAAC,GAAG,EAAE,EAAE,OAAO,EAAE,CAAC,CAAC;QAC3D,OAAO,IAAI,EAAE,CAAC;IAChB,CAAC,CAAC;AACJ,CAAC"}

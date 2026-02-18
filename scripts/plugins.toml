@@ -39,6 +39,15 @@ commands = ["wp2md"]
 min_cli_version = "0.1.0"
 
 [[plugins]]
+crate_name = "crawl-plugin"
+plugin_id = "crawl"
+name = "Crawl"
+description = "Scrape or crawl URLs to Markdown files"
+tier = "free"
+commands = ["crawl"]
+min_cli_version = "0.1.0"
+
+[[plugins]]
 crate_name = "site-plugin"
 plugin_id = "site"
 name = "Site"

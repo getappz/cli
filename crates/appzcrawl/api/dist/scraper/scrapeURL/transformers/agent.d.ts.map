@@ -1,0 +1,1 @@
+{"version":3,"file":"agent.d.ts","sourceRoot":"","sources":["../../../../src/scraper/scrapeURL/transformers/agent.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,QAAQ,EAAE,MAAM,+BAA+B,CAAC;AACzD,OAAO,EAAE,IAAI,EAAE,MAAM,IAAI,CAAC;AAM1B,wBAAsB,YAAY,CAChC,IAAI,EAAE,IAAI,EACV,QAAQ,EAAE,QAAQ,GACjB,OAAO,CAAC,QAAQ,CAAC,CA8DnB"}

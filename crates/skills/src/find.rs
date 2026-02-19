@@ -268,7 +268,7 @@ fn parse_frontmatter(content: &str) -> Result<(String, String), miette::Report> 
     let rest = content
         .strip_prefix("---")
         .ok_or_else(|| miette::miette!("No YAML frontmatter"))?;
-    let rest = rest.trim_start_matches(|c| c == '\n' || c == '\r');
+    let rest = rest.trim_start_matches(['\n', '\r']);
     let end = rest
         .find("\n---")
         .or_else(|| rest.find("\r\n---"))

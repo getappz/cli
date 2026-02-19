@@ -2,7 +2,6 @@
 
 use crate::vfs_wasm::CrawlVfs;
 use crawl_core::post_process_markdown;
-use htmd;
 
 /// Scrape a single URL to markdown.
 pub fn scrape_url(

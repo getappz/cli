@@ -55,7 +55,7 @@ fn resolve_template_and_name(
 ) -> Result<(String, String), miette::Report> {
     if let Some(explicit_template) = template {
         let proj_name = name
-            .or_else(|| template_or_name)
+            .or(template_or_name)
             .ok_or_else(|| miette!("Project name required. Use --name or provide as positional argument."))?;
         return Ok((explicit_template, proj_name));
     }

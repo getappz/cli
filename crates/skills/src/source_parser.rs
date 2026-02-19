@@ -230,11 +230,10 @@ fn is_direct_skill_url(input: &str) -> bool {
     if !lower.ends_with("/skill.md") {
         return false;
     }
-    if input.contains("github.com/") && !input.contains("raw.githubusercontent.com") {
-        if !input.contains("/blob/") && !input.contains("/raw/") {
+    if input.contains("github.com/") && !input.contains("raw.githubusercontent.com")
+        && !input.contains("/blob/") && !input.contains("/raw/") {
             return false;
         }
-    }
     if input.contains("gitlab.com/") && !input.contains("/-/raw/") {
         return false;
     }
@@ -322,7 +321,7 @@ fn parse_colon_format(input: &str) -> Option<(String, Vec<String>)> {
         return None;
     }
     let skills: Vec<String> = rest
-        .split(|c| c == ',' || c == ':')
+        .split([',', ':'])
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .filter(|s| *s != "*")

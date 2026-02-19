@@ -6,7 +6,7 @@ mod wellknown;
 
 pub use huggingface::HuggingFaceProvider;
 pub use mintlify::MintlifyProvider;
-pub use wellknown::{WellKnownProvider, WellKnownSkillEntry};
+pub use wellknown::WellKnownProvider;
 
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -79,7 +79,7 @@ impl ProviderHandle {
 fn parse_frontmatter(content: &str) -> Option<(String, String, Option<HashMap<String, serde_json::Value>>)> {
     let content = content.trim_start();
     let rest = content.strip_prefix("---")?;
-    let rest = rest.trim_start_matches(|c| c == '\n' || c == '\r');
+    let rest = rest.trim_start_matches(['\n', '\r']);
     let end = rest.find("\n---").or_else(|| rest.find("\r\n---"))?;
     let yaml = rest[..end].trim();
     #[derive(Deserialize)]

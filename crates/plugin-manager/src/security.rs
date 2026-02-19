@@ -69,7 +69,7 @@ impl PluginSecurity {
         let sig_path = wasm_path.with_extension("wasm.sig");
 
         let wasm_bytes = fs::read_file_bytes(wasm_path)
-            .map_err(|e| PluginError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+            .map_err(|e| PluginError::Io(std::io::Error::other(e.to_string())))?;
         let sig_bytes = fs::read_file_bytes(&sig_path).map_err(|_| PluginError::SignatureInvalid {
             plugin: plugin_name.to_string(),
         })?;
@@ -105,7 +105,7 @@ impl PluginSecurity {
     ) -> PluginResult<()> {
         use sha2::Digest;
 
-        let wasm_bytes = fs::read_file_bytes(wasm_path).map_err(|e| PluginError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+        let wasm_bytes = fs::read_file_bytes(wasm_path).map_err(|e| PluginError::Io(std::io::Error::other(e.to_string())))?;
         let hash = Sha256::digest(&wasm_bytes);
         let actual = hex::encode(hash);
 

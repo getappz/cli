@@ -1,5 +1,6 @@
 pub mod aliases;
 pub mod build;
+mod install_helpers;
 #[cfg(feature = "check")]
 pub mod check;
 #[cfg(feature = "code-search")]

@@ -414,7 +414,7 @@ fn parse_skill_name(content: &str) -> Result<String, miette::Report> {
     let rest = content
         .strip_prefix("---")
         .ok_or_else(|| miette::miette!("No frontmatter"))?;
-    let rest = rest.trim_start_matches(|c| c == '\n' || c == '\r');
+    let rest = rest.trim_start_matches(['\n', '\r']);
     let end = rest.find("\n---").or_else(|| rest.find("\r\n---")).ok_or_else(|| miette::miette!("No closing ---"))?;
     let yaml = rest[..end].trim();
     #[derive(serde::Deserialize)]
@@ -440,7 +440,7 @@ fn find_skill_by_name_or_path(
             let name = canon.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "skill".to_string());
             (canon.join("SKILL.md"), name)
         } else {
-            return Err(miette::miette!("No SKILL.md at {}", common::user_config::path_for_display(path)).into());
+            return Err(miette::miette!("No SKILL.md at {}", common::user_config::path_for_display(path)));
         };
         return Ok(vec![(name, skill_file.parent().unwrap().to_path_buf())]);
     }
@@ -451,7 +451,7 @@ fn find_skill_by_name_or_path(
         .filter(|(n, _)| n.eq_ignore_ascii_case(name_or_path))
         .collect();
     if matches.is_empty() {
-        Err(miette::miette!("Skill '{}' not found", name_or_path).into())
+        Err(miette::miette!("Skill '{}' not found", name_or_path))
     } else {
         Ok(matches)
     }

@@ -685,7 +685,7 @@ fn filter_plugins<'a>(
     plugins
         .iter()
         .filter(|p| {
-            filter.map_or(true, |f| {
+            filter.is_none_or(|f| {
                 p.plugin_id == f || p.crate_name == f
             })
         })

@@ -3,6 +3,7 @@
 use crate::chunk::CodeChunk;
 use crate::embed::{embed, Embedder};
 use crate::error::CodeSearchError;
+use crate::types::SearchResult;
 use qdrant_client::qdrant::{
     CreateCollectionBuilder, Distance, PointStruct, SearchPointsBuilder, UpsertPointsBuilder,
     VectorParamsBuilder,
@@ -110,14 +111,6 @@ where
     }
 
     Ok(())
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct SearchResult {
-    pub path: String,
-    pub content: String,
-    pub line_start: usize,
-    pub score: f32,
 }
 
 #[instrument(skip_all)]

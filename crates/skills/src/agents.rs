@@ -346,7 +346,8 @@ impl AgentType {
     pub fn global_dir(&self) -> PathBuf {
         let home = home_dir();
         let config = config_home();
-        let path = match self {
+        
+        match self {
             AgentType::Amp | AgentType::KimiCli | AgentType::Replit => {
                 config.join("agents/skills")
             }
@@ -386,8 +387,7 @@ impl AgentType {
             AgentType::Windsurf => home.join(".codeium/windsurf/skills"),
             AgentType::Zencoder => home.join(".zencoder/skills"),
             AgentType::AdaL => home.join(".adal/skills"),
-        };
-        path
+        }
     }
 
     /// Check if this agent is installed (has config dir).
@@ -518,12 +518,7 @@ pub fn parse_agent(id: &str) -> Option<AgentType> {
         "vibe" => "mistral-vibe",
         other => other,
     };
-    for &a in all_agents() {
-        if a.config().id == id {
-            return Some(a);
-        }
-    }
-    None
+    all_agents().iter().find(|&&a| a.config().id == id).copied()
 }
 
 /// Resolve agent filter: "*" or list of ids.

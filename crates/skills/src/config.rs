@@ -94,7 +94,7 @@ fn assert_skills_config(value: &mut serde_json::Value) -> Result<SkillsConfig, m
     })?;
 
     if !obj.contains_key("skills") {
-        return Err(miette::miette!("Invalid skills.json: missing 'skills' key.").into());
+        return Err(miette::miette!("Invalid skills.json: missing 'skills' key."));
     }
 
     if !obj.contains_key("$schema") {
@@ -105,7 +105,7 @@ fn assert_skills_config(value: &mut serde_json::Value) -> Result<SkillsConfig, m
     }
 
     serde_json::from_value(serde_json::Value::Object(std::mem::take(obj)))
-        .map_err(|e| miette::miette!("Invalid skills.json: {}", e).into())
+        .map_err(|e| miette::miette!("Invalid skills.json: {}", e))
 }
 
 /// Read and validate skills.json.
@@ -142,8 +142,7 @@ pub fn read_skills_config(
             } else {
                 return Err(miette::miette!(
                     "skills.json not found in current directory or any parent directory."
-                )
-                .into());
+                ));
             }
         }
     };

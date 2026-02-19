@@ -483,10 +483,7 @@ async fn repair_loop(
         let _ = ui::layout::blank_line();
 
         // --- Confirm with user ---
-        let apply = match ui::prompt::confirm("Apply this patch?", true) {
-            Ok(v) => v,
-            Err(_) => false,
-        };
+        let apply = ui::prompt::confirm("Apply this patch?", true).unwrap_or_default();
 
         if !apply {
             let _ = ui::status::info("Patch rejected by user.");

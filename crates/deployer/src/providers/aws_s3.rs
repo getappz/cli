@@ -145,7 +145,7 @@ impl DeployProvider for AwsS3Provider {
 
         let cmd = format!("aws s3 sync {} {} --delete", output_str, s3_uri);
 
-        crate::ui::info(&ctx, &format!("Syncing to S3 bucket: {}...", bucket));
+        crate::ui::info(ctx, &format!("Syncing to S3 bucket: {}...", bucket));
 
         let result = ctx.exec(&cmd).await?;
 
@@ -158,7 +158,7 @@ impl DeployProvider for AwsS3Provider {
 
         // Invalidate CloudFront cache if configured
         if let Some(ref dist_id) = s3_config.cloudfront_distribution_id {
-            crate::ui::info(&ctx, "Invalidating CloudFront cache...");
+            crate::ui::info(ctx, "Invalidating CloudFront cache...");
             let invalidate_cmd = format!(
                 "aws cloudfront create-invalidation --distribution-id {} --paths '/*'",
                 dist_id

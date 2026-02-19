@@ -192,15 +192,12 @@ impl MiseToolSpec {
 
 /// The kind of sandbox provider backend.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Default)]
 pub enum ProviderKind {
     /// Local filesystem-based sandbox.
+    #[default]
     Local,
     /// Docker container-based sandbox (future).
     Docker,
 }
 
-impl Default for ProviderKind {
-    fn default() -> Self {
-        Self::Local
-    }
-}

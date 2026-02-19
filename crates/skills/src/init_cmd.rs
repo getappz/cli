@@ -39,7 +39,7 @@ pub async fn init_cmd(ctx: &SkillsContext, name: Option<String>, output: Option<
     let sanitized = sanitized.trim_matches('-');
     let sanitized = sanitized.replace("--", "-");
     if sanitized.is_empty() {
-        return Err(miette::miette!("Invalid skill name: '{}'", name).into());
+        return Err(miette::miette!("Invalid skill name: '{}'", name));
     }
 
     let base = output
@@ -50,8 +50,7 @@ pub async fn init_cmd(ctx: &SkillsContext, name: Option<String>, output: Option<
         return Err(miette::miette!(
             "Directory already exists: {}. Choose a different name or remove it first.",
             common::user_config::path_for_display(&skill_dir)
-        )
-        .into());
+        ));
     }
 
     fs::create_dir_all(&skill_dir)

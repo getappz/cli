@@ -127,7 +127,7 @@ pub fn ensure_user_appz_dir() -> std::io::Result<PathBuf> {
     let dir = user_appz_dir().ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::NotFound, "Could not determine home directory")
     })?;
-    fs::create_dir_all(&dir).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+    fs::create_dir_all(&dir).map_err(|e| std::io::Error::other(e.to_string()))?;
     Ok(dir)
 }
 

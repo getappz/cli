@@ -45,8 +45,7 @@ pub async fn remove(
         return Err(miette::miette!(
             "Skill '{}' not found in project or global skills. Use `appz skills list` to see installed skills.",
             name
-        )
-        .into());
+        ));
     }
 
     if !yes {

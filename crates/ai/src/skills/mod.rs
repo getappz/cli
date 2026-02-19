@@ -65,7 +65,7 @@ pub fn discover_skills(
             }
             let skill_path = match dir {
                 SkillDir::Relative(rel) => rel.join(&entry.name),
-                SkillDir::Allowed(_) => PathBuf::from(entry.abs_path.clone()),
+                SkillDir::Allowed(_) => entry.abs_path.clone(),
             };
             let skill_file = match dir {
                 SkillDir::Relative(rel) => rel.join(&entry.name).join("SKILL.md"),
@@ -122,7 +122,7 @@ fn parse_frontmatter(content: &str) -> AiResult<SkillFrontmatter> {
     let rest = content.strip_prefix("---").ok_or_else(|| AiError::SkillError {
         reason: "No valid YAML frontmatter (--- ... ---) found".to_string(),
     })?;
-    let rest = rest.trim_start_matches(|c| c == '\n' || c == '\r');
+    let rest = rest.trim_start_matches(['\n', '\r']);
     let end_marker = rest.find("\n---").or_else(|| rest.find("\r\n---"));
     let yaml = end_marker
         .map(|i| rest[..i].trim())

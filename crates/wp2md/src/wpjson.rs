@@ -54,9 +54,7 @@ pub fn fetch_posts_from_wpjson(
 
 fn normalize_api_url(url: &str) -> Result<String> {
     let url = url.trim().trim_end_matches('/');
-    let base = if url.ends_with("/wp-json") {
-        url.to_string()
-    } else if url.ends_with("/wp-json/wp/v2") {
+    let base = if url.ends_with("/wp-json") || url.ends_with("/wp-json/wp/v2") {
         url.to_string()
     } else {
         format!("{}/wp-json/wp/v2", url)
@@ -260,7 +258,7 @@ fn collect_images(api: &WpApiPost, config: &Wp2mdConfig) -> (Option<String>, Vec
                 continue;
             }
             let filename = common::filename_from_url(url);
-            let is_cover = cover_image.as_ref().map_or(false, |c| *c == filename);
+            let is_cover = cover_image.as_ref().is_some_and(|c| *c == filename);
             images.push(ImageRef {
                 url: url.to_string(),
                 filename,

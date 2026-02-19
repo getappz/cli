@@ -101,6 +101,12 @@ lto = true
 codegen-units = 1
 panic = "abort"
 
+[profile.dev]
+incremental = true  # default
+opt-level = 0
+codegen-units = 256
+debug = true
+
 # Benchmark profile: debug symbols for profiling (perf, VTune, Superluminal).
 [profile.bench]
 inherits = "release"

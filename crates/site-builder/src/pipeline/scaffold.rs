@@ -89,7 +89,7 @@ fn write_site_data(
         .map(|t| {
             // Take the site name portion before " - " or " | " separators
             t.split(&['-', '|'][..])
-                .last()
+                .next_back()
                 .unwrap_or(&t)
                 .trim()
                 .to_string()

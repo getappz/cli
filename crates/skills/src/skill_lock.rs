@@ -87,7 +87,7 @@ fn create_empty_lock() -> SkillLockFile {
 /// Write the lock file.
 pub fn write_skill_lock(ctx: &SkillsContext, lock: &SkillLockFile) -> Result<(), miette::Report> {
     let Some(appz_dir) = &ctx.user_appz_dir else {
-        return Err(miette::miette!("Could not determine home directory").into());
+        return Err(miette::miette!("Could not determine home directory"));
     };
     starbase_utils::fs::create_dir_all(appz_dir)
         .map_err(|e| miette::miette!("Failed to create appz dir: {}", e))?;

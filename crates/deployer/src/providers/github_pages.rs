@@ -214,7 +214,7 @@ async fn detect_github_pages_url(ctx: &DeployContext) -> Option<String> {
             let repo = parts[parts.len() - 1];
             let owner = parts[parts.len() - 2];
             // Handle SSH format (git@github.com:owner/repo)
-            let owner = owner.split(':').last().unwrap_or(owner);
+            let owner = owner.split(':').next_back().unwrap_or(owner);
             (owner.to_string(), repo.to_string())
         } else {
             return None;

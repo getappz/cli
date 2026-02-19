@@ -126,7 +126,7 @@ fn path_matches_exclusion(path: &Path, exclusion: &str, root: &Path) -> bool {
         .replace("\\*", "[^/]*");
     regex::Regex::new(&format!("^{}$", pattern))
         .or_else(|_| regex::Regex::new(&format!(".*{}.*", pattern)))
-        .map_or(false, |re| re.is_match(&rel_str))
+        .is_ok_and(|re| re.is_match(&rel_str))
 }
 
 fn expand_workspace_pattern(root: &Path, pattern: &str) -> Vec<PathBuf> {

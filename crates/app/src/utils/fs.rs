@@ -4,7 +4,6 @@
 //! etc.). Use `std::fs` only for operations starbase_utils does not expose, such as setting
 //! executable bits via `PermissionsExt`.
 
-pub use starbase_utils::fs;
 
 use miette::Result;
 use std::path::Path;

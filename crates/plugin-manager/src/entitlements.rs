@@ -122,7 +122,7 @@ impl EntitlementChecker {
     /// Save entitlements to local cache.
     fn save_to_cache(cache_path: &Path, tiers: &[String]) -> PluginResult<()> {
         if let Some(parent) = cache_path.parent() {
-            fs::create_dir_all(parent).map_err(|e| PluginError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+            fs::create_dir_all(parent).map_err(|e| PluginError::Io(std::io::Error::other(e.to_string())))?;
         }
 
         let cached = CachedEntitlements {
@@ -134,7 +134,7 @@ impl EntitlementChecker {
         };
 
         starbase_utils::json::write_file(cache_path, &cached, true)
-            .map_err(|e| PluginError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+            .map_err(|e| PluginError::Io(std::io::Error::other(e.to_string())))?;
         Ok(())
     }
 }

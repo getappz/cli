@@ -215,9 +215,9 @@ fn parse_hunk_header(header: &str) -> CheckResult<(usize, usize, usize, usize)> 
     // Find the range specs between @@ markers.
     let inner = header
         .strip_prefix("@@")
-        .and_then(|s| {
+        .map(|s| {
             let end = s.find("@@").unwrap_or(s.len());
-            Some(s[..end].trim())
+            s[..end].trim()
         })
         .ok_or_else(|| CheckerError::AiFixFailed {
             reason: format!("Malformed hunk header: {}", header),

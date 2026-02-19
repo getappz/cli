@@ -12,7 +12,6 @@
 
 use crate::session::AppzSession;
 use crate::wasm::PluginRunner;
-use miette::Result;
 use sandbox::{create_sandbox, SandboxConfig, SandboxSettings};
 use starbase::AppResult;
 use std::sync::Arc;
@@ -22,7 +21,7 @@ pub async fn run(session: AppzSession, args: Vec<String>) -> AppResult {
     let command_name = args.first().cloned().unwrap_or_default();
 
     if command_name.is_empty() {
-        return Err(miette::miette!("No command specified").into());
+        return Err(miette::miette!("No command specified"));
     }
 
     tracing::debug!("Looking up plugin command: {}", &command_name);

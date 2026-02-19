@@ -1,4 +1,4 @@
-use extism::{convert::Json, Manifest, Plugin, PluginBuilder, UserData, Wasm, PTR};
+use extism::{Manifest, Plugin, PluginBuilder, UserData, Wasm, PTR};
 use starbase_utils::fs;
 use miette::{IntoDiagnostic, Result};
 use sandbox::{ScopedFs, SandboxProvider};
@@ -78,6 +78,12 @@ pub struct PluginHostData {
 pub struct PluginManager {
     plugins: Arc<std::sync::Mutex<HashMap<String, Mutex<Plugin>>>>, // Share via Arc for task closures
     context: Arc<RwLock<Context>>,
+}
+
+impl Default for PluginManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl PluginManager {

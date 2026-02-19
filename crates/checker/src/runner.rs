@@ -16,6 +16,7 @@ use crate::output::{CheckReport, Severity};
 use crate::provider::{detect_applicable_providers, get_provider, CheckProvider};
 
 /// Options for a check run.
+#[derive(Default)]
 pub struct RunOptions {
     /// Fix mode — auto-fix safe issues.
     pub fix: bool,
@@ -37,21 +38,6 @@ pub struct RunOptions {
     pub check_config: CheckConfig,
 }
 
-impl Default for RunOptions {
-    fn default() -> Self {
-        Self {
-            fix: false,
-            format: false,
-            strict: false,
-            json_output: false,
-            is_ci: false,
-            file_filter: None,
-            checker: None,
-            jobs: None,
-            check_config: CheckConfig::default(),
-        }
-    }
-}
 
 /// Run checks on a project using the sandbox.
 ///
@@ -105,7 +91,7 @@ pub async fn run_checks(
     // Wrap providers in Arc for shared access across async tasks.
     let providers: Vec<Arc<dyn CheckProvider>> = providers
         .into_iter()
-        .map(|p| Arc::from(p))
+        .map(Arc::from)
         .collect();
 
     // 3. Ensure tools are installed (in parallel, streamed).

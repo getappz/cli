@@ -59,8 +59,7 @@ fn resolve_skill_path(path: &Path) -> Result<(PathBuf, String), miette::Report> 
         return Err(miette::miette!(
             "No SKILL.md found at {}",
             path.display()
-        )
-        .into());
+        ));
     };
     Ok((skill_file, name))
 }
@@ -70,7 +69,7 @@ fn parse_frontmatter_and_body(content: &str) -> Result<(SkillFrontmatter, String
     let rest = content
         .strip_prefix("---")
         .ok_or_else(|| miette::miette!("No YAML frontmatter found"))?;
-    let rest = rest.trim_start_matches(|c| c == '\n' || c == '\r');
+    let rest = rest.trim_start_matches(['\n', '\r']);
     let end = rest
         .find("\n---")
         .or_else(|| rest.find("\r\n---"))
@@ -200,7 +199,7 @@ fn parse_name_desc(content: &str) -> Result<(String, String), miette::Report> {
     let rest = content
         .strip_prefix("---")
         .ok_or_else(|| miette::miette!("No YAML frontmatter"))?;
-    let rest = rest.trim_start_matches(|c| c == '\n' || c == '\r');
+    let rest = rest.trim_start_matches(['\n', '\r']);
     let end = rest
         .find("\n---")
         .or_else(|| rest.find("\r\n---"))

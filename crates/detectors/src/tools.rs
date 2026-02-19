@@ -12,6 +12,25 @@ struct ToolPattern {
 }
 
 const TOOL_PATTERNS: &[ToolPattern] = &[
+    // UI libraries (used as "framework" for skill matching when no meta-framework present)
+    ToolPattern {
+        name: "react",
+        config_files: &[],
+        files: &[],
+        dependencies: &["react", "react-dom"],
+    },
+    ToolPattern {
+        name: "vue",
+        config_files: &[],
+        files: &[],
+        dependencies: &["vue"],
+    },
+    ToolPattern {
+        name: "svelte",
+        config_files: &[],
+        files: &[],
+        dependencies: &["svelte"],
+    },
     ToolPattern {
         name: "prisma",
         config_files: &["prisma/schema.prisma"],
@@ -298,6 +317,42 @@ const TOOL_PATTERNS: &[ToolPattern] = &[
         config_files: &[],
         files: &[],
         dependencies: &["ai"],
+    },
+    ToolPattern {
+        name: "shadcn",
+        config_files: &["components.json"],
+        files: &[],
+        dependencies: &["class-variance-authority"],
+    },
+    ToolPattern {
+        name: "react-hook-form",
+        config_files: &[],
+        files: &[],
+        dependencies: &["react-hook-form", "@hookform/resolvers"],
+    },
+    ToolPattern {
+        name: "zod",
+        config_files: &[],
+        files: &[],
+        dependencies: &["zod"],
+    },
+    ToolPattern {
+        name: "better-auth",
+        config_files: &[],
+        files: &[],
+        dependencies: &["better-auth"],
+    },
+    ToolPattern {
+        name: "react-router",
+        config_files: &[],
+        files: &[],
+        dependencies: &["react-router", "react-router-dom"],
+    },
+    ToolPattern {
+        name: "recharts",
+        config_files: &[],
+        files: &[],
+        dependencies: &["recharts"],
     },
 ];
 

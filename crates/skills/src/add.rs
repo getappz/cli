@@ -116,8 +116,7 @@ pub async fn add(
         return Err(miette::miette!(
             "Skill '{}' not found. Use owner/repo, https://..., ./local-path, or install the skill in ~/.appz/skills, ~/.cursor/skills, ~/.codex/skills, or ~/.agents/skills first.",
             source
-        )
-        .into());
+        ));
     }
 
     // Default to global when neither -p nor -g
@@ -134,8 +133,7 @@ pub async fn add(
     if target_dirs.is_empty() {
         return Err(miette::miette!(
             "No target directory. Use --project (-p) or --global (-g)."
-        )
-        .into());
+        ));
     }
 
     let primary_target = &target_dirs[0].0;
@@ -182,8 +180,7 @@ pub async fn add(
         return Err(miette::miette!(
             "Invalid source: '{}'. Use owner/repo, https://..., or ./local-path",
             source
-        )
-        .into());
+        ));
     };
 
     // Git/GitHub repos (vercel-labs/skills, astrolicious/agent-skills, etc.) use skills/ subdir.
@@ -194,8 +191,7 @@ pub async fn add(
     if skill_dirs.is_empty() {
         return Err(miette::miette!(
             "No skills found (no SKILL.md in subdirectories)"
-        )
-        .into());
+        ));
     }
 
     let to_install: Vec<_> = if let Some(ref filters) = skill_filters {
@@ -218,8 +214,7 @@ pub async fn add(
         return Err(miette::miette!(
             "No matching skill '{}' found",
             skill_filter.as_deref().unwrap_or("")
-        )
-        .into());
+        ));
     }
 
     if list_only {
@@ -531,16 +526,14 @@ async fn repomix_skill_generate(
         return Err(miette::miette!(
             "Repomix exited with code {:?}",
             status.code()
-        )
-        .into());
+        ));
     }
 
     if !output_path.join("SKILL.md").exists() {
         return Err(miette::miette!(
             "Repomix did not produce skill folder at {}",
             output_path.display()
-        )
-        .into());
+        ));
     }
 
     Ok(())
@@ -587,7 +580,7 @@ async fn add_from_provider(
         do_global,
     );
     if target_dirs.is_empty() {
-        return Err(miette::miette!("No target directory. Use --project (-p) or --global (-g).").into());
+        return Err(miette::miette!("No target directory. Use --project (-p) or --global (-g)."));
     }
 
     for (target_dir, _) in &target_dirs {
@@ -613,7 +606,7 @@ async fn add_from_provider(
         }
         starbase_fs::create_dir_all(&dest)
             .map_err(|e| miette::miette!("Failed to create skill directory: {}", e))?;
-        starbase_fs::write_file(&dest.join("SKILL.md"), &remote.content)
+        starbase_fs::write_file(dest.join("SKILL.md"), &remote.content)
             .map_err(|e| miette::miette!("Failed to write SKILL.md: {}", e))?;
 
         let _ = ui::status::success(&format!("Installed skill: {} ({})", remote.install_name, label));
@@ -741,7 +734,7 @@ fn try_existing_skill_from_git_url(
 ) -> Option<PathBuf> {
     let parsed = parse_git_source(source).ok()?;
     let subfolder = parsed.subfolder.as_deref()?;
-    let name = subfolder.split('/').last()?.to_string();
+    let name = subfolder.split('/').next_back()?.to_string();
     if name.is_empty() {
         return None;
     }

@@ -69,8 +69,9 @@ fn get_post_content(html: &str) -> String {
         .to_string();
 
     // Protect <figure> elements that contain <figcaption>
+    // Note: Rust regex doesn't support look-ahead; use non-greedy .*? instead
     let figure_re =
-        Regex::new(r"(?is)(<figure[^>]*>(?:(?!</figure>).)*<figcaption.*?</figure>)").unwrap();
+        Regex::new(r"(?is)(<figure[^>]*>.*?<figcaption.*?</figure>)").unwrap();
     let mut figure_blocks: Vec<String> = Vec::new();
     content = figure_re
         .replace_all(&content, |caps: &regex::Captures| {
@@ -140,7 +141,7 @@ fn get_post_content(html: &str) -> String {
 
     // ── Core conversion ────────────────────────────────────────────
 
-    let mut md = htmd::convert(&content).unwrap_or_else(|_| content);
+    let mut md = htmd::convert(&content).unwrap_or(content);
 
     // ── Post-processing ────────────────────────────────────────────
 

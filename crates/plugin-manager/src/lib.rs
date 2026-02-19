@@ -67,7 +67,7 @@ impl PluginManager {
         api_client: Arc<Client>,
         plugins_dir: &Path,
     ) -> PluginResult<Self> {
-        fs::create_dir_all(plugins_dir).map_err(|e| PluginError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+        fs::create_dir_all(plugins_dir).map_err(|e| PluginError::Io(std::io::Error::other(e.to_string())))?;
 
         let manifest = PluginManifest::load(plugins_dir).await?;
         let entitlements = EntitlementChecker::new(api_client, plugins_dir);
@@ -147,7 +147,7 @@ impl PluginManager {
         PluginSecurity::verify_signature(&wasm_path, &plugin_name)?;
 
         // 5. Validate WASM header
-        let wasm_bytes = fs::read_file_bytes(&wasm_path).map_err(|e| PluginError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+        let wasm_bytes = fs::read_file_bytes(&wasm_path).map_err(|e| PluginError::Io(std::io::Error::other(e.to_string())))?;
         let header = PluginSecurity::validate_header(&wasm_bytes, &plugin_name)?;
 
         // 6. Check CLI version compatibility
@@ -193,7 +193,7 @@ impl PluginManager {
         // Remove the cached manifest so the next load hits the CDN
         let cache_path = PluginManifest::cache_path(&self.plugins_dir);
         if cache_path.exists() {
-            fs::remove_file(&cache_path).map_err(|e| PluginError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+            fs::remove_file(&cache_path).map_err(|e| PluginError::Io(std::io::Error::other(e.to_string())))?;
         }
         self.manifest = PluginManifest::load(&self.plugins_dir).await?;
         Ok(())

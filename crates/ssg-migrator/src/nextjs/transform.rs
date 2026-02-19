@@ -22,7 +22,7 @@ pub(super) fn transform_client_files(
     transforms_opt: Option<&str>,
 ) -> Result<()> {
     let transforms: Option<Vec<NextJsTransform>> = transforms_opt
-        .map(|s| super::convert::parse_transforms(s))
+        .map(super::convert::parse_transforms)
         .filter(|v| !v.is_empty());
     let client_path = output_dir.join(client_rel);
     if !vfs.exists(client_path.as_str()) {

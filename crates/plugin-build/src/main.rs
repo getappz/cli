@@ -134,7 +134,7 @@ async fn main() -> Result<()> {
             let key_path = key.or_else(|| {
                 std::env::var("APPZ_SIGNING_KEY")
                     .ok()
-                    .map(|s| std::path::PathBuf::from(s))
+                    .map(std::path::PathBuf::from)
             }).or_else(|| {
                 Some(
                     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))

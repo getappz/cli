@@ -150,12 +150,10 @@ pub async fn deploy(
         let msg = if r.is_ok() { "Deployed!" } else { "Failed" };
         sp.finish_with_message(msg);
         r
+    } else if preview {
+        provider.deploy_preview(&ctx).await
     } else {
-        if preview {
-            provider.deploy_preview(&ctx).await
-        } else {
-            provider.deploy(&ctx).await
-        }
+        provider.deploy(&ctx).await
     };
 
     let output = result.map_err(|e| miette!("{}", e))?;
@@ -593,51 +591,48 @@ fn display_deploy_result(output: &DeployOutput, json_output: bool) -> Result<()>
 /// Write deployment output to CI systems (GitHub Actions, etc.).
 fn write_ci_output(output: &DeployOutput) {
     if let Some(ci_platform) = deployer::config::detect_ci_platform() {
-        match ci_platform {
-            deployer::CiPlatform::GitHubActions => {
-                // Write to GITHUB_OUTPUT
-                if let Ok(output_file) = std::env::var("GITHUB_OUTPUT") {
-                    let content = format!(
-                        "deploy_url={}\ndeploy_status={}\ndeploy_provider={}\n",
-                        output.url, output.status, output.provider
-                    );
-                    let _ = std::fs::OpenOptions::new()
-                        .append(true)
-                        .create(true)
-                        .open(&output_file)
-                        .and_then(|mut f| {
-                            use std::io::Write;
-                            f.write_all(content.as_bytes())
-                        });
-                }
-
-                // Write to GITHUB_STEP_SUMMARY
-                if let Ok(summary_file) = std::env::var("GITHUB_STEP_SUMMARY") {
-                    let deploy_type = if output.is_preview { "Preview" } else { "Production" };
-                    let content = format!(
-                        "### {} Deployment\n\n\
-                         | Field | Value |\n\
-                         |-------|-------|\n\
-                         | Provider | {} |\n\
-                         | URL | [{}]({}) |\n\
-                         | Status | {} |\n\n",
-                        deploy_type,
-                        output.provider,
-                        output.url,
-                        output.url,
-                        output.status,
-                    );
-                    let _ = std::fs::OpenOptions::new()
-                        .append(true)
-                        .create(true)
-                        .open(&summary_file)
-                        .and_then(|mut f| {
-                            use std::io::Write;
-                            f.write_all(content.as_bytes())
-                        });
-                }
+        if ci_platform == deployer::CiPlatform::GitHubActions {
+            // Write to GITHUB_OUTPUT
+            if let Ok(output_file) = std::env::var("GITHUB_OUTPUT") {
+                let content = format!(
+                    "deploy_url={}\ndeploy_status={}\ndeploy_provider={}\n",
+                    output.url, output.status, output.provider
+                );
+                let _ = std::fs::OpenOptions::new()
+                    .append(true)
+                    .create(true)
+                    .open(&output_file)
+                    .and_then(|mut f| {
+                        use std::io::Write;
+                        f.write_all(content.as_bytes())
+                    });
             }
-            _ => {}
+
+            // Write to GITHUB_STEP_SUMMARY
+            if let Ok(summary_file) = std::env::var("GITHUB_STEP_SUMMARY") {
+                let deploy_type = if output.is_preview { "Preview" } else { "Production" };
+                let content = format!(
+                    "### {} Deployment\n\n\
+                     | Field | Value |\n\
+                     |-------|-------|\n\
+                     | Provider | {} |\n\
+                     | URL | [{}]({}) |\n\
+                     | Status | {} |\n\n",
+                    deploy_type,
+                    output.provider,
+                    output.url,
+                    output.url,
+                    output.status,
+                );
+                let _ = std::fs::OpenOptions::new()
+                    .append(true)
+                    .create(true)
+                    .open(&summary_file)
+                    .and_then(|mut f| {
+                        use std::io::Write;
+                        f.write_all(content.as_bytes())
+                    });
+            }
         }
     }
 }

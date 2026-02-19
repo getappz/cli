@@ -8,10 +8,12 @@ init:
 # BUILDING
 
 build:
-	cargo build -p cli
+	export CARGO_BUILD_JOBS=$(nproc)
+	cargo build -p cli -j $(nproc)
 	sudo cp ./target/debug/appz ~/.local/bin/appz
 build-rel:
-	cargo build -p cli --release
+	export CARGO_BUILD_JOBS=$(nproc)
+	cargo build -p cli --release -j $(nproc)
 	sudo cp ./target/release/appz ~/.local/bin/appz
 build-pageflare:
 	cargo build -p pageflare

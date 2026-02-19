@@ -81,7 +81,7 @@ fn build_posts(items: &[Item], post_types: &[String]) -> Vec<Post> {
     items
         .iter()
         .filter(|item| type_set.contains(item.get_post_type()))
-        .map(|item| build_post(item))
+        .map(build_post)
         .collect()
 }
 

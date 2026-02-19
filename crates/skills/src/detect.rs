@@ -119,7 +119,7 @@ fn is_relevant_skill(skill_ref: &str, term: &str, detected_frameworks: &[String]
     // Word-boundary style match: term should appear as whole word
     let has_term = {
         let pattern = format!(r"(^|[^a-z0-9]){}([^a-z0-9]|$)", regex::escape(&lower_term));
-        regex::Regex::new(&pattern).ok().map_or(false, |re| re.is_match(&lower_ref))
+        regex::Regex::new(&pattern).ok().is_some_and(|re| re.is_match(&lower_ref))
             || (lower_term.contains('-') && lower_ref.contains(&lower_term))
     };
     if !has_term {

@@ -595,7 +595,7 @@ fn _parse_sitemap_xml(xml_content: &str) -> std::result::Result<ParsedSitemap, S
       }
       Ok(Event::Text(e)) => {
         if in_loc {
-          current_loc.push_str(&e.unescape().unwrap_or_default().into_owned());
+          current_loc.push_str(&e.unescape().unwrap_or_default());
         }
       }
       Ok(Event::End(e)) => {

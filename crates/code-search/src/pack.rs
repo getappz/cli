@@ -36,7 +36,7 @@ pub async fn pack(workdir: &Path) -> Result<std::path::PathBuf, CodeSearchError>
     if !out.success() {
         return Err(CodeSearchError(format!(
             "Repomix failed: {}",
-            out.stderr().trim().to_string()
+            out.stderr().trim()
         )));
     }
 

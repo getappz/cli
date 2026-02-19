@@ -6,6 +6,7 @@ use tracing::instrument;
 
 const MODEL: EmbeddingModel = EmbeddingModel::AllMiniLML6V2;
 
+#[allow(dead_code)]
 pub fn dimension() -> u64 {
     384
 }

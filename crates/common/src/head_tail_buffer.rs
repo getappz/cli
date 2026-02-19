@@ -72,7 +72,6 @@ impl HeadTailBuffer {
             if data.len() <= head_remaining {
                 // Fits entirely in head.
                 self.head.extend_from_slice(data);
-                return;
             } else {
                 // Fill head, rest goes to tail.
                 self.head.extend_from_slice(&data[..head_remaining]);

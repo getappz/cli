@@ -206,7 +206,7 @@ impl ScopedFs {
     pub fn read_bytes(&self, rel_path: impl AsRef<Path>) -> SandboxResult<Vec<u8>> {
         let abs = self.resolve_existing(&rel_path)?;
         starbase_fs::read_file_bytes(&abs)
-            .map_err(|e| SandboxError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))
+            .map_err(|e| SandboxError::Io(std::io::Error::other(e.to_string())))
     }
 
     /// Read multiple files in parallel.
@@ -379,7 +379,7 @@ impl ScopedFs {
         }
 
         let raw = starbase_fs::read_dir(&abs)
-            .map_err(|e| SandboxError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+            .map_err(|e| SandboxError::Io(std::io::Error::other(e.to_string())))?;
         let mut entries = Vec::with_capacity(raw.len());
         for entry in raw {
             let abs_path = entry.path();
@@ -478,7 +478,7 @@ impl ScopedFs {
         }
 
         let raw = starbase_fs::read_dir(&abs)
-            .map_err(|e| SandboxError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+            .map_err(|e| SandboxError::Io(std::io::Error::other(e.to_string())))?;
         let mut entries = Vec::with_capacity(raw.len());
         for entry in raw {
             let abs_path = entry.path();
@@ -638,7 +638,7 @@ impl ScopedFs {
             starbase_fs::create_dir_all(parent)?;
         }
         starbase_fs::rename(&src, &dst)
-            .map_err(|e| SandboxError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))
+            .map_err(|e| SandboxError::Io(std::io::Error::other(e.to_string())))
     }
 
     /// Copy a file or directory tree from an external absolute path into the sandbox.
@@ -661,7 +661,7 @@ impl ScopedFs {
                 starbase_fs::create_dir_all(parent)?;
             }
             starbase_fs::copy_file(src, dst)
-                .map_err(|e| SandboxError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+                .map_err(|e| SandboxError::Io(std::io::Error::other(e.to_string())))?;
             return Ok(());
         }
 
@@ -685,7 +685,7 @@ impl ScopedFs {
             .par_iter()
             .filter_map(|(from, to)| {
             starbase_fs::copy_file(from, to)
-                .map_err(|e| SandboxError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))
+                .map_err(|e| SandboxError::Io(std::io::Error::other(e.to_string())))
                 .err()
         })
             .collect();
@@ -775,7 +775,7 @@ where
             starbase_fs::create_dir_all(parent)?;
         }
         starbase_fs::copy_file(src, dst)
-            .map_err(|e| SandboxError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+            .map_err(|e| SandboxError::Io(std::io::Error::other(e.to_string())))?;
         if let Some(cb) = on_each {
             cb();
         }
@@ -801,7 +801,7 @@ where
         .par_iter()
         .filter_map(|(from, to)| {
             let result = starbase_fs::copy_file(from, to)
-                .map_err(|e| SandboxError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+                .map_err(|e| SandboxError::Io(std::io::Error::other(e.to_string())));
             if let Some(cb) = on_each {
                 cb();
             }
@@ -826,7 +826,7 @@ fn collect_tree(
 ) -> SandboxResult<()> {
     dirs.push(dst.to_path_buf());
     let entries = starbase_fs::read_dir(src)
-        .map_err(|e| SandboxError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+        .map_err(|e| SandboxError::Io(std::io::Error::other(e.to_string())))?;
     for entry in entries {
         let from = entry.path();
         let to = dst.join(entry.file_name());
@@ -851,7 +851,7 @@ fn collect_tree_external(
     files: &mut Vec<(PathBuf, PathBuf)>,
 ) -> SandboxResult<()> {
     let entries = starbase_fs::read_dir(src)
-        .map_err(|e| SandboxError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+        .map_err(|e| SandboxError::Io(std::io::Error::other(e.to_string())))?;
     for entry in entries {
         let from = entry.path();
         let rel_suffix = from.strip_prefix(src).map_err(|_| {

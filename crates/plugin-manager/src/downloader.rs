@@ -39,7 +39,7 @@ impl PluginDownloader {
     /// Returns the path to the downloaded WASM file.
     pub async fn download(&self, plugin_name: &str, entry: &PluginEntry) -> PluginResult<PathBuf> {
         let plugin_dir = self.plugins_dir.join(plugin_name).join(&entry.version);
-        fs::create_dir_all(&plugin_dir).map_err(|e| PluginError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+        fs::create_dir_all(&plugin_dir).map_err(|e| PluginError::Io(std::io::Error::other(e.to_string())))?;
 
         let wasm_path = plugin_dir.join("plugin.wasm");
         let sig_path = plugin_dir.join("plugin.wasm.sig");

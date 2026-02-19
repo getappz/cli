@@ -48,9 +48,9 @@ impl PluginCache {
         }
 
         let mut versions = Vec::new();
-        let entries = fs::read_dir(&plugin_dir).map_err(|e| PluginError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+        let entries = fs::read_dir(&plugin_dir).map_err(|e| PluginError::Io(std::io::Error::other(e.to_string())))?;
         for entry in entries {
-            if entry.file_type().map_err(|e| PluginError::Io(e))?.is_dir() {
+            if entry.file_type().map_err(PluginError::Io)?.is_dir() {
                 if let Some(name) = entry.file_name().to_str() {
                     // Check that the version directory actually contains a plugin
                     let wasm_path = entry.path().join("plugin.wasm");
@@ -80,7 +80,7 @@ impl PluginCache {
                     plugin_name,
                     version
                 );
-                fs::remove_dir_all(&version_dir).map_err(|e| PluginError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+                fs::remove_dir_all(&version_dir).map_err(|e| PluginError::Io(std::io::Error::other(e.to_string())))?;
             }
         }
 
@@ -91,7 +91,7 @@ impl PluginCache {
     pub fn remove(&self, plugin_name: &str) -> PluginResult<()> {
         let plugin_dir = self.plugins_dir.join(plugin_name);
         if plugin_dir.exists() {
-            fs::remove_dir_all(&plugin_dir).map_err(|e| PluginError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+            fs::remove_dir_all(&plugin_dir).map_err(|e| PluginError::Io(std::io::Error::other(e.to_string())))?;
             tracing::debug!("Removed plugin '{}' from cache", plugin_name);
         }
         Ok(())
@@ -99,7 +99,7 @@ impl PluginCache {
 
     /// Ensure the plugins directory exists.
     pub fn ensure_dir(&self) -> PluginResult<()> {
-        fs::create_dir_all(&self.plugins_dir).map_err(|e| PluginError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+        fs::create_dir_all(&self.plugins_dir).map_err(|e| PluginError::Io(std::io::Error::other(e.to_string())))?;
         Ok(())
     }
 }

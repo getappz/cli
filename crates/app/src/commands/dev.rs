@@ -1,3 +1,6 @@
+use crate::commands::install_helpers::{
+    get_default_install_command, handle_shell_script_fallback, run_recipe_task,
+};
 use detectors::{
     detect_framework_record, detect_hugo_info, DetectFrameworkRecordOptions, DetectorFilesystem,
     StdFilesystem,
@@ -75,6 +78,14 @@ pub async fn dev(session: AppzSession) -> AppResult {
 
     match detect_framework_record(options).await {
         Ok(Some((framework, _version, package_manager))) => {
+            // Get framework install command (fallback) - extract before consuming framework.settings
+            let framework_install_cmd = framework
+                .settings
+                .as_ref()
+                .and_then(|s| s.install_command.as_ref())
+                .and_then(|c| c.value.as_ref())
+                .map(|s| s.to_string());
+
             // Get framework dev command (fallback)
             let framework_dev_cmd = framework
                 .settings
@@ -200,29 +211,91 @@ pub async fn dev(session: AppzSession) -> AppResult {
                 tool_info: tool_info.clone(),
             };
 
+            // Install step (same as build flow): resolve install command and run
+            let user_install_script = package_manager
+                .as_ref()
+                .and_then(|pm| pm.install_script.clone());
+            let install_cmd = if let Some(ref user_install) = user_install_script {
+                user_install.clone()
+            } else if let Some(ref framework_install) = framework_install_cmd {
+                framework_install.clone()
+            } else {
+                get_default_install_command(&package_manager)
+            };
+
+            // Display which install command is being used
+            if user_install_script.is_some() {
+                println!("✓ Using user-defined install script from package.json");
+            } else if framework_install_cmd.is_some() {
+                println!("✓ Using framework install command");
+            } else {
+                println!("✓ Using package manager default install command");
+            }
+
+            // Sandbox for install and dev (mise-managed)
+            let config = SandboxConfig::new(project_path.clone())
+                .with_settings(mise_tools_for_execution(
+                    &package_manager,
+                    tool_info.as_ref(),
+                ));
+            let sandbox = create_sandbox(config).await.ok();
+            if sandbox.is_none() {
+                tracing::debug!(
+                    "Sandbox setup failed, will use run_local_with fallback for install/dev"
+                );
+            }
+
+            // Execute install step: check for appz:install recipe task first
+            let registry = session.get_task_registry();
+            let using_appz_install = registry.get("appz:install").is_some();
+
+            if using_appz_install {
+                println!("✓ Found appz:install recipe task, using recipe install...");
+                println!("\n📦 Running install command...");
+                run_recipe_task(
+                    &registry,
+                    "appz:install",
+                    project_path.clone(),
+                    session.cli.verbose,
+                )
+                .await?;
+            } else {
+                println!("\n📦 Running install command...");
+                let install_result = if let Some(ref s) = &sandbox {
+                    s.exec_interactive(&install_cmd)
+                        .await
+                        .map(|_| ())
+                        .map_err(|e| miette::miette!("{}", e))
+                } else {
+                    run_local_with(&ctx, &install_cmd, opts.clone()).await
+                };
+
+                handle_shell_script_fallback(
+                    install_result,
+                    is_shell_script(&install_cmd),
+                    user_install_script.is_some(),
+                    framework_install_cmd.as_ref(),
+                    Some(get_default_install_command(&package_manager)),
+                    &ctx,
+                    &opts,
+                )
+                .await?;
+            }
+
             // If sharing, wait a bit for dev server to start
             if share {
                 println!("⏳ Waiting for dev server to start on port {}...", port);
                 tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
             }
 
-            // Run the dev command via sandbox (mise-managed) with fallback to run_local_with
-            let config = SandboxConfig::new(project_path.clone())
-                .with_settings(mise_tools_for_execution(
-                    &package_manager,
-                    tool_info.as_ref(),
-                ));
-
-            let result = match create_sandbox(config).await {
-                Ok(sandbox) => sandbox
+            // Run the dev command via sandbox (reuse sandbox from install) with fallback to run_local_with
+            let result = match &sandbox {
+                Some(s) => s
                     .exec_interactive(&dev_cmd)
                     .await
                     .map(|_| ())
                     .map_err(|e| miette::miette!("{}", e)),
-                Err(e) => {
-                    tracing::debug!("Sandbox setup failed, falling back to run_local_with: {}", e);
-                    run_local_with(&ctx, &dev_cmd, opts.clone()).await
-                }
+                None => run_local_with(&ctx, &dev_cmd, opts.clone()).await,
             };
 
             // Clean up tunnel after command completes (success or failure)

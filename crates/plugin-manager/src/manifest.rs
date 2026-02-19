@@ -181,7 +181,7 @@ impl PluginManifest {
     /// Save manifest to local cache.
     fn save_to_cache(cache_path: &Path, manifest: &PluginManifest) -> PluginResult<()> {
         if let Some(parent) = cache_path.parent() {
-            fs::create_dir_all(parent).map_err(|e| PluginError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+            fs::create_dir_all(parent).map_err(|e| PluginError::Io(std::io::Error::other(e.to_string())))?;
         }
 
         let cached = CachedManifest {

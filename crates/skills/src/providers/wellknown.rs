@@ -99,7 +99,7 @@ impl WellKnownProvider {
             if let Ok(res) = reqwest::Client::new().get(&index_url).send().await {
                 if res.status().is_success() {
                     if let Ok(index) = res.json::<WellKnownIndex>().await {
-                        if index.skills.iter().all(|e| valid_entry(e)) {
+                        if index.skills.iter().all(valid_entry) {
                             return Some((index, resolved_base));
                         }
                     }

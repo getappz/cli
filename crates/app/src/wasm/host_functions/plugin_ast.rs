@@ -131,11 +131,9 @@ host_fn!(pub appz_past_parse_jsx(
                 let tag = &rest[..end];
                 if !tag.is_empty()
                     && tag.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
-                {
-                    if !components.contains(&tag.to_string()) {
+                    && !components.contains(&tag.to_string()) {
                         components.push(tag.to_string());
                     }
-                }
             }
         }
     }

@@ -76,7 +76,7 @@ fn url_to_filename(url: &str) -> String {
     let filename = without_protocol
         .split('/')
         .filter(|s| !s.is_empty() && s.contains('.'))
-        .last()
+        .next_back()
         .unwrap_or("image.png");
 
     // Clean up query params

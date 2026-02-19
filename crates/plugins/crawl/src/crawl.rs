@@ -4,7 +4,6 @@ use crate::vfs_wasm::CrawlVfs;
 use crawl_core::{
     extract_links, filter_links, post_process_markdown, process_sitemap, FilterLinksCall,
 };
-use htmd;
 use std::collections::{HashSet, VecDeque};
 use url::Url;
 
@@ -74,10 +73,7 @@ pub fn crawl(vfs: &dyn CrawlVfs, opts: &CrawlOptions) -> Result<u32, String> {
                     continue;
                 }
                 visited.insert(url.clone());
-                match scrape_one(vfs, &url, &opts.output_dir, opts.want_raw_html, opts.strict_ssl) {
-                    Ok(_) => written += 1,
-                    Err(_) => {}
-                }
+                if let Ok(_) = scrape_one(vfs, &url, &opts.output_dir, opts.want_raw_html, opts.strict_ssl) { written += 1 }
             }
             return Ok(written);
         }

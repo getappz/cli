@@ -2,7 +2,6 @@
 
 use crate::session::AppzSession;
 use clap::Subcommand;
-use miette::Result;
 use starbase::AppResult;
 
 #[derive(Subcommand, Debug, Clone)]
@@ -36,7 +35,7 @@ async fn list_plugins(session: AppzSession) -> AppResult {
         return Ok(None);
     }
 
-    println!("{:<20} {:<12} {:<12} {}", "PLUGIN", "INSTALLED", "LATEST", "STATUS");
+    println!("{:<20} {:<12} {:<12} STATUS", "PLUGIN", "INSTALLED", "LATEST");
     println!("{}", "─".repeat(60));
 
     for p in &plugins {

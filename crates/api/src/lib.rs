@@ -3,6 +3,7 @@ pub mod endpoints;
 pub mod error;
 mod middleware;
 pub mod models;
+pub mod paths;
 pub mod http {
     pub mod error_mapper;
     pub mod response_handler;

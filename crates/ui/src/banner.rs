@@ -1,6 +1,7 @@
 //! Banner component for displaying app name and version on startup.
 
-use owo_colors::OwoColorize;
+use crate::theme;
+use design::{layout, no_color};
 use std::io::{self, Write};
 
 /// Display a compact banner with app name and version.
@@ -14,22 +15,26 @@ use std::io::{self, Write};
 /// # Returns
 /// `io::Result` indicating success or failure
 pub fn display(name: &str, version: &str, tagline: Option<&str>) -> io::Result<()> {
-    let use_colors = std::env::var("NO_COLOR").is_err();
+    let use_colors = !no_color();
 
     if let Some(tagline) = tagline {
         if use_colors {
             println!(
                 "{} {}  {}  {}",
-                name.bold().cyan(),
-                version.bright_black(),
-                "·".bright_black(),
-                tagline.bright_black()
+                theme::style_accent_bold(name),
+                theme::style(version, design::ColorRole::Muted),
+                theme::style("·", design::ColorRole::Muted),
+                theme::style(tagline, design::ColorRole::Muted)
             );
         } else {
             println!("{} {}  ·  {}", name, version, tagline);
         }
     } else if use_colors {
-        println!("{} {}", name.bold().cyan(), version.bright_black());
+        println!(
+            "{} {}",
+            theme::style_accent_bold(name),
+            theme::style(version, design::ColorRole::Muted)
+        );
     } else {
         println!("{} {}", name, version);
     }
@@ -61,7 +66,7 @@ pub fn display_minimal(name: &str, version: &str) -> io::Result<()> {
 /// # Returns
 /// `io::Result` indicating success or failure
 pub fn display_with_border(name: &str, version: &str, tagline: Option<&str>) -> io::Result<()> {
-    let use_colors = std::env::var("NO_COLOR").is_err();
+    let use_colors = !no_color();
 
     let content = if let Some(tagline) = tagline {
         format!("{} {}  {}", name, version, tagline)
@@ -70,22 +75,29 @@ pub fn display_with_border(name: &str, version: &str, tagline: Option<&str>) -> 
     };
 
     let width = content.len().max(40);
+    let border_char = layout::SEPARATOR_CHAR.to_string();
 
     // Top border
     if use_colors {
-        println!("{}", "─".repeat(width + 2).bright_black());
+        println!(
+            "{}",
+            theme::style(&border_char.repeat(width + 2), design::ColorRole::Border)
+        );
         print!(" ");
-        print!("{}", name.bold().cyan());
-        print!(" {}", version.bright_black());
+        print!("{}", theme::style_accent_bold(name));
+        print!(" {}", theme::style(version, design::ColorRole::Muted));
         if let Some(tagline) = tagline {
-            print!("  {}", tagline.bright_black());
+            print!("  {}", theme::style(tagline, design::ColorRole::Muted));
         }
         println!();
-        println!("{}", "─".repeat(width + 2).bright_black());
+        println!(
+            "{}",
+            theme::style(&border_char.repeat(width + 2), design::ColorRole::Border)
+        );
     } else {
-        println!("{}", "─".repeat(width + 2));
+        println!("{}", border_char.repeat(width + 2));
         println!(" {} {} {}", name, version, tagline.unwrap_or(""));
-        println!("{}", "─".repeat(width + 2));
+        println!("{}", border_char.repeat(width + 2));
     }
 
     io::stdout().flush()
@@ -95,7 +107,7 @@ pub fn display_with_border(name: &str, version: &str, tagline: Option<&str>) -> 
 /// Uses a simple heuristic: check if NO_COLOR is set or if output might be piped.
 pub fn should_display() -> bool {
     // Don't display if NO_COLOR is explicitly set
-    if std::env::var("NO_COLOR").is_ok() {
+    if no_color() {
         return false;
     }
 

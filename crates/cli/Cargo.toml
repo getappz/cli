@@ -23,6 +23,9 @@ starbase_utils = { workspace = true }
 tokio = { workspace = true }
 tracing = "0.1"
 
+[dev-dependencies]
+tempfile = { workspace = true }
+
 [features]
 default = ["full"]
 

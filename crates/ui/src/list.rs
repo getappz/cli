@@ -2,6 +2,10 @@
 
 use crate::empty;
 use crate::layout;
+use crate::theme;
+use design::layout as design_layout;
+use design::spacing as design_spacing;
+use design::ColorRole;
 use miette::Result;
 use std::collections::BTreeMap;
 use std::fmt::Display;
@@ -34,12 +38,15 @@ pub fn display_grouped(
     }
 
     for (group_name, items) in groups {
-        println!("[{}]", group_name);
+        println!(
+            "[{}]",
+            theme::style(group_name, ColorRole::Accent)
+        );
         for (name, description) in items {
             if let Some(desc) = description {
-                println!("  {}\t{}", name, desc);
+                println!("{}{}\t{}", design_spacing::INDENT, name, desc);
             } else {
-                println!("  {}", name);
+                println!("{}{}", design_spacing::INDENT, name);
             }
         }
         layout::blank_line().map_err(|e| miette::miette!("Failed to print blank line: {}", e))?;
@@ -73,7 +80,11 @@ pub fn display_bullet<T: Display>(items: &[T], title: Option<&str>) -> Result<()
     }
 
     for item in items {
-        println!("  • {}", item);
+        println!(
+            "  {} {}",
+            theme::style(&design_layout::BULLET_CHAR.to_string(), ColorRole::Muted),
+            item
+        );
     }
 
     Ok(())
@@ -104,7 +115,7 @@ pub fn display_numbered<T: Display>(items: &[T], title: Option<&str>) -> Result<
     }
 
     for (i, item) in items.iter().enumerate() {
-        println!("  {}. {}", i + 1, item);
+        println!("{}{}. {}", design_spacing::INDENT, i + 1, item);
     }
 
     Ok(())
@@ -135,7 +146,7 @@ pub fn display_hierarchical<T: Display>(items: &[(usize, T)], title: Option<&str
     }
 
     for (level, item) in items {
-        let indent = layout::spacing::INDENT.repeat(*level);
+        let indent = design_spacing::INDENT.repeat(*level);
         println!("{}{}", indent, item);
     }
 

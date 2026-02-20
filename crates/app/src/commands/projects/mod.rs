@@ -1,9 +1,7 @@
-//! Projects command module - manage projects.
+//! Projects command module - manage projects (Vercel-aligned).
 //!
-//! This module provides commands for:
-//! - Listing projects
-//! - Creating projects
-//! - Deleting projects
+//! Subcommands: list/ls | add | inspect | remove/rm
+//! Default: list when no subcommand provided
 
 use crate::session::AppzSession;
 use api::Client;
@@ -11,12 +9,29 @@ use clap::Subcommand;
 use starbase::AppResult;
 
 pub mod add;
+pub mod inspect;
 pub mod ls;
 pub mod rm;
 
 pub use add::add;
+pub use inspect::inspect;
 pub use ls::ls;
 pub use rm::rm;
+
+/// Map API errors to user-friendly messages for list projects.
+pub fn user_friendly_list_projects_error(e: &api::ApiError) -> String {
+    use api::ApiError;
+    match e {
+        ApiError::Unauthorized(msg) => format!("Couldn't list projects. {}", msg),
+        ApiError::ApiError { code: 503, .. } => {
+            "Couldn't list projects. The service is temporarily unavailable. Please try again in a few moments.".to_string()
+        }
+        ApiError::ApiError { code, message } => {
+            format!("Couldn't list projects. {} (code: {})", message, code)
+        }
+        _ => format!("Couldn't list projects. {}", e),
+    }
+}
 
 /// Resolve project identifier (ID or slug) to project ID.
 ///
@@ -45,7 +60,7 @@ pub async fn resolve_project_id(
         .projects()
         .list(None, None, None)
         .await
-        .map_err(|e| miette::miette!("Failed to list projects: {}", e))?;
+        .map_err(|e| miette::miette!("{}", user_friendly_list_projects_error(&e)))?;
 
     for project in projects_response.projects {
         let matches_id = project
@@ -75,33 +90,74 @@ pub async fn resolve_project_id(
 #[derive(Subcommand, Debug, Clone)]
 pub enum ProjectsCommands {
     /// List all projects
+    #[command(alias = "list")]
     Ls,
-    /// Create a new project
+    /// Add a new project
     Add {
-        /// Project slug (unique identifier)
-        slug: String,
-        /// Project name (optional)
-        #[arg(short, long)]
-        name: Option<String>,
+        /// Project name (used to derive slug, e.g. "my-project" or "My Project")
+        name: String,
         /// Team ID or slug (optional)
-        #[arg(short, long)]
+        #[arg(short = 'T', long)]
         team: Option<String>,
     },
-    /// Delete a project
-    Rm {
-        /// Project ID or slug
-        project: String,
-        /// Skip confirmation prompt
+    /// Display information about a project
+    Inspect {
+        /// Project name or ID (optional – uses linked project from CWD if omitted)
+        name: Option<String>,
+        /// Skip confirmation when linking
         #[arg(long)]
         yes: bool,
     },
+    /// Delete a project
+    #[command(alias = "remove")]
+    Rm {
+        /// Project name or ID to delete
+        name: String,
+        /// Skip confirmation prompt
+        #[arg(long, short = 'y')]
+        yes: bool,
+        /// Skip removal if project has deployments with active preview/production URL
+        #[arg(long, short = 's')]
+        safe: bool,
+    },
+}
+
+/// Derive slug from project name (Vercel-style: lowercase, alphanumeric + hyphen/underscore)
+fn name_to_slug(name: &str) -> String {
+    name.trim()
+        .to_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else if c.is_whitespace() {
+                '-'
+            } else {
+                '\0'
+            }
+        })
+        .filter(|c| *c != '\0')
+        .collect::<String>()
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
 }
 
 /// Route projects subcommands to their respective handlers.
 pub async fn run(session: AppzSession, command: ProjectsCommands) -> AppResult {
     match command {
         ProjectsCommands::Ls => ls(session).await,
-        ProjectsCommands::Add { slug, name, team } => add(session, slug, name, team).await,
-        ProjectsCommands::Rm { project, yes } => rm(session, project, yes).await,
+        ProjectsCommands::Add { name, team } => {
+            let slug = name_to_slug(&name);
+            let display_name = if slug != name.trim() {
+                Some(name.trim().to_string())
+            } else {
+                None
+            };
+            add(session, slug, display_name, team).await
+        }
+        ProjectsCommands::Inspect { name, yes } => inspect(session, name, yes).await,
+        ProjectsCommands::Rm { name, yes, safe } => rm(session, name, yes, safe).await,
     }
 }

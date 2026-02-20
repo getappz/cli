@@ -87,15 +87,24 @@ pub async fn handle_json<T: serde::de::DeserializeOwned>(
             return Err(ApiError::InvalidResponse("Empty response body".to_string()));
         }
 
-        // Log raw JSON response for debugging
-        tracing::debug!(raw_json = %text, "Raw JSON response received");
-
+        tracing::trace!(raw_json = %text, "Raw JSON response received");
         return serde_json::from_str(&text).map_err(ApiError::Json);
     }
 
     // Error path
     let headers = response.headers().clone();
     let body = response.text().await.unwrap_or_default();
+
+    let body_preview: String = if body.len() > 500 {
+        format!("{}... [truncated, {} bytes total]", &body[..500], body.len())
+    } else {
+        body.clone()
+    };
+    tracing::debug!(
+        status = %status,
+        body = %body_preview,
+        "API error response"
+    );
 
     // Cloudflare detection (header + HTML markers only)
     let is_cloudflare = (headers.get("cf-ray").is_some()

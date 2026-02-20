@@ -1,8 +1,9 @@
 //! Pagination display components.
 
 use crate::format;
+use crate::theme;
+use design::ColorRole;
 use miette::Result;
-use owo_colors::OwoColorize;
 use std::io::{self, Write};
 
 /// Pagination information for display.
@@ -32,7 +33,10 @@ impl PaginationInfo {
 /// `Result` indicating success or failure
 pub fn display(info: &PaginationInfo) -> Result<()> {
     let count = format::number(info.count);
-    print!("{}", format!("Total: {} item(s)", count).bright_black());
+    print!(
+        "{}",
+        theme::style(&format!("Total: {} item(s)", count), ColorRole::Muted)
+    );
 
     if info.next.is_some() || info.prev.is_some() {
         print!(" (");
@@ -45,7 +49,7 @@ pub fn display(info: &PaginationInfo) -> Result<()> {
             parts.push("has next page".to_string());
         }
 
-        print!("{}", parts.join(", ").bright_black());
+        print!("{}", theme::style(&parts.join(", "), ColorRole::Muted));
         print!(")");
     }
 
@@ -66,7 +70,10 @@ pub fn display(info: &PaginationInfo) -> Result<()> {
 /// `Result` indicating success or failure
 pub fn display_compact(info: &PaginationInfo) -> Result<()> {
     let count = format::number(info.count);
-    println!("{}", format!("Total: {}", count).bright_black());
+    println!(
+        "{}",
+        theme::style(&format!("Total: {}", count), ColorRole::Muted)
+    );
 
     io::stdout()
         .flush()
@@ -89,16 +96,21 @@ pub fn display_pages(current_page: usize, total_pages: Option<usize>, count: i64
     if let Some(total) = total_pages {
         println!(
             "{}",
-            format!(
-                "Page {} of {} ({} total items)",
-                current_page, total, count_str
+            theme::style(
+                &format!(
+                    "Page {} of {} ({} total items)",
+                    current_page, total, count_str
+                ),
+                ColorRole::Muted
             )
-            .bright_black()
         );
     } else {
         println!(
             "{}",
-            format!("Page {} ({} total items)", current_page, count_str).bright_black()
+            theme::style(
+                &format!("Page {} ({} total items)", current_page, count_str),
+                ColorRole::Muted
+            )
         );
     }
 

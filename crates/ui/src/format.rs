@@ -1,7 +1,8 @@
 //! Formatting utilities for dates, statuses, numbers, and strings.
 
+use crate::theme;
 use chrono::{DateTime, Utc};
-use owo_colors::OwoColorize;
+use design::ColorRole;
 
 /// Format a Unix timestamp to a readable date/time string.
 ///
@@ -21,13 +22,13 @@ pub fn timestamp(timestamp: i64) -> String {
     }
 }
 
-/// Format a timestamp that may be in seconds or milliseconds.
+/// Format a timestamp that may be in seconds, milliseconds, or microseconds.
 ///
-/// Automatically detects if the timestamp is in milliseconds (very large values)
-/// and converts it to seconds before formatting.
+/// Automatically detects the unit from magnitude and converts to seconds
+/// before formatting. Some backends (e.g., D1) return microseconds.
 ///
 /// # Arguments
-/// * `ts` - Unix timestamp in seconds or milliseconds
+/// * `ts` - Unix timestamp in seconds, milliseconds, or microseconds
 ///
 /// # Returns
 /// Formatted date string in "YYYY-MM-DD HH:MM:SS" format, or "N/A" if invalid
@@ -36,9 +37,17 @@ pub fn timestamp_auto(ts: i64) -> String {
         return "N/A".to_string();
     }
 
-    // If timestamp is very large (> year 2100 in seconds), assume it's in milliseconds
-    // Jan 1, 2100 00:00:00 UTC = 4_102_444_800 seconds
-    let ts_seconds = if ts > 4_102_444_800 { ts / 1000 } else { ts };
+    // Normalize to seconds based on magnitude. Thresholds:
+    // - > 1e15: microseconds (e.g., 1739961333000000)
+    // - > 4.1e9: milliseconds (year 2100 in seconds)
+    // - else: already in seconds
+    let ts_seconds = if ts > 1_000_000_000_000_000 {
+        ts / 1_000_000
+    } else if ts > 4_102_444_800 {
+        ts / 1000
+    } else {
+        ts
+    };
 
     timestamp(ts_seconds)
 }
@@ -85,13 +94,14 @@ pub fn timestamp_relative(timestamp: i64) -> String {
 /// Colored status badge
 pub fn status_badge(status: &str) -> String {
     let status_lower = status.to_lowercase();
-    match status_lower.as_str() {
-        "active" | "success" | "completed" | "ready" | "safe" => status.green().to_string(),
-        "pending" | "processing" | "queued" | "low" | "medium" => status.yellow().to_string(),
-        "failed" | "error" | "cancelled" | "high" | "critical" => status.red().to_string(),
-        "inactive" | "stopped" => status.bright_black().to_string(),
-        _ => status.to_string(),
-    }
+    let role = match status_lower.as_str() {
+        "active" | "success" | "completed" | "ready" | "safe" => ColorRole::Success,
+        "pending" | "processing" | "queued" | "low" | "medium" => ColorRole::Warning,
+        "failed" | "error" | "cancelled" | "high" | "critical" => ColorRole::Error,
+        "inactive" | "stopped" => ColorRole::Muted,
+        _ => return status.to_string(),
+    };
+    theme::style(status, role)
 }
 
 /// Format a number with thousand separators.
@@ -137,15 +147,16 @@ pub fn truncate(s: &str, max_len: usize) -> String {
 /// - Cyan for hunk headers (@@)
 /// Respects NO_COLOR environment variable.
 pub fn colored_diff(plain: &str) -> String {
-    if std::env::var("NO_COLOR").is_ok() {
-        return plain.to_string();
-    }
     let mut out = String::new();
     for line in plain.lines() {
         let colored = match line.chars().next() {
-            Some('-') if !line.starts_with("---") => format!("{}", line.red()),
-            Some('+') if !line.starts_with("+++") => format!("{}", line.green()),
-            Some('@') => format!("{}", line.cyan()),
+            Some('-') if !line.starts_with("---") => {
+                theme::style(line, ColorRole::Error)
+            }
+            Some('+') if !line.starts_with("+++") => {
+                theme::style(line, ColorRole::Success)
+            }
+            Some('@') => theme::style(line, ColorRole::Accent),
             _ => line.to_string(),
         };
         out.push_str(&colored);
@@ -196,6 +207,26 @@ mod tests {
         assert!(timestamp(ts).contains("2021"));
         assert_eq!(timestamp(0), "N/A");
         assert_eq!(timestamp(-1), "N/A");
+    }
+
+    #[test]
+    fn test_timestamp_auto_units() {
+        // Seconds (2021-01-01 00:00:00 UTC)
+        assert!(timestamp_auto(1609459200).contains("2021"));
+
+        // Milliseconds (Feb 19, 2026)
+        let ms = 1739961333000i64;
+        assert!(
+            timestamp_auto(ms).contains("2026"),
+            "milliseconds should format correctly"
+        );
+
+        // Microseconds (CLI-created teams from D1/etc.)
+        let us = 1739961333000000i64;
+        assert!(
+            timestamp_auto(us).contains("2026"),
+            "microseconds should format correctly, not overflow to year 58108"
+        );
     }
 
     #[test]

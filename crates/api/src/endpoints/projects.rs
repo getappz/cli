@@ -1,6 +1,7 @@
 use crate::client::Client;
 use crate::error::ApiError;
 use crate::models::{CreateProjectRequest, DeleteResponse, Project, ProjectsListResponse};
+use crate::paths::V0_PREFIX;
 
 pub struct Projects<'a> {
     client: &'a Client,
@@ -25,7 +26,8 @@ impl<'a> Projects<'a> {
             ("until", until.map(|u| u.to_string())),
         ];
 
-        self.client.get_with_query("/projects", &query_params).await
+        let path = format!("{}/projects", V0_PREFIX);
+        self.client.get_with_query(&path, &query_params).await
     }
 
     /// Create a new project
@@ -41,20 +43,21 @@ impl<'a> Projects<'a> {
             name,
             teamId: team_id,
         };
-        self.client.post("/projects", Some(request)).await
+        let path = format!("{}/projects", V0_PREFIX);
+        self.client.post(&path, Some(request)).await
     }
 
     /// Get a project by ID
     #[tracing::instrument(skip(self))]
     pub async fn get(&self, id: &str) -> Result<Project, ApiError> {
-        let path = format!("/projects/{}", id);
+        let path = format!("{}/projects/{}", V0_PREFIX, id);
         self.client.get(&path).await
     }
 
     /// Delete a project
     #[tracing::instrument(skip(self))]
     pub async fn delete(&self, id: &str) -> Result<DeleteResponse, ApiError> {
-        let path = format!("/projects/{}", id);
+        let path = format!("{}/projects/{}", V0_PREFIX, id);
         self.client.delete(&path).await
     }
 }

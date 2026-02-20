@@ -73,7 +73,7 @@ pub fn crawl(vfs: &dyn CrawlVfs, opts: &CrawlOptions) -> Result<u32, String> {
                     continue;
                 }
                 visited.insert(url.clone());
-                if let Ok(_) = scrape_one(vfs, &url, &opts.output_dir, opts.want_raw_html, opts.strict_ssl) { written += 1 }
+                if scrape_one(vfs, &url, &opts.output_dir, opts.want_raw_html, opts.strict_ssl).is_ok() { written += 1 }
             }
             return Ok(written);
         }

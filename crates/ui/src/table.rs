@@ -2,6 +2,8 @@
 
 use crate::empty;
 use crate::layout;
+use crate::theme;
+use design::{spacing as design_spacing, ColorRole};
 use miette::Result;
 use tabled::{settings::Style, Table, Tabled};
 
@@ -110,7 +112,7 @@ fn display_formatted_table(data: &[Vec<String>]) -> Result<()> {
         for (i, cell) in row.iter().enumerate() {
             // Account for ANSI color codes in width calculation
             let width = strip_ansi_codes(cell).len();
-            col_widths[i] = col_widths[i].max(width).max(3); // Min width of 3
+            col_widths[i] = col_widths[i].max(width).max(design_spacing::TABLE_COLUMN_MIN);
         }
     }
 
@@ -127,13 +129,14 @@ fn display_formatted_table(data: &[Vec<String>]) -> Result<()> {
     }
     output.push_str("┐\n");
 
-    // Header row
+    // Header row (styled with accent)
     if !data.is_empty() {
         output.push('│');
         for (i, cell) in data[0].iter().enumerate() {
             let width = col_widths[i];
-            let content = format!(" {:<width$} ", cell, width = width);
-            output.push_str(&content);
+            let padded = format!(" {:<width$} ", cell, width = width);
+            let styled = theme::style(&padded, ColorRole::Accent);
+            output.push_str(&styled);
             output.push('│');
         }
         output.push('\n');

@@ -74,7 +74,14 @@ pub async fn add(session: AppzSession, slug: Option<String>, name: Option<String
     } else {
         // Interactive prompt for slug
         println!("Pick a team identifier for its URL (e.g.: `appz.dev/acme`)");
-        text_with_validation("- Team URL      appz.dev/", None, validate_slug)?
+        match text_with_validation("- Team URL      appz.dev/", None, validate_slug)? {
+            Some(s) => s,
+            None => {
+                status::info("Cancelled")
+                    .map_err(|e| miette::miette!("Failed to display message: {}", e))?;
+                return Ok(None);
+            }
+        }
     };
 
     // Step 2: Create team with slug only
@@ -100,7 +107,14 @@ pub async fn add(session: AppzSession, slug: Option<String>, name: Option<String
     } else {
         // Interactive prompt for name
         println!("\nPick a display name for your team");
-        text_with_validation("- Team Name     ", None, validate_name)?
+        match text_with_validation("- Team Name     ", None, validate_name)? {
+            Some(n) => n,
+            None => {
+                status::info("Cancelled")
+                    .map_err(|e| miette::miette!("Failed to display message: {}", e))?;
+                return Ok(None);
+            }
+        }
     };
 
     // Step 4: Update team with name
@@ -156,7 +170,10 @@ pub async fn add(session: AppzSession, slug: Option<String>, name: Option<String
             Ok(None)
         };
 
-        let email_input = text_with_validation("- Invite User   ", None, validate_email)?;
+        let email_input = match text_with_validation("- Invite User   ", None, validate_email)? {
+            Some(s) => s,
+            None => break, // User cancelled (Ctrl+C/Esc) — same as done inviting
+        };
 
         let email = email_input.trim().to_string();
 

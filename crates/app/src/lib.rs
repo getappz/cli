@@ -1,7 +1,9 @@
 mod app;
 mod app_error;
 mod auth;
+mod config;
 pub mod commands;
+mod telemetry;
 mod context;
 mod host;
 mod http;
@@ -23,3 +25,4 @@ pub mod wasm;
 pub use app::*;
 pub use app_error::*;
 pub use session::*;
+pub use telemetry::{record_command, TelemetryEventStore};

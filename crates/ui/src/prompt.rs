@@ -183,12 +183,14 @@ pub fn checkbox<T: Clone + std::fmt::Display>(
 /// * `validator` - Function that returns None if valid, Some(error_msg) if invalid
 ///
 /// # Returns
-/// Validated user input string or error
-pub fn text_with_validation<F>(message: &str, default: Option<&str>, validator: F) -> Result<String>
+/// - `Ok(Some(value))` - Validated user input
+/// - `Ok(None)` - User cancelled (Ctrl+C or Esc) — not an error
+/// - `Err` - Validation or I/O error
+pub fn text_with_validation<F>(message: &str, default: Option<&str>, validator: F) -> Result<Option<String>>
 where
     F: Fn(&str) -> Result<Option<String>> + Clone + 'static, // Returns None if valid, Some(error_msg) if invalid
 {
-    use inquire::Text;
+    use inquire::{InquireError, Text};
 
     loop {
         let mut prompt = Text::new(message);
@@ -208,7 +210,8 @@ where
         });
 
         match prompt.prompt() {
-            Ok(value) => return Ok(value),
+            Ok(value) => return Ok(Some(value)),
+            Err(InquireError::OperationCanceled | InquireError::OperationInterrupted) => return Ok(None),
             Err(e) => return Err(miette::miette!("Prompt failed: {}", e)),
         }
     }

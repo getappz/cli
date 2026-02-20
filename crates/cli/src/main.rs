@@ -116,8 +116,10 @@ async fn main() -> MainResult {
 
     // Run the CLI with starbase session lifecycle
     timing.checkpoint("pre app.run");
+    let telemetry_store = std::sync::Arc::new(app::TelemetryEventStore::new());
     let exit_code = app
-        .run(AppzSession::new(cli), |session| async {
+        .run(AppzSession::new(cli, telemetry_store.clone()), |session| async {
+            app::record_command(&session.telemetry_store, &session.cli.command).await;
             match session.cli.command.clone() {
                 Commands::List => app::commands::list(session).await,
                 Commands::Plan { task } => app::commands::plan(session, task).await,
@@ -132,12 +134,17 @@ async fn main() -> MainResult {
                 #[cfg(feature = "dev-server")]
                 Commands::Preview { .. } => app::commands::preview(session).await,
                 Commands::Ls => app::commands::ls(session).await,
+                Commands::Open => app::commands::open(session).await,
                 Commands::Link { project, team } => {
                     app::commands::link(session, project, team).await
                 }
                 Commands::Unlink => app::commands::unlink(session).await,
                 Commands::Login => app::commands::login(session).await,
                 Commands::Logout => app::commands::logout(session).await,
+                Commands::Whoami { json, format } => {
+                    let as_json = json || format.as_deref() == Some("json");
+                    app::commands::whoami(session, as_json).await
+                }
                 Commands::Init { template_or_name, name, template, skip_install, force, output } => {
                     app::commands::init(session, template_or_name, name, template, skip_install, force, output).await
                 }
@@ -148,8 +155,12 @@ async fn main() -> MainResult {
                 Commands::Teams { command } => {
                     app::commands::teams::run(session, command).await
                 }
+                Commands::Telemetry { command } => {
+                    app::commands::telemetry::run(command).await
+                }
                 Commands::Projects { command } => {
-                    app::commands::projects::run(session, command).await
+                    let cmd = command.unwrap_or(app::commands::projects::ProjectsCommands::Ls);
+                    app::commands::projects::run(session, cmd).await
                 }
                 Commands::Aliases { command } => {
                     app::commands::aliases::run(session, command).await
@@ -213,6 +224,9 @@ async fn main() -> MainResult {
 
     timing.checkpoint("app.run (session + command)");
     timing.print();
+
+    telemetry_store.set_run_outcome(exit_code == 0);
+    telemetry_store.flush().await;
 
     Ok(ExitCode::from(exit_code))
 }

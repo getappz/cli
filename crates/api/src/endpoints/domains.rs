@@ -1,6 +1,7 @@
 use crate::client::Client;
 use crate::error::ApiError;
 use crate::models::DomainsListResponse;
+use crate::paths::V0_PREFIX;
 
 pub struct Domains<'a> {
     client: &'a Client,
@@ -31,7 +32,8 @@ impl<'a> Domains<'a> {
             self.client.set_team_id(Some(team_id_val.clone())).await;
         }
 
-        let result = self.client.get_with_query("/domains", &query_params).await;
+        let path = format!("{}/domains", V0_PREFIX);
+        let result = self.client.get_with_query(&path, &query_params).await;
 
         // Reset team_id if we set it
         if team_id.is_some() {
@@ -44,7 +46,7 @@ impl<'a> Domains<'a> {
     /// Delete a domain
     #[tracing::instrument(skip(self))]
     pub async fn delete(&self, domain: &str, team_id: Option<String>) -> Result<(), ApiError> {
-        let path = format!("/domains/{}", domain);
+        let path = format!("{}/domains/{}", V0_PREFIX, domain);
 
         // Temporarily set team_id if provided
         if let Some(ref team_id_val) = team_id {

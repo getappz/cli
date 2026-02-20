@@ -55,6 +55,7 @@ sandbox = { path = "../sandbox" }
 plugin-manager = { path = "../plugin-manager" }
 init = { path = "../init" }
 skills_lib = { path = "../skills", package = "skills" }
+uuid = { workspace = true }
 
 # Optional heavy dependencies — gated behind feature flags so the core CLI
 # can be kept small as an orchestration / delegator tool.

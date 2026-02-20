@@ -1,25 +1,34 @@
 //! Theme and styles for TUI components.
-//! Aligns with appz banner cyan accent.
+//! Uses design tokens for consistency with line-based UI.
 
+use design::ColorRole;
 use ratatui::style::{Color, Modifier, Style};
 
-/// Cyan accent (matches appz banner)
-pub const ACCENT: Color = Color::Cyan;
-/// Muted/dim text
-pub const MUTED: Color = Color::DarkGray;
-/// Highlight for selected item
-pub const HIGHLIGHT: Color = Color::Cyan;
-/// Border color
-pub const BORDER: Color = Color::DarkGray;
+/// Map design ColorRole to ratatui Color.
+fn role_to_color(role: ColorRole) -> Color {
+    match role {
+        ColorRole::Accent => Color::Cyan,
+        ColorRole::Success => Color::Green,
+        ColorRole::Error => Color::Red,
+        ColorRole::Warning => Color::Yellow,
+        ColorRole::Info => Color::Blue,
+        ColorRole::Muted | ColorRole::Border => Color::DarkGray,
+    }
+}
 
 /// Style for the dialog title
 pub fn title() -> Style {
-    Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
+    Style::new()
+        .fg(role_to_color(ColorRole::Accent))
+        .add_modifier(Modifier::BOLD)
 }
 
 /// Style for the selected/highlighted item
 pub fn selected() -> Style {
-    Style::new().fg(Color::Black).bg(HIGHLIGHT).add_modifier(Modifier::BOLD)
+    Style::new()
+        .fg(Color::Black)
+        .bg(role_to_color(ColorRole::Accent))
+        .add_modifier(Modifier::BOLD)
 }
 
 /// Style for unselected items
@@ -29,12 +38,12 @@ pub fn default_item() -> Style {
 
 /// Style for the key hints bar
 pub fn hints() -> Style {
-    Style::new().fg(MUTED)
+    Style::new().fg(role_to_color(ColorRole::Muted))
 }
 
 /// Style for borders
 pub fn border() -> Style {
-    Style::new().fg(BORDER)
+    Style::new().fg(role_to_color(ColorRole::Border))
 }
 
 /// Create a bordered block with styled title and border

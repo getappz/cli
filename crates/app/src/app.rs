@@ -189,6 +189,8 @@ pub enum Commands {
     },
     /// List all deployments
     Ls,
+    /// Open the linked project in the Appz Dashboard
+    Open,
     /// Link current directory to a project
     Link {
         /// Project ID or slug to link to
@@ -203,6 +205,15 @@ pub enum Commands {
     Login,
     /// Log out and clear authentication token
     Logout,
+    /// Show the username of the currently logged-in user
+    Whoami {
+        /// Output as JSON (username, email, name)
+        #[arg(long)]
+        json: bool,
+        /// Output format (e.g. json)
+        #[arg(long)]
+        format: Option<String>,
+    },
     /// Initialize a new project from a template
     Init {
         /// Template name (built-in) or project name
@@ -233,10 +244,17 @@ pub enum Commands {
         #[command(subcommand)]
         command: crate::commands::teams::TeamsCommands,
     },
-    /// Manage projects
-    Projects {
+    /// Enable or disable telemetry collection (Vercel-aligned)
+    Telemetry {
         #[command(subcommand)]
-        command: crate::commands::projects::ProjectsCommands,
+        command: crate::commands::telemetry::TelemetryCommands,
+    },
+    /// Manage projects (Vercel-aligned: project ls | add | inspect | rm)
+    #[command(name = "project", alias = "projects")]
+    Projects {
+        /// Subcommand (defaults to list when omitted)
+        #[command(subcommand)]
+        command: Option<crate::commands::projects::ProjectsCommands>,
     },
     /// Manage aliases
     Aliases {
@@ -270,15 +288,16 @@ pub enum Commands {
         #[arg(long)]
         yes: bool,
     },
-    /// Remove resources (projects, aliases, domains, teams)
+    /// Remove deployments (by URL/ID) or project (by name). Alias: rm.
+    #[command(alias = "rm")]
     Remove {
-        /// Resource identifiers (project IDs/slugs, alias IDs/strings, domain names, team IDs/slugs)
+        /// Deployment URL(s)/ID(s) or project name (Vercel-aligned: deployments by URL, project by name removes entire project)
         resources: Vec<String>,
         /// Skip confirmation prompt
-        #[arg(long)]
+        #[arg(long, short = 'y')]
         yes: bool,
-        /// Skip resources with active aliases (not fully implemented)
-        #[arg(long)]
+        /// When removing a project: skip if it has deployments with active preview/production URL
+        #[arg(long, short = 's')]
         safe: bool,
     },
     /// Generate a website from a natural-language prompt (AI)

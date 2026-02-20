@@ -20,6 +20,7 @@ pub use input_project::{input_project, Either};
 pub use input_root_directory::input_root_directory;
 pub use select_org::select_org;
 
+use crate::commands::projects::user_friendly_list_projects_error;
 use api::models::Project;
 use api::Client;
 use miette::{miette, Result};
@@ -273,7 +274,9 @@ async fn fetch_project_with_team_context(
     project_id: &str,
     team_id: &str,
 ) -> Result<Option<api::models::Project>, api::error::ApiError> {
-    // Set team context if provided
+    // Save previous team scope so we restore it after (preserves user's --scope when switching teams)
+    let previous_team_id = client.get_team_id().await;
+
     let had_team_context = !team_id.is_empty();
     if had_team_context {
         client.set_team_id(Some(team_id.to_string())).await;
@@ -282,10 +285,8 @@ async fn fetch_project_with_team_context(
     // Fetch project (errors will be handled by caller)
     let result = client.projects().get(project_id).await;
 
-    // Reset team context if we set it
-    if had_team_context {
-        client.set_team_id(None).await;
-    }
+    // Restore previous team scope (preserves explicit --scope, env, or app switch)
+    client.set_team_id(previous_team_id).await;
 
     result.map(Some).or_else(|e| {
         if is_project_unavailable_error(&e) {
@@ -410,7 +411,7 @@ pub async fn link_project_interactive(
             .projects()
             .list(None, None, None)
             .await
-            .map_err(|e| miette!("Failed to list projects: {}", e))?;
+            .map_err(|e| miette!("{}", user_friendly_list_projects_error(&e)))?;
 
         if projects_response.projects.is_empty() {
             // No projects exist - create a new one

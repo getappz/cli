@@ -365,6 +365,28 @@ impl Client {
         Ok(text)
     }
 
+    /// Execute a PUT request with JSON body and deserialize JSON response
+    #[tracing::instrument(skip(self, body))]
+    pub async fn put_json<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        body: impl serde::Serialize,
+    ) -> Result<T, ApiError> {
+        let url = format!("{}{}", self.base_url, path);
+        let json_body = serde_json::to_string(&body).map_err(ApiError::Json)?;
+
+        let response = self
+            .execute_with_auth_retry(&url, || {
+                self.http_client
+                    .request(Method::PUT, &url)
+                    .header("Content-Type", "application/json")
+                    .body(json_body.clone())
+            })
+            .await?;
+
+        self.handle_response(response).await
+    }
+
     /// Execute a PATCH request with JSON body and deserialize JSON response
     #[tracing::instrument(skip(self, body))]
     pub async fn patch<T: serde::de::DeserializeOwned>(

@@ -5,6 +5,7 @@
 
 pub mod banner;
 pub mod empty;
+pub mod theme;
 pub mod error;
 pub mod format;
 pub mod layout;

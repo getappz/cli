@@ -6,6 +6,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
+design = { path = "../design" }
 grab = { path = "../grab" }
 tabled = "0.20"
 indicatif = { workspace = true }

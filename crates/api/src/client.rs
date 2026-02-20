@@ -296,9 +296,20 @@ impl Client {
         path: &str,
         body: Option<impl serde::Serialize>,
     ) -> Result<T, ApiError> {
+        let response = self.post_raw(path, body).await?;
+        self.handle_response(response).await
+    }
+
+    /// Execute a POST request with JSON body and return the raw response.
+    /// Caller must handle status and parse body (e.g. for create_deployment which has special handling).
+    #[tracing::instrument(skip(self, body))]
+    pub async fn post_raw(
+        &self,
+        path: &str,
+        body: Option<impl serde::Serialize>,
+    ) -> Result<reqwest_middleware::reqwest::Response, ApiError> {
         let url = format!("{}{}", self.base_url, path);
 
-        // Prepare request body
         let json_body = if let Some(ref body) = body {
             Some(serde_json::to_string(body).map_err(ApiError::Json)?)
         } else {
@@ -317,7 +328,7 @@ impl Client {
             })
             .await?;
 
-        self.handle_response(response).await
+        Ok(response)
     }
 
     /// Execute a POST request with JSON body and return response body as text
@@ -363,6 +374,30 @@ impl Client {
         }
 
         Ok(text)
+    }
+
+    /// Execute a POST request with raw bytes and custom headers (e.g. file upload).
+    /// Body is cloned for retries.
+    #[tracing::instrument(skip(self, body))]
+    pub async fn post_bytes(
+        &self,
+        path: &str,
+        body: Vec<u8>,
+        headers: &[(&str, &str)],
+    ) -> Result<reqwest_middleware::reqwest::Response, ApiError> {
+        let url = format!("{}{}", self.base_url, path);
+
+        let response = self
+            .execute_with_auth_retry(&url, || {
+                let mut req = self.http_client.request(Method::POST, &url).body(body.clone());
+                for (k, v) in headers {
+                    req = req.header(*k, *v);
+                }
+                req
+            })
+            .await?;
+
+        Ok(response)
     }
 
     /// Execute a PUT request with JSON body and deserialize JSON response

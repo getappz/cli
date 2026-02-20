@@ -29,6 +29,8 @@ members = [
     "crates/wp2md",
     "crates/code-search",
     "crates/code-mix",
+    "crates/code-grep",
+    "crates/hypermix",
     "crates/crawl-core",
     "crates/plugins/ssg-migrator",
     "crates/plugins/check",
@@ -36,6 +38,7 @@ members = [
     "crates/plugins/wp2md",
     "crates/plugins/crawl",
     "crates/plugin-build",
+    "crates/appz-client",
 ]
 resolver = "2"
 

@@ -61,11 +61,14 @@ uuid = { workspace = true }
 # can be kept small as an orchestration / delegator tool.
 dev-server = { path = "../dev-server", optional = true }
 deployer = { path = "../deployer", optional = true }
+appz-client = { path = "../appz-client", optional = true }
 checker = { path = "../checker", optional = true }
 site-builder = { path = "../site-builder", optional = true }
 appz-studio = { path = "../studio", optional = true }
 mcp-server = { path = "../mcp-server", optional = true }
+code-grep = { path = "../code-grep" }
 code-mix = { path = "../code-mix" }
+hypermix = { path = "../hypermix" }
 [features]
 default = ["self_update", "dev-server", "deploy", "mcp", "gen"]
 
@@ -76,7 +79,8 @@ tui = ["ui/tui"]
 dev-server = ["dep:dev-server"]
 
 # Third-party deployment providers (appz deploy, deploy-init, deploy-list)
-deploy = ["dep:deployer"]
+# appz-client used when project is linked to Appz (.appz/project.json)
+deploy = ["dep:deployer", "dep:appz-client"]
 
 # Code quality checker (plugin host function for appz check)
 check = ["dep:checker"]

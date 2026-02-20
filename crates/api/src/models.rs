@@ -338,6 +338,50 @@ pub struct DeploymentsListResponse {
     pub pagination: Pagination,
 }
 
+/// Minimal payload for creating a deployment (Vercel-aligned).
+/// Used by appz-client for prebuilt deployments.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeploymentCreateRequest {
+    /// Project ID (required)
+    pub projectId: String,
+    /// Optional deployment name
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Target environment: "preview" or "production"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    /// Arbitrary metadata
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub meta: Option<serde_json::Map<String, serde_json::Value>>,
+    /// File list with paths and SHAs (content-addressed)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<PreparedFile>>,
+}
+
+/// Single file entry for deployment create/continue (path + SHA for dedup).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PreparedFile {
+    pub file: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sha: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    pub mode: u32,
+}
+
+/// Result of deployment creation: either a deployment or a list of missing file SHAs.
+#[derive(Debug, Clone)]
+pub enum DeploymentCreateResult {
+    /// Deployment created (may be BUILDING until files are uploaded).
+    Created(Deployment),
+    /// Backend needs these files; client must upload them then call continue.
+    /// deployment_id is present when backend creates deployment in "waiting for files" state.
+    MissingFiles {
+        deployment_id: String,
+        missing: Vec<String>,
+    },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeleteResponse {
     pub status: String,

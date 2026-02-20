@@ -1,7 +1,12 @@
 use crate::client::Client;
 use crate::error::ApiError;
-use crate::models::{DeleteResponse, Deployment, DeploymentsListResponse};
+use crate::http::response_handler::error_from_status_body_headers;
+use crate::models::{
+    DeleteResponse, Deployment, DeploymentCreateRequest, DeploymentCreateResult,
+    DeploymentsListResponse, PreparedFile,
+};
 use crate::paths::V0_PREFIX;
+use reqwest_middleware::reqwest::StatusCode;
 
 pub struct Deployments<'a> {
     client: &'a Client,
@@ -114,6 +119,156 @@ impl<'a> Deployments<'a> {
         }
 
         result
+    }
+
+    /// Create a deployment (prebuilt flow).
+    ///
+    /// Sends file list to API. Returns either a created deployment or a list of
+    /// missing file SHAs that must be uploaded before calling [`continue_deployment`](Self::continue_deployment).
+    #[tracing::instrument(skip(self, payload))]
+    pub async fn create_deployment(
+        &self,
+        payload: DeploymentCreateRequest,
+    ) -> Result<DeploymentCreateResult, ApiError> {
+        let path = format!("{}/deployments", V0_PREFIX);
+        let response = self.client.post_raw(&path, Some(&payload)).await?;
+        let status = response.status();
+        let headers = response.headers().clone();
+        let text = response
+            .text()
+            .await
+            .map_err(|e| ApiError::HttpMiddleware(format!("Failed to read response: {}", e)))?;
+
+        if status.is_success() {
+            let deployment: Deployment = serde_json::from_str(&text).map_err(ApiError::Json)?;
+            return Ok(DeploymentCreateResult::Created(deployment));
+        }
+
+        if status == StatusCode::BAD_REQUEST {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                let code = json
+                    .get("error")
+                    .and_then(|e| e.get("code"))
+                    .or_else(|| json.get("code"))
+                    .and_then(|c| c.as_str());
+                if code == Some("missing_files") {
+                    let missing = json
+                        .get("error")
+                        .and_then(|e| e.get("missing"))
+                        .or_else(|| json.get("missing"))
+                        .and_then(|m| serde_json::from_value(m.clone()).ok())
+                        .unwrap_or_default();
+                    let deployment_id = json
+                        .get("error")
+                        .and_then(|e| e.get("deploymentId").and_then(|v| v.as_str()))
+                        .or_else(|| json.get("deploymentId").and_then(|v| v.as_str()))
+                        .unwrap_or_default()
+                        .to_string();
+                    return Ok(DeploymentCreateResult::MissingFiles {
+                        deployment_id,
+                        missing,
+                    });
+                }
+            }
+        }
+
+        Err(error_from_status_body_headers(
+            status,
+            &text,
+            &headers,
+        ))
+    }
+
+    /// Upload a single file to a deployment (content-addressed by SHA).
+    /// Uses `POST /v0/deployments/:id/files` with `x-now-digest` and `x-now-size` headers.
+    #[tracing::instrument(skip(self, data))]
+    pub async fn upload_file(
+        &self,
+        deployment_id: &str,
+        sha: &str,
+        data: Vec<u8>,
+    ) -> Result<(), ApiError> {
+        let path = format!("{}/deployments/{}/files", V0_PREFIX, deployment_id);
+        let size_str = data.len().to_string();
+        let headers: [(&str, &str); 3] = [
+            ("Content-Type", "application/octet-stream"),
+            ("x-now-digest", sha),
+            ("x-now-size", size_str.as_str()),
+        ];
+        let response = self
+            .client
+            .post_bytes(&path, data, &headers)
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let headers = response.headers().clone();
+            let text = response.text().await.unwrap_or_default();
+            return Err(error_from_status_body_headers(status, &text, &headers));
+        }
+        Ok(())
+    }
+
+    /// Continue deployment after uploading files (Vercel-aligned flow).
+    /// May return `MissingFiles` if more files are needed.
+    #[tracing::instrument(skip(self, files))]
+    pub async fn continue_deployment(
+        &self,
+        deployment_id: &str,
+        files: Vec<PreparedFile>,
+    ) -> Result<DeploymentCreateResult, ApiError> {
+        let path = format!("{}/deployments/{}/continue", V0_PREFIX, deployment_id);
+        let body = serde_json::json!({ "files": files });
+
+        let response = self
+            .client
+            .post_raw(&path, Some(&body))
+            .await?;
+        let status = response.status();
+        let headers = response.headers().clone();
+        let text = response
+            .text()
+            .await
+            .map_err(|e| ApiError::HttpMiddleware(format!("Failed to read response: {}", e)))?;
+
+        if status.is_success() {
+            let deployment: Deployment = serde_json::from_str(&text).map_err(ApiError::Json)?;
+            return Ok(DeploymentCreateResult::Created(deployment));
+        }
+
+        if status == StatusCode::BAD_REQUEST {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                let code = json
+                    .get("error")
+                    .and_then(|e| e.get("code"))
+                    .or_else(|| json.get("code"))
+                    .and_then(|c| c.as_str());
+                if code == Some("missing_files") {
+                    let missing = json
+                        .get("error")
+                        .and_then(|e| e.get("missing"))
+                        .or_else(|| json.get("missing"))
+                        .and_then(|m| serde_json::from_value(m.clone()).ok())
+                        .unwrap_or_default();
+                    let deployment_id = json
+                        .get("error")
+                        .and_then(|e| e.get("deploymentId").and_then(|v| v.as_str()))
+                        .or_else(|| json.get("deploymentId").and_then(|v| v.as_str()))
+                        .map(str::to_string)
+                        .unwrap_or_else(|| deployment_id.to_string());
+                    return Ok(DeploymentCreateResult::MissingFiles {
+                        deployment_id,
+                        missing,
+                    });
+                }
+            }
+        }
+
+        Err(error_from_status_body_headers(
+            status,
+            &text,
+            &headers,
+        ))
     }
 
     /// Delete a deployment by ID or URL (soft delete)

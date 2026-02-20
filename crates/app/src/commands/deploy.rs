@@ -23,6 +23,100 @@ use crate::app_error::UserCancellation;
 use crate::session::AppzSession;
 
 // ---------------------------------------------------------------------------
+// Appz platform deploy (when linked)
+// ---------------------------------------------------------------------------
+
+/// Deploy to Appz when project is linked (.appz/project.json).
+#[cfg(feature = "deploy")]
+async fn deploy_to_appz(
+    session: &AppzSession,
+    output_dir: &str,
+    preview: bool,
+    no_build: bool,
+    dry_run: bool,
+    json_output: bool,
+) -> AppResult {
+    let project_dir = &session.working_dir;
+    let link = crate::project::read_project_link(project_dir)
+        .map_err(|e| miette!("{}", e))?
+        .ok_or_else(|| miette!("Project link not found"))?;
+
+    let output_path = project_dir.join(output_dir);
+    if !dry_run && !output_path.exists() {
+        if !no_build {
+            let build_session = session.clone();
+            crate::commands::build(build_session).await?;
+        }
+        if !output_path.exists() {
+            return Err(miette!(
+                "Build output directory not found: {}\n\
+                 Run 'appz build' first or check outputDirectory in appz.json.",
+                output_path.display()
+            ));
+        }
+    }
+
+    if dry_run {
+        let _ = ui::status::info(&format!(
+            "Would deploy {} to Appz (preview={})",
+            output_path.display(),
+            preview
+        ));
+        return Ok(None);
+    }
+
+    let client = session.get_api_client();
+    if client.get_token().await.is_none() {
+        return Err(miette!(
+            "Not logged in. Run 'appz login' or set APPZ_TOKEN."
+        ));
+    }
+
+    let ctx = appz_client::DeployContext {
+        output_dir: output_path,
+        project_id: link.link.project_id.clone(),
+        team_id: Some(link.link.team_id.clone()),
+        target: if preview { "preview" } else { "production" }.to_string(),
+        name: link.link.project_name.clone(),
+    };
+
+    if !json_output {
+        let _ = ui::layout::blank_line();
+        let _ = ui::layout::section_title("Deploying to Appz");
+    }
+
+    let sp = if !json_output {
+        Some(ui::progress::spinner("Deploying to Appz..."))
+    } else {
+        None
+    };
+
+    let output = appz_client::deploy_prebuilt(&client, &ctx)
+        .await
+        .map_err(|e| miette!("{}", e))?;
+
+    if let Some(sp) = sp {
+        sp.finish_with_message("Deployed!");
+    }
+
+    let deploy_output = deployer::DeployOutput {
+        url: output.url.clone(),
+        status: deployer::DeployStatus::Ready,
+        provider: "appz".to_string(),
+        is_preview: preview,
+        deployment_id: Some(output.deployment_id),
+        additional_urls: vec![],
+        duration_ms: None,
+        created_at: Some(chrono::Utc::now()),
+    };
+
+    display_deploy_result(&deploy_output, json_output)?;
+    write_ci_output(&deploy_output);
+
+    Ok(None)
+}
+
+// ---------------------------------------------------------------------------
 // Sandbox creation helper
 // ---------------------------------------------------------------------------
 
@@ -65,6 +159,15 @@ pub async fn deploy(
 
     // 2. Determine output directory
     let output_dir = resolve_output_dir(&session);
+
+    // 2b. If linked to Appz project and no explicit provider (or appz), use Appz platform
+    if crate::project::is_project_linked(&project_dir)
+        && (provider_arg.is_none() || provider_arg.as_deref() == Some("appz"))
+        && !deploy_all
+    {
+        return deploy_to_appz(&session, &output_dir, preview, no_build, dry_run, json_output)
+            .await;
+    }
 
     // 3. Create sandbox for command execution
     let sandbox = create_deploy_sandbox(&project_dir).await?;

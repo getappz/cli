@@ -25,7 +25,7 @@ impl UserConfig {
 
     /// Whether telemetry is enabled. Defaults to true when not explicitly disabled.
     pub fn telemetry_enabled(&self) -> bool {
-        self.telemetry.as_ref().map_or(true, |t| t.enabled)
+        self.telemetry.as_ref().is_none_or(|t| t.enabled)
     }
 }
 

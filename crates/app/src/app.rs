@@ -257,11 +257,11 @@ pub enum Commands {
         command: Option<crate::commands::projects::ProjectsCommands>,
     },
     /// Transfer projects between teams (Vercel-aligned: transfer <project> | transfer accept <code>)
+    #[command(subcommand_required = false)]
     Transfer {
-        #[command(subcommand_required = false)]
         #[command(subcommand)]
         command: Option<crate::commands::transfer::TransferCommands>,
-        /// Project to transfer (when no subcommand)
+        /// Project to transfer (optional – uses linked project from CWD if omitted)
         #[arg(required = false)]
         project: Option<String>,
         /// Target team for direct transfer (with project)

@@ -31,10 +31,9 @@ pub async fn ls(session: AppzSession) -> AppResult {
             return Err(miette::miette!(
                 "Access denied: this project belongs to a different team. \
                  Switch to the project's team or use --scope to list deployments."
-            )
-            .into());
+            ));
         }
-        Err(e) => return Err(miette::miette!("Failed to list deployments: {}", e).into()),
+        Err(e) => return Err(miette::miette!("Failed to list deployments: {}", e)),
     };
 
     if deployments_response.deployments.is_empty() {

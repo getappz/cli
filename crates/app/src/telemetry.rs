@@ -233,7 +233,6 @@ pub async fn record_command(store: &TelemetryEventStore, command: &crate::app::C
         Commands::DeployInit { .. } => "deploy-init",
         #[cfg(feature = "deploy")]
         Commands::DeployList { .. } => "deploy-list",
-        #[cfg(feature = "code-search")]
         Commands::Code { .. } => "code",
         Commands::Skills { .. } => "skills",
         Commands::Plugin { .. } => "plugin",

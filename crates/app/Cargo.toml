@@ -65,7 +65,7 @@ checker = { path = "../checker", optional = true }
 site-builder = { path = "../site-builder", optional = true }
 appz-studio = { path = "../studio", optional = true }
 mcp-server = { path = "../mcp-server", optional = true }
-code-search = { path = "../code-search", optional = true }
+code-mix = { path = "../code-mix" }
 [features]
 default = ["self_update", "dev-server", "deploy", "mcp", "gen"]
 
@@ -87,8 +87,8 @@ site = ["dep:site-builder"]
 # MCP protocol server for AI assistants (appz mcp)
 mcp = ["dep:mcp-server"]
 
-# Semantic code search (appz code index, appz code search)
-code-search = ["dep:code-search", "mcp-server?/code-search"]
+# Semantic search MCP tools (code_index, code_search) — requires mcp-server
+code-search = ["dep:mcp-server", "mcp-server/code-search"]
 
 # AI website generation (appz gen)
 gen = ["dep:appz-studio"]

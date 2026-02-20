@@ -375,11 +375,7 @@ pub enum Commands {
     // It is now handled by the External(Vec<String>) variant below.
     // NOTE: The `site` command has been extracted to a downloadable plugin (pro tier).
     // It is now handled by the External(Vec<String>) variant below.
-    /// Semantic code search over indexed codebase (Repomix + Qdrant)
-    ///
-    /// Requires Node.js (for Repomix) and Qdrant. Install Qdrant via:
-    /// `mise use -g ubi:qdrant/qdrant` or Docker: `docker run -p 6334:6334 qdrant/qdrant`
-    #[cfg(feature = "code-search")]
+    /// Pack codebase for AI context (Repomix with pre-filters)
     Code {
         #[command(subcommand)]
         command: crate::commands::code::CodeCommands,

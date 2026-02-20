@@ -28,6 +28,7 @@ members = [
     "crates/plugin-manager",
     "crates/wp2md",
     "crates/code-search",
+    "crates/code-mix",
     "crates/crawl-core",
     "crates/plugins/ssg-migrator",
     "crates/plugins/check",
@@ -86,6 +87,7 @@ site = ["app/site"]
 mcp = ["app/mcp"]
 gen = ["app/gen"]
 self_update = ["app/self_update"]
+# Semantic search MCP tools (code_index, code_search) — optional for mcp-server
 code-search = ["app/code-search"]
 tui = ["app/tui", "ui/tui"]
 

@@ -197,7 +197,6 @@ async fn main() -> MainResult {
                     app::commands::deploy_list(session, provider).await
                 }
                 // Check and site commands are now downloadable plugins (handled by External)
-                #[cfg(feature = "code-search")]
                 Commands::Code { command } => {
                     app::commands::code::run(session, command).await
                 }

@@ -98,8 +98,10 @@ pub async fn install(
             false,
             false,
             skill_filters,
-            true, // no_save: skills already in config
+            true,  // no_save: skills already in config
             false, // code
+            false, // compress
+            None,  // directories
             None,  // workdir
             None,  // name
         )

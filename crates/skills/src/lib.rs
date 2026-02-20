@@ -50,6 +50,12 @@ pub enum SkillsCommands {
         /// Generate skill from current project via Repomix (codebase reference)
         #[arg(long)]
         code: bool,
+        /// When using --code: pass --compress to repomix (extract essential code structure via Tree-sitter)
+        #[arg(long, requires = "code")]
+        compress: bool,
+        /// When using --code: directories to process (default: ["."])
+        #[arg(long, short = 'd', num_args = 1.., requires = "code")]
+        directories: Option<Vec<std::path::PathBuf>>,
         /// Working directory when using --code (default: current directory)
         #[arg(long, short = 'C')]
         workdir: Option<std::path::PathBuf>,
@@ -183,6 +189,8 @@ pub async fn run(ctx: SkillsContext, command: SkillsCommands) -> AppResult {
         SkillsCommands::Add {
             source,
             code,
+            compress,
+            directories,
             workdir,
             name,
             global,
@@ -196,7 +204,7 @@ pub async fn run(ctx: SkillsContext, command: SkillsCommands) -> AppResult {
             no_save,
         } => {
             let source = source.unwrap_or_else(|| ".".to_string());
-            add::add(&ctx, source, global, project, yes, skill, list, &agent, _all, full_depth, None, no_save, code, workdir, name).await
+            add::add(&ctx, source, global, project, yes, skill, list, &agent, _all, full_depth, None, no_save, code, compress, directories, workdir, name).await
         }
         SkillsCommands::List {
             global: global_only,

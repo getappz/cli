@@ -154,7 +154,7 @@ pub async fn remove(
         println!();
 
         if !confirm("Are you sure? This action cannot be undone.", false)? {
-            println!("Canceled");
+            let _ = ui::status::info("Cancelled.");
             return Ok(None);
         }
     }

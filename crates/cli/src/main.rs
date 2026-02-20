@@ -1,4 +1,4 @@
-use app::{AppzSession, Cli, Commands};
+use app::{AppzSession, Cli, Commands, UserCancellation};
 use clap::Parser;
 use env_var::GlobalEnvBag;
 use mimalloc::MiMalloc;
@@ -117,7 +117,7 @@ async fn main() -> MainResult {
     // Run the CLI with starbase session lifecycle
     timing.checkpoint("pre app.run");
     let telemetry_store = std::sync::Arc::new(app::TelemetryEventStore::new());
-    let exit_code = app
+    let run_result = app
         .run(AppzSession::new(cli, telemetry_store.clone()), |session| async {
             app::record_command(&session.telemetry_store, &session.cli.command).await;
             match session.cli.command.clone() {
@@ -223,13 +223,31 @@ async fn main() -> MainResult {
                 }
             }
         })
-        .await?;
+        .await;
 
     timing.checkpoint("app.run (session + command)");
     timing.print();
 
-    telemetry_store.set_run_outcome(exit_code == 0);
-    telemetry_store.flush().await;
+    let exit_code = match run_result {
+        Ok(code) => {
+            telemetry_store.set_run_outcome(code == 0);
+            telemetry_store.flush().await;
+            Ok(ExitCode::from(code))
+        }
+        Err(e) => {
+            if e.downcast_ref::<UserCancellation>().is_some() {
+                let msg = e.to_string();
+                let _ = ui::status::info(&msg);
+                telemetry_store.set_run_outcome(true);
+                telemetry_store.flush().await;
+                Ok(ExitCode::SUCCESS)
+            } else {
+                telemetry_store.set_run_outcome(false);
+                telemetry_store.flush().await;
+                Err(e.into())
+            }
+        }
+    };
 
-    Ok(ExitCode::from(exit_code))
+    exit_code
 }

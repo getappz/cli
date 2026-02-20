@@ -67,7 +67,7 @@ pub async fn rm(
         );
 
         if !confirm(&confirm_msg, false)? {
-            println!("Canceled");
+            let _ = status::info("Cancelled.");
             return Ok(None);
         }
     }

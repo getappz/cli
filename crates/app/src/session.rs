@@ -1,4 +1,5 @@
 use crate::app::Cli;
+use crate::app_error::UserCancellation;
 use crate::auth;
 use crate::context::AppContext;
 use crate::importer;
@@ -332,7 +333,10 @@ impl AppSession for AppzSession {
                     let _ = self.project_context.set(Some(ctx));
                 }
                 Err(e) => {
-                    // If linking fails, return error (don't proceed without project context)
+                    // Pass through user cancellation; other errors get wrapped
+                    if e.downcast_ref::<UserCancellation>().is_some() {
+                        return Err(e);
+                    }
                     return Err(miette::miette!("Failed to ensure project link: {}", e));
                 }
             }

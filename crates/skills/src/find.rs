@@ -112,9 +112,11 @@ pub async fn find(ctx: &SkillsContext, query: Option<String>) -> AppResult {
                                 false,
                                 None,
                                 false,
-                                false, // code
-                                None,  // workdir
-                                None,  // name
+                                false,  // code
+                                false,  // compress
+                                None,   // directories
+                                None,   // workdir
+                                None,   // name
                             )
                             .await;
                         }

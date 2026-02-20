@@ -43,12 +43,23 @@ pub async fn add(
     skill_filters_override: Option<Vec<String>>, // from skills.json when installing from config
     no_save: bool, // skip writing to skills.json
     code: bool,
+    compress: bool,
+    directories: Option<Vec<PathBuf>>,
     workdir: Option<PathBuf>,
     name: Option<String>,
 ) -> AppResult {
     if code {
         return add_from_code(
-            ctx, global, project, yes, list_only, agent, workdir, name,
+            ctx,
+            global,
+            project,
+            yes,
+            list_only,
+            agent,
+            compress,
+            directories,
+            workdir,
+            name,
         )
         .await;
     }
@@ -426,6 +437,8 @@ async fn add_from_code(
     yes: bool,
     list_only: bool,
     _agent: &[String],
+    compress: bool,
+    directories: Option<Vec<PathBuf>>,
     workdir: Option<PathBuf>,
     _name: Option<String>,
 ) -> AppResult {
@@ -470,7 +483,8 @@ async fn add_from_code(
         workdir.display()
     ));
 
-    repomix_skill_generate(&workdir, &code_ref_path).await?;
+    let dirs: Vec<PathBuf> = directories.unwrap_or_else(|| vec![PathBuf::from(".")]);
+    repomix_skill_generate(&workdir, &code_ref_path, compress, &dirs).await?;
 
     // Symlink docs/code-ref into project agent skill dirs (.cursor/skills, .claude/skills, etc.)
     let docs_dir = workdir.join("docs");
@@ -498,6 +512,8 @@ async fn add_from_code(
 async fn repomix_skill_generate(
     workdir: &Path,
     output_path: &Path,
+    compress: bool,
+    directories: &[PathBuf],
 ) -> Result<(), miette::Report> {
     let config = SandboxConfig::new(workdir)
         .with_settings(SandboxSettings::default().with_tool("node", Some("22")));
@@ -510,11 +526,24 @@ async fn repomix_skill_generate(
     let ignore_patterns =
         ".claude/**,.cursor/**,.codex/**,.aider/**,.continue/**,.github/copilot/**,**/node_modules/**";
 
+    let compress_flag = if compress { " --compress" } else { "" };
+    let dirs_str: Vec<String> = directories
+        .iter()
+        .map(|d| d.to_string_lossy().to_string())
+        .collect();
+    let dirs_arg = if dirs_str.is_empty() {
+        " .".to_string()
+    } else {
+        format!(" {}", dirs_str.join(" "))
+    };
+
     let cmd = format!(
-        "npx repomix@latest --skill-generate code-ref --skill-output {} --force --include \"{}\" --ignore \"{}\" .",
+        "npx repomix@latest --skill-generate code-ref --skill-output {} --force --include \"{}\" --ignore \"{}\"{}{}",
         output_path.display(),
         include_patterns,
-        ignore_patterns
+        ignore_patterns,
+        compress_flag,
+        dirs_arg
     );
 
     let status = sandbox

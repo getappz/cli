@@ -16,9 +16,10 @@ use deployer::{
     create_provider_registry, DeployConfig, DeployContext, DeployOutput,
     DeployProvider, DetectedPlatform, SetupContext,
 };
-use miette::{miette, Result};
+use miette::{miette, Report, Result};
 use starbase::AppResult;
 
+use crate::app_error::UserCancellation;
 use crate::session::AppzSession;
 
 // ---------------------------------------------------------------------------
@@ -668,7 +669,7 @@ async fn prompt_provider_selection() -> Result<String> {
 
     let selection = ui::select_interactive("Select a deployment provider:", &options)
         .map_err(|e| miette!("Selection failed: {}", e))?
-        .ok_or_else(|| miette!("Selection cancelled"))?;
+        .ok_or_else(|| Report::from(UserCancellation::selection()))?;
 
     // Extract slug from "Name (slug)" format
     let slug = selection
@@ -690,7 +691,7 @@ async fn prompt_detected_selection(detected: &[DetectedPlatform]) -> Result<Stri
 
     let selection = ui::select_interactive("Multiple platforms detected. Select one:", &options)
         .map_err(|e| miette!("Selection failed: {}", e))?
-        .ok_or_else(|| miette!("Selection cancelled"))?;
+        .ok_or_else(|| Report::from(UserCancellation::selection()))?;
 
     // Match back to slug
     for (i, option) in detected.iter().enumerate() {

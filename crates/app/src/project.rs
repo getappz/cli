@@ -20,6 +20,7 @@ pub use input_project::{input_project, Either};
 pub use input_root_directory::input_root_directory;
 pub use select_org::select_org;
 
+use crate::app_error::UserCancellation;
 use crate::commands::projects::user_friendly_list_projects_error;
 use api::models::Project;
 use api::Client;
@@ -581,7 +582,7 @@ pub async fn setup_and_link(
 
     if !should_start_setup {
         tracing::info!("Canceled. Project not set up.");
-        return Err(miette!("Project setup canceled"));
+        return Err(miette::Report::from(UserCancellation::project_setup()));
     }
 
     // Select organization/team

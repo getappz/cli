@@ -71,6 +71,8 @@ pub async fn update(ctx: &SkillsContext) -> AppResult {
             None,  // skill_filters_override
             true,  // no_save (update doesn't touch skills.json)
             false, // code
+            false, // compress
+            None,  // directories
             None,  // workdir
             None,  // name
         )

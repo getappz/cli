@@ -2,10 +2,11 @@
 //!
 //! Handles interactive prompts when args are missing, then calls init::run().
 
+use crate::app_error::UserCancellation;
 use crate::session::AppzSession;
-use tracing::instrument;
 use crate::templates::{get_builtin_template, BUILTIN_TEMPLATES};
 use miette::miette;
+use tracing::instrument;
 use starbase::AppResult;
 use std::path::PathBuf;
 
@@ -97,7 +98,7 @@ fn prompt_for_template() -> Result<String, miette::Report> {
 
     let selected = ui::select_template_interactive("Select a template (type to search or enter git/npm/path):", &options)
         .map_err(|e| miette!("Failed to select template: {}", e))?
-        .ok_or_else(|| miette!("Selection cancelled"))?;
+        .ok_or_else(|| miette::Report::from(UserCancellation::selection()))?;
 
     // selected is already the final value: slug, URL, npm:xx, or path
     resolve_template_source(&selected)

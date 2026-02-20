@@ -219,6 +219,7 @@ pub async fn record_command(store: &TelemetryEventStore, command: &crate::app::C
         Commands::Teams { .. } => "teams",
         Commands::Telemetry { .. } => "telemetry",
         Commands::Projects { .. } => "project",
+        Commands::Transfer { .. } => "transfer",
         Commands::Aliases { .. } => "aliases",
         Commands::Domains { .. } => "domains",
         Commands::Promote { .. } => "promote",

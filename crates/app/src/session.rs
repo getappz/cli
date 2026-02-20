@@ -87,11 +87,21 @@ impl AppzSession {
 pub fn requires_project_context(command: &crate::app::Commands) -> bool {
     use crate::app::Commands;
     use crate::commands::projects::ProjectsCommands;
+    use crate::commands::transfer::TransferCommands;
     matches!(
         command,
         Commands::Ls
             | Commands::Projects {
                 command: Some(ProjectsCommands::Inspect { name: None, .. }),
+                ..
+            }
+            | Commands::Transfer {
+                command: None,
+                project: None,
+                ..
+            }
+            | Commands::Transfer {
+                command: Some(TransferCommands::Create { project: None, .. }),
                 ..
             }
     )

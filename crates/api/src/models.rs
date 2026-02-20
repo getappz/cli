@@ -343,6 +343,19 @@ pub struct DeleteResponse {
     pub status: String,
 }
 
+/// Request body for creating a project transfer request (Vercel-aligned).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateTransferRequestBody {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub callbackUrl: Option<String>,
+}
+
+/// Response from creating a project transfer request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransferRequestResponse {
+    pub code: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PromoteResponse {
     #[serde(default)]

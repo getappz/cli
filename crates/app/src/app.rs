@@ -256,6 +256,18 @@ pub enum Commands {
         #[command(subcommand)]
         command: Option<crate::commands::projects::ProjectsCommands>,
     },
+    /// Transfer projects between teams (Vercel-aligned: transfer <project> | transfer accept <code>)
+    Transfer {
+        #[command(subcommand_required = false)]
+        #[command(subcommand)]
+        command: Option<crate::commands::transfer::TransferCommands>,
+        /// Project to transfer (when no subcommand)
+        #[arg(required = false)]
+        project: Option<String>,
+        /// Target team for direct transfer (with project)
+        #[arg(long)]
+        to_team: Option<String>,
+    },
     /// Manage aliases
     Aliases {
         #[command(subcommand)]

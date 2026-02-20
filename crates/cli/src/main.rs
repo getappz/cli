@@ -162,6 +162,9 @@ async fn main() -> MainResult {
                     let cmd = command.unwrap_or(app::commands::projects::ProjectsCommands::Ls);
                     app::commands::projects::run(session, cmd).await
                 }
+                Commands::Transfer { command, project, to_team } => {
+                    app::commands::transfer::run(session, command, project, to_team).await
+                }
                 Commands::Aliases { command } => {
                     app::commands::aliases::run(session, command).await
                 }

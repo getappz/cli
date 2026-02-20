@@ -246,6 +246,7 @@ pub fn requires_auth(command: &crate::app::Commands) -> bool {
         | Commands::Switch { .. }
         | Commands::Teams { .. }
         | Commands::Projects { .. }
+        | Commands::Transfer { .. }
         | Commands::Whoami { .. }
         | Commands::Aliases { .. }
         | Commands::Domains { .. }

@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/app",
+    "crates/design",
     "crates/detectors",
     "crates/grab",
     "crates/mcp-server",
@@ -175,6 +176,7 @@ ssh = { package = "ssh-rs", version = "0.5.0" }
 
 # Randomness
 rand = "0.8"
+uuid = { version = "1.10", features = ["v4"] }
 
 # Config
 toml = "0.8"

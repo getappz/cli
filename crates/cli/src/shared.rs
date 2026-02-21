@@ -325,6 +325,7 @@ pub async fn run_cli(args: Vec<OsString>) -> MainResult {
                     Commands::Git { command } => {
                         app::commands::git::run(session, command).await
                     }
+                    Commands::Exec(args) => app::commands::exec(session, args).await,
                     #[cfg(feature = "mcp")]
                     Commands::McpServer => {
                         app::commands::mcp_server::mcp_server(session).await

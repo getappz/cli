@@ -240,6 +240,7 @@ pub fn command_name_for_telemetry(command: crate::app::Commands) -> String {
         Commands::Skills { .. } => "skills",
         Commands::Plugin { .. } => "plugin",
         Commands::Git { .. } => "git",
+        Commands::Exec(_) => "exec",
         #[cfg(feature = "mcp")]
         Commands::McpServer => "mcp",
         #[cfg(feature = "self_update")]

@@ -250,6 +250,20 @@ pub struct GrepSearchParams {
     pub pack_hash: Option<String>,
 }
 
+// --- Exec (appz exec - sandbox-by-default, optional no_sandbox) ---
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ExecParams {
+    pub command: String,
+    #[serde(default)]
+    pub workdir: Option<String>,
+    #[serde(default)]
+    pub shell: bool,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+    #[serde(default)]
+    pub no_sandbox: bool,
+}
+
 // --- Shell (sandboxed) ---
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ShellParams {
@@ -580,6 +594,37 @@ impl AppzTool {
         }))?]))
     }
 
+    /// Execute a command via appz exec (sandbox-by-default). Returns JSON with exit_code, stdout, stderr, timed_out.
+    #[tool]
+    async fn exec(
+        &self,
+        _context: RequestContext<RoleServer>,
+        Parameters(params): Parameters<ExecParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let mut args = vec!["exec".to_string(), "--json".to_string(), params.command.clone()];
+        if params.shell {
+            args.push("--shell".to_string());
+        }
+        if let Some(t) = params.timeout_ms {
+            args.extend(["--timeout".to_string(), (t / 1000).to_string()]);
+        }
+        if params.no_sandbox {
+            args.push("--no-sandbox".to_string());
+        }
+        let workdir = params.workdir.as_deref();
+        let out = run_appz(&args, workdir).await?;
+        // appz exec --json prints ExecResult to stdout; run_appz captures it
+        let result: serde_json::Value = serde_json::from_str(&out.stdout).unwrap_or_else(|_| {
+            serde_json::json!({
+                "exit_code": out.exit_code,
+                "stdout": out.stdout,
+                "stderr": out.stderr,
+                "timed_out": false
+            })
+        });
+        Ok(CallToolResult::success(vec![Content::json(result)?]))
+    }
+
     /// Run a shell command inside the appz sandbox (project-root scoped, mise environment).
     #[tool]
     async fn shell(
@@ -642,10 +687,10 @@ impl ServerHandler for AppzTool {
             server_info: Implementation::from_build_env(),
             instructions: Some(
                 "This server provides tools to run appz CLI commands: init, build, dev, deploy, run, \
-                 plan, ls, skills, code_index, code_search, grep_search, and a sandboxed shell. Auth-required tools \
-                 (run, plan, ls, etc.) need 'appz login' or APPZ_API_TOKEN.                  code_index indexes the \
-                 codebase with Repomix+Qdrant; code_search runs semantic search over it. grep_search \
-                 searches packed code (from appz code pack) with ripgrep."
+                 plan, ls, skills, code_index, code_search, grep_search, exec, and a sandboxed shell. Auth-required tools \
+                 (run, plan, ls, etc.) need 'appz login' or APPZ_API_TOKEN. exec runs arbitrary commands \
+                 (e.g. npm, cargo) with sandbox-by-default. code_index indexes the codebase with Repomix+Qdrant; \
+                 code_search runs semantic search over it. grep_search searches packed code (from appz code pack) with ripgrep."
                     .to_string(),
             ),
         }

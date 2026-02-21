@@ -1,7 +1,9 @@
 mod app;
 mod app_error;
 mod args;
+pub mod exec;
 mod auth;
+mod verify;
 mod config;
 pub mod commands;
 mod telemetry;

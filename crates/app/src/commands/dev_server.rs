@@ -5,43 +5,14 @@ use tracing::instrument;
 
 /// Start the development server
 #[instrument(skip_all)]
-pub async fn dev_server(session: AppzSession) -> AppResult {
-    // Use the working directory from session (already respects --cwd)
+pub async fn dev_server(session: AppzSession, args: crate::args::DevServerArgs) -> AppResult {
     let project_path = session.working_dir.clone();
 
-    // Get command arguments
-    let port = if let crate::app::Commands::DevServer { port, .. } = &session.cli.command {
-        *port
-    } else {
-        3000
-    };
-
-    let dir = if let crate::app::Commands::DevServer { dir, .. } = &session.cli.command {
-        dir.clone().unwrap_or(project_path)
-    } else {
-        project_path
-    };
-
-    let hot_reload = if let crate::app::Commands::DevServer { no_reload, .. } = &session.cli.command
-    {
-        !no_reload
-    } else {
-        true
-    };
-
-    let enable_forms =
-        if let crate::app::Commands::DevServer { enable_forms, .. } = &session.cli.command {
-            *enable_forms
-        } else {
-            false
-        };
-
-    let spa_fallback =
-        if let crate::app::Commands::DevServer { spa_fallback, .. } = &session.cli.command {
-            *spa_fallback
-        } else {
-            false
-        };
+    let port = args.port;
+    let dir = args.dir.clone().unwrap_or_else(|| project_path.clone());
+    let hot_reload = !args.no_reload;
+    let enable_forms = args.enable_forms;
+    let spa_fallback = args.spa_fallback;
 
     // Check if path exists
     if !dir.exists() {

@@ -2,6 +2,25 @@ use app::{AppzSession, Cli, Commands, UserCancellation};
 use clap::Parser;
 use env_var::GlobalEnvBag;
 use mimalloc::MiMalloc;
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
+/// Wraps a future to assert Send. Used when the compiler cannot prove Send due to
+/// higher-rank trait bound issues with &str/&Path in clap-derived types, but our
+/// CLI args are owned (parsed from env::args()) so the future is safe to send.
+struct AssertSend<F>(F);
+
+impl<F: Future> Future for AssertSend<F> {
+    type Output = F::Output;
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        unsafe { Pin::new_unchecked(&mut self.get_unchecked_mut().0).poll(cx) }
+    }
+}
+// SAFETY: Our Commands/Cli are parsed from env::args() and all values are owned
+// (String, PathBuf). The compiler fails HRTB for &str/&Path but at runtime we have
+// no references. With current_thread runtime the future stays on main thread.
+unsafe impl<F> Send for AssertSend<F> {}
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
@@ -49,10 +68,10 @@ async fn main() -> MainResult {
     timing.checkpoint("get_version (incl. GlobalEnvBag)");
 
     // Try to parse CLI args - handle gracefully if no command provided
-    let cli = match Cli::try_parse() {
-        Ok(cli) => {
+    let mut cli = match Cli::try_parse() {
+        Ok(c) => {
             timing.checkpoint("Cli::try_parse");
-            cli
+            c
         }
         Err(e) => {
             timing.checkpoint("Cli::try_parse");
@@ -115,43 +134,47 @@ async fn main() -> MainResult {
     timing.checkpoint("banner (success path)");
 
     // Run the CLI with starbase session lifecycle
+    // Extract command before run to avoid capturing &str/&Path in Send future
     timing.checkpoint("pre app.run");
     let telemetry_store = std::sync::Arc::new(app::TelemetryEventStore::new());
+    let command = std::mem::replace(&mut cli.command, Commands::List);
     let run_result = app
-        .run(AppzSession::new(cli, telemetry_store.clone()), |session| async move {
-            let cmd_name = app::command_name_for_telemetry(session.cli.command.clone());
+        .run(AppzSession::new(cli, telemetry_store.clone()), move |session| {
+            AssertSend(async move {
+            let cmd_name = app::command_name_for_telemetry(command.clone());
             app::record_command(session.telemetry_store.clone(), cmd_name).await;
-            match session.cli.command.clone() {
+
+            match command {
                 Commands::List => app::commands::list(session).await,
-                Commands::Plan { task } => app::commands::plan(session, task).await,
-                Commands::Run { task, force, changed } => app::commands::run(session, task, force, changed).await,
-                Commands::RecipeValidate { path } => {
-                    app::commands::recipe_validate(session, path).await
+                Commands::Plan(args) => app::commands::plan(session, args.task).await,
+                Commands::Run(args) => app::commands::run(session, args.task, args.force, args.changed).await,
+                Commands::RecipeValidate(args) => {
+                    app::commands::recipe_validate(session, args.path).await
                 }
-                Commands::Dev { .. } => app::commands::dev(session).await,
+                Commands::Dev(args) => app::commands::dev(session, args).await,
                 #[cfg(feature = "dev-server")]
-                Commands::DevServer { .. } => app::commands::dev_server(session).await,
+                Commands::DevServer(args) => app::commands::dev_server(session, args).await,
                 Commands::Build => app::commands::build(session).await,
                 #[cfg(feature = "dev-server")]
-                Commands::Preview { .. } => app::commands::preview(session).await,
-                Commands::Ls { policy } => app::commands::ls(session, policy).await,
+                Commands::Preview(args) => app::commands::preview(session, args).await,
+                Commands::Ls(args) => app::commands::ls(session, args.policy).await,
                 Commands::Open => app::commands::open(session).await,
-                Commands::Link { project, team } => {
-                    app::commands::link(session, project, team).await
+                Commands::Link(args) => {
+                    app::commands::link(session, args.project, args.team).await
                 }
                 Commands::Unlink => app::commands::unlink(session).await,
                 Commands::Login => app::commands::login(session).await,
                 Commands::Logout => app::commands::logout(session).await,
-                Commands::Whoami { json, format } => {
-                    let as_json = json || format.as_deref() == Some("json");
+                Commands::Whoami(args) => {
+                    let as_json = args.json || args.format.as_deref() == Some("json");
                     app::commands::whoami(session, as_json).await
                 }
-                Commands::Init { template_or_name, name, template, skip_install, force, output } => {
-                    app::commands::init(session, template_or_name, name, template, skip_install, force, output).await
+                Commands::Init(args) => {
+                    app::commands::init(session, args.template_or_name, args.name, args.template, args.skip_install, args.force, args.output).await
                 }
-                Commands::Switch { team } => {
+                Commands::Switch(args) => {
                     // Backward compatibility: route to teams switch
-                    app::commands::teams::switch(session, team).await
+                    app::commands::teams::switch(session, args.team).await
                 }
                 Commands::Teams { command } => {
                     app::commands::teams::run(session, command).await
@@ -172,92 +195,69 @@ async fn main() -> MainResult {
                 Commands::Domains { command } => {
                     app::commands::domains::run(session, command).await
                 }
-                Commands::Pull { environment, yes } => {
-                    app::commands::pull(session, environment, yes).await
+                Commands::Pull(args) => {
+                    app::commands::pull(session, args.environment, args.yes).await
                 }
-                Commands::Logs { deployment } => {
-                    app::commands::logs(session, deployment).await
+                Commands::Logs(args) => {
+                    app::commands::logs(session, args.deployment).await
                 }
-                Commands::Inspect { deployment, json } => {
-                    app::commands::inspect(session, deployment, json).await
+                Commands::Inspect(args) => {
+                    app::commands::inspect(session, args.deployment, args.json).await
                 }
                 Commands::Env { command } => {
                     app::commands::env::run(session, command).await
                 }
-                Commands::Promote { deployment, timeout, yes } => {
-                    app::commands::promote(session, deployment, timeout, yes).await
+                Commands::Promote(args) => {
+                    app::commands::promote(session, args.deployment, args.timeout, args.yes).await
                 }
-                Commands::Rollback { deployment, timeout, yes } => {
-                    app::commands::rollback(session, deployment, timeout, yes).await
+                Commands::Rollback(args) => {
+                    app::commands::rollback(session, args.deployment, args.timeout, args.yes).await
                 }
-                Commands::Remove { resources, yes, safe } => {
-                    app::commands::remove(session, resources, yes, safe).await
+                Commands::Remove(args) => {
+                    app::commands::remove(session, args.resources, args.yes, args.safe).await
                 }
                 #[cfg(feature = "gen")]
-                Commands::Gen { prompt, output, name, model } => {
-                    app::commands::gen::run(session, prompt, output, name, model).await
+                Commands::Gen(args) => {
+                    app::commands::gen::run(session, args.prompt, args.output, args.name, args.model).await
                 }
                 #[cfg(feature = "deploy")]
-                Commands::Deploy {
-                    project_path,
-                    provider,
-                    prod,
-                    preview,
-                    target,
-                    prebuilt,
-                    no_build,
-                    build_env,
-                    env,
-                    force,
-                    guidance,
-                    logs,
-                    meta,
-                    no_wait,
-                    public,
-                    skip_domain,
-                    with_cache,
-                    dry_run,
-                    json,
-                    all,
-                    yes,
-                } => {
+                Commands::Deploy(args) => {
                     app::commands::deploy(
                         session,
-                        project_path,
-                        provider,
-                        prod,
-                        preview,
-                        target,
-                        prebuilt,
-                        no_build,
-                        build_env,
-                        env,
-                        force,
-                        guidance,
-                        logs,
-                        meta,
-                        no_wait,
-                        public,
-                        skip_domain,
-                        with_cache,
-                        dry_run,
-                        json,
-                        all,
-                        yes,
+                        args.project_path,
+                        args.provider,
+                        args.prod,
+                        args.preview,
+                        args.target,
+                        args.prebuilt,
+                        args.no_build,
+                        args.build_env,
+                        args.env,
+                        args.force,
+                        args.guidance,
+                        args.logs,
+                        args.meta,
+                        args.no_wait,
+                        args.public,
+                        args.skip_domain,
+                        args.with_cache,
+                        args.dry_run,
+                        args.json,
+                        args.all,
+                        args.yes,
                     )
                     .await
                 }
                 #[cfg(feature = "deploy")]
-                Commands::DeployInit { provider } => {
-                    app::commands::deploy_init(session, provider).await
+                Commands::DeployInit(args) => {
+                    app::commands::deploy_init(session, args.provider).await
                 }
                 #[cfg(feature = "deploy")]
-                Commands::DeployList { provider } => {
-                    app::commands::deploy_list(session, provider).await
+                Commands::DeployList(args) => {
+                    app::commands::deploy_list(session, args.provider).await
                 }
-                // Check and site commands are now downloadable plugins (handled by External)
-                Commands::Pack { subcommand, run_opts } => {
-                    app::commands::pack::run(session, subcommand, run_opts).await
+                Commands::Pack(args) => {
+                    app::commands::pack::run(session, args.subcommand, args.run_opts).await
                 }
                 Commands::Code { command } => {
                     app::commands::code::run(session, command).await
@@ -273,9 +273,9 @@ async fn main() -> MainResult {
                 // NOTE: Convert and Migrate commands are now downloadable plugins.
                 // It is handled by Commands::External below.
                 #[cfg(feature = "self_update")]
-                Commands::SelfUpdate { version, force, yes } => {
+                Commands::SelfUpdate(args) => {
                     use app::commands::SelfUpdate;
-                    let cmd = SelfUpdate::new(version, force, yes);
+                    let cmd = SelfUpdate::new(args.version, args.force, args.yes);
                     cmd.run().await.map_err(|e| miette::miette!("{}", e))?;
                     Ok(None)
                 }
@@ -283,6 +283,7 @@ async fn main() -> MainResult {
                     app::commands::external::run(session, args).await
                 }
             }
+        })
         })
         .await;
 

@@ -11,32 +11,11 @@ use tokio::signal;
 use tracing::instrument;
 
 #[instrument(skip_all)]
-pub async fn preview(session: AppzSession) -> AppResult {
-    // Extract CLI flags
-    let port = if let crate::app::Commands::Preview { port, .. } = &session.cli.command {
-        *port
-    } else {
-        3000
-    };
-
-    let dir = if let crate::app::Commands::Preview { dir, .. } = &session.cli.command {
-        dir.clone()
-    } else {
-        None
-    };
-
-    let share = if let crate::app::Commands::Preview { share, .. } = &session.cli.command {
-        *share
-    } else {
-        false
-    };
-
-    let spa_fallback =
-        if let crate::app::Commands::Preview { spa_fallback, .. } = &session.cli.command {
-            *spa_fallback
-        } else {
-            false
-        };
+pub async fn preview(session: AppzSession, args: crate::args::PreviewArgs) -> AppResult {
+    let port = args.port;
+    let dir = args.dir.clone();
+    let share = args.share;
+    let spa_fallback = args.spa_fallback;
 
     // Use the working directory from session (already respects --cwd)
     let project_path = session.working_dir.clone();

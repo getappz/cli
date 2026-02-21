@@ -1,5 +1,6 @@
 mod app;
 mod app_error;
+mod args;
 mod auth;
 mod config;
 pub mod commands;

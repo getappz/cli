@@ -17,19 +17,9 @@ use task::Context;
 use tracing::instrument;
 
 #[instrument(skip_all)]
-pub async fn dev(session: AppzSession) -> AppResult {
-    // Extract CLI flags
-    let share = if let crate::app::Commands::Dev { share, .. } = &session.cli.command {
-        *share
-    } else {
-        false
-    };
-
-    let port = if let crate::app::Commands::Dev { port, .. } = &session.cli.command {
-        port.unwrap_or(3000)
-    } else {
-        3000
-    };
+pub async fn dev(session: AppzSession, args: crate::args::DevArgs) -> AppResult {
+    let share = args.share;
+    let port = args.port.unwrap_or(3000);
 
     // Use the working directory from session (already respects --cwd)
     let project_path = session.working_dir.clone();

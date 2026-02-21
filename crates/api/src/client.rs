@@ -282,7 +282,7 @@ impl Client {
     }
 
     /// Execute a GET request and deserialize JSON response
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self, path))]
     pub async fn get<T: serde::de::DeserializeOwned>(
         &self,
         path: impl Into<String>,

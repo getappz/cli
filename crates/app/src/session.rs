@@ -91,7 +91,7 @@ pub fn requires_project_context(command: &crate::app::Commands) -> bool {
     use crate::commands::transfer::TransferCommands;
     matches!(
         command,
-        Commands::Ls { .. }
+        Commands::Ls(_)
             | Commands::Projects {
                 command: Some(ProjectsCommands::Inspect { name: None, .. }),
                 ..

@@ -210,6 +210,23 @@ pub fn colored_diff(plain: &str) -> String {
     out
 }
 
+/// Format byte count to human-readable string (e.g. "1.2 MB", "500 KB").
+/// Matches Vercel's bytes package: 1 decimal place.
+pub fn bytes(n: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+    if n < KB {
+        format!("{} B", n)
+    } else if n < MB {
+        format!("{:.1} KB", n as f64 / KB as f64)
+    } else if n < GB {
+        format!("{:.1} MB", n as f64 / MB as f64)
+    } else {
+        format!("{:.1} GB", n as f64 / GB as f64)
+    }
+}
+
 /// Format a duration in seconds to a human-readable string.
 ///
 /// # Arguments
@@ -287,6 +304,16 @@ mod tests {
         assert_eq!(truncate("hello", 10), "hello");
         assert_eq!(truncate("hello world", 5), "he...");
         assert_eq!(truncate("hi", 5), "hi");
+    }
+
+    #[test]
+    fn test_bytes() {
+        assert_eq!(bytes(0), "0 B");
+        assert_eq!(bytes(100), "100 B");
+        assert_eq!(bytes(1024), "1.0 KB");
+        assert_eq!(bytes(1536), "1.5 KB");
+        assert_eq!(bytes(1024 * 1024), "1.0 MB");
+        assert_eq!(bytes(1024 * 1024 * 2), "2.0 MB");
     }
 
     #[test]

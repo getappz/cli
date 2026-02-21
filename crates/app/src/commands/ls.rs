@@ -1,4 +1,5 @@
 use api::error::ApiError as ApiErrorType;
+use crate::args::LsArgs;
 use crate::session::AppzSession;
 use crate::ClientExt;
 use starbase::AppResult;
@@ -25,13 +26,16 @@ fn parse_policy(policy: &[String]) -> Option<Vec<(String, String)>> {
     }
 }
 
+/// List deployments. Project context is ensured in session analyze (bootstrap).
 #[instrument(skip_all)]
-pub async fn ls(session: AppzSession, policy: Vec<String>) -> AppResult {
+pub async fn ls(session: AppzSession, args: LsArgs) -> AppResult {
     let client = session.get_api_client();
 
-    let project_context = session
-        .get_project_context()
-        .ok_or_else(|| miette::miette!("Project context not available - this should not happen"))?;
+    let project_context = session.get_project_context().ok_or_else(|| {
+        miette::miette!(
+            "No project linked. Run `appz link` to link this directory to an Appz project before listing deployments."
+        )
+    })?;
 
     let project_id = project_context.link.project_id.clone();
 
@@ -42,7 +46,7 @@ pub async fn ls(session: AppzSession, policy: Vec<String>) -> AppResult {
             .await;
     }
 
-    let policy_params = parse_policy(&policy);
+    let policy_params = parse_policy(&args.policy);
     let show_policy = policy_params.is_some();
     let deployments_response = match client
         .deployments()

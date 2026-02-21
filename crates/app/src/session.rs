@@ -83,8 +83,8 @@ impl AppzSession {
     }
 }
 
-/// Check if a command requires project context (must be linked)
-/// Commands that return an error if not linked
+/// Check if a command requires project context (must be linked).
+/// Project context is loaded in analyze (bootstrap) for these commands.
 pub fn requires_project_context(command: &crate::app::Commands) -> bool {
     use crate::app::Commands;
     use crate::commands::projects::ProjectsCommands;
@@ -108,17 +108,18 @@ pub fn requires_project_context(command: &crate::app::Commands) -> bool {
     )
 }
 
-/// Whether project inspect --yes was passed (skip link confirmation)
-fn project_inspect_yes(command: &crate::app::Commands) -> bool {
+/// Whether --yes was passed for project link (skip confirmation in non-interactive)
+fn project_link_auto_confirm(command: &crate::app::Commands) -> bool {
     use crate::app::Commands;
     use crate::commands::projects::ProjectsCommands;
-    matches!(
-        command,
+    match command {
+        Commands::Ls(args) => args.yes,
         Commands::Projects {
-            command: Some(ProjectsCommands::Inspect { yes: true, .. }),
+            command: Some(ProjectsCommands::Inspect { yes, .. }),
             ..
-        }
-    )
+        } => *yes,
+        _ => false,
+    }
 }
 
 #[async_trait]
@@ -321,11 +322,11 @@ impl AppSession for AppzSession {
             t.write().unwrap().checkpoint("analyze: task_registry + recipes");
         }
 
-        // Load project context if command requires it
-        // This will automatically link the project if not already linked
+        // Load project context if command requires it (bootstrap phase).
+        // This will automatically link the project if not already linked.
         if requires_project_context(&self.cli.command) {
             let client = self.get_api_client();
-            let auto_confirm = project_inspect_yes(&self.cli.command);
+            let auto_confirm = project_link_auto_confirm(&self.cli.command);
             match crate::project::ensure_project_link(
                 "command".to_string(),
                 client,

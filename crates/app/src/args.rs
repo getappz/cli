@@ -76,6 +76,9 @@ pub struct LsArgs {
     /// See deployments with deployment retention policies (e.g. -p errored=6m -p preview=12m)
     #[arg(long, short = 'p', value_name = "KEY=VALUE")]
     pub policy: Vec<String>,
+    /// Skip confirmation prompts (e.g. when linking project in non-interactive mode)
+    #[arg(long, short = 'y')]
+    pub yes: bool,
 }
 
 #[derive(Args, Debug, Clone)]

@@ -201,11 +201,6 @@ host_fn!(pub appz_reg_fail(
 // Recipe Import
 // ============================================================================
 
-#[derive(Debug, serde::Deserialize)]
-struct ImportInput {
-    path: String,
-}
-
 #[derive(Debug, serde::Serialize)]
 struct ImportResponse {
     success: bool,

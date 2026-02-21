@@ -254,6 +254,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: crate::commands::plugin::PluginCommands,
     },
+    /// Git tooling for Superpowers workflow (worktrees, branch finish, review prepare)
+    Git {
+        #[command(subcommand)]
+        command: crate::commands::git::GitCommands,
+    },
     /// Run the MCP (Model Context Protocol) server for AI assistants (Cursor, Claude, etc.)
     #[cfg(feature = "mcp")]
     #[command(name = "mcp")]

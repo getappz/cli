@@ -14,6 +14,7 @@ pub mod dev_server;
 pub mod domains;
 pub mod env;
 pub mod external;
+pub mod git;
 pub mod inspect;
 pub mod logs;
 pub mod pull;
@@ -87,6 +88,7 @@ pub use run::run;
 pub use self_upgrade::{append_self_update_instructions, upgrade_instructions_text};
 #[cfg(feature = "self_update")]
 pub use self_upgrade::{append_self_update_instructions, upgrade_instructions_text, SelfUpdate};
+pub use git::{run as git_run, GitCommands};
 pub use plugin::PluginCommands;
 pub use skills_lib::SkillsCommands;
 pub use switch::switch;

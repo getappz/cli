@@ -12,7 +12,8 @@
 //! - `VERCEL_TOKEN` environment variable (CI/CD)
 //! - `vercel login` interactive flow (local)
 
-use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -70,7 +71,7 @@ impl DeployProvider for VercelProvider {
 
     async fn check_prerequisites(
         &self,
-        sandbox: &dyn SandboxProvider,
+        sandbox: Arc<dyn SandboxProvider>,
     ) -> DeployResult<PrerequisiteStatus> {
         let cli_ok = sandbox.exec("vercel --version").await.map(|o| o.success()).unwrap_or(false);
         let auth_ok = has_env_var("VERCEL_TOKEN");
@@ -96,7 +97,7 @@ impl DeployProvider for VercelProvider {
         }
     }
 
-    async fn detect_config(&self, project_dir: &Path) -> DeployResult<Option<DetectedConfig>> {
+    async fn detect_config(&self, project_dir: PathBuf) -> DeployResult<Option<DetectedConfig>> {
         // Check for .vercel/project.json (linked project)
         let state_path = project_dir.join(".vercel/project.json");
         if state_path.exists() {
@@ -141,7 +142,7 @@ impl DeployProvider for VercelProvider {
         // Ensure Vercel CLI is installed via sandbox
         let cli_ok = ctx.sandbox.exec("vercel --version").await.map(|o| o.success()).unwrap_or(false);
         if !cli_ok {
-            self.ensure_cli(&*ctx.sandbox).await?;
+            self.ensure_cli(ctx.sandbox.clone()).await?;
         }
 
         // Run vercel link to connect the project
@@ -174,7 +175,7 @@ impl DeployProvider for VercelProvider {
         })
     }
 
-    async fn deploy(&self, ctx: &DeployContext) -> DeployResult<DeployOutput> {
+    async fn deploy(&self, ctx: DeployContext) -> DeployResult<DeployOutput> {
         let start = std::time::Instant::now();
 
         if ctx.dry_run {
@@ -223,7 +224,7 @@ impl DeployProvider for VercelProvider {
         })
     }
 
-    async fn deploy_preview(&self, ctx: &DeployContext) -> DeployResult<DeployOutput> {
+    async fn deploy_preview(&self, ctx: DeployContext) -> DeployResult<DeployOutput> {
         let start = std::time::Instant::now();
 
         if ctx.dry_run {
@@ -269,7 +270,7 @@ impl DeployProvider for VercelProvider {
         })
     }
 
-    async fn list_deployments(&self, ctx: &DeployContext) -> DeployResult<Vec<DeploymentInfo>> {
+    async fn list_deployments(&self, ctx: DeployContext) -> DeployResult<Vec<DeploymentInfo>> {
         let token_flag = get_env_var("VERCEL_TOKEN")
             .map(|t| format!(" --token {}", t))
             .unwrap_or_default();

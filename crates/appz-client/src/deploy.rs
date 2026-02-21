@@ -203,7 +203,7 @@ where
                 Some(async move {
                     let res = client
                         .deployments()
-                        .upload_file_with_progress(&deployment_id, &sha, &data, progress)
+                        .upload_file_with_progress(&deployment_id, &sha, data, progress)
                         .await
                         .map(|_| (path_str, size))
                         .map_err(|e| miette!("Upload file {} failed: {}", sha, e));

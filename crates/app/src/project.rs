@@ -144,8 +144,8 @@ pub fn read_project_link(cwd: &Path) -> Result<Option<ProjectLinkAndSettings>> {
 }
 
 /// Read project link from `.appz/project.json` (async version)
-pub async fn read_project_link_async(cwd: &Path) -> Result<Option<ProjectLinkAndSettings>> {
-    let appz_dir = get_appz_directory(cwd);
+pub async fn read_project_link_async(cwd: PathBuf) -> Result<Option<ProjectLinkAndSettings>> {
+    let appz_dir = get_appz_directory(&cwd);
     let project_json = appz_dir.join(PROJECT_JSON);
 
     // Use spawn_blocking for file I/O in async context (following workspace rules)
@@ -356,7 +356,7 @@ pub async fn resolve_project_context(
     }
 
     // Then check .appz/project.json (use async version in async context)
-    if let Some(link_and_settings) = read_project_link_async(&cwd).await? {
+    if let Some(link_and_settings) = read_project_link_async(cwd.clone()).await? {
         return resolve_and_validate_link(
             client,
             link_and_settings.link,
@@ -650,7 +650,7 @@ pub async fn setup_and_link(
         Either::Right(new_project_name) => {
             // Creating new project
             let root_directory = if !auto_confirm {
-                input_root_directory(&cwd, auto_confirm).await?
+                input_root_directory(cwd.clone(), auto_confirm).await?
             } else {
                 None
             };

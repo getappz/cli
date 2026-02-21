@@ -11,7 +11,8 @@
 //! - `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (CI/CD)
 //! - AWS CLI profile (local)
 
-use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -65,7 +66,7 @@ impl DeployProvider for AwsS3Provider {
 
     async fn check_prerequisites(
         &self,
-        sandbox: &dyn SandboxProvider,
+        sandbox: Arc<dyn SandboxProvider>,
     ) -> DeployResult<PrerequisiteStatus> {
         let cli_ok = sandbox.exec("aws --version").await.map(|o| o.success()).unwrap_or(false);
         let auth_ok = has_env_var("AWS_ACCESS_KEY_ID") && has_env_var("AWS_SECRET_ACCESS_KEY");
@@ -83,7 +84,7 @@ impl DeployProvider for AwsS3Provider {
         }
     }
 
-    async fn detect_config(&self, project_dir: &Path) -> DeployResult<Option<DetectedConfig>> {
+    async fn detect_config(&self, project_dir: PathBuf) -> DeployResult<Option<DetectedConfig>> {
         for name in &["s3-deploy.json", "samconfig.toml"] {
             if project_dir.join(name).exists() {
                 return Ok(Some(DetectedConfig {
@@ -115,7 +116,7 @@ impl DeployProvider for AwsS3Provider {
         })
     }
 
-    async fn deploy(&self, ctx: &DeployContext) -> DeployResult<DeployOutput> {
+    async fn deploy(&self, ctx: DeployContext) -> DeployResult<DeployOutput> {
         let start = std::time::Instant::now();
 
         if ctx.dry_run {
@@ -145,7 +146,7 @@ impl DeployProvider for AwsS3Provider {
 
         let cmd = format!("aws s3 sync {} {} --delete", output_str, s3_uri);
 
-        crate::ui::info(ctx, &format!("Syncing to S3 bucket: {}...", bucket));
+        crate::ui::info(&ctx, &format!("Syncing to S3 bucket: {}...", bucket));
 
         let result = ctx.exec(&cmd).await?;
 
@@ -158,7 +159,7 @@ impl DeployProvider for AwsS3Provider {
 
         // Invalidate CloudFront cache if configured
         if let Some(ref dist_id) = s3_config.cloudfront_distribution_id {
-            crate::ui::info(ctx, "Invalidating CloudFront cache...");
+            crate::ui::info(&ctx, "Invalidating CloudFront cache...");
             let invalidate_cmd = format!(
                 "aws cloudfront create-invalidation --distribution-id {} --paths '/*'",
                 dist_id
@@ -180,7 +181,7 @@ impl DeployProvider for AwsS3Provider {
         })
     }
 
-    async fn deploy_preview(&self, _ctx: &DeployContext) -> DeployResult<DeployOutput> {
+    async fn deploy_preview(&self, _ctx: DeployContext) -> DeployResult<DeployOutput> {
         Err(DeployError::Unsupported {
             provider: "AWS S3".into(),
             operation: "preview deployments (use a separate bucket for staging)".into(),

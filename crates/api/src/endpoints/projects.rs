@@ -25,14 +25,14 @@ impl Projects {
         since: Option<i64>,
         until: Option<i64>,
     ) -> Result<ProjectsListResponse, ApiError> {
-        let query_params = vec![
-            ("limit", limit.map(|l| l.to_string())),
-            ("since", since.map(|s| s.to_string())),
-            ("until", until.map(|u| u.to_string())),
+        let query_params: Vec<(String, Option<String>)> = vec![
+            ("limit".to_string(), limit.map(|l| l.to_string())),
+            ("since".to_string(), since.map(|s| s.to_string())),
+            ("until".to_string(), until.map(|u| u.to_string())),
         ];
 
         let path = format!("{}/projects", V0_PREFIX);
-        self.client.get_with_query(&path, &query_params).await
+        self.client.get_with_query(path, query_params).await
     }
 
     /// Create a new project
@@ -49,21 +49,22 @@ impl Projects {
             teamId: team_id,
         };
         let path = format!("{}/projects", V0_PREFIX);
-        self.client.post(&path, Some(request)).await
+        self.client.post(path, Some(request)).await
     }
 
     /// Get a project by ID
-    #[tracing::instrument(skip(self))]
-    pub async fn get(&self, id: &str) -> Result<Project, ApiError> {
+    #[tracing::instrument(skip(self, id))]
+    pub async fn get(&self, id: impl Into<String>) -> Result<Project, ApiError> {
+        let id = id.into();
         let path = format!("{}/projects/{}", V0_PREFIX, id);
-        self.client.get(&path).await
+        self.client.get(path).await
     }
 
     /// Delete a project
     #[tracing::instrument(skip(self))]
     pub async fn delete(&self, id: &str) -> Result<DeleteResponse, ApiError> {
         let path = format!("{}/projects/{}", V0_PREFIX, id);
-        self.client.delete(&path).await
+        self.client.delete(path).await
     }
 
     /// Create a project transfer request (Vercel-aligned).
@@ -78,7 +79,7 @@ impl Projects {
             callbackUrl: callback_url,
         };
         let path = format!("{}/projects/{}/transfer-request", V0_PREFIX, id_or_name);
-        self.client.post(&path, Some(body)).await
+        self.client.post(path, Some(body)).await
     }
 
     /// Accept a project transfer request by code into the current team.
@@ -89,9 +90,7 @@ impl Projects {
             V0_PREFIX,
             urlencoding::encode(code)
         );
-        self.client
-            .put_json(&path, serde_json::json!({}))
-            .await
+        self.client.put_json(path, serde_json::json!({})).await
     }
 
     /// List env vars for a project (Vercel-aligned).
@@ -102,15 +101,15 @@ impl Projects {
         target: Option<&str>,
         decrypt: bool,
     ) -> Result<ProjectEnvListResponse, ApiError> {
-        let mut query_params = vec![
-            ("decrypt", Some(decrypt.to_string())),
-            ("source", Some("appz-cli:env:ls".to_string())),
+        let mut query_params: Vec<(String, Option<String>)> = vec![
+            ("decrypt".to_string(), Some(decrypt.to_string())),
+            ("source".to_string(), Some("appz-cli:env:ls".to_string())),
         ];
         if let Some(t) = target {
-            query_params.push(("target", Some(t.to_string())));
+            query_params.push(("target".to_string(), Some(t.to_string())));
         }
         let path = format!("{}/projects/{}/env", V0_PREFIX, project_id);
-        self.client.get_with_query(&path, &query_params).await
+        self.client.get_with_query(path, query_params).await
     }
 
     /// Add an env var to a project.
@@ -123,7 +122,7 @@ impl Projects {
     ) -> Result<(), ApiError> {
         let suffix = if upsert { "?upsert=true" } else { "" };
         let path = format!("{}/projects/{}/env{}", V0_PREFIX, project_id, suffix);
-        let _ = self.client.post::<serde_json::Value>(&path, Some(body)).await?;
+        let _ = self.client.post::<serde_json::Value>(path, Some(body)).await?;
         Ok(())
     }
 
@@ -131,7 +130,7 @@ impl Projects {
     #[tracing::instrument(skip(self))]
     pub async fn remove_env(&self, project_id: &str, env_id: &str) -> Result<(), ApiError> {
         let path = format!("{}/projects/{}/env/{}", V0_PREFIX, project_id, env_id);
-        self.client.delete_no_content(&path).await
+        self.client.delete_no_content(path).await
     }
 
     /// Pull env vars (decrypted) for a target.

@@ -13,7 +13,8 @@
 //! - `GITHUB_TOKEN` environment variable (CI/CD, auto-set in GitHub Actions)
 //! - Git credentials (local)
 
-use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -67,7 +68,7 @@ impl DeployProvider for GitHubPagesProvider {
 
     async fn check_prerequisites(
         &self,
-        sandbox: &dyn SandboxProvider,
+        sandbox: Arc<dyn SandboxProvider>,
     ) -> DeployResult<PrerequisiteStatus> {
         let has_gh = sandbox.exec("gh --version").await.map(|o| o.success()).unwrap_or(false);
         let has_npx = sandbox.exec("npx --version").await.map(|o| o.success()).unwrap_or(false);
@@ -98,7 +99,7 @@ impl DeployProvider for GitHubPagesProvider {
         }
     }
 
-    async fn detect_config(&self, project_dir: &Path) -> DeployResult<Option<DetectedConfig>> {
+    async fn detect_config(&self, project_dir: PathBuf) -> DeployResult<Option<DetectedConfig>> {
         let workflows_dir = project_dir.join(".github/workflows");
         if workflows_dir.is_dir() {
             if let Ok(entries) = std::fs::read_dir(&workflows_dir) {
@@ -145,7 +146,7 @@ impl DeployProvider for GitHubPagesProvider {
         })
     }
 
-    async fn deploy(&self, ctx: &DeployContext) -> DeployResult<DeployOutput> {
+    async fn deploy(&self, ctx: DeployContext) -> DeployResult<DeployOutput> {
         let start = std::time::Instant::now();
 
         if ctx.dry_run {
@@ -173,7 +174,7 @@ impl DeployProvider for GitHubPagesProvider {
         }
 
         // Try to determine the pages URL from git remote
-        let url = detect_github_pages_url(ctx).await
+        let url = detect_github_pages_url(&ctx).await
             .unwrap_or_else(|| "https://github.io".into());
 
         Ok(DeployOutput {
@@ -188,7 +189,7 @@ impl DeployProvider for GitHubPagesProvider {
         })
     }
 
-    async fn deploy_preview(&self, _ctx: &DeployContext) -> DeployResult<DeployOutput> {
+    async fn deploy_preview(&self, _ctx: DeployContext) -> DeployResult<DeployOutput> {
         Err(DeployError::Unsupported {
             provider: "GitHub Pages".into(),
             operation: "preview deployments".into(),

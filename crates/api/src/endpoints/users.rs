@@ -18,7 +18,7 @@ impl Users {
     #[tracing::instrument(skip(self))]
     pub async fn get_current(&self) -> Result<User, ApiError> {
         let path = format!("{}/user", V0_PREFIX);
-        let response: BetterAuthUserResponse = self.client.get(&path).await?;
+        let response: BetterAuthUserResponse = self.client.get(path).await?;
         Ok(map_better_auth_user_to_cli_user(response.user))
     }
 
@@ -26,7 +26,7 @@ impl Users {
     #[tracing::instrument(skip(self))]
     pub async fn get_telemetry(&self) -> Result<TelemetryPreference, ApiError> {
         let path = format!("{}/user/telemetry", V0_PREFIX);
-        self.client.get(&path).await
+        self.client.get(path).await
     }
 
     /// Set telemetry preference for the current user (requires auth).
@@ -34,7 +34,7 @@ impl Users {
     pub async fn set_telemetry(&self, enabled: bool) -> Result<TelemetryPreference, ApiError> {
         let path = format!("{}/user/telemetry", V0_PREFIX);
         self.client
-            .put_json(&path, &TelemetryPreference { enabled })
+            .put_json(path, TelemetryPreference { enabled })
             .await
     }
 }

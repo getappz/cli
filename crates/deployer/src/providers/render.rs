@@ -12,7 +12,8 @@
 //! - `RENDER_API_KEY` environment variable (CI/CD)
 //! - Render dashboard (local)
 
-use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -64,7 +65,7 @@ impl DeployProvider for RenderProvider {
 
     async fn check_prerequisites(
         &self,
-        _sandbox: &dyn SandboxProvider,
+        _sandbox: Arc<dyn SandboxProvider>,
     ) -> DeployResult<PrerequisiteStatus> {
         // Render deploys via git push or dashboard; API key is optional
         if has_env_var("RENDER_API_KEY") {
@@ -77,7 +78,7 @@ impl DeployProvider for RenderProvider {
         }
     }
 
-    async fn detect_config(&self, project_dir: &Path) -> DeployResult<Option<DetectedConfig>> {
+    async fn detect_config(&self, project_dir: PathBuf) -> DeployResult<Option<DetectedConfig>> {
         for name in &["render.yaml", "render.yml"] {
             if project_dir.join(name).exists() {
                 return Ok(Some(DetectedConfig {
@@ -108,7 +109,7 @@ impl DeployProvider for RenderProvider {
         })
     }
 
-    async fn deploy(&self, ctx: &DeployContext) -> DeployResult<DeployOutput> {
+    async fn deploy(&self, ctx: DeployContext) -> DeployResult<DeployOutput> {
         if ctx.dry_run {
             return Ok(DeployOutput {
                 provider: "render".into(),
@@ -144,7 +145,7 @@ impl DeployProvider for RenderProvider {
         })
     }
 
-    async fn deploy_preview(&self, _ctx: &DeployContext) -> DeployResult<DeployOutput> {
+    async fn deploy_preview(&self, _ctx: DeployContext) -> DeployResult<DeployOutput> {
         Err(DeployError::Unsupported {
             provider: "Render".into(),
             operation: "preview deployments (use Render's PR preview feature via dashboard)".into(),

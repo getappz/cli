@@ -12,7 +12,8 @@
 //! - `FIREBASE_TOKEN` environment variable (CI/CD)
 //! - `firebase login` interactive flow (local)
 
-use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -63,7 +64,7 @@ impl DeployProvider for FirebaseProvider {
     }
 
     /// Override: the npm package is `firebase-tools`, not `firebase`.
-    async fn ensure_cli(&self, sandbox: &dyn SandboxProvider) -> DeployResult<()> {
+    async fn ensure_cli(&self, sandbox: Arc<dyn SandboxProvider>) -> DeployResult<()> {
         let _ = ui::status::info("Installing Firebase CLI...");
         let output = sandbox.exec("npm install -g firebase-tools").await?;
         if !output.success() {
@@ -77,7 +78,7 @@ impl DeployProvider for FirebaseProvider {
 
     async fn check_prerequisites(
         &self,
-        sandbox: &dyn SandboxProvider,
+        sandbox: Arc<dyn SandboxProvider>,
     ) -> DeployResult<PrerequisiteStatus> {
         let cli_ok = sandbox.exec("firebase --version").await.map(|o| o.success()).unwrap_or(false);
         let auth_ok = has_env_var("FIREBASE_TOKEN");
@@ -95,7 +96,7 @@ impl DeployProvider for FirebaseProvider {
         }
     }
 
-    async fn detect_config(&self, project_dir: &Path) -> DeployResult<Option<DetectedConfig>> {
+    async fn detect_config(&self, project_dir: PathBuf) -> DeployResult<Option<DetectedConfig>> {
         let firebaserc = project_dir.join(".firebaserc");
         if firebaserc.exists() {
             let content = tokio::fs::read_to_string(&firebaserc).await?;
@@ -136,7 +137,7 @@ impl DeployProvider for FirebaseProvider {
 
         let cli_ok = ctx.sandbox.exec("firebase --version").await.map(|o| o.success()).unwrap_or(false);
         if !cli_ok {
-            self.ensure_cli(&*ctx.sandbox).await?;
+            self.ensure_cli(ctx.sandbox.clone()).await?;
         }
 
         let _ = ui::status::info("Initializing Firebase Hosting...");
@@ -155,7 +156,7 @@ impl DeployProvider for FirebaseProvider {
         })
     }
 
-    async fn deploy(&self, ctx: &DeployContext) -> DeployResult<DeployOutput> {
+    async fn deploy(&self, ctx: DeployContext) -> DeployResult<DeployOutput> {
         let start = std::time::Instant::now();
 
         if ctx.dry_run {
@@ -201,7 +202,7 @@ impl DeployProvider for FirebaseProvider {
         })
     }
 
-    async fn deploy_preview(&self, ctx: &DeployContext) -> DeployResult<DeployOutput> {
+    async fn deploy_preview(&self, ctx: DeployContext) -> DeployResult<DeployOutput> {
         let start = std::time::Instant::now();
 
         if ctx.dry_run {

@@ -283,7 +283,11 @@ impl Client {
 
     /// Execute a GET request and deserialize JSON response
     #[tracing::instrument(skip(self))]
-    pub async fn get<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, ApiError> {
+    pub async fn get<T: serde::de::DeserializeOwned>(
+        &self,
+        path: impl Into<String>,
+    ) -> Result<T, ApiError> {
+        let path = path.into();
         let url = format!("{}{}", self.base_url, path);
 
         let response = self
@@ -294,10 +298,10 @@ impl Client {
     }
 
     /// Execute a POST request with JSON body and deserialize JSON response
-    #[tracing::instrument(skip(self, body))]
+    #[tracing::instrument(skip(self, path, body))]
     pub async fn post<T: serde::de::DeserializeOwned>(
         &self,
-        path: &str,
+        path: impl Into<String>,
         body: Option<impl serde::Serialize>,
     ) -> Result<T, ApiError> {
         let response = self.post_raw(path, body).await?;
@@ -306,12 +310,13 @@ impl Client {
 
     /// Execute a POST request with JSON body and return the raw response.
     /// Caller must handle status and parse body (e.g. for create_deployment which has special handling).
-    #[tracing::instrument(skip(self, body))]
+    #[tracing::instrument(skip(self, path, body))]
     pub async fn post_raw(
         &self,
-        path: &str,
+        path: impl Into<String>,
         body: Option<impl serde::Serialize>,
     ) -> Result<reqwest_middleware::reqwest::Response, ApiError> {
+        let path = path.into();
         let url = format!("{}{}", self.base_url, path);
 
         let json_body = if let Some(ref body) = body {
@@ -336,12 +341,13 @@ impl Client {
     }
 
     /// Execute a POST request with JSON body and return response body as text
-    #[tracing::instrument(skip(self, body))]
+    #[tracing::instrument(skip(self, path, body))]
     pub async fn post_return_text(
         &self,
-        path: &str,
+        path: impl Into<String>,
         body: Option<impl serde::Serialize>,
     ) -> Result<String, ApiError> {
+        let path = path.into();
         let url = format!("{}{}", self.base_url, path);
 
         let json_body = if let Some(ref body) = body {
@@ -382,20 +388,22 @@ impl Client {
 
     /// Execute a POST request with raw bytes and custom headers (e.g. file upload).
     /// Body is cloned for retries.
-    #[tracing::instrument(skip(self, body))]
+    #[tracing::instrument(skip(self, path, body, headers))]
     pub async fn post_bytes(
         &self,
-        path: &str,
+        path: impl Into<String>,
         body: Vec<u8>,
-        headers: &[(&str, &str)],
+        headers: impl Into<Vec<(String, String)>>,
     ) -> Result<reqwest_middleware::reqwest::Response, ApiError> {
+        let path = path.into();
+        let headers = headers.into();
         let url = format!("{}{}", self.base_url, path);
 
         let response = self
             .execute_with_auth_retry(&url, || {
                 let mut req = self.http_client.request(Method::POST, &url).body(body.clone());
-                for (k, v) in headers {
-                    req = req.header(*k, *v);
+                for (k, v) in &headers {
+                    req = req.header(k.as_str(), v.as_str());
                 }
                 req
             })
@@ -406,16 +414,19 @@ impl Client {
 
     /// Execute a POST request with streaming body and byte-level progress.
     /// Streams data in 16KB chunks (Vercel-aligned); invokes `on_progress` per chunk.
-    #[tracing::instrument(skip(self, data, on_progress))]
+    #[tracing::instrument(skip(self, path, data, headers, on_progress))]
     pub async fn post_bytes_stream(
         &self,
-        path: &str,
-        data: &[u8],
-        headers: &[(&str, &str)],
+        path: impl Into<String>,
+        data: impl Into<Vec<u8>>,
+        headers: impl Into<Vec<(String, String)>>,
         on_progress: Arc<dyn Fn(u64) + Send + Sync>,
     ) -> Result<reqwest_middleware::reqwest::Response, ApiError> {
         const CHUNK_SIZE: usize = 16 * 1024; // 16KB - Vercel default
 
+        let path = path.into();
+        let data = data.into();
+        let headers = headers.into();
         let url = format!("{}{}", self.base_url, path);
 
         let response = self
@@ -433,8 +444,8 @@ impl Client {
                 let body = Body::wrap_stream(body_stream);
 
                 let mut req = self.http_client.request(Method::POST, &url).body(body);
-                for (k, v) in headers {
-                    req = req.header(*k, *v);
+                for (k, v) in &headers {
+                    req = req.header(k.as_str(), v.as_str());
                 }
                 req
             })
@@ -444,12 +455,13 @@ impl Client {
     }
 
     /// Execute a PUT request with JSON body and deserialize JSON response
-    #[tracing::instrument(skip(self, body))]
+    #[tracing::instrument(skip(self, path, body))]
     pub async fn put_json<T: serde::de::DeserializeOwned>(
         &self,
-        path: &str,
+        path: impl Into<String>,
         body: impl serde::Serialize,
     ) -> Result<T, ApiError> {
+        let path = path.into();
         let url = format!("{}{}", self.base_url, path);
         let json_body = serde_json::to_string(&body).map_err(ApiError::Json)?;
 
@@ -466,12 +478,13 @@ impl Client {
     }
 
     /// Execute a PATCH request with JSON body and deserialize JSON response
-    #[tracing::instrument(skip(self, body))]
+    #[tracing::instrument(skip(self, path, body))]
     pub async fn patch<T: serde::de::DeserializeOwned>(
         &self,
-        path: &str,
+        path: impl Into<String>,
         body: Option<impl serde::Serialize>,
     ) -> Result<T, ApiError> {
+        let path = path.into();
         let url = format!("{}{}", self.base_url, path);
 
         // Prepare request body
@@ -497,8 +510,12 @@ impl Client {
     }
 
     /// Execute a DELETE request
-    #[tracing::instrument(skip(self))]
-    pub async fn delete<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, ApiError> {
+    #[tracing::instrument(skip(self, path))]
+    pub async fn delete<T: serde::de::DeserializeOwned>(
+        &self,
+        path: impl Into<String>,
+    ) -> Result<T, ApiError> {
+        let path = path.into();
         let url = format!("{}{}", self.base_url, path);
 
         let response = self
@@ -518,8 +535,12 @@ impl Client {
     }
 
     /// Execute a DELETE request that may return 204 No Content
-    #[tracing::instrument(skip(self))]
-    pub async fn delete_no_content(&self, path: &str) -> Result<(), ApiError> {
+    #[tracing::instrument(skip(self, path))]
+    pub async fn delete_no_content(
+        &self,
+        path: impl Into<String>,
+    ) -> Result<(), ApiError> {
+        let path = path.into();
         let url = format!("{}{}", self.base_url, path);
 
         let response = self
@@ -559,15 +580,17 @@ impl Client {
     }
 
     /// Execute a GET request with query parameters
-    #[tracing::instrument(skip(self, query_params))]
+    #[tracing::instrument(skip(self, path, query_params))]
     pub async fn get_with_query<T: serde::de::DeserializeOwned>(
         &self,
-        path: &str,
-        query_params: &[(&str, Option<String>)],
+        path: impl Into<String>,
+        query_params: impl Into<Vec<(String, Option<String>)>>,
     ) -> Result<T, ApiError> {
+        let path = path.into();
+        let query_params = query_params.into();
         // Build query string manually
         let mut query_parts = Vec::new();
-        for (key, value) in query_params {
+        for (key, value) in &query_params {
             if let Some(val) = value {
                 query_parts.push(format!("{}={}", key, urlencoding::encode(val)));
             }

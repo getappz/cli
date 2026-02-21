@@ -463,17 +463,17 @@ pub async fn deploy(
     let result = if !json_output && !dry_run {
         let sp = ui::progress::spinner(&format!("Deploying to {}...", deploy_label));
         let r = if is_preview {
-            provider.deploy_preview(&ctx).await
+            provider.deploy_preview(ctx.clone()).await
         } else {
-            provider.deploy(&ctx).await
+            provider.deploy(ctx.clone()).await
         };
         let msg = if r.is_ok() { "Deployed!" } else { "Failed" };
         sp.finish_with_message(msg);
         r
     } else if is_preview {
-        provider.deploy_preview(&ctx).await
+        provider.deploy_preview(ctx).await
     } else {
-        provider.deploy(&ctx).await
+        provider.deploy(ctx).await
     };
 
     let output = result.map_err(|e| miette!("{}", e))?;
@@ -595,7 +595,7 @@ pub async fn deploy_list(
         .with_config(deploy_config);
 
     let deployments = provider
-        .list_deployments(&ctx)
+        .list_deployments(ctx)
         .await
         .map_err(|e| miette!("{}", e))?;
 
@@ -667,7 +667,7 @@ async fn resolve_provider(
                 get_provider(&platform.slug).map_err(|e| miette!("{}", e))
             } else {
                 // Prompt the user to choose
-                let slug = prompt_detected_selection(&detected).await?;
+                let slug = prompt_detected_selection(detected).await?;
                 get_provider(&slug).map_err(|e| miette!("{}", e))
             }
         }
@@ -683,7 +683,7 @@ async fn handle_prerequisites(
     use deployer::PrerequisiteStatus;
 
     let status = provider
-        .check_prerequisites(&*sandbox)
+        .check_prerequisites(sandbox.clone())
         .await
         .map_err(|e| miette!("{}", e))?;
 
@@ -836,9 +836,9 @@ async fn deploy_to_all_targets(
 
         handles.push(async move {
             let result = if preview {
-                provider.deploy_preview(&ctx).await
+                provider.deploy_preview(ctx).await
             } else {
-                provider.deploy(&ctx).await
+                provider.deploy(ctx).await
             };
             (slug_owned, result)
         });
@@ -1044,7 +1044,7 @@ async fn prompt_provider_selection() -> Result<String> {
 }
 
 /// Prompt the user to select from detected platforms.
-async fn prompt_detected_selection(detected: &[DetectedPlatform]) -> Result<String> {
+async fn prompt_detected_selection(detected: Vec<DetectedPlatform>) -> Result<String> {
     let options: Vec<String> = detected
         .iter()
         .map(|p| format!("{} (detected: {})", p.name, p.config_files.join(", ")))

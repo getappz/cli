@@ -22,10 +22,10 @@ impl Domains {
         until: Option<i64>,
         team_id: Option<String>,
     ) -> Result<DomainsListResponse, ApiError> {
-        let query_params = vec![
-            ("limit", limit.map(|l| l.to_string())),
-            ("since", since.map(|s| s.to_string())),
-            ("until", until.map(|u| u.to_string())),
+        let query_params: Vec<(String, Option<String>)> = vec![
+            ("limit".to_string(), limit.map(|l| l.to_string())),
+            ("since".to_string(), since.map(|s| s.to_string())),
+            ("until".to_string(), until.map(|u| u.to_string())),
         ];
 
         // Temporarily set team_id if provided
@@ -34,7 +34,7 @@ impl Domains {
         }
 
         let path = format!("{}/domains", V0_PREFIX);
-        let result = self.client.get_with_query(&path, &query_params).await;
+        let result = self.client.get_with_query(path, query_params).await;
 
         // Reset team_id if we set it
         if team_id.is_some() {
@@ -45,8 +45,13 @@ impl Domains {
     }
 
     /// Delete a domain
-    #[tracing::instrument(skip(self))]
-    pub async fn delete(&self, domain: &str, team_id: Option<String>) -> Result<(), ApiError> {
+    #[tracing::instrument(skip(self, domain))]
+    pub async fn delete(
+        &self,
+        domain: impl Into<String>,
+        team_id: Option<String>,
+    ) -> Result<(), ApiError> {
+        let domain = domain.into();
         let path = format!("{}/domains/{}", V0_PREFIX, domain);
 
         // Temporarily set team_id if provided
@@ -55,7 +60,7 @@ impl Domains {
         }
 
         // DELETE /domains/{domain} returns 204 No Content
-        let result = self.client.delete_no_content(&path).await;
+        let result = self.client.delete_no_content(path).await;
 
         // Reset team_id if we set it
         if team_id.is_some() {

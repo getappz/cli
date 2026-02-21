@@ -64,18 +64,13 @@ impl Deployments {
                 query_params.push((format!("policy-{}", k), Some(v)));
             }
         }
-        let query_refs: Vec<(&str, Option<String>)> = query_params
-            .iter()
-            .map(|(k, v)| (k.as_str(), v.clone()))
-            .collect();
-
         // Temporarily set team_id if provided
         if let Some(ref team_id_val) = team_id {
             self.client.set_team_id(Some(team_id_val.clone())).await;
         }
 
         let path = format!("{}/deployments", V0_PREFIX);
-        let result = self.client.get_with_query(&path, &query_refs).await;
+        let result = self.client.get_with_query(path, query_params).await;
 
         // Reset team_id if we set it
         if team_id.is_some() {
@@ -86,29 +81,39 @@ impl Deployments {
     }
 
     /// Get a deployment by ID or URL
-    #[tracing::instrument(skip(self))]
-    pub async fn get(&self, deployment_id_or_url: &str) -> Result<Deployment, ApiError> {
-        let id = deployment_id_for_path(deployment_id_or_url);
+    #[tracing::instrument(skip(self, deployment_id_or_url))]
+    pub async fn get(
+        &self,
+        deployment_id_or_url: impl Into<String>,
+    ) -> Result<Deployment, ApiError> {
+        let id = deployment_id_for_path(&deployment_id_or_url.into());
         let path = format!("{}/deployments/{}", V0_PREFIX, id);
-        self.client.get(&path).await
+        self.client.get(path).await
     }
 
     /// Promote a deployment to production
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self, project_id, deployment_id))]
     pub async fn promote(
         &self,
-        project_id: &str,
-        deployment_id: &str,
+        project_id: impl Into<String>,
+        deployment_id: impl Into<String>,
         team_id: Option<String>,
     ) -> Result<DeleteResponse, ApiError> {
-        let path = format!("{}/projects/{}/promote/{}", V0_PREFIX, project_id, deployment_id);
+        let project_id = project_id.into();
+        let deployment_id = deployment_id.into();
+        let path = format!(
+            "{}/projects/{}/promote/{}",
+            V0_PREFIX,
+            project_id,
+            deployment_id
+        );
 
         // Temporarily set team_id if provided
         if let Some(ref team_id_val) = team_id {
             self.client.set_team_id(Some(team_id_val.clone())).await;
         }
 
-        let result = self.client.post(&path, Some(serde_json::json!({}))).await;
+        let result = self.client.post(path, Some(serde_json::json!({}))).await;
 
         // Reset team_id if we set it
         if team_id.is_some() {
@@ -119,21 +124,28 @@ impl Deployments {
     }
 
     /// Rollback to a previous deployment
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self, project_id, deployment_id))]
     pub async fn rollback(
         &self,
-        project_id: &str,
-        deployment_id: &str,
+        project_id: impl Into<String>,
+        deployment_id: impl Into<String>,
         team_id: Option<String>,
     ) -> Result<DeleteResponse, ApiError> {
-        let path = format!("{}/projects/{}/rollback/{}", V0_PREFIX, project_id, deployment_id);
+        let project_id = project_id.into();
+        let deployment_id = deployment_id.into();
+        let path = format!(
+            "{}/projects/{}/rollback/{}",
+            V0_PREFIX,
+            project_id,
+            deployment_id
+        );
 
         // Temporarily set team_id if provided
         if let Some(ref team_id_val) = team_id {
             self.client.set_team_id(Some(team_id_val.clone())).await;
         }
 
-        let result = self.client.post(&path, Some(serde_json::json!({}))).await;
+        let result = self.client.post(path, Some(serde_json::json!({}))).await;
 
         // Reset team_id if we set it
         if team_id.is_some() {
@@ -153,7 +165,7 @@ impl Deployments {
         payload: DeploymentCreateRequest,
     ) -> Result<DeploymentCreateResult, ApiError> {
         let path = format!("{}/deployments", V0_PREFIX);
-        let response = self.client.post_raw(&path, Some(&payload)).await?;
+        let response = self.client.post_raw(path, Some(payload)).await?;
         let status = response.status();
         let headers = response.headers().clone();
         let text = response
@@ -203,24 +215,23 @@ impl Deployments {
 
     /// Upload a single file to a deployment (content-addressed by SHA).
     /// Uses `POST /v0/deployments/:id/files` with `x-now-digest` and `x-now-size` headers.
-    #[tracing::instrument(skip(self, data))]
+    #[tracing::instrument(skip(self, deployment_id, sha, data))]
     pub async fn upload_file(
         &self,
-        deployment_id: &str,
-        sha: &str,
+        deployment_id: impl Into<String>,
+        sha: impl Into<String>,
         data: Vec<u8>,
     ) -> Result<(), ApiError> {
+        let deployment_id = deployment_id.into();
+        let sha = sha.into();
         let path = format!("{}/deployments/{}/files", V0_PREFIX, deployment_id);
         let size_str = data.len().to_string();
-        let headers: [(&str, &str); 3] = [
-            ("Content-Type", "application/octet-stream"),
-            ("x-now-digest", sha),
-            ("x-now-size", size_str.as_str()),
+        let headers = vec![
+            ("Content-Type".to_string(), "application/octet-stream".to_string()),
+            ("x-now-digest".to_string(), sha),
+            ("x-now-size".to_string(), size_str),
         ];
-        let response = self
-            .client
-            .post_bytes(&path, data, &headers)
-            .await?;
+        let response = self.client.post_bytes(path, data, headers).await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -232,24 +243,27 @@ impl Deployments {
     }
 
     /// Upload a file with byte-level progress (streaming body, 16KB chunks).
-    #[tracing::instrument(skip(self, data, on_progress))]
+    #[tracing::instrument(skip(self, deployment_id, sha, data, on_progress))]
     pub async fn upload_file_with_progress(
         &self,
-        deployment_id: &str,
-        sha: &str,
-        data: &[u8],
+        deployment_id: impl Into<String>,
+        sha: impl Into<String>,
+        data: impl Into<Vec<u8>>,
         on_progress: std::sync::Arc<dyn Fn(u64) + Send + Sync>,
     ) -> Result<(), ApiError> {
+        let deployment_id = deployment_id.into();
+        let sha = sha.into();
         let path = format!("{}/deployments/{}/files", V0_PREFIX, deployment_id);
+        let data = data.into();
         let size_str = data.len().to_string();
-        let headers: [(&str, &str); 3] = [
-            ("Content-Type", "application/octet-stream"),
-            ("x-now-digest", sha),
-            ("x-now-size", size_str.as_str()),
+        let headers = vec![
+            ("Content-Type".to_string(), "application/octet-stream".to_string()),
+            ("x-now-digest".to_string(), sha),
+            ("x-now-size".to_string(), size_str),
         ];
         let response = self
             .client
-            .post_bytes_stream(&path, data, &headers, on_progress)
+            .post_bytes_stream(path, data, headers, on_progress)
             .await?;
 
         if !response.status().is_success() {
@@ -263,19 +277,17 @@ impl Deployments {
 
     /// Continue deployment after uploading files (Vercel-aligned flow).
     /// May return `MissingFiles` if more files are needed.
-    #[tracing::instrument(skip(self, files))]
+    #[tracing::instrument(skip(self, deployment_id, files))]
     pub async fn continue_deployment(
         &self,
-        deployment_id: &str,
+        deployment_id: impl Into<String>,
         files: Vec<PreparedFile>,
     ) -> Result<DeploymentCreateResult, ApiError> {
+        let deployment_id = deployment_id.into();
         let path = format!("{}/deployments/{}/continue", V0_PREFIX, deployment_id);
         let body = serde_json::json!({ "files": files });
 
-        let response = self
-            .client
-            .post_raw(&path, Some(&body))
-            .await?;
+        let response = self.client.post_raw(path, Some(body)).await?;
         let status = response.status();
         let headers = response.headers().clone();
         let text = response
@@ -324,18 +336,24 @@ impl Deployments {
     }
 
     /// Get logs for a deployment.
-    #[tracing::instrument(skip(self))]
-    pub async fn logs(&self, deployment_id_or_url: &str) -> Result<DeploymentLogsResponse, ApiError> {
-        let id = deployment_id_for_path(deployment_id_or_url);
+    #[tracing::instrument(skip(self, deployment_id_or_url))]
+    pub async fn logs(
+        &self,
+        deployment_id_or_url: impl Into<String>,
+    ) -> Result<DeploymentLogsResponse, ApiError> {
+        let id = deployment_id_for_path(&deployment_id_or_url.into());
         let path = format!("{}/deployments/{}/logs", V0_PREFIX, id);
-        self.client.get(&path).await
+        self.client.get(path).await
     }
 
     /// Delete a deployment by ID or URL (soft delete)
-    #[tracing::instrument(skip(self))]
-    pub async fn delete(&self, deployment_id_or_url: &str) -> Result<DeleteResponse, ApiError> {
-        let id = deployment_id_for_path(deployment_id_or_url);
+    #[tracing::instrument(skip(self, deployment_id_or_url))]
+    pub async fn delete(
+        &self,
+        deployment_id_or_url: impl Into<String>,
+    ) -> Result<DeleteResponse, ApiError> {
+        let id = deployment_id_for_path(&deployment_id_or_url.into());
         let path = format!("{}/deployments/{}", V0_PREFIX, id);
-        self.client.delete(&path).await
+        self.client.delete(path).await
     }
 }

@@ -25,14 +25,14 @@ impl Teams {
         since: Option<i64>,
         until: Option<i64>,
     ) -> Result<TeamsListResponse, ApiError> {
-        let query_params = vec![
-            ("limit", limit.map(|l| l.to_string())),
-            ("since", since.map(|s| s.to_string())),
-            ("until", until.map(|u| u.to_string())),
+        let query_params: Vec<(String, Option<String>)> = vec![
+            ("limit".to_string(), limit.map(|l| l.to_string())),
+            ("since".to_string(), since.map(|s| s.to_string())),
+            ("until".to_string(), until.map(|u| u.to_string())),
         ];
 
         let path = format!("{}/teams", V0_PREFIX);
-        self.client.get_with_query(&path, &query_params).await
+        self.client.get_with_query(path, query_params).await
     }
 
     /// Create a new team
@@ -40,14 +40,15 @@ impl Teams {
     pub async fn create(&self, slug: String, name: Option<String>) -> Result<Team, ApiError> {
         let request = CreateTeamRequest { slug, name };
         let path = format!("{}/teams", V0_PREFIX);
-        self.client.post(&path, Some(request)).await
+        self.client.post(path, Some(request)).await
     }
 
     /// Get a team by ID
-    #[tracing::instrument(skip(self))]
-    pub async fn get(&self, id: &str) -> Result<Team, ApiError> {
+    #[tracing::instrument(skip(self, id))]
+    pub async fn get(&self, id: impl Into<String>) -> Result<Team, ApiError> {
+        let id = id.into();
         let path = format!("{}/teams/{}", V0_PREFIX, id);
-        self.client.get(&path).await
+        self.client.get(path).await
     }
 
     /// Update a team
@@ -61,14 +62,14 @@ impl Teams {
     ) -> Result<Team, ApiError> {
         let path = format!("{}/teams/{}", V0_PREFIX, id);
         let request = UpdateTeamRequest { slug, name, avatar };
-        self.client.patch(&path, Some(request)).await
+        self.client.patch(path, Some(request)).await
     }
 
     /// Delete a team
     #[tracing::instrument(skip(self))]
     pub async fn delete(&self, id: &str) -> Result<DeleteResponse, ApiError> {
         let path = format!("{}/teams/{}", V0_PREFIX, id);
-        self.client.delete(&path).await
+        self.client.delete(path).await
     }
 
     /// List members of a team
@@ -81,13 +82,13 @@ impl Teams {
         until: Option<i64>,
     ) -> Result<MembersListResponse, ApiError> {
         let path = format!("{}/teams/{}/members", V0_PREFIX, id);
-        let query_params = vec![
-            ("limit", limit.map(|l| l.to_string())),
-            ("since", since.map(|s| s.to_string())),
-            ("until", until.map(|u| u.to_string())),
+        let query_params: Vec<(String, Option<String>)> = vec![
+            ("limit".to_string(), limit.map(|l| l.to_string())),
+            ("since".to_string(), since.map(|s| s.to_string())),
+            ("until".to_string(), until.map(|u| u.to_string())),
         ];
 
-        self.client.get_with_query(&path, &query_params).await
+        self.client.get_with_query(path, query_params).await
     }
 
     /// Add a member to a team
@@ -103,14 +104,14 @@ impl Teams {
             userId: user_id,
             roleId: role_id,
         };
-        self.client.post(&path, Some(request)).await
+        self.client.post(path, Some(request)).await
     }
 
     /// Remove a member from a team
     #[tracing::instrument(skip(self))]
     pub async fn remove_member(&self, id: &str, user_id: &str) -> Result<(), ApiError> {
         let path = format!("{}/teams/{}/members/{}", V0_PREFIX, id, user_id);
-        self.client.delete_no_content(&path).await
+        self.client.delete_no_content(path).await
     }
 
     /// List invitations for a team
@@ -123,13 +124,13 @@ impl Teams {
         until: Option<i64>,
     ) -> Result<InvitationsListResponse, ApiError> {
         let path = format!("{}/teams/{}/invitations", V0_PREFIX, id);
-        let query_params = vec![
-            ("limit", limit.map(|l| l.to_string())),
-            ("since", since.map(|s| s.to_string())),
-            ("until", until.map(|u| u.to_string())),
+        let query_params: Vec<(String, Option<String>)> = vec![
+            ("limit".to_string(), limit.map(|l| l.to_string())),
+            ("since".to_string(), since.map(|s| s.to_string())),
+            ("until".to_string(), until.map(|u| u.to_string())),
         ];
 
-        self.client.get_with_query(&path, &query_params).await
+        self.client.get_with_query(path, query_params).await
     }
 
     /// Create an invitation for a team
@@ -146,13 +147,13 @@ impl Teams {
             email,
             roleId: role_id,
         };
-        self.client.post(&path, Some(request)).await
+        self.client.post(path, Some(request)).await
     }
 
     /// Delete an invitation
     #[tracing::instrument(skip(self))]
     pub async fn delete_invitation(&self, id: &str, invitation_id: &str) -> Result<(), ApiError> {
         let path = format!("{}/teams/{}/invitations/{}", V0_PREFIX, id, invitation_id);
-        self.client.delete_no_content(&path).await
+        self.client.delete_no_content(path).await
     }
 }

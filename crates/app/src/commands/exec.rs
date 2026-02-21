@@ -5,9 +5,11 @@ use crate::session::AppzSession;
 use starbase::AppResult;
 
 pub async fn exec(session: AppzSession, args: crate::args::ExecArgs) -> AppResult {
-    let cwd = args
-        .cwd
-        .unwrap_or_else(|| session.working_dir.clone())
+    let cwd = match &args.cwd {
+        Some(s) => std::path::PathBuf::from(s),
+        None => session.working_dir.clone(),
+    };
+    let cwd = cwd
         .canonicalize()
         .map_err(|e| miette::miette!("Invalid cwd: {}", e))?;
 

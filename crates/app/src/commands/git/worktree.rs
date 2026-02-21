@@ -104,7 +104,7 @@ async fn create(
     }
 
     if verify {
-        run_baseline_tests(&worktree_dir).await?;
+        crate::verify::run_tests(&worktree_dir).await?;
     }
 
     Ok(None)
@@ -157,57 +157,6 @@ async fn run_project_setup(workdir: &PathBuf) -> AppResult {
             .map_err(|e| miette::miette!("go mod download failed: {}", e))?;
         if !status.success() {
             return Err(miette::miette!("go mod download failed"));
-        }
-    }
-    Ok(None)
-}
-
-async fn run_baseline_tests(workdir: &PathBuf) -> AppResult {
-    if workdir.join("package.json").exists() {
-        ui::status::info("Running npm test...");
-        let status = tokio::process::Command::new("npm")
-            .arg("test")
-            .current_dir(workdir)
-            .status()
-            .await
-            .map_err(|e| miette::miette!("npm test failed: {}", e))?;
-        if !status.success() {
-            return Err(miette::miette!("Baseline tests failed"));
-        }
-    }
-    if workdir.join("Cargo.toml").exists() {
-        ui::status::info("Running cargo test...");
-        let status = tokio::process::Command::new("cargo")
-            .arg("test")
-            .current_dir(workdir)
-            .status()
-            .await
-            .map_err(|e| miette::miette!("cargo test failed: {}", e))?;
-        if !status.success() {
-            return Err(miette::miette!("Baseline tests failed"));
-        }
-    }
-    if workdir.join("pyproject.toml").exists() || workdir.join("setup.py").exists() {
-        ui::status::info("Running pytest...");
-        let status = tokio::process::Command::new("pytest")
-            .current_dir(workdir)
-            .status()
-            .await
-            .map_err(|e| miette::miette!("pytest failed: {}", e))?;
-        if !status.success() {
-            return Err(miette::miette!("Baseline tests failed"));
-        }
-    }
-    if workdir.join("go.mod").exists() {
-        ui::status::info("Running go test...");
-        let status = tokio::process::Command::new("go")
-            .args(["test", "./..."])
-            .current_dir(workdir)
-            .status()
-            .await
-            .map_err(|e| miette::miette!("go test failed: {}", e))?;
-        if !status.success() {
-            return Err(miette::miette!("Baseline tests failed"));
         }
     }
     Ok(None)

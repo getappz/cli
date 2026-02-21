@@ -50,9 +50,9 @@ pub struct ExecArgs {
     /// Output as JSON (stdout, stderr, exit_code)
     #[arg(long)]
     pub json: bool,
-    /// Working directory
+    /// Working directory (matches global --cwd type for consistency)
     #[arg(long)]
-    pub cwd: Option<std::path::PathBuf>,
+    pub cwd: Option<String>,
     /// Use shell for pipes/redirects
     #[arg(long)]
     pub shell: bool,

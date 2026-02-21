@@ -7,5 +7,5 @@ pub mod deploy;
 pub mod file_tree;
 pub mod upload;
 
-pub use deploy::{deploy_prebuilt, DeployContext, DeployOutput};
+pub use deploy::{deploy_prebuilt, deploy_prebuilt_stream, DeployContext, DeployEvent, DeployOutput};
 pub use file_tree::build_file_tree;

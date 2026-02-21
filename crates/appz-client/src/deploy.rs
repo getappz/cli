@@ -11,6 +11,38 @@ use std::path::Path;
 use crate::file_tree::{build_file_tree, build_hashed_files};
 use crate::upload::prepare_files;
 
+/// Events emitted during deployment (Vercel-aligned).
+#[derive(Debug, Clone)]
+pub enum DeployEvent {
+    Preparing,
+    FileCount {
+        total: usize,
+        missing: usize,
+        total_bytes: u64,
+    },
+    FileUploaded {
+        path: String,
+        bytes: u64,
+    },
+    UploadProgress {
+        uploaded_bytes: u64,
+        total_bytes: u64,
+    },
+    Created {
+        deployment_id: String,
+        url: String,
+        inspect_url: Option<String>,
+        is_production: bool,
+    },
+    Processing,
+    Ready {
+        url: String,
+        inspect_url: Option<String>,
+        is_production: bool,
+    },
+    Error(String),
+}
+
 /// Context for a prebuilt deployment.
 #[derive(Debug, Clone)]
 pub struct DeployContext {
@@ -40,13 +72,13 @@ pub struct DeployOutput {
     pub status: String,
 }
 
-/// Deploy prebuilt output to Appz.
+/// Deploy prebuilt output to Appz with event stream.
 ///
-/// 1. Build file tree and hashes
-/// 2. Create deployment with file list
-/// 3. If missing_files, upload each file then call continue
-/// 4. Return deployment URL when ready
-pub async fn deploy_prebuilt(client: &Client, ctx: &DeployContext) -> Result<DeployOutput> {
+/// Invokes `on_event` for each deployment phase. See `DeployEvent` for variants.
+pub async fn deploy_prebuilt_stream<F>(client: &Client, ctx: &DeployContext, mut on_event: F) -> Result<DeployOutput>
+where
+    F: FnMut(DeployEvent),
+{
     let output_dir = Path::new(&ctx.output_dir);
     let tree = build_file_tree(output_dir, &[])?;
     let files_by_sha = build_hashed_files(output_dir, &tree)?;
@@ -57,6 +89,8 @@ pub async fn deploy_prebuilt(client: &Client, ctx: &DeployContext) -> Result<Dep
             ctx.output_dir.display()
         ));
     }
+
+    on_event(DeployEvent::Preparing);
 
     let prepared = prepare_files(output_dir, &files_by_sha);
     let payload = DeploymentCreateRequest {
@@ -80,41 +114,124 @@ pub async fn deploy_prebuilt(client: &Client, ctx: &DeployContext) -> Result<Dep
         .map_err(|e| miette!("Create deployment failed: {}", e))?;
 
     match result {
-        DeploymentCreateResult::Created(d) => return extract_output(&d),
+        DeploymentCreateResult::Created(d) => {
+            let is_production = ctx.target == "production" || ctx.target == "prod";
+            let url = d
+                .url
+                .clone()
+                .unwrap_or_else(|| format!("https://{}", d.id));
+            on_event(DeployEvent::Created {
+                deployment_id: d.id.clone(),
+                url: url.clone(),
+                inspect_url: None,
+                is_production,
+            });
+            on_event(DeployEvent::Processing);
+            on_event(DeployEvent::Ready {
+                url,
+                inspect_url: None,
+                is_production,
+            });
+            extract_output(&d)
+        }
         DeploymentCreateResult::MissingFiles {
             deployment_id,
             missing,
         } => {
             if deployment_id.is_empty() {
+                on_event(DeployEvent::Error("Backend returned missing_files but no deploymentId.".to_string()));
                 return Err(miette!(
                     "Backend returned missing_files but no deploymentId. \
                      API should return deploymentId when files are required."
                 ));
             }
+
+            let total_bytes: u64 = missing
+                .iter()
+                .filter_map(|sha| files_by_sha.get(sha))
+                .map(|fr| fr.data.len() as u64)
+                .sum();
+            on_event(DeployEvent::FileCount {
+                total: files_by_sha.len(),
+                missing: missing.len(),
+                total_bytes,
+            });
+
+            let mut uploaded_bytes: u64 = 0;
             for sha in &missing {
                 if let Some(file_ref) = files_by_sha.get(sha) {
+                    let path_str = file_ref.path.to_string_lossy().replace('\\', "/");
+                    let size = file_ref.data.len() as u64;
                     client
                         .deployments()
                         .upload_file(&deployment_id, sha, file_ref.data.clone())
                         .await
-                        .map_err(|e| miette!("Upload file {} failed: {}", sha, e))?;
+                        .map_err(|e| {
+                            on_event(DeployEvent::Error(format!("Upload file {} failed: {}", sha, e)));
+                            miette!("Upload file {} failed: {}", sha, e)
+                        })?;
+                    uploaded_bytes += size;
+                    on_event(DeployEvent::FileUploaded {
+                        path: path_str,
+                        bytes: size,
+                    });
+                    on_event(DeployEvent::UploadProgress {
+                        uploaded_bytes,
+                        total_bytes,
+                    });
                 }
             }
+
+            on_event(DeployEvent::Processing);
             let continue_result = client
                 .deployments()
                 .continue_deployment(&deployment_id, prepared)
                 .await
-                .map_err(|e| miette!("Continue deployment failed: {}", e))?;
+                .map_err(|e| {
+                    on_event(DeployEvent::Error(format!("Continue deployment failed: {}", e)));
+                    miette!("Continue deployment failed: {}", e)
+                })?;
 
             match continue_result {
-                DeploymentCreateResult::Created(d) => extract_output(&d),
-                DeploymentCreateResult::MissingFiles { missing: m, .. } => Err(miette!(
-                    "Continue still requested {} files after upload. Retry or check API.",
-                    m.len()
-                )),
+                DeploymentCreateResult::Created(d) => {
+                    let is_production = ctx.target == "production" || ctx.target == "prod";
+                    let url = d
+                        .url
+                        .clone()
+                        .unwrap_or_else(|| format!("https://{}", d.id));
+                    on_event(DeployEvent::Created {
+                        deployment_id: d.id.clone(),
+                        url: url.clone(),
+                        inspect_url: None,
+                        is_production,
+                    });
+                    on_event(DeployEvent::Ready {
+                        url,
+                        inspect_url: None,
+                        is_production,
+                    });
+                    extract_output(&d)
+                }
+                DeploymentCreateResult::MissingFiles { missing: m, .. } => {
+                    on_event(DeployEvent::Error(format!(
+                        "Continue still requested {} files after upload.",
+                        m.len()
+                    )));
+                    Err(miette!(
+                        "Continue still requested {} files after upload. Retry or check API.",
+                        m.len()
+                    ))
+                }
             }
         }
     }
+}
+
+/// Deploy prebuilt output to Appz.
+///
+/// Thin wrapper around `deploy_prebuilt_stream` with a no-op callback.
+pub async fn deploy_prebuilt(client: &Client, ctx: &DeployContext) -> Result<DeployOutput> {
+    deploy_prebuilt_stream(client, ctx, |_| {}).await
 }
 
 fn extract_output(d: &Deployment) -> Result<DeployOutput> {

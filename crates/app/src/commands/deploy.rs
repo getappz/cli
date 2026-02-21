@@ -9,6 +9,7 @@
 //! 6. Deploy via the provider (all exec goes through sandbox).
 //! 7. Display results (or JSON output for CI).
 
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 
 use deployer::{
@@ -109,19 +110,86 @@ async fn deploy_to_appz(
         let _ = ui::layout::section_title("Deploying to Appz");
     }
 
+    let is_tty = atty::is(atty::Stream::Stderr);
     let sp = if !json_output {
         Some(ui::progress::spinner("Deploying to Appz..."))
     } else {
         None
     };
 
-    let output = appz_client::deploy_prebuilt(&client, &ctx)
+    let output = if json_output {
+        appz_client::deploy_prebuilt(&client, &ctx)
+            .await
+            .map_err(|e| miette!("{}", e))?
+    } else {
+        let last_printed_pct = AtomicU8::new(0);
+        let sp_ref = sp.as_ref();
+        appz_client::deploy_prebuilt_stream(&client, &ctx, |ev| {
+            if let Some(sp) = sp_ref {
+                match ev {
+                    appz_client::DeployEvent::Preparing => {
+                        sp.set_message("Deploying to Appz...");
+                    }
+                    appz_client::DeployEvent::UploadProgress {
+                        uploaded_bytes,
+                        total_bytes,
+                    } => {
+                        let should_update = if is_tty {
+                            true
+                        } else {
+                            let pct = if total_bytes > 0 {
+                                ((uploaded_bytes as f64 / total_bytes as f64) * 100.0) as u8
+                            } else {
+                                100
+                            };
+                            let stepped = (pct / 25) * 25;
+                            let prev = last_printed_pct.load(Ordering::Relaxed);
+                            if stepped > prev {
+                                last_printed_pct.store(stepped, Ordering::Relaxed);
+                                true
+                            } else {
+                                false
+                            }
+                        };
+                        if should_update {
+                            let msg = format!(
+                                "Uploading [{}] ({}/{})",
+                                ui::progress::bar_string(uploaded_bytes, total_bytes, 20),
+                                ui::format::bytes(uploaded_bytes),
+                                ui::format::bytes(total_bytes)
+                            );
+                            sp.set_message(&msg);
+                        }
+                    }
+                    appz_client::DeployEvent::Processing => {
+                        sp.set_message("Processing deployment...");
+                    }
+                    appz_client::DeployEvent::Ready {
+                        url,
+                        inspect_url,
+                        is_production,
+                        created_at,
+                        ..
+                    } => {
+                        sp.finish();
+                        let _ = ui::layout::blank_line();
+                        if let Some(inspect) = &inspect_url {
+                            println!("  Inspect: {}", inspect);
+                        }
+                        let deploy_type = if is_production { "Production" } else { "Preview" };
+                        println!("  {}: {} {}", deploy_type, url, ui::format::deploy_stamp(created_at));
+                        sp.finish_with_message("Deployed!");
+                    }
+                    appz_client::DeployEvent::Error(_) => {
+                        sp.finish();
+                    }
+                    _ => {}
+                }
+            }
+        })
         .await
-        .map_err(|e| miette!("{}", e))?;
-
-    if let Some(sp) = sp {
-        sp.finish_with_message("Deployed!");
-    }
+        .map_err(|e| miette!("{}", e))?
+    };
 
     let deploy_output = deployer::DeployOutput {
         url: output.url.clone(),
@@ -134,7 +202,7 @@ async fn deploy_to_appz(
         created_at: Some(chrono::Utc::now()),
     };
 
-    display_deploy_result(&deploy_output, json_output)?;
+    display_deploy_result(&deploy_output, json_output, true)?;
     write_ci_output(&deploy_output);
 
     Ok(None)
@@ -345,7 +413,7 @@ pub async fn deploy(
     }
 
     // 13. Display results
-    display_deploy_result(&output, json_output)?;
+    display_deploy_result(&output, json_output, false)?;
 
     // 14. Write GitHub Actions output if applicable
     write_ci_output(&output);
@@ -736,7 +804,12 @@ async fn deploy_to_all_targets(
 }
 
 /// Display the deployment result.
-fn display_deploy_result(output: &DeployOutput, json_output: bool) -> Result<()> {
+/// When `phased_output_done` is true (Appz phased UI), skip success message and URL since already printed.
+fn display_deploy_result(
+    output: &DeployOutput,
+    json_output: bool,
+    phased_output_done: bool,
+) -> Result<()> {
     if json_output {
         let json = serde_json::to_string_pretty(output)
             .map_err(|e| miette!("JSON serialization failed: {}", e))?;
@@ -744,22 +817,24 @@ fn display_deploy_result(output: &DeployOutput, json_output: bool) -> Result<()>
     } else {
         let _ = ui::layout::blank_line();
 
-        let deploy_type = if output.is_preview {
-            "Preview"
-        } else {
-            "Production"
-        };
+        if !phased_output_done {
+            let deploy_type = if output.is_preview {
+                "Preview"
+            } else {
+                "Production"
+            };
 
-        let _ = ui::status::success(&format!(
-            "{} deployment to {} is {}!",
-            deploy_type, output.provider, output.status
-        ));
+            let _ = ui::status::success(&format!(
+                "{} deployment to {} is {}!",
+                deploy_type, output.provider, output.status
+            ));
 
-        println!();
-        println!("  URL: {}", output.url);
+            println!();
+            println!("  URL: {}", output.url);
 
-        for url in &output.additional_urls {
-            println!("  Alias: {}", url);
+            for url in &output.additional_urls {
+                println!("  Alias: {}", url);
+            }
         }
 
         if let Some(id) = &output.deployment_id {

@@ -210,6 +210,13 @@ pub fn colored_diff(plain: &str) -> String {
     out
 }
 
+/// Deploy stamp: relative age for display next to URL (e.g. "[2m]").
+/// `ts`: Unix timestamp in seconds or milliseconds (auto-detected via `timestamp_age_short`).
+pub fn deploy_stamp(ts: i64) -> String {
+    let s = timestamp_age_short(ts);
+    format!("[{}]", s)
+}
+
 /// Format byte count to human-readable string (e.g. "1.2 MB", "500 KB").
 /// Matches Vercel's bytes package: 1 decimal place.
 pub fn bytes(n: u64) -> String {

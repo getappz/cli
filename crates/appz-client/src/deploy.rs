@@ -33,12 +33,14 @@ pub enum DeployEvent {
         url: String,
         inspect_url: Option<String>,
         is_production: bool,
+        created_at: i64,
     },
     Processing,
     Ready {
         url: String,
         inspect_url: Option<String>,
         is_production: bool,
+        created_at: i64,
     },
     Error(String),
 }
@@ -120,17 +122,20 @@ where
                 .url
                 .clone()
                 .unwrap_or_else(|| format!("https://{}", d.id));
+            let created_at = d.createdAt;
             on_event(DeployEvent::Created {
                 deployment_id: d.id.clone(),
                 url: url.clone(),
                 inspect_url: None,
                 is_production,
+                created_at,
             });
             on_event(DeployEvent::Processing);
             on_event(DeployEvent::Ready {
                 url,
                 inspect_url: None,
                 is_production,
+                created_at,
             });
             extract_output(&d)
         }
@@ -199,16 +204,19 @@ where
                         .url
                         .clone()
                         .unwrap_or_else(|| format!("https://{}", d.id));
+                    let created_at = d.createdAt;
                     on_event(DeployEvent::Created {
                         deployment_id: d.id.clone(),
                         url: url.clone(),
                         inspect_url: None,
                         is_production,
+                        created_at,
                     });
                     on_event(DeployEvent::Ready {
                         url,
                         inspect_url: None,
                         is_production,
+                        created_at,
                     });
                     extract_output(&d)
                 }

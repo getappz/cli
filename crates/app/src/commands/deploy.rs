@@ -26,17 +26,38 @@ use crate::session::AppzSession;
 // Appz platform deploy (when linked)
 // ---------------------------------------------------------------------------
 
+/// Parse KEY=VALUE strings into a JSON map for deployment meta.
+fn parse_meta_kv(meta: &[String]) -> Option<serde_json::Map<String, serde_json::Value>> {
+    if meta.is_empty() {
+        return None;
+    }
+    let mut map = serde_json::Map::new();
+    for kv in meta {
+        if let Some((k, v)) = kv.split_once('=') {
+            map.insert(k.to_string(), serde_json::Value::String(v.to_string()));
+        }
+    }
+    if map.is_empty() {
+        None
+    } else {
+        Some(map)
+    }
+}
+
 /// Deploy to Appz when project is linked (.appz/project.json).
 #[cfg(feature = "deploy")]
 async fn deploy_to_appz(
     session: &AppzSession,
+    project_dir: &std::path::Path,
     output_dir: &str,
     preview: bool,
     no_build: bool,
     dry_run: bool,
     json_output: bool,
+    meta: &[String],
+    skip_domain: bool,
+    force: bool,
 ) -> AppResult {
-    let project_dir = &session.working_dir;
     let link = crate::project::read_project_link(project_dir)
         .map_err(|e| miette!("{}", e))?
         .ok_or_else(|| miette!("Project link not found"))?;
@@ -78,6 +99,9 @@ async fn deploy_to_appz(
         team_id: Some(link.link.team_id.clone()),
         target: if preview { "preview" } else { "production" }.to_string(),
         name: link.link.project_name.clone(),
+        meta: parse_meta_kv(meta),
+        skip_domain,
+        force,
     };
 
     if !json_output {
@@ -138,19 +162,54 @@ async fn create_deploy_sandbox(
     Ok(Arc::from(sb))
 }
 
-/// Main deploy command entry point.
+/// Main deploy command entry point (Vercel-parity options).
+#[allow(clippy::too_many_arguments)]
 pub async fn deploy(
     session: AppzSession,
+    project_path: Option<std::path::PathBuf>,
     provider_arg: Option<String>,
-    preview: bool,
+    prod: bool,
+    _preview: bool,
+    target: Option<String>,
+    prebuilt: bool,
     no_build: bool,
+    build_env: Vec<String>,
+    env: Vec<String>,
+    force: bool,
+    guidance: bool,
+    logs: bool,
+    meta: Vec<String>,
+    no_wait: bool,
+    public: bool,
+    skip_domain: bool,
+    with_cache: bool,
     dry_run: bool,
     json_output: bool,
     deploy_all: bool,
     yes: bool,
 ) -> AppResult {
-    let project_dir = session.working_dir.clone();
+    // Resolve project directory (Vercel: [project-path])
+    let project_dir = match project_path {
+        Some(p) => session
+            .working_dir
+            .join(&p)
+            .canonicalize()
+            .unwrap_or_else(|_| session.working_dir.join(p)),
+        None => session.working_dir.clone(),
+    };
+
+    // Resolve target (Vercel-parity): --prod => production, --target production => production, else preview
+    let is_preview = !prod
+        && target.as_deref() != Some("production")
+        && target.as_deref() != Some("prod");
+
+    // Skip build when --prebuilt or --no-build
+    let no_build = no_build || prebuilt;
+
     let is_ci = is_ci_environment() || yes;
+
+    // Stub for options not yet wired to backend: logs, no_wait, public, with_cache, build_env
+    let _ = (logs, no_wait, public, with_cache, build_env);
 
     // 1. Load existing deploy config
     let deploy_config = read_deploy_config(&project_dir)
@@ -158,14 +217,25 @@ pub async fn deploy(
         .unwrap_or_default();
 
     // 2. Determine output directory
-    let output_dir = resolve_output_dir(&session);
+    let output_dir = resolve_output_dir(&project_dir);
 
     // 2b. If linked to Appz project and no explicit provider (or appz), use Appz platform
     if crate::project::is_project_linked(&project_dir)
         && (provider_arg.is_none() || provider_arg.as_deref() == Some("appz"))
         && !deploy_all
     {
-        return deploy_to_appz(&session, &output_dir, preview, no_build, dry_run, json_output)
+        return deploy_to_appz(
+            &session,
+            &project_dir,
+            &output_dir,
+            is_preview,
+            no_build,
+            dry_run,
+            json_output,
+            &meta,
+            skip_domain,
+            force,
+        )
             .await;
     }
 
@@ -178,7 +248,7 @@ pub async fn deploy(
             sandbox.clone(),
             &output_dir,
             &deploy_config,
-            preview,
+            is_preview,
             no_build,
             dry_run,
             json_output,
@@ -206,7 +276,7 @@ pub async fn deploy(
 
     // 7. Build before deploy (unless --no-build)
     if !no_build && !dry_run {
-        run_build_step(&session, json_output).await?;
+        run_build_step(&session, &project_dir, json_output).await?;
     }
 
     // 8. Run before_deploy hook via sandbox
@@ -217,9 +287,14 @@ pub async fn deploy(
     }
 
     // 9. Build deploy context with sandbox
-    let env_vars = deploy_config.env_for(if preview { "preview" } else { "production" });
+    let mut env_vars = deploy_config.env_for(if is_preview { "preview" } else { "production" });
+    for kv in &env {
+        if let Some((k, v)) = kv.split_once('=') {
+            env_vars.insert(k.to_string(), v.to_string());
+        }
+    }
     let ctx = DeployContext::new(sandbox.clone(), output_dir)
-        .with_preview(preview)
+        .with_preview(is_preview)
         .with_config(deploy_config.clone())
         .with_env(env_vars)
         .with_dry_run(dry_run)
@@ -238,7 +313,7 @@ pub async fn deploy(
     }
 
     // 11. Deploy (with spinner when interactive, like sandbox init)
-    let deploy_label = if preview {
+    let deploy_label = if is_preview {
         format!("{} (preview)", provider.name())
     } else {
         format!("{} (production)", provider.name())
@@ -246,7 +321,7 @@ pub async fn deploy(
 
     let result = if !json_output && !dry_run {
         let sp = ui::progress::spinner(&format!("Deploying to {}...", deploy_label));
-        let r = if preview {
+        let r = if is_preview {
             provider.deploy_preview(&ctx).await
         } else {
             provider.deploy(&ctx).await
@@ -254,7 +329,7 @@ pub async fn deploy(
         let msg = if r.is_ok() { "Deployed!" } else { "Failed" };
         sp.finish_with_message(msg);
         r
-    } else if preview {
+    } else if is_preview {
         provider.deploy_preview(&ctx).await
     } else {
         provider.deploy(&ctx).await
@@ -274,6 +349,11 @@ pub async fn deploy(
 
     // 14. Write GitHub Actions output if applicable
     write_ci_output(&output);
+
+    // 15. --guidance: show suggested next steps and examples (Vercel-parity)
+    if guidance {
+        ui::guidance::deploy_guidance(&output.url, output.is_preview).display(json_output);
+    }
 
     Ok(None)
 }
@@ -307,7 +387,7 @@ pub async fn deploy_init(
         .map_err(|e| miette!("{}", e))?
         .unwrap_or_default();
 
-    let output_dir = resolve_output_dir(&session);
+    let output_dir = resolve_output_dir(&project_dir);
 
     // Create sandbox for setup operations
     let sandbox = create_deploy_sandbox(&project_dir).await?;
@@ -349,7 +429,7 @@ pub async fn deploy_list(
         .map_err(|e| miette!("{}", e))?
         .unwrap_or_default();
 
-    let output_dir = resolve_output_dir(&session);
+    let output_dir = resolve_output_dir(&project_dir);
 
     let provider_slug = match provider_arg {
         Some(slug) => slug,
@@ -510,13 +590,18 @@ async fn handle_prerequisites(
 }
 
 /// Run the build step before deploying.
-async fn run_build_step(session: &AppzSession, json_output: bool) -> Result<()> {
+/// When project_dir override is provided (e.g. from --project-path), use it as working_dir for the build.
+async fn run_build_step(
+    session: &AppzSession,
+    project_dir: &std::path::Path,
+    json_output: bool,
+) -> Result<()> {
     if !json_output {
         let _ = ui::status::info("Building project before deployment...");
     }
 
-    // Build takes AppzSession by value, so clone it
-    let build_session = session.clone();
+    let mut build_session = session.clone();
+    build_session.working_dir = project_dir.to_path_buf();
     crate::commands::build(build_session).await?;
 
     if !json_output {
@@ -741,12 +826,21 @@ fn write_ci_output(output: &DeployOutput) {
     }
 }
 
-/// Resolve the build output directory from session and config.
-fn resolve_output_dir(session: &AppzSession) -> String {
+/// Resolve the build output directory from project path and config.
+///
+/// Prefers `.appz/output` (Build Output v3) when `config.json` exists,
+/// else uses `appz.json` outputDirectory or common fallbacks.
+fn resolve_output_dir(project_dir: &std::path::Path) -> String {
+    // Prefer standardized build output when present
+    let appz_output = project_dir.join(".appz/output");
+    if appz_output.join("config.json").exists() {
+        return ".appz/output".to_string();
+    }
+
     // Try to read outputDirectory from appz.json
-    if let Ok(root) = starbase_utils::json::read_file::<serde_json::Value>(
-        session.working_dir.join("appz.json"),
-    ) {
+    if let Ok(root) =
+        starbase_utils::json::read_file::<serde_json::Value>(project_dir.join("appz.json"))
+    {
         if let Some(dir) = root.get("outputDirectory").and_then(|v| v.as_str()) {
             return dir.to_string();
         }
@@ -754,7 +848,7 @@ fn resolve_output_dir(session: &AppzSession) -> String {
 
     // Default to common output directories
     for dir in &["dist", "build", "out", "public", "_site"] {
-        if session.working_dir.join(dir).exists() {
+        if project_dir.join(dir).exists() {
             return dir.to_string();
         }
     }

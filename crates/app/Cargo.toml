@@ -52,6 +52,7 @@ webbrowser = "1.0"
 toml = "0.8"
 camino = "1.2"
 sandbox = { path = "../sandbox" }
+appz-build = { path = "../appz-build" }
 plugin-manager = { path = "../plugin-manager" }
 init = { path = "../init" }
 skills_lib = { path = "../skills", package = "skills" }

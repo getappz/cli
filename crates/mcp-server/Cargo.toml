@@ -30,4 +30,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 schemars = { version = "0.8", features = ["derive"] }
 which = { workspace = true }
+code-grep = { path = "../code-grep" }
+code-mix = { path = "../code-mix" }
 code-search = { path = "../code-search", optional = true }

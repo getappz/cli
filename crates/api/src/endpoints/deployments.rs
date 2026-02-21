@@ -3,10 +3,33 @@ use crate::error::ApiError;
 use crate::http::response_handler::error_from_status_body_headers;
 use crate::models::{
     DeleteResponse, Deployment, DeploymentCreateRequest, DeploymentCreateResult,
-    DeploymentsListResponse, PreparedFile,
+    DeploymentLogsResponse, DeploymentsListResponse, PreparedFile,
 };
 use crate::paths::V0_PREFIX;
 use reqwest_middleware::reqwest::StatusCode;
+use url::Url;
+
+/// Extract deployment identifier for API path. For URLs (e.g. https://project-xxx.preview.appz.dev),
+/// returns the hostname so the backend can resolve by url column. For raw IDs (UUID), returns as-is.
+fn deployment_id_for_path(deployment_id_or_url: &str) -> String {
+    if deployment_id_or_url.starts_with("http://") || deployment_id_or_url.starts_with("https://") {
+        if let Ok(u) = Url::parse(deployment_id_or_url) {
+            if let Some(host) = u.host_str() {
+                // Pass hostname (e.g. project-xxx.preview.appz.dev) for backend url lookup
+                return host.to_string();
+            }
+        }
+        // Fallback: take part after last /
+        deployment_id_or_url
+            .split('/')
+            .filter(|s| !s.is_empty() && !s.contains(":"))
+            .next_back()
+            .unwrap_or(deployment_id_or_url)
+            .to_string()
+    } else {
+        deployment_id_or_url.to_string()
+    }
+}
 
 pub struct Deployments<'a> {
     client: &'a Client,
@@ -53,21 +76,8 @@ impl<'a> Deployments<'a> {
     /// Get a deployment by ID or URL
     #[tracing::instrument(skip(self))]
     pub async fn get(&self, deployment_id_or_url: &str) -> Result<Deployment, ApiError> {
-        // Extract deployment ID from URL if it's a URL
-        let deployment_id = if deployment_id_or_url.starts_with("http://")
-            || deployment_id_or_url.starts_with("https://")
-        {
-            // Extract ID from URL (format: https://xxx.appz.dev or similar)
-            // For now, assume the ID is the last part after splitting by /
-            deployment_id_or_url
-                .split('/')
-                .next_back()
-                .unwrap_or(deployment_id_or_url)
-        } else {
-            deployment_id_or_url
-        };
-
-        let path = format!("{}/deployments/{}", V0_PREFIX, deployment_id);
+        let id = deployment_id_for_path(deployment_id_or_url);
+        let path = format!("{}/deployments/{}", V0_PREFIX, id);
         self.client.get(&path).await
     }
 
@@ -271,21 +281,19 @@ impl<'a> Deployments<'a> {
         ))
     }
 
+    /// Get logs for a deployment.
+    #[tracing::instrument(skip(self))]
+    pub async fn logs(&self, deployment_id_or_url: &str) -> Result<DeploymentLogsResponse, ApiError> {
+        let id = deployment_id_for_path(deployment_id_or_url);
+        let path = format!("{}/deployments/{}/logs", V0_PREFIX, id);
+        self.client.get(&path).await
+    }
+
     /// Delete a deployment by ID or URL (soft delete)
     #[tracing::instrument(skip(self))]
     pub async fn delete(&self, deployment_id_or_url: &str) -> Result<DeleteResponse, ApiError> {
-        let deployment_id = if deployment_id_or_url.starts_with("http://")
-            || deployment_id_or_url.starts_with("https://")
-        {
-            deployment_id_or_url
-                .split('/')
-                .next_back()
-                .unwrap_or(deployment_id_or_url)
-        } else {
-            deployment_id_or_url
-        };
-
-        let path = format!("{}/deployments/{}", V0_PREFIX, deployment_id);
+        let id = deployment_id_for_path(deployment_id_or_url);
+        let path = format!("{}/deployments/{}", V0_PREFIX, id);
         self.client.delete(&path).await
     }
 }

@@ -39,6 +39,7 @@ members = [
     "crates/plugins/crawl",
     "crates/plugin-build",
     "crates/appz-client",
+    "crates/appz-build",
 ]
 resolver = "2"
 

@@ -52,6 +52,51 @@ pub fn timestamp_auto(ts: i64) -> String {
     timestamp(ts_seconds)
 }
 
+/// Format a timestamp to Vercel-style short age (e.g., "45s", "2m", "3h", "1d").
+///
+/// Accepts seconds or milliseconds (auto-detected). Use for deployment "Age" column.
+///
+/// # Arguments
+/// * `ts` - Unix timestamp in seconds, milliseconds, or microseconds
+///
+/// # Returns
+/// Short age string (e.g., "45s", "2m", "3h", "1d") or "N/A" if invalid
+pub fn timestamp_age_short(ts: i64) -> String {
+    if ts <= 0 {
+        return "N/A".to_string();
+    }
+
+    let ts_seconds = if ts > 1_000_000_000_000_000 {
+        ts / 1_000_000
+    } else if ts > 4_102_444_800 {
+        ts / 1000
+    } else {
+        ts
+    };
+
+    match DateTime::from_timestamp(ts_seconds, 0) {
+        Some(dt) => {
+            let now = Utc::now();
+            let duration = now.signed_duration_since(dt);
+            let secs = duration.num_seconds();
+            if secs < 0 {
+                "now".to_string()
+            } else if secs < 60 {
+                format!("{}s", secs)
+            } else if secs < 3600 {
+                format!("{}m", secs / 60)
+            } else if secs < 86400 {
+                format!("{}h", secs / 3600)
+            } else if secs < 2592000 {
+                format!("{}d", secs / 86400)
+            } else {
+                dt.format("%Y-%m-%d").to_string()
+            }
+        }
+        None => "N/A".to_string(),
+    }
+}
+
 /// Format a Unix timestamp to a relative time string (e.g., "2 hours ago").
 ///
 /// # Arguments

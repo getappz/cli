@@ -4,6 +4,7 @@ mod install_helpers;
 #[cfg(feature = "check")]
 pub mod check;
 pub mod code;
+pub mod pack;
 #[cfg(feature = "deploy")]
 pub mod deploy;
 pub mod deployment_utils;
@@ -11,7 +12,11 @@ pub mod dev;
 #[cfg(feature = "dev-server")]
 pub mod dev_server;
 pub mod domains;
+pub mod env;
 pub mod external;
+pub mod inspect;
+pub mod logs;
+pub mod pull;
 #[cfg(feature = "gen")]
 pub mod gen;
 pub mod init;
@@ -57,6 +62,10 @@ pub use dev::dev;
 #[cfg(feature = "dev-server")]
 pub use dev_server::dev_server;
 pub use domains::*;
+pub use env::{run as env_run, EnvCommands};
+pub use inspect::inspect;
+pub use logs::logs;
+pub use pull::pull;
 pub use init::init;
 pub use link::link;
 pub use list::list;

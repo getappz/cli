@@ -24,6 +24,12 @@ pub struct DeployContext {
     pub target: String,
     /// Project name (for deployment)
     pub name: Option<String>,
+    /// Arbitrary metadata (KEY=VALUE from -m flag)
+    pub meta: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Skip automatic domain promotion (from --skip-domain)
+    pub skip_domain: bool,
+    /// Force new deployment (from -f)
+    pub force: bool,
 }
 
 /// Result of a successful deployment.
@@ -57,7 +63,9 @@ pub async fn deploy_prebuilt(client: &Client, ctx: &DeployContext) -> Result<Dep
         projectId: ctx.project_id.clone(),
         name: ctx.name.clone(),
         target: Some(ctx.target.clone()),
-        meta: None,
+        meta: ctx.meta.clone(),
+        skipDomain: Some(ctx.skip_domain),
+        force: Some(ctx.force),
         files: Some(prepared.clone()),
     };
 

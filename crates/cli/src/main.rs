@@ -171,6 +171,16 @@ async fn main() -> MainResult {
                 Commands::Domains { command } => {
                     app::commands::domains::run(session, command).await
                 }
+                Commands::Pull => app::commands::pull(session).await,
+                Commands::Logs { deployment } => {
+                    app::commands::logs(session, deployment).await
+                }
+                Commands::Inspect { deployment, json } => {
+                    app::commands::inspect(session, deployment, json).await
+                }
+                Commands::Env { command } => {
+                    app::commands::env::run(session, command).await
+                }
                 Commands::Promote { deployment, timeout, yes } => {
                     app::commands::promote(session, deployment, timeout, yes).await
                 }
@@ -185,8 +195,54 @@ async fn main() -> MainResult {
                     app::commands::gen::run(session, prompt, output, name, model).await
                 }
                 #[cfg(feature = "deploy")]
-                Commands::Deploy { provider, preview, no_build, dry_run, json, all, yes } => {
-                    app::commands::deploy(session, provider, preview, no_build, dry_run, json, all, yes).await
+                Commands::Deploy {
+                    project_path,
+                    provider,
+                    prod,
+                    preview,
+                    target,
+                    prebuilt,
+                    no_build,
+                    build_env,
+                    env,
+                    force,
+                    guidance,
+                    logs,
+                    meta,
+                    no_wait,
+                    public,
+                    skip_domain,
+                    with_cache,
+                    dry_run,
+                    json,
+                    all,
+                    yes,
+                } => {
+                    app::commands::deploy(
+                        session,
+                        project_path,
+                        provider,
+                        prod,
+                        preview,
+                        target,
+                        prebuilt,
+                        no_build,
+                        build_env,
+                        env,
+                        force,
+                        guidance,
+                        logs,
+                        meta,
+                        no_wait,
+                        public,
+                        skip_domain,
+                        with_cache,
+                        dry_run,
+                        json,
+                        all,
+                        yes,
+                    )
+                    .await
                 }
                 #[cfg(feature = "deploy")]
                 Commands::DeployInit { provider } => {
@@ -197,6 +253,9 @@ async fn main() -> MainResult {
                     app::commands::deploy_list(session, provider).await
                 }
                 // Check and site commands are now downloadable plugins (handled by External)
+                Commands::Pack { subcommand, run_opts } => {
+                    app::commands::pack::run(session, subcommand, run_opts).await
+                }
                 Commands::Code { command } => {
                     app::commands::code::run(session, command).await
                 }

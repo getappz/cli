@@ -1,0 +1,19 @@
+[package]
+name = "hypermix"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Multi-source AI context builder via Repomix orchestration"
+publish = false
+
+[dependencies]
+sandbox = { path = "../sandbox" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+miette = { workspace = true }
+reqwest = { workspace = true }
+json_comments = "0.2"
+regex = { workspace = true }
+pathdiff = "0.2"
+walkdir = "2"

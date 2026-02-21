@@ -1,16 +1,22 @@
-//! Pre-filters: content search (ripgrep), git modes, bundle load.
+//! Pre-filters: content search (ripgrep), git modes, bundle load, path discovery.
 //!
 //! When options require a custom file list, we run the appropriate filter
 //! and return paths to pipe to Repomix --stdin. All external commands
-//! (ripgrep, git) run via the sandbox.
+//! (ripgrep, git) run via the sandbox. When no filter applies, we discover
+//! paths from include/ignore patterns so the pack can be cached.
 
+use std::path::Path;
+
+use ignore::overrides::OverrideBuilder;
+use ignore::WalkBuilder;
 use sandbox::SandboxProvider;
 
 use crate::repomix::RepomixError;
 use crate::types::PackOptions;
 
 /// If options require a pre-filter (strings, git modes, bundle), return
-/// the file list to pipe to Repomix --stdin. Otherwise None (passthrough).
+/// the file list to pipe to Repomix --stdin. Otherwise discover paths from
+/// include/ignore so the pack can be cached.
 ///
 /// All external commands run through `sandbox`.
 pub async fn get_stdin_paths(
@@ -27,7 +33,69 @@ pub async fn get_stdin_paths(
         return Ok(Some(paths));
     }
 
-    Ok(None)
+    // Default: discover paths from include/ignore so we can cache the pack
+    let workdir = sandbox.project_path();
+    let paths = discover_paths_from_patterns(workdir, options)?;
+    if paths.is_empty() {
+        return Ok(None); // Fall back to non-cached run (e.g. fully ignored)
+    }
+    Ok(Some(paths))
+}
+
+/// Discover file paths by walking workdir with include/ignore glob patterns.
+pub fn discover_paths_from_patterns(
+    workdir: &Path,
+    options: &PackOptions,
+) -> Result<Vec<String>, RepomixError> {
+    let mut overrides = OverrideBuilder::new(workdir);
+
+    // Ignore patterns (gitignore semantics: !prefix = ignore)
+    for p in &options.ignore {
+        let rule = format!("!{}", p.trim());
+        overrides
+            .add(&rule)
+            .map_err(|e| RepomixError(format!("Invalid ignore pattern '{}': {}", p, e)))?;
+    }
+
+    // When include is set, whitelist those patterns first, then ignore all else
+    if !options.include.is_empty() {
+        for p in &options.include {
+            let rule = p.trim();
+            if !rule.is_empty() {
+                overrides
+                    .add(rule)
+                    .map_err(|e| RepomixError(format!("Invalid include pattern '{}': {}", p, e)))?;
+            }
+        }
+        overrides
+            .add("!**")
+            .map_err(|e| RepomixError(format!("Override error: {}", e)))?;
+    }
+
+    let overrides = overrides
+        .build()
+        .map_err(|e| RepomixError(format!("Override build failed: {}", e)))?;
+
+    let mut paths: Vec<String> = Vec::new();
+    for result in WalkBuilder::new(workdir)
+        .overrides(overrides)
+        .standard_filters(true)
+        .hidden(false)
+        .build()
+    {
+        let entry = result.map_err(|e| RepomixError(format!("Walk error: {}", e)))?;
+        if entry.path().is_file() {
+            if let Ok(rel) = entry.path().strip_prefix(workdir) {
+                let s = rel.as_os_str().to_string_lossy().replace('\\', "/");
+                if !s.is_empty() {
+                    paths.push(s);
+                }
+            }
+        }
+    }
+
+    paths.sort();
+    Ok(paths)
 }
 
 /// Run ripgrep to find files containing search strings; pipe to Repomix.

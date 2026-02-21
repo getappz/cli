@@ -127,7 +127,7 @@ impl TelemetryEventStore {
         );
     }
 
-    /// Flush events to backend. Non-blocking; spawns task. Safe to call multiple times (no-op after first).
+    /// Flush events to backend. Blocks until send completes. Safe to call multiple times (no-op after first).
     pub async fn flush(&self) {
         if self.flushed.swap(true, Ordering::SeqCst) {
             return;
@@ -179,11 +179,9 @@ impl TelemetryEventStore {
             return;
         }
 
-        tokio::spawn(async move {
-            if let Err(e) = send_telemetry(&ndjson).await {
-                debug!("Telemetry flush failed: {}", e);
-            }
-        });
+        if let Err(e) = send_telemetry(&ndjson).await {
+            debug!("Telemetry flush failed: {}", e);
+        }
     }
 }
 
@@ -222,6 +220,10 @@ pub async fn record_command(store: &TelemetryEventStore, command: &crate::app::C
         Commands::Transfer { .. } => "transfer",
         Commands::Aliases { .. } => "aliases",
         Commands::Domains { .. } => "domains",
+        Commands::Pull => "pull",
+        Commands::Logs { .. } => "logs",
+        Commands::Inspect { .. } => "inspect",
+        Commands::Env { .. } => "env",
         Commands::Promote { .. } => "promote",
         Commands::Rollback { .. } => "rollback",
         Commands::Remove { .. } => "remove",
@@ -233,6 +235,7 @@ pub async fn record_command(store: &TelemetryEventStore, command: &crate::app::C
         Commands::DeployInit { .. } => "deploy-init",
         #[cfg(feature = "deploy")]
         Commands::DeployList { .. } => "deploy-list",
+        Commands::Pack { .. } => "pack",
         Commands::Code { .. } => "code",
         Commands::Skills { .. } => "skills",
         Commands::Plugin { .. } => "plugin",

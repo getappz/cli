@@ -278,6 +278,27 @@ pub enum Commands {
         #[command(subcommand)]
         command: crate::commands::domains::DomainsCommands,
     },
+    /// Pull project config and env from Appz (writes .appz/project.json, .env.local)
+    Pull,
+    /// Show deployment logs
+    Logs {
+        /// Deployment URL or ID (uses latest from linked project if omitted)
+        deployment: Option<String>,
+    },
+    /// Inspect deployment details
+    Inspect {
+        /// Deployment URL or ID
+        deployment: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Manage environment variables (Vercel-aligned: env ls | add | rm | pull)
+    #[command(name = "env")]
+    Env {
+        #[command(subcommand)]
+        command: crate::commands::env::EnvCommands,
+    },
     /// Promote a deployment to production
     Promote {
         /// Deployment ID or URL to promote
@@ -328,20 +349,77 @@ pub enum Commands {
         #[arg(short, long)]
         model: Option<String>,
     },
-    /// Deploy to a hosting provider (Vercel, Netlify, Cloudflare Pages, etc.)
+    /// Deploy to a hosting provider (Vercel, Netlify, Cloudflare Pages, Appz, etc.)
+    /// Vercel-parity: project-path, --prod, --prebuilt, -e, -b, -f, --logs, --target, etc.
     #[cfg(feature = "deploy")]
     Deploy {
+        /// Project path to deploy (defaults to current directory)
+        #[arg()]
+        project_path: Option<PathBuf>,
+
         /// Target provider (vercel, netlify, cloudflare-pages, github-pages, etc.)
         /// Auto-detected if not specified.
         provider: Option<String>,
+
+        /// Create a production deployment (shorthand for --target=production)
+        #[arg(long)]
+        prod: bool,
 
         /// Deploy as preview instead of production
         #[arg(long)]
         preview: bool,
 
+        /// Specify the target deployment environment (preview, production, staging)
+        #[arg(long)]
+        target: Option<String>,
+
+        /// Deploy existing build output (use with `appz build` first)
+        #[arg(long)]
+        prebuilt: bool,
+
         /// Skip the build step before deploying
         #[arg(long)]
         no_build: bool,
+
+        /// Specify environment variables during build-time (e.g. -b KEY1=value1 -b KEY2=value2)
+        #[arg(long, short = 'b', value_name = "KEY=VALUE")]
+        build_env: Vec<String>,
+
+        /// Specify environment variables during run-time (e.g. -e KEY1=value1 -e KEY2=value2)
+        #[arg(long, short = 'e', value_name = "KEY=VALUE")]
+        env: Vec<String>,
+
+        /// Force a new deployment even if nothing has changed
+        #[arg(long, short = 'f')]
+        force: bool,
+
+        /// Receive command suggestions once deployment is complete
+        #[arg(long)]
+        guidance: bool,
+
+        /// Print the build logs
+        #[arg(long, short = 'l')]
+        logs: bool,
+
+        /// Specify metadata for the deployment (e.g. -m KEY1=value1 -m KEY2=value2)
+        #[arg(long, short = 'm', value_name = "KEY=VALUE")]
+        meta: Vec<String>,
+
+        /// Don't wait for the deployment to finish
+        #[arg(long)]
+        no_wait: bool,
+
+        /// Deployment is public
+        #[arg(long, short = 'p')]
+        public: bool,
+
+        /// Disable automatic promotion of domains to the new deployment
+        #[arg(long)]
+        skip_domain: bool,
+
+        /// Retain build cache when using --force
+        #[arg(long)]
+        with_cache: bool,
 
         /// Show what would happen without actually deploying
         #[arg(long)]
@@ -355,8 +433,8 @@ pub enum Commands {
         #[arg(long)]
         all: bool,
 
-        /// Skip confirmation prompts (for CI/CD)
-        #[arg(long, short)]
+        /// Use default options and skip all prompts (for CI/CD)
+        #[arg(long, short = 'y')]
         yes: bool,
     },
     /// Set up deployment configuration for a provider
@@ -375,7 +453,14 @@ pub enum Commands {
     // It is now handled by the External(Vec<String>) variant below.
     // NOTE: The `site` command has been extracted to a downloadable plugin (pro tier).
     // It is now handled by the External(Vec<String>) variant below.
-    /// Pack codebase for AI context (Repomix with pre-filters)
+    /// Pack codebase for AI context (config-driven or imperative)
+    Pack {
+        #[command(subcommand)]
+        subcommand: Option<crate::commands::pack::PackSubcommand>,
+        #[command(flatten)]
+        run_opts: crate::commands::pack::PackRunOpts,
+    },
+    /// Search packed code and other code operations
     Code {
         #[command(subcommand)]
         command: crate::commands::code::CodeCommands,

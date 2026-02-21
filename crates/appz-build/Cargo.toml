@@ -1,0 +1,21 @@
+[package]
+name = "appz-build"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Framework detection and build pipeline for Appz platform (Vercel-aligned)"
+
+[dependencies]
+detectors = { path = "../detectors" }
+frameworks = { path = "../frameworks" }
+miette = { workspace = true }
+sandbox = { path = "../sandbox" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+starbase_utils = { workspace = true }
+tokio = { workspace = true }
+walkdir = "2"
+
+[dev-dependencies]
+tempfile = { workspace = true }

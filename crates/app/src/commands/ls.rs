@@ -44,24 +44,56 @@ pub async fn ls(session: AppzSession) -> AppResult {
         return Ok(None);
     }
 
-    // Prepare table data
-    let headers = vec!["ID", "Status", "Project ID", "Created"];
+    // Match Vercel CLI format: Age | Deployment | Status | Environment | Duration | Username
+    let headers = vec![
+        "Age",
+        "Deployment",
+        "Status",
+        "Environment",
+        "Duration",
+        "Username",
+    ];
     let mut rows = Vec::new();
 
     for deployment in &deployments_response.deployments {
         let status = deployment.status.as_deref().unwrap_or("unknown");
-        let status_badge = format::status_badge(status);
-        let project_id = deployment.projectId.as_deref().unwrap_or("N/A");
+        let status_display = format!("● {}", format::status_badge(status));
+        let url = deployment
+            .url
+            .as_deref()
+            .unwrap_or("–")
+            .to_string();
+        let env = deployment
+            .env_type
+            .as_deref()
+            .map(|t| {
+                if t.eq_ignore_ascii_case("production") {
+                    "Production"
+                } else {
+                    "Preview"
+                }
+            })
+            .unwrap_or("Preview");
+        let age = format::timestamp_age_short(deployment.createdAt);
+        let duration = if status.eq_ignore_ascii_case("ready")
+            || status.eq_ignore_ascii_case("completed")
+        {
+            let dur_secs = (deployment.updatedAt - deployment.createdAt) / 1000;
+            if dur_secs >= 0 {
+                format::duration(dur_secs as u64)
+            } else {
+                "–".to_string()
+            }
+        } else {
+            "–".to_string()
+        };
+        let username = deployment
+            .createdBy
+            .as_deref()
+            .unwrap_or("–")
+            .to_string();
 
-        // Format timestamp
-        let created = format::timestamp(deployment.createdAt);
-
-        rows.push(vec![
-            deployment.id.clone(),
-            status_badge,
-            project_id.to_string(),
-            created,
-        ]);
+        rows.push(vec![age, url, status_display, env.to_string(), duration, username]);
     }
 
     // Display table with professional formatting

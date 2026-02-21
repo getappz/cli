@@ -227,3 +227,15 @@ impl Drop for ProgressBarHandle {
 pub fn progress_bar(total: u64, message: &str) -> ProgressBarHandle {
     ProgressBarHandle::new(total, message)
 }
+
+/// Returns a progress bar string like "[=====-----]".
+/// current/total determine fill; width chars total.
+pub fn bar_string(current: u64, total: u64, width: usize) -> String {
+    if total == 0 || current >= total {
+        return "=".repeat(width);
+    }
+    let unit = total as f64 / width as f64;
+    let pos = (current as f64 / unit) as usize;
+    let pos = pos.min(width);
+    format!("{}{}", "=".repeat(pos), "-".repeat(width - pos))
+}

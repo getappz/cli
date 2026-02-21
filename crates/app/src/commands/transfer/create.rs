@@ -3,6 +3,7 @@
 use crate::commands::projects::resolve_project_id;
 use crate::commands::teams::resolve_team_id;
 use crate::session::AppzSession;
+use crate::ClientExt;
 use starbase::AppResult;
 use tracing::instrument;
 use ui::status;
@@ -12,12 +13,12 @@ use ui::status;
 #[instrument(skip_all)]
 pub async fn create(
     session: AppzSession,
-    project: &str,
-    to_team: Option<&str>,
+    project: String,
+    to_team: Option<String>,
 ) -> AppResult {
     let client = session.get_api_client();
 
-    let project_id = resolve_project_id(&client, project).await?;
+    let project_id = resolve_project_id(client.clone(), project.clone()).await?;
 
     let resp = client
         .projects()
@@ -26,7 +27,7 @@ pub async fn create(
         .map_err(|e| miette::miette!("Failed to create transfer request: {}", e))?;
 
     if let Some(team_ref) = to_team {
-        let target_team_id = resolve_team_id(&client, team_ref).await?;
+        let target_team_id = resolve_team_id(client.clone(), team_ref.clone()).await?;
         let prev_team = client.get_team_id().await;
         client.set_team_id(Some(target_team_id.clone())).await;
         let transferred = client

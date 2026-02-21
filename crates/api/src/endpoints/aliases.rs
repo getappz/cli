@@ -1,14 +1,15 @@
 use crate::client::Client;
 use crate::error::ApiError;
+use std::sync::Arc;
 use crate::models::{Alias, AliasesListResponse, DeleteResponse};
 use crate::paths::V0_PREFIX;
 
-pub struct Aliases<'a> {
-    client: &'a Client,
+pub struct Aliases {
+    client: Arc<Client>,
 }
 
-impl<'a> Aliases<'a> {
-    pub fn new(client: &'a Client) -> Self {
+impl Aliases {
+    pub fn new(client: Arc<Client>) -> Self {
         Self { client }
     }
 
@@ -50,6 +51,26 @@ impl<'a> Aliases<'a> {
     pub async fn get(&self, id_or_alias: &str) -> Result<Alias, ApiError> {
         let path = format!("{}/aliases/{}", V0_PREFIX, id_or_alias);
         self.client.get(&path).await
+    }
+
+    /// Create an alias: assign a custom domain to a deployment.
+    ///
+    /// Vercel parity: `POST /now/deployments/{id}/aliases` with `{ alias }`.
+    /// Uses `POST /v0/deployments/{id}/aliases` for appz.
+    #[tracing::instrument(skip(self))]
+    pub async fn create(
+        &self,
+        deployment_id: &str,
+        alias: &str,
+    ) -> Result<Alias, ApiError> {
+        #[derive(serde::Serialize)]
+        struct CreateAliasRequest<'a> {
+            alias: &'a str,
+        }
+        let path = format!("{}/deployments/{}/aliases", V0_PREFIX, deployment_id);
+        self.client
+            .post(&path, Some(CreateAliasRequest { alias }))
+            .await
     }
 
     /// Delete an alias

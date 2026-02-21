@@ -19,7 +19,7 @@ pub async fn inspect(
         return Err(miette::miette!("Not logged in. Run 'appz login' or set APPZ_TOKEN.").into());
     }
 
-    let dep = resolve_deployment_by_id_or_url(&client, &deployment).await?;
+    let dep = resolve_deployment_by_id_or_url(client.clone(), deployment).await?;
 
     if json_output {
         let out = serde_json::to_string_pretty(&dep).map_err(|e| miette::miette!("{}", e))?;

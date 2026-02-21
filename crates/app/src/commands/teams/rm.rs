@@ -1,5 +1,6 @@
 use crate::commands::teams::resolve_team_id;
 use crate::session::AppzSession;
+use crate::ClientExt;
 use starbase::AppResult;
 use tracing::instrument;
 use ui::prompt::confirm;
@@ -16,7 +17,7 @@ pub async fn rm(session: AppzSession, team: String, yes: bool) -> AppResult {
     let client = session.get_api_client();
 
     // Resolve team identifier to team ID
-    let team_id = resolve_team_id(&client, &team).await?;
+    let team_id = resolve_team_id(client.clone(), team.clone()).await?;
 
     // Get team details for display before deletion
     let team_details = client

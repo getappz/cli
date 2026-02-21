@@ -1,5 +1,6 @@
 use crate::client::Client;
 use crate::error::ApiError;
+use std::sync::Arc;
 use crate::http::response_handler::error_from_status_body_headers;
 use crate::models::{
     DeleteResponse, Deployment, DeploymentCreateRequest, DeploymentCreateResult,
@@ -31,16 +32,17 @@ fn deployment_id_for_path(deployment_id_or_url: &str) -> String {
     }
 }
 
-pub struct Deployments<'a> {
-    client: &'a Client,
+pub struct Deployments {
+    client: Arc<Client>,
 }
 
-impl<'a> Deployments<'a> {
-    pub fn new(client: &'a Client) -> Self {
+impl Deployments {
+    pub fn new(client: Arc<Client>) -> Self {
         Self { client }
     }
 
-    /// List deployments with optional pagination and filters
+    /// List deployments with optional pagination and filters.
+    /// Policy: e.g. [("errored", "6m"), ("preview", "12m")] for retention policy display (Vercel parity).
     #[tracing::instrument(skip(self))]
     pub async fn list(
         &self,
@@ -49,13 +51,23 @@ impl<'a> Deployments<'a> {
         since: Option<i64>,
         until: Option<i64>,
         team_id: Option<String>,
+        policy: Option<Vec<(String, String)>>,
     ) -> Result<DeploymentsListResponse, ApiError> {
-        let query_params = vec![
-            ("projectId", project_id),
-            ("limit", limit.map(|l| l.to_string())),
-            ("since", since.map(|s| s.to_string())),
-            ("until", until.map(|u| u.to_string())),
+        let mut query_params: Vec<(String, Option<String>)> = vec![
+            ("projectId".to_string(), project_id),
+            ("limit".to_string(), limit.map(|l| l.to_string())),
+            ("since".to_string(), since.map(|s| s.to_string())),
+            ("until".to_string(), until.map(|u| u.to_string())),
         ];
+        if let Some(p) = policy {
+            for (k, v) in p {
+                query_params.push((format!("policy-{}", k), Some(v)));
+            }
+        }
+        let query_refs: Vec<(&str, Option<String>)> = query_params
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.clone()))
+            .collect();
 
         // Temporarily set team_id if provided
         if let Some(ref team_id_val) = team_id {
@@ -63,7 +75,7 @@ impl<'a> Deployments<'a> {
         }
 
         let path = format!("{}/deployments", V0_PREFIX);
-        let result = self.client.get_with_query(&path, &query_params).await;
+        let result = self.client.get_with_query(&path, &query_refs).await;
 
         // Reset team_id if we set it
         if team_id.is_some() {
@@ -208,6 +220,36 @@ impl<'a> Deployments<'a> {
         let response = self
             .client
             .post_bytes(&path, data, &headers)
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let headers = response.headers().clone();
+            let text = response.text().await.unwrap_or_default();
+            return Err(error_from_status_body_headers(status, &text, &headers));
+        }
+        Ok(())
+    }
+
+    /// Upload a file with byte-level progress (streaming body, 16KB chunks).
+    #[tracing::instrument(skip(self, data, on_progress))]
+    pub async fn upload_file_with_progress(
+        &self,
+        deployment_id: &str,
+        sha: &str,
+        data: &[u8],
+        on_progress: std::sync::Arc<dyn Fn(u64) + Send + Sync>,
+    ) -> Result<(), ApiError> {
+        let path = format!("{}/deployments/{}/files", V0_PREFIX, deployment_id);
+        let size_str = data.len().to_string();
+        let headers: [(&str, &str); 3] = [
+            ("Content-Type", "application/octet-stream"),
+            ("x-now-digest", sha),
+            ("x-now-size", size_str.as_str()),
+        ];
+        let response = self
+            .client
+            .post_bytes_stream(&path, data, &headers, on_progress)
             .await?;
 
         if !response.status().is_success() {

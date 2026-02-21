@@ -5,6 +5,7 @@
 
 use crate::project::resolve_project_context;
 use crate::session::AppzSession;
+use crate::ClientExt;
 use miette::miette;
 use starbase::AppResult;
 use tracing::instrument;
@@ -34,9 +35,9 @@ fn build_dashboard_url(
 #[instrument(skip_all)]
 pub async fn open(session: AppzSession) -> AppResult {
     let client = session.get_api_client();
-    let cwd = &session.working_dir;
+    let cwd = session.working_dir.clone();
 
-    let ctx = resolve_project_context(client.as_ref(), cwd)
+    let ctx = resolve_project_context(client.clone(), cwd)
         .await
         .map_err(|e| miette!("Failed to resolve project: {}", e))?
         .ok_or_else(|| {

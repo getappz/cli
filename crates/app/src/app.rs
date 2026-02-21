@@ -187,8 +187,12 @@ pub enum Commands {
         #[arg(long)]
         spa_fallback: bool,
     },
-    /// List all deployments
-    Ls,
+    /// List all deployments (Vercel parity: appz list [project] [--policy KEY=value])
+    Ls {
+        /// See deployments with deployment retention policies (e.g. -p errored=6m -p preview=12m)
+        #[arg(long, short = 'p', value_name = "KEY=VALUE")]
+        policy: Vec<String>,
+    },
     /// Open the linked project in the Appz Dashboard
     Open,
     /// Link current directory to a project
@@ -278,8 +282,15 @@ pub enum Commands {
         #[command(subcommand)]
         command: crate::commands::domains::DomainsCommands,
     },
-    /// Pull project config and env from Appz (writes .appz/project.json, .env.local)
-    Pull,
+    /// Pull project config and env from Appz (writes .appz/project.json, .env[.environment].local)
+    Pull {
+        /// Target environment (development, preview, production) [default: development]
+        #[arg(long, short = 'e', default_value = "development")]
+        environment: String,
+        /// Skip overwrite confirmation
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
     /// Show deployment logs
     Logs {
         /// Deployment URL or ID (uses latest from linked project if omitted)

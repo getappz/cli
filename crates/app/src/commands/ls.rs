@@ -1,11 +1,32 @@
 use api::error::ApiError as ApiErrorType;
 use crate::session::AppzSession;
+use crate::ClientExt;
 use starbase::AppResult;
 use tracing::instrument;
 use ui::{format, pagination, table};
 
+/// Parse policy args like ["errored=6m", "preview=12m"] into vec of (k,v).
+fn parse_policy(policy: &[String]) -> Option<Vec<(String, String)>> {
+    if policy.is_empty() {
+        return None;
+    }
+    let parsed: Vec<(String, String)> = policy
+        .iter()
+        .filter_map(|s| {
+            let eq = s.find('=')?;
+            let (k, v) = s.split_at(eq);
+            Some((k.trim().to_string(), v[1..].trim().to_string()))
+        })
+        .collect();
+    if parsed.is_empty() {
+        None
+    } else {
+        Some(parsed)
+    }
+}
+
 #[instrument(skip_all)]
-pub async fn ls(session: AppzSession) -> AppResult {
+pub async fn ls(session: AppzSession, policy: Vec<String>) -> AppResult {
     let client = session.get_api_client();
 
     let project_context = session
@@ -21,9 +42,18 @@ pub async fn ls(session: AppzSession) -> AppResult {
             .await;
     }
 
+    let policy_params = parse_policy(&policy);
+    let show_policy = policy_params.is_some();
     let deployments_response = match client
         .deployments()
-        .list(Some(project_id), None, None, None, None)
+        .list(
+            Some(project_id),
+            None,
+            None,
+            None,
+            None,
+            policy_params.clone(),
+        )
         .await
     {
         Ok(r) => r,
@@ -44,15 +74,19 @@ pub async fn ls(session: AppzSession) -> AppResult {
         return Ok(None);
     }
 
-    // Match Vercel CLI format: Age | Deployment | Status | Environment | Duration | Username
-    let headers = vec![
+    // Match Vercel CLI format: Age | Deployment | Status | Environment | [Duration | Username] or Proposed Expiration
+    let mut headers = vec![
         "Age",
         "Deployment",
         "Status",
         "Environment",
-        "Duration",
-        "Username",
     ];
+    if !show_policy {
+        headers.push("Duration");
+        headers.push("Username");
+    } else {
+        headers.push("Proposed Expiration");
+    }
     let mut rows = Vec::new();
 
     for deployment in &deployments_response.deployments {
@@ -93,7 +127,29 @@ pub async fn ls(session: AppzSession) -> AppResult {
             .unwrap_or("–")
             .to_string();
 
-        rows.push(vec![age, url, status_display, env.to_string(), duration, username]);
+        let proposed_exp = deployment
+            .proposedExpiration
+            .map(|ts| format::timestamp_auto(ts))
+            .unwrap_or_else(|| "No expiration".to_string());
+
+        if show_policy {
+            rows.push(vec![
+                age,
+                url,
+                status_display,
+                env.to_string(),
+                proposed_exp,
+            ]);
+        } else {
+            rows.push(vec![
+                age,
+                url,
+                status_display,
+                env.to_string(),
+                duration,
+                username,
+            ]);
+        }
     }
 
     // Display table with professional formatting

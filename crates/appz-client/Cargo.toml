@@ -7,7 +7,9 @@ authors.workspace = true
 
 [dependencies]
 api = { path = "../api" }
-tokio = { workspace = true, features = ["fs"] }
+tokio = { workspace = true, features = ["fs", "sync"] }
+futures = { workspace = true }
+futures-util = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha1_smol = "1.0"

@@ -1,6 +1,7 @@
 use crate::auth;
 use crate::commands::teams::resolve_team_id;
 use crate::session::AppzSession;
+use crate::ClientExt;
 use starbase::AppResult;
 use tracing::instrument;
 use ui::status;
@@ -19,7 +20,7 @@ pub async fn switch(session: AppzSession, team: String) -> AppResult {
     let client = session.get_api_client();
 
     // Resolve team identifier to team ID
-    let team_id = resolve_team_id(&client, &team).await?;
+    let team_id = resolve_team_id(client.clone(), team.clone()).await?;
 
     // Get team details for display
     let team_details = client

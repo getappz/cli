@@ -1,6 +1,7 @@
 //! Pull environment variables and write to .env.local.
 
 use crate::project::{read_project_link, ProjectLinkAndSettings};
+use crate::ClientExt;
 use miette::{miette, Result};
 use starbase::AppResult;
 use std::path::Path;
@@ -9,6 +10,19 @@ use tracing::instrument;
 use ui::status;
 
 const CONTENTS_PREFIX: &str = "# Created by Appz CLI\n";
+
+/// Default output filename for env pull by target (Vercel parity).
+/// - development → .env.local
+/// - preview → .env.preview.local
+/// - production → .env.production.local
+pub fn default_env_filename(target: &str) -> String {
+    match target {
+        "development" => ".env.local".to_string(),
+        "preview" => ".env.preview.local".to_string(),
+        "production" => ".env.production.local".to_string(),
+        _ => format!(".env.{}.local", target),
+    }
+}
 
 fn escape_value(v: &str) -> String {
     v.replace('\n', "\\n").replace('\r', "\\r")
@@ -97,4 +111,29 @@ fn require_linked_project(cwd: &Path) -> Result<ProjectLinkAndSettings> {
             "Project not linked. Run 'appz link' to link this directory to a project."
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::default_env_filename;
+
+    #[test]
+    fn test_default_env_filename_development() {
+        assert_eq!(default_env_filename("development"), ".env.local");
+    }
+
+    #[test]
+    fn test_default_env_filename_preview() {
+        assert_eq!(default_env_filename("preview"), ".env.preview.local");
+    }
+
+    #[test]
+    fn test_default_env_filename_production() {
+        assert_eq!(default_env_filename("production"), ".env.production.local");
+    }
+
+    #[test]
+    fn test_default_env_filename_custom() {
+        assert_eq!(default_env_filename("staging"), ".env.staging.local");
+    }
 }

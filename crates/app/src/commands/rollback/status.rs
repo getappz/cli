@@ -3,6 +3,7 @@
 use crate::commands::deployment_utils;
 use crate::project::resolve_project_context;
 use crate::session::AppzSession;
+use crate::ClientExt;
 use api::models::{Deployment, Project};
 use miette::Result;
 use starbase::AppResult;
@@ -19,7 +20,7 @@ pub async fn rollback_status(session: AppzSession, timeout: Duration) -> AppResu
     let cwd = session.working_dir.clone();
 
     // Resolve project context
-    let project_context = resolve_project_context(&client, &cwd)
+    let project_context = resolve_project_context(client.clone(), cwd)
         .await?
         .ok_or_else(|| miette::miette!("Project not linked. Run 'appz link' first."))?;
 
@@ -32,7 +33,7 @@ pub async fn rollback_status(session: AppzSession, timeout: Duration) -> AppResu
         .await
         .map_err(|e| miette::miette!("Failed to get project: {}", e))?;
 
-    poll_rollback_status(&client, &project_id, None, &project, timeout, false).await?;
+    poll_rollback_status(client.clone(), project_id.clone(), None, &project, timeout, false).await?;
 
     Ok(None)
 }
@@ -40,8 +41,8 @@ pub async fn rollback_status(session: AppzSession, timeout: Duration) -> AppResu
 /// Poll for rollback status until completion or timeout
 #[tracing::instrument(skip(client, deployment, project))]
 pub async fn poll_rollback_status(
-    client: &api::Client,
-    project_id: &str,
+    client: std::sync::Arc<api::Client>,
+    project_id: String,
     deployment: Option<&Deployment>,
     project: &Project,
     timeout: Duration,
@@ -69,7 +70,7 @@ pub async fn poll_rollback_status(
         // Get updated project to check lastAliasRequest
         let project_check = client
             .projects()
-            .get(project_id)
+            .get(&project_id)
             .await
             .map_err(|e| miette::miette!("Failed to get project: {}", e))?;
 
@@ -122,7 +123,7 @@ pub async fn poll_rollback_status(
                 client,
                 project,
                 requested_at.unwrap_or(0),
-                to_deployment_id.unwrap_or(""),
+                to_deployment_id.unwrap_or("").to_string(),
                 performing_rollback,
             )
             .await;
@@ -133,9 +134,9 @@ pub async fn poll_rollback_status(
             spinner = None;
             return render_job_failed(
                 client,
-                project_id,
+                project_id.clone(),
                 deployment,
-                to_deployment_id.unwrap_or(""),
+                to_deployment_id.unwrap_or("").to_string(),
             )
             .await;
         }
@@ -178,10 +179,10 @@ pub async fn poll_rollback_status(
 }
 
 async fn render_job_succeeded(
-    client: &api::Client,
+    client: std::sync::Arc<api::Client>,
     project: &Project,
     requested_at: i64,
-    to_deployment_id: &str,
+    to_deployment_id: String,
     performing_rollback: bool,
 ) -> Result<()> {
     let project_name = project
@@ -191,12 +192,12 @@ async fn render_job_succeeded(
         .unwrap_or("project");
 
     // Try to get deployment info
-    let deployment_info = match client.deployments().get(to_deployment_id).await {
+    let deployment_info = match client.deployments().get(&to_deployment_id).await {
         Ok(deployment) => {
-            let url = deployment.url.as_deref().unwrap_or(to_deployment_id);
+            let url = deployment.url.as_deref().unwrap_or(&to_deployment_id);
             format!("{} ({})", url, to_deployment_id)
         }
-        Err(_) => to_deployment_id.to_string(),
+        Err(_) => to_deployment_id.clone(),
     };
 
     let duration = if performing_rollback && requested_at > 0 {
@@ -217,10 +218,10 @@ async fn render_job_succeeded(
 }
 
 async fn render_job_failed(
-    client: &api::Client,
-    _project_id: &str,
+    client: std::sync::Arc<api::Client>,
+    _project_id: String,
     deployment: Option<&Deployment>,
-    to_deployment_id: &str,
+    to_deployment_id: String,
 ) -> Result<()> {
     let deployment_name = if let Some(deployment) = deployment {
         deployment
@@ -229,11 +230,11 @@ async fn render_job_failed(
             .unwrap_or(&deployment.id)
             .to_string()
     } else {
-        match client.deployments().get(to_deployment_id).await {
+        match client.deployments().get(&to_deployment_id).await {
             Ok(deployment) => deployment
                 .url
                 .as_deref()
-                .unwrap_or(to_deployment_id)
+                .unwrap_or(&to_deployment_id)
                 .to_string(),
             Err(_) => to_deployment_id.to_string(),
         }

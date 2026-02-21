@@ -1,8 +1,9 @@
 //! Pull project config and env from Appz API (Vercel-aligned).
 //!
-//! Fetches project settings and env vars, writes .appz/project.json and .env.local.
+//! Fetches project settings and env vars, writes .appz/project.json and .env[.environment].local.
 
-use crate::commands::env::pull_env;
+use crate::commands::env::{default_env_filename, pull_env};
+use crate::ClientExt;
 use crate::project::{read_project_link, write_project_link, ProjectLinkAndSettings};
 use miette::{miette, Result};
 use starbase::AppResult;
@@ -10,8 +11,21 @@ use std::path::Path;
 use tracing::instrument;
 use ui::status;
 
+const VALID_ENVIRONMENTS: &[&str] = &["development", "preview", "production"];
+
 #[instrument(skip_all)]
-pub async fn pull(session: crate::session::AppzSession) -> AppResult {
+pub async fn pull(
+    session: crate::session::AppzSession,
+    environment: String,
+    yes: bool,
+) -> AppResult {
+    if !VALID_ENVIRONMENTS.contains(&environment.as_str()) {
+        return Err(miette!(
+            "Environment must be one of: development, preview, production. Got: {}",
+            environment
+        )
+        .into());
+    }
     let link = require_linked_project(&session.working_dir)?;
     let client = session.get_api_client();
 
@@ -50,7 +64,8 @@ pub async fn pull(session: crate::session::AppzSession) -> AppResult {
 
     let _ = status::success("Downloaded project settings to .appz/project.json");
 
-    pull_env(session, ".env.local".to_string(), "development".to_string(), true).await?;
+    let filename = default_env_filename(&environment);
+    pull_env(session, filename, environment, yes).await?;
 
     Ok(None)
 }

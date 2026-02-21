@@ -21,6 +21,7 @@ pub use input_root_directory::input_root_directory;
 pub use select_org::select_org;
 
 use crate::app_error::UserCancellation;
+use crate::ClientExt;
 use crate::commands::projects::user_friendly_list_projects_error;
 use api::models::Project;
 use api::Client;
@@ -28,6 +29,7 @@ use miette::{miette, Result};
 use serde::{Deserialize, Serialize};
 use starbase_utils::{fs, json};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Organization/Team type
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -271,7 +273,7 @@ fn is_project_unavailable_error(err: &api::error::ApiError) -> bool {
 /// - Resets team context after fetching (using a guard pattern)
 /// - Handles errors gracefully
 async fn fetch_project_with_team_context(
-    client: &Client,
+    client: Arc<Client>,
     project_id: &str,
     team_id: &str,
 ) -> Result<Option<api::models::Project>, api::error::ApiError> {
@@ -306,7 +308,7 @@ async fn fetch_project_with_team_context(
 /// - Showing appropriate warnings
 /// - Returning the appropriate ProjectContext or None
 async fn resolve_and_validate_link(
-    client: &Client,
+    client: Arc<Client>,
     link: ProjectLink,
     settings: ProjectSettings,
 ) -> Result<Option<ProjectContext>> {
@@ -345,16 +347,16 @@ async fn resolve_and_validate_link(
 /// In these cases, it shows a warning message and returns None (not linked),
 /// allowing the user to re-link the project.
 pub async fn resolve_project_context(
-    client: &Client,
-    cwd: &Path,
+    client: Arc<Client>,
+    cwd: PathBuf,
 ) -> Result<Option<ProjectContext>> {
     // First check environment variables
     if let Some(link) = get_project_context_from_env() {
-        return resolve_and_validate_link(client, link, ProjectSettings::default()).await;
+        return resolve_and_validate_link(client.clone(), link, ProjectSettings::default()).await;
     }
 
     // Then check .appz/project.json (use async version in async context)
-    if let Some(link_and_settings) = read_project_link_async(cwd).await? {
+    if let Some(link_and_settings) = read_project_link_async(&cwd).await? {
         return resolve_and_validate_link(
             client,
             link_and_settings.link,
@@ -375,8 +377,8 @@ pub async fn resolve_project_context(
 /// 4. Creates and writes the project link
 /// 5. Returns the project context
 pub async fn link_project_interactive(
-    client: &Client,
-    cwd: &Path,
+    client: Arc<Client>,
+    cwd: PathBuf,
     project_id: Option<String>,
     team_id: Option<String>,
 ) -> Result<ProjectContext> {
@@ -386,7 +388,7 @@ pub async fn link_project_interactive(
 
     // Resolve team ID first (needed for both linking and creating projects)
     let team_id = if let Some(ref team_identifier) = team_id {
-        Some(teams::resolve_team_id(client, team_identifier).await?)
+        Some(teams::resolve_team_id(client.clone(), team_identifier.clone()).await?)
     } else {
         // Try to get team from client
         client.get_team_id().await
@@ -399,7 +401,8 @@ pub async fn link_project_interactive(
     // Resolve project identifier
     let (project_id, project_obj) = if let Some(ref project_identifier) = project_id {
         // Use provided project identifier
-        let resolved_id = projects::resolve_project_id(client, project_identifier).await?;
+        let resolved_id =
+            projects::resolve_project_id(client.clone(), project_identifier.clone()).await?;
         let project = client
             .projects()
             .get(&resolved_id)
@@ -417,7 +420,7 @@ pub async fn link_project_interactive(
         if projects_response.projects.is_empty() {
             // No projects exist - create a new one
             // Use directory name as project slug
-            let dir_name = cwd
+            let dir_name = cwd.as_path()
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("project")
@@ -509,7 +512,7 @@ pub async fn link_project_interactive(
         settings: settings.clone(),
     };
 
-    write_project_link_async(cwd, &link_and_settings).await?;
+    write_project_link_async(&cwd, &link_and_settings).await?;
 
     // Display success message
     let project_name = project_link
@@ -547,21 +550,20 @@ pub async fn link_project_interactive(
 /// 5. If creating: root directory, framework detection, settings editing, create project, link, git connection
 #[tracing::instrument(skip(client, cwd))]
 pub async fn setup_and_link(
-    client: &Client,
-    cwd: &Path,
+    client: Arc<Client>,
+    cwd: PathBuf,
     auto_confirm: bool,
-    setup_msg: Option<&str>,
-    project_name: Option<&str>,
+    setup_msg: Option<String>,
+    project_name: Option<String>,
 ) -> Result<ProjectContext> {
     use ui::prompt::confirm;
 
     use ui::status;
 
-    let setup_msg = setup_msg.unwrap_or("Set up");
+    let setup_msg = setup_msg.unwrap_or_else(|| "Set up".to_string());
     let detected_project_name = project_name
-        .map(|s| s.to_string())
         .or_else(|| {
-            cwd.file_name()
+            cwd.as_path().file_name()
                 .and_then(|n| n.to_str())
                 .map(|s| s.to_string())
         })
@@ -576,7 +578,7 @@ pub async fn setup_and_link(
     }
 
     // Initial setup prompt
-    let humanized_path = humanize_path(cwd);
+    let humanized_path = humanize_path(&cwd);
     let should_start_setup =
         auto_confirm || confirm(&format!("{} \"{}\"?", setup_msg, humanized_path), true)?;
 
@@ -587,8 +589,8 @@ pub async fn setup_and_link(
 
     // Select organization/team
     let org = select_org(
-        client,
-        "Which scope should contain your project?",
+        client.clone(),
+        "Which scope should contain your project?".to_string(),
         auto_confirm,
     )
     .await?;
@@ -601,7 +603,8 @@ pub async fn setup_and_link(
     }
 
     // Project selection/creation
-    let project_result = input_project(client, &org, &detected_project_name, auto_confirm).await?;
+    let project_result =
+        input_project(client.clone(), &org, detected_project_name, auto_confirm).await?;
 
     match project_result {
         Either::Left(project) => {
@@ -624,7 +627,7 @@ pub async fn setup_and_link(
                 settings: settings.clone(),
             };
 
-            write_project_link_async(cwd, &link_and_settings).await?;
+            write_project_link_async(&cwd, &link_and_settings).await?;
 
             let project_name_display = project
                 .name
@@ -647,14 +650,14 @@ pub async fn setup_and_link(
         Either::Right(new_project_name) => {
             // Creating new project
             let root_directory = if !auto_confirm {
-                input_root_directory(cwd, auto_confirm).await?
+                input_root_directory(&cwd, auto_confirm).await?
             } else {
                 None
             };
 
             // Validate root directory if provided (use spawn_blocking for file I/O)
             if let Some(ref root_dir) = root_directory {
-                let root_path = cwd.join(root_dir);
+                let root_path = cwd.as_path().join(root_dir);
                 let root_path_clone = root_path.clone();
                 let exists = tokio::task::spawn_blocking(move || root_path_clone.exists())
                     .await
@@ -683,7 +686,7 @@ pub async fn setup_and_link(
             let path_with_root = root_directory
                 .as_ref()
                 .map(|rd| cwd.join(rd))
-                .unwrap_or_else(|| cwd.to_path_buf());
+                .unwrap_or_else(|| cwd.clone());
 
             // Read local config if exists (use async version in async context)
             let local_config = read_config_async(&path_with_root).await.ok().flatten();
@@ -756,7 +759,7 @@ pub async fn setup_and_link(
                 settings: settings.clone(),
             };
 
-            write_project_link_async(cwd, &link_and_settings).await?;
+            write_project_link_async(&cwd, &link_and_settings).await?;
 
             status::success(&format!(
                 "Linked to project '{}' (ID: {})",
@@ -765,7 +768,7 @@ pub async fn setup_and_link(
             .map_err(|e| miette!("Failed to display message: {}", e))?;
 
             // Connect git repository
-            connect_git_repository(cwd, auto_confirm).await.ok(); // Ignore errors for git connection
+            connect_git_repository(&cwd, auto_confirm).await.ok(); // Ignore errors for git connection
 
             Ok(ProjectContext {
                 link: project_link,
@@ -779,16 +782,16 @@ pub async fn setup_and_link(
 /// Ensure project is linked, automatically linking if necessary
 #[tracing::instrument(skip(client, cwd))]
 pub async fn ensure_project_link(
-    _command_name: &str,
-    client: &Client,
-    cwd: &Path,
+    _command_name: String,
+    client: Arc<Client>,
+    cwd: PathBuf,
     auto_confirm: bool,
 ) -> Result<ProjectContext> {
     // First try to resolve existing link
-    if let Some(ctx) = resolve_project_context(client, cwd).await? {
+    if let Some(ctx) = resolve_project_context(client.clone(), cwd.clone()).await? {
         return Ok(ctx);
     }
 
     // If not linked, use setup_and_link to link automatically
-    setup_and_link(client, cwd, auto_confirm, None, None).await
+    setup_and_link(client, cwd, auto_confirm, None::<String>, None::<String>).await
 }

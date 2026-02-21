@@ -332,6 +332,9 @@ pub struct Deployment {
     pub createdBy: Option<String>,
     pub createdAt: i64,
     pub updatedAt: i64,
+    /// When listing with --policy: computed expiration based on retention (Vercel parity).
+    #[serde(default)]
+    pub proposedExpiration: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,14 +1,15 @@
 use crate::client::Client;
 use crate::error::ApiError;
+use std::sync::Arc;
 use crate::models::DomainsListResponse;
 use crate::paths::V0_PREFIX;
 
-pub struct Domains<'a> {
-    client: &'a Client,
+pub struct Domains {
+    client: Arc<Client>,
 }
 
-impl<'a> Domains<'a> {
-    pub fn new(client: &'a Client) -> Self {
+impl Domains {
+    pub fn new(client: Arc<Client>) -> Self {
         Self { client }
     }
 

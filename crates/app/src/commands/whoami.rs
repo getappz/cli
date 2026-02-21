@@ -1,6 +1,7 @@
 //! Whoami command – show the username of the currently logged-in user (Vercel-aligned).
 
 use crate::session::AppzSession;
+use crate::ClientExt;
 use starbase::AppResult;
 use tracing::instrument;
 

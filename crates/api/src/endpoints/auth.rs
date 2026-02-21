@@ -7,14 +7,14 @@ use crate::models::{
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-pub struct Auth<'a> {
-    client: &'a Client,
+pub struct Auth {
+    client: std::sync::Arc<Client>,
     // Cache for authorization server metadata
     metadata_cache: Arc<RwLock<Option<AuthorizationServerMetadata>>>,
 }
 
-impl<'a> Auth<'a> {
-    pub fn new(client: &'a Client) -> Self {
+impl Auth {
+    pub fn new(client: std::sync::Arc<Client>) -> Self {
         Self {
             client,
             metadata_cache: Arc::new(RwLock::new(None)),

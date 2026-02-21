@@ -1,4 +1,5 @@
 use crate::session::AppzSession;
+use crate::ClientExt;
 use starbase::AppResult;
 use tracing::instrument;
 use ui::{format, pagination, table};
@@ -6,15 +7,19 @@ use ui::{format, pagination, table};
 /// List all aliases the user has access to.
 ///
 /// Displays aliases in a table format with ID, alias, target, domain, and creation timestamp.
+/// Vercel parity: `alias ls [--limit N]` (default 20, max 100).
 #[instrument(skip_all)]
-pub async fn ls(session: AppzSession) -> AppResult {
+pub async fn ls(session: AppzSession, limit: Option<i64>) -> AppResult {
     // Get authenticated API client from session
     let client = session.get_api_client();
+
+    // Clamp limit to 1..100 if provided (Vercel max)
+    let limit = limit.map(|l| l.clamp(1, 100));
 
     // List aliases
     let aliases_response = client
         .aliases()
-        .list(None, None, None, None, None)
+        .list(None, None, limit, None, None)
         .await
         .map_err(|e| {
             let error_msg = match &e {

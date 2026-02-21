@@ -1,14 +1,15 @@
 use crate::client::Client;
 use crate::error::ApiError;
+use std::sync::Arc;
 use crate::models::{map_better_auth_user_to_cli_user, BetterAuthUserResponse, User};
 use crate::paths::V0_PREFIX;
 
-pub struct Users<'a> {
-    client: &'a Client,
+pub struct Users {
+    client: Arc<Client>,
 }
 
-impl<'a> Users<'a> {
-    pub fn new(client: &'a Client) -> Self {
+impl Users {
+    pub fn new(client: Arc<Client>) -> Self {
         Self { client }
     }
 

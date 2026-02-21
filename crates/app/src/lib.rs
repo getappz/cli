@@ -22,7 +22,8 @@ mod tunnel;
 mod utils;
 pub mod wasm;
 
+pub use api::ClientExt;
 pub use app::*;
 pub use app_error::*;
 pub use session::*;
-pub use telemetry::{record_command, TelemetryEventStore};
+pub use telemetry::{command_name_for_telemetry, record_command, TelemetryEventStore};

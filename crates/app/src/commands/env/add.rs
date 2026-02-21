@@ -1,6 +1,7 @@
 //! Add an environment variable to a linked project.
 
 use crate::project::{read_project_link, ProjectLinkAndSettings};
+use crate::ClientExt;
 use api::models::AddEnvRequest;
 use miette::{miette, Result};
 use starbase::AppResult;

@@ -82,20 +82,21 @@ const DETECTION_RULES: &[DetectionRule] = &[
 /// Detect all configured platforms in the project directory.
 ///
 /// Returns detected platforms sorted by confidence (highest first).
-pub async fn detect_all(project_dir: &Path) -> DeployResult<Vec<DetectedPlatform>> {
+/// Takes PathBuf to avoid capturing &Path in Send futures (starbase spawn).
+pub async fn detect_all(project_dir: std::path::PathBuf) -> DeployResult<Vec<DetectedPlatform>> {
     let mut detected = Vec::new();
 
     // 1. Check appz.json deploy targets (highest confidence)
-    if let Some(deploy_config) = crate::config::read_deploy_config(project_dir)? {
+    if let Some(deploy_config) = crate::config::read_deploy_config(&project_dir)? {
         detect_from_config(&deploy_config, &mut detected);
     }
 
     // 2. Check platform-specific files
-    detect_from_files(project_dir, &mut detected);
+    detect_from_files(&project_dir, &mut detected);
 
     // 3. Special-case detections
-    detect_github_pages(project_dir, &mut detected);
-    detect_surge(project_dir, &mut detected);
+    detect_github_pages(&project_dir, &mut detected);
+    detect_surge(&project_dir, &mut detected);
 
     // Sort by confidence (highest first), then alphabetically
     detected.sort_by(|a, b| {
@@ -113,7 +114,7 @@ pub async fn detect_all(project_dir: &Path) -> DeployResult<Vec<DetectedPlatform
 
 /// Detect a specific platform by slug.
 pub async fn detect(project_dir: &Path, slug: &str) -> DeployResult<Option<DetectedPlatform>> {
-    let all = detect_all(project_dir).await?;
+    let all = detect_all(project_dir.to_path_buf()).await?;
     Ok(all.into_iter().find(|p| p.slug == slug))
 }
 

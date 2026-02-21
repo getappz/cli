@@ -36,7 +36,7 @@ fn get_tracing_modules() -> Vec<String> {
     modules
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> MainResult {
     let mut timing = common::timing::TimingDebug::new();
 
@@ -118,8 +118,9 @@ async fn main() -> MainResult {
     timing.checkpoint("pre app.run");
     let telemetry_store = std::sync::Arc::new(app::TelemetryEventStore::new());
     let run_result = app
-        .run(AppzSession::new(cli, telemetry_store.clone()), |session| async {
-            app::record_command(&session.telemetry_store, &session.cli.command).await;
+        .run(AppzSession::new(cli, telemetry_store.clone()), |session| async move {
+            let cmd_name = app::command_name_for_telemetry(session.cli.command.clone());
+            app::record_command(session.telemetry_store.clone(), cmd_name).await;
             match session.cli.command.clone() {
                 Commands::List => app::commands::list(session).await,
                 Commands::Plan { task } => app::commands::plan(session, task).await,
@@ -133,7 +134,7 @@ async fn main() -> MainResult {
                 Commands::Build => app::commands::build(session).await,
                 #[cfg(feature = "dev-server")]
                 Commands::Preview { .. } => app::commands::preview(session).await,
-                Commands::Ls => app::commands::ls(session).await,
+                Commands::Ls { policy } => app::commands::ls(session, policy).await,
                 Commands::Open => app::commands::open(session).await,
                 Commands::Link { project, team } => {
                     app::commands::link(session, project, team).await
@@ -171,7 +172,9 @@ async fn main() -> MainResult {
                 Commands::Domains { command } => {
                     app::commands::domains::run(session, command).await
                 }
-                Commands::Pull => app::commands::pull(session).await,
+                Commands::Pull { environment, yes } => {
+                    app::commands::pull(session, environment, yes).await
+                }
                 Commands::Logs { deployment } => {
                     app::commands::logs(session, deployment).await
                 }

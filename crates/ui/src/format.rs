@@ -283,17 +283,17 @@ mod tests {
         // Seconds (2021-01-01 00:00:00 UTC)
         assert!(timestamp_auto(1609459200).contains("2021"));
 
-        // Milliseconds (Feb 19, 2026)
+        // Milliseconds (Feb 19, 2025)
         let ms = 1739961333000i64;
         assert!(
-            timestamp_auto(ms).contains("2026"),
+            timestamp_auto(ms).contains("2025"),
             "milliseconds should format correctly"
         );
 
         // Microseconds (CLI-created teams from D1/etc.)
         let us = 1739961333000000i64;
         assert!(
-            timestamp_auto(us).contains("2026"),
+            timestamp_auto(us).contains("2025"),
             "microseconds should format correctly, not overflow to year 58108"
         );
     }

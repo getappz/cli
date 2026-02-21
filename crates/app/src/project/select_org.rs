@@ -3,6 +3,7 @@
 //! Matches Vercel's select-org.ts functionality
 
 use crate::project::{Org, OrgType};
+use crate::ClientExt;
 use api::Client;
 use miette::{miette, Result};
 use tracing::instrument;
@@ -14,7 +15,11 @@ use ui::status;
 /// Prompts user to select which scope (personal account or team) should contain the project.
 /// Shows spinner while loading scopes.
 #[instrument(skip(client))]
-pub async fn select_org(client: &Client, question: &str, auto_confirm: bool) -> Result<Org> {
+pub async fn select_org(
+    client: std::sync::Arc<Client>,
+    question: String,
+    auto_confirm: bool,
+) -> Result<Org> {
     // Show spinner while loading
     status::info("Loading scopes…").map_err(|e| miette!("Failed to display message: {}", e))?;
 
@@ -73,7 +78,7 @@ pub async fn select_org(client: &Client, question: &str, auto_confirm: bool) -> 
 
     // Prompt user to select
     let default_org_ref = default_org.as_ref();
-    let selected = select_with_value(question, choices, default_org_ref)?;
+    let selected = select_with_value(question.as_str(), choices, default_org_ref)?;
 
     Ok(selected)
 }

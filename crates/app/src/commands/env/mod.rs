@@ -13,7 +13,7 @@ pub mod rm;
 
 pub use add::add;
 pub use ls::ls;
-pub use pull::pull_env;
+pub use pull::{default_env_filename, pull_env};
 pub use rm::rm;
 
 #[derive(Subcommand, Debug, Clone)]

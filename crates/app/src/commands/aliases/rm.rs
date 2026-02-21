@@ -1,5 +1,6 @@
 use crate::commands::aliases::resolve_alias_id;
 use crate::session::AppzSession;
+use crate::ClientExt;
 use starbase::AppResult;
 use tracing::instrument;
 use ui::prompt::confirm;
@@ -16,7 +17,7 @@ pub async fn rm(session: AppzSession, alias: String, yes: bool) -> AppResult {
     let client = session.get_api_client();
 
     // Resolve alias identifier to alias ID
-    let alias_id = resolve_alias_id(&client, &alias).await?;
+    let alias_id = resolve_alias_id(client.clone(), alias.clone()).await?;
 
     // Get alias details for display before deletion
     let alias_details = client

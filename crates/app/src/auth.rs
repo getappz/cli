@@ -1,4 +1,4 @@
-use api::Client;
+use api::{Client, ClientExt};
 use miette::Result;
 use serde::{Deserialize, Serialize};
 use starbase_utils::dirs;
@@ -240,7 +240,7 @@ pub fn clear_token() -> Result<()> {
 pub fn requires_auth(command: &crate::app::Commands) -> bool {
     use crate::app::Commands;
     match command {
-        Commands::Ls
+        Commands::Ls { .. }
         | Commands::Run { .. }
         | Commands::Plan { .. }
         | Commands::Switch { .. }

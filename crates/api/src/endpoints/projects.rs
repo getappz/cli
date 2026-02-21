@@ -1,5 +1,6 @@
 use crate::client::Client;
 use crate::error::ApiError;
+use std::sync::Arc;
 use crate::models::{
     AddEnvRequest, CreateProjectRequest, CreateTransferRequestBody, DeleteResponse, Project,
     ProjectEnvListResponse, ProjectEnvPullResponse, ProjectsListResponse,
@@ -7,12 +8,12 @@ use crate::models::{
 };
 use crate::paths::V0_PREFIX;
 
-pub struct Projects<'a> {
-    client: &'a Client,
+pub struct Projects {
+    client: Arc<Client>,
 }
 
-impl<'a> Projects<'a> {
-    pub fn new(client: &'a Client) -> Self {
+impl Projects {
+    pub fn new(client: Arc<Client>) -> Self {
         Self { client }
     }
 

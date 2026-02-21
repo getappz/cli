@@ -2,6 +2,9 @@ use crate::error::ApiError;
 use crate::middleware::auth::AuthenticationMiddleware;
 use crate::middleware::retry::{RetryMiddleware, RetryPolicy};
 use crate::middleware::tracing::TracingMiddleware;
+use bytes::Bytes;
+use futures_util::stream::{self, StreamExt};
+use reqwest_middleware::reqwest::Body;
 use reqwest_middleware::reqwest::{Method, StatusCode};
 use reqwest_middleware::ClientWithMiddleware;
 use std::future::Future;
@@ -75,6 +78,7 @@ fn format_reqwest_error(err: reqwest_middleware::reqwest::Error, url: &str) -> S
 pub type UnauthorizedCallback =
     Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<String, ApiError>> + Send>> + Send + Sync>;
 
+#[derive(Clone)]
 pub struct Client {
     http_client: ClientWithMiddleware,
     base_url: String,
@@ -390,6 +394,45 @@ impl Client {
         let response = self
             .execute_with_auth_retry(&url, || {
                 let mut req = self.http_client.request(Method::POST, &url).body(body.clone());
+                for (k, v) in headers {
+                    req = req.header(*k, *v);
+                }
+                req
+            })
+            .await?;
+
+        Ok(response)
+    }
+
+    /// Execute a POST request with streaming body and byte-level progress.
+    /// Streams data in 16KB chunks (Vercel-aligned); invokes `on_progress` per chunk.
+    #[tracing::instrument(skip(self, data, on_progress))]
+    pub async fn post_bytes_stream(
+        &self,
+        path: &str,
+        data: &[u8],
+        headers: &[(&str, &str)],
+        on_progress: Arc<dyn Fn(u64) + Send + Sync>,
+    ) -> Result<reqwest_middleware::reqwest::Response, ApiError> {
+        const CHUNK_SIZE: usize = 16 * 1024; // 16KB - Vercel default
+
+        let url = format!("{}{}", self.base_url, path);
+
+        let response = self
+            .execute_with_auth_retry(&url, || {
+                let chunks: Vec<Bytes> = data
+                    .chunks(CHUNK_SIZE)
+                    .map(Bytes::copy_from_slice)
+                    .collect();
+                let progress = Arc::clone(&on_progress);
+                let body_stream = stream::iter(chunks).map(move |chunk| {
+                    let len = chunk.len() as u64;
+                    progress(len);
+                    Ok::<Bytes, std::io::Error>(chunk)
+                });
+                let body = Body::wrap_stream(body_stream);
+
+                let mut req = self.http_client.request(Method::POST, &url).body(body);
                 for (k, v) in headers {
                     req = req.header(*k, *v);
                 }

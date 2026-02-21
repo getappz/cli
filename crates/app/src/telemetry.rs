@@ -191,10 +191,10 @@ impl Default for TelemetryEventStore {
     }
 }
 
-/// Record the current command from the CLI. Call at start of command dispatch.
-pub async fn record_command(store: &TelemetryEventStore, command: &crate::app::Commands) {
+/// Extract command name from Commands for telemetry (takes owned clone to avoid refs in Send futures).
+pub fn command_name_for_telemetry(command: crate::app::Commands) -> String {
     use crate::app::Commands;
-    let cmd_name = match command {
+    let name = match command {
         Commands::List => "list",
         Commands::Plan { .. } => "plan",
         Commands::Run { .. } => "run",
@@ -205,7 +205,7 @@ pub async fn record_command(store: &TelemetryEventStore, command: &crate::app::C
         Commands::Build => "build",
         #[cfg(feature = "dev-server")]
         Commands::Preview { .. } => "preview",
-        Commands::Ls => "ls",
+        Commands::Ls { .. } => "ls",
         Commands::Open => "open",
         Commands::Link { .. } => "link",
         Commands::Unlink => "unlink",
@@ -220,7 +220,7 @@ pub async fn record_command(store: &TelemetryEventStore, command: &crate::app::C
         Commands::Transfer { .. } => "transfer",
         Commands::Aliases { .. } => "aliases",
         Commands::Domains { .. } => "domains",
-        Commands::Pull => "pull",
+        Commands::Pull { .. } => "pull",
         Commands::Logs { .. } => "logs",
         Commands::Inspect { .. } => "inspect",
         Commands::Env { .. } => "env",
@@ -245,7 +245,14 @@ pub async fn record_command(store: &TelemetryEventStore, command: &crate::app::C
         Commands::SelfUpdate { .. } => "self-update",
         Commands::External(_) => "external",
     };
-    store.track_command(cmd_name, cmd_name).await;
+    name.to_string()
+}
+
+/// Record the current command from the CLI. Call at start of command dispatch.
+/// Takes owned `store` and `cmd_name` to avoid capturing references in the async future (Send).
+pub async fn record_command(store: std::sync::Arc<TelemetryEventStore>, cmd_name: String) {
+    let s = cmd_name.as_str();
+    store.track_command(s, s).await;
 }
 
 async fn send_telemetry(ndjson: &str) -> Result<(), String> {

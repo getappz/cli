@@ -1,6 +1,7 @@
 //! Remove an environment variable from a linked project.
 
 use crate::project::{read_project_link, ProjectLinkAndSettings};
+use crate::ClientExt;
 use api::models::ProjectEnvVariable;
 use miette::{miette, Result};
 use starbase::AppResult;

@@ -4,9 +4,12 @@
 //! continue deployment.
 
 use api::models::{Deployment, DeploymentCreateRequest, DeploymentCreateResult};
-use api::Client;
+use api::{Client, ClientExt};
+use futures_util::stream::{self, StreamExt};
 use miette::{miette, Result};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use crate::file_tree::{build_file_tree, build_hashed_files};
 use crate::upload::prepare_files;
@@ -77,9 +80,9 @@ pub struct DeployOutput {
 /// Deploy prebuilt output to Appz with event stream.
 ///
 /// Invokes `on_event` for each deployment phase. See `DeployEvent` for variants.
-pub async fn deploy_prebuilt_stream<F>(client: &Client, ctx: &DeployContext, mut on_event: F) -> Result<DeployOutput>
+pub async fn deploy_prebuilt_stream<F>(client: Arc<Client>, ctx: DeployContext, mut on_event: F) -> Result<DeployOutput>
 where
-    F: FnMut(DeployEvent),
+    F: FnMut(DeployEvent) + Send + 'static,
 {
     let output_dir = Path::new(&ctx.output_dir);
     let tree = build_file_tree(output_dir, &[])?;
@@ -156,48 +159,116 @@ where
                 .filter_map(|sha| files_by_sha.get(sha))
                 .map(|fr| fr.data.len() as u64)
                 .sum();
-            on_event(DeployEvent::FileCount {
-                total: files_by_sha.len(),
-                missing: missing.len(),
-                total_bytes,
+
+            // Channel for events from parallel upload tasks (progress runs in upload context).
+            let (tx, mut rx) = tokio::sync::mpsc::channel(1024);
+            let handle = tokio::spawn(async move {
+                while let Some(ev) = rx.recv().await {
+                    on_event(ev);
+                }
             });
 
-            let mut uploaded_bytes: u64 = 0;
-            for sha in &missing {
-                if let Some(file_ref) = files_by_sha.get(sha) {
-                    let path_str = file_ref.path.to_string_lossy().replace('\\', "/");
-                    let size = file_ref.data.len() as u64;
-                    client
+            let _ = tx
+                .send(DeployEvent::FileCount {
+                    total: files_by_sha.len(),
+                    missing: missing.len(),
+                    total_bytes,
+                })
+                .await;
+
+            const CONCURRENCY: usize = 50; // Vercel-aligned
+            let client = client.clone();
+            let uploaded = std::sync::Arc::new(AtomicU64::new(0));
+            let uploaded_for_progress = std::sync::Arc::clone(&uploaded);
+            let tx_progress = tx.clone();
+            let progress = std::sync::Arc::new(move |delta: u64| {
+                let prev = uploaded_for_progress.fetch_add(delta, Ordering::Relaxed);
+                let new_val = prev + delta;
+                let _ = tx_progress.try_send(DeployEvent::UploadProgress {
+                    uploaded_bytes: new_val,
+                    total_bytes,
+                });
+            });
+
+            let upload_futures = missing.iter().filter_map(|sha| {
+                let file_ref = files_by_sha.get(sha)?;
+                let path_str = file_ref.path.to_string_lossy().replace('\\', "/");
+                let size = file_ref.data.len() as u64;
+                let client = client.clone();
+                let deployment_id = deployment_id.clone();
+                let sha = sha.clone();
+                let data = file_ref.data.clone();
+                let progress = std::sync::Arc::clone(&progress);
+                let tx = tx.clone();
+                Some(async move {
+                    let res = client
                         .deployments()
-                        .upload_file(&deployment_id, sha, file_ref.data.clone())
+                        .upload_file_with_progress(&deployment_id, &sha, &data, progress)
                         .await
-                        .map_err(|e| {
-                            on_event(DeployEvent::Error(format!("Upload file {} failed: {}", sha, e)));
-                            miette!("Upload file {} failed: {}", sha, e)
-                        })?;
-                    uploaded_bytes += size;
-                    on_event(DeployEvent::FileUploaded {
-                        path: path_str,
-                        bytes: size,
-                    });
-                    on_event(DeployEvent::UploadProgress {
-                        uploaded_bytes,
-                        total_bytes,
-                    });
+                        .map(|_| (path_str, size))
+                        .map_err(|e| miette!("Upload file {} failed: {}", sha, e));
+                    (res, tx)
+                })
+            });
+
+            let results: Vec<_> = stream::iter(upload_futures)
+                .buffer_unordered(CONCURRENCY)
+                .collect()
+                .await;
+
+            let mut upload_error = None;
+            for (result, _tx) in results {
+                match result {
+                    Ok((path_str, size)) => {
+                        let _ = tx
+                            .send(DeployEvent::FileUploaded {
+                                path: path_str,
+                                bytes: size,
+                            })
+                            .await;
+                        let _ = tx
+                            .send(DeployEvent::UploadProgress {
+                                uploaded_bytes: uploaded.load(Ordering::Relaxed),
+                                total_bytes,
+                            })
+                            .await;
+                    }
+                    Err(e) => {
+                        let _ = tx.send(DeployEvent::Error(e.to_string())).await;
+                        upload_error = Some(e);
+                        break;
+                    }
                 }
             }
 
-            on_event(DeployEvent::Processing);
-            let continue_result = client
+            if let Some(e) = upload_error {
+                drop(tx);
+                let _ = handle.await;
+                return Err(e);
+            }
+
+            let _ = tx.send(DeployEvent::Processing).await;
+
+            let continue_result = match client
                 .deployments()
                 .continue_deployment(&deployment_id, prepared)
                 .await
-                .map_err(|e| {
-                    on_event(DeployEvent::Error(format!("Continue deployment failed: {}", e)));
-                    miette!("Continue deployment failed: {}", e)
-                })?;
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    let _ = tx
+                        .send(DeployEvent::Error(format!(
+                            "Continue deployment failed: {}",
+                            e
+                        )))
+                        .await;
+                    drop(tx);
+                    let _ = handle.await;
+                    return Err(miette!("Continue deployment failed: {}", e));
+                }
+            };
 
-            match continue_result {
+            let out = match continue_result {
                 DeploymentCreateResult::Created(d) => {
                     let is_production = ctx.target == "production" || ctx.target == "prod";
                     let url = d
@@ -205,32 +276,44 @@ where
                         .clone()
                         .unwrap_or_else(|| format!("https://{}", d.id));
                     let created_at = d.createdAt;
-                    on_event(DeployEvent::Created {
-                        deployment_id: d.id.clone(),
-                        url: url.clone(),
-                        inspect_url: None,
-                        is_production,
-                        created_at,
-                    });
-                    on_event(DeployEvent::Ready {
-                        url,
-                        inspect_url: None,
-                        is_production,
-                        created_at,
-                    });
-                    extract_output(&d)
+                    let _ = tx
+                        .send(DeployEvent::Created {
+                            deployment_id: d.id.clone(),
+                            url: url.clone(),
+                            inspect_url: None,
+                            is_production,
+                            created_at,
+                        })
+                        .await;
+                    let _ = tx
+                        .send(DeployEvent::Ready {
+                            url,
+                            inspect_url: None,
+                            is_production,
+                            created_at,
+                        })
+                        .await;
+                    Ok(extract_output(&d)?)
                 }
                 DeploymentCreateResult::MissingFiles { missing: m, .. } => {
-                    on_event(DeployEvent::Error(format!(
-                        "Continue still requested {} files after upload.",
-                        m.len()
-                    )));
-                    Err(miette!(
+                    let _ = tx
+                        .send(DeployEvent::Error(format!(
+                            "Continue still requested {} files after upload.",
+                            m.len()
+                        )))
+                        .await;
+                    drop(tx);
+                    let _ = handle.await;
+                    return Err(miette!(
                         "Continue still requested {} files after upload. Retry or check API.",
                         m.len()
-                    ))
+                    ));
                 }
-            }
+            };
+
+            drop(tx);
+            let _ = handle.await;
+            out
         }
     }
 }
@@ -238,7 +321,7 @@ where
 /// Deploy prebuilt output to Appz.
 ///
 /// Thin wrapper around `deploy_prebuilt_stream` with a no-op callback.
-pub async fn deploy_prebuilt(client: &Client, ctx: &DeployContext) -> Result<DeployOutput> {
+pub async fn deploy_prebuilt(client: Arc<Client>, ctx: DeployContext) -> Result<DeployOutput> {
     deploy_prebuilt_stream(client, ctx, |_| {}).await
 }
 

@@ -4,6 +4,7 @@
 
 use crate::commands::projects::resolve_project_id;
 use crate::project::Org;
+use crate::ClientExt;
 use api::models::Project;
 use api::Client;
 use miette::{miette, Result};
@@ -35,12 +36,12 @@ fn slugify(input: &str) -> String {
 /// - `String` (project name) if creating new project
 #[instrument(skip(client, org))]
 pub async fn input_project(
-    client: &Client,
+    client: std::sync::Arc<Client>,
     org: &Org,
-    detected_project_name: &str,
+    detected_project_name: String,
     auto_confirm: bool,
 ) -> Result<Either<Project, String>> {
-    let slugified_name = slugify(detected_project_name);
+    let slugified_name = slugify(&detected_project_name);
 
     // Show spinner while searching
     status::info("Searching for existing projects…")
@@ -50,7 +51,7 @@ pub async fn input_project(
     let mut detected_project: Option<Project> = None;
 
     // Try to find project by name or slug
-    if let Ok(project_id) = resolve_project_id(client, detected_project_name).await {
+    if let Ok(project_id) = resolve_project_id(client.clone(), detected_project_name.clone()).await {
         if let Ok(project) = client.projects().get(&project_id).await {
             // Check if project belongs to this org
             if project.teamId.as_ref() == Some(&org.id)
@@ -63,7 +64,7 @@ pub async fn input_project(
 
     // Also try slugified name
     if detected_project.is_none() && slugified_name != detected_project_name {
-        if let Ok(project_id) = resolve_project_id(client, &slugified_name).await {
+        if let Ok(project_id) = resolve_project_id(client.clone(), slugified_name.clone()).await {
             if let Ok(project) = client.projects().get(&project_id).await {
                 if project.teamId.as_ref() == Some(&org.id)
                     || (org.org_type == crate::project::OrgType::User && project.teamId.is_none())
@@ -78,7 +79,7 @@ pub async fn input_project(
         if let Some(project) = detected_project {
             return Ok(Either::Left(project));
         }
-        return Ok(Either::Right(detected_project_name.to_string()));
+        return Ok(Either::Right(detected_project_name));
     }
 
     let should_link_project: bool;
@@ -120,7 +121,7 @@ pub async fn input_project(
                 continue;
             }
 
-            match resolve_project_id(client, &input).await {
+            match resolve_project_id(client.clone(), input.clone()).await {
                 Ok(project_id) => {
                     match client.projects().get(&project_id).await {
                         Ok(project) => {
@@ -148,7 +149,7 @@ pub async fn input_project(
             }
         };
 
-        let project_id = resolve_project_id(client, &project_name).await?;
+        let project_id = resolve_project_id(client.clone(), project_name.clone()).await?;
         let project = client
             .projects()
             .get(&project_id)
@@ -175,7 +176,7 @@ pub async fn input_project(
         }
 
         // Check if project already exists
-        match resolve_project_id(client, &input).await {
+        match resolve_project_id(client.clone(), input.clone()).await {
             Ok(_) => {
                 tracing::warn!("Project already exists");
                 continue;

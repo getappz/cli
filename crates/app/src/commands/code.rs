@@ -138,6 +138,4 @@ pub async fn run(session: AppzSession, command: CodeCommands) -> starbase::AppRe
             return Ok(None);
         }
     }
-
-    Ok(None)
 }

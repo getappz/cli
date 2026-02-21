@@ -1,5 +1,6 @@
 //! Show deployment logs (Vercel-aligned).
 
+use crate::ClientExt;
 use crate::project::read_project_link;
 use miette::{miette, Result};
 use starbase::AppResult;
@@ -27,7 +28,14 @@ pub async fn logs(
             }
             let list = client
                 .deployments()
-                .list(Some(link.link.project_id.clone()), Some(1), None, None, None)
+                .list(
+                    Some(link.link.project_id.clone()),
+                    Some(1),
+                    None,
+                    None,
+                    None,
+                    None,
+                )
                 .await
                 .map_err(|e| miette!("Failed to list deployments: {}", e))?;
             client.set_team_id(None).await;

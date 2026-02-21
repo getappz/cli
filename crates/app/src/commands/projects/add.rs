@@ -1,5 +1,6 @@
 use crate::commands::teams::resolve_team_id;
 use crate::session::AppzSession;
+use crate::ClientExt;
 use starbase::AppResult;
 use tracing::instrument;
 use ui::status;
@@ -22,7 +23,7 @@ pub async fn add(
 
     // Resolve team identifier to team ID if provided
     let team_id = if let Some(ref team_identifier) = team {
-        Some(resolve_team_id(&client, team_identifier).await?)
+        Some(resolve_team_id(client.clone(), team_identifier.clone()).await?)
     } else {
         None
     };

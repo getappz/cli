@@ -42,7 +42,7 @@ pub async fn run(
     to_team: Option<String>,
 ) -> AppResult {
     match command {
-        Some(TransferCommands::Accept { code }) => accept(session, &code).await,
+        Some(TransferCommands::Accept { code }) => accept(session, code).await,
         None => {
             let project = match project {
                 Some(p) => p,
@@ -56,7 +56,7 @@ pub async fn run(
                     ctx.link.project_id.clone()
                 }
             };
-            create(session, &project, to_team.as_deref()).await
+            create(session, project, to_team).await
         }
         Some(TransferCommands::Create { project, to_team }) => {
             let project = match project {
@@ -71,7 +71,7 @@ pub async fn run(
                     ctx.link.project_id.clone()
                 }
             };
-            create(session, &project, to_team.as_deref()).await
+            create(session, project, to_team).await
         }
     }
 }

@@ -1,8 +1,10 @@
 //! Shared utilities for deployment-related commands (promote, rollback)
 
+use crate::ClientExt;
 use api::models::Deployment;
 use api::Client;
 use miette::Result;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Resolve a deployment by ID or URL
@@ -10,8 +12,8 @@ use std::time::Duration;
 /// If the input is a URL, extracts the deployment ID from it.
 /// Otherwise, treats it as a deployment ID and fetches the deployment.
 pub async fn resolve_deployment_by_id_or_url(
-    client: &Client,
-    deployment_id_or_url: &str,
+    client: Arc<Client>,
+    deployment_id_or_url: String,
 ) -> Result<Deployment> {
     // If it's a URL, try to extract ID or fetch by URL
     if deployment_id_or_url.starts_with("http://") || deployment_id_or_url.starts_with("https://") {
@@ -19,7 +21,7 @@ pub async fn resolve_deployment_by_id_or_url(
         // For now, extract ID from URL pattern
         // URL format: https://xxx.appz.dev or https://xxx-xxx.appz.dev
         // We'll try to get it directly, and if that fails, extract ID
-        match client.deployments().get(deployment_id_or_url).await {
+        match client.deployments().get(&deployment_id_or_url).await {
             Ok(deployment) => Ok(deployment),
             Err(_) => {
                 // Fallback: try to extract ID from URL
@@ -27,7 +29,7 @@ pub async fn resolve_deployment_by_id_or_url(
                 let id = deployment_id_or_url
                     .split('/')
                     .next_back()
-                    .unwrap_or(deployment_id_or_url);
+                    .unwrap_or(&deployment_id_or_url);
                 client
                     .deployments()
                     .get(id)
@@ -39,7 +41,7 @@ pub async fn resolve_deployment_by_id_or_url(
         // Treat as deployment ID
         client
             .deployments()
-            .get(deployment_id_or_url)
+            .get(&deployment_id_or_url)
             .await
             .map_err(|e| miette::miette!("Failed to get deployment: {}", e))
     }

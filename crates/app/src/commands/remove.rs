@@ -4,6 +4,7 @@
 //! domains, and teams. Auto-detects resource type from the identifier.
 
 use crate::session::AppzSession;
+use crate::ClientExt;
 use starbase::AppResult;
 use tracing::instrument;
 use ui::prompt::confirm;
@@ -51,7 +52,7 @@ pub async fn remove(
 
     // Detect resource types (deployment first for URL/UUID, then project, alias, domain, team)
     for resource_id in &resources {
-        match detect_resource_type(&client, resource_id).await {
+        match detect_resource_type(client.clone(), resource_id.clone()).await {
             Ok(ResourceType::Deployment(id)) => {
                 deployments.push((id.clone(), resource_id.clone()))
             }
@@ -76,6 +77,7 @@ pub async fn remove(
                     None,
                     None,
                     team_id.clone(),
+                    None,
                 )
                 .await;
             let has_active = list
@@ -274,25 +276,25 @@ fn uuid_like(s: &str) -> bool {
 ///
 /// Vercel-aligned: deployment (URL/UUID) first, then project → alias → domain → team
 async fn detect_resource_type(
-    client: &api::Client,
-    identifier: &str,
+    client: std::sync::Arc<api::Client>,
+    identifier: String,
 ) -> Result<ResourceType, miette::Error> {
     // Try deployment first when identifier looks like URL or UUID (Vercel primary use case)
-    if looks_like_deployment(identifier) {
-        if let Ok(deployment) = client.deployments().get(identifier).await {
+    if looks_like_deployment(&identifier) {
+        if let Ok(deployment) = client.deployments().get(&identifier).await {
             return Ok(ResourceType::Deployment(deployment.id));
         }
     }
 
     // Try as project
-    if let Ok(project) = client.projects().get(identifier).await {
+    if let Ok(project) = client.projects().get(&identifier).await {
         if let Some(id) = project.id {
             return Ok(ResourceType::Project(id));
         }
     }
 
     // Try as alias
-    if let Ok(alias) = client.aliases().get(identifier).await {
+    if let Ok(alias) = client.aliases().get(&identifier).await {
         return Ok(ResourceType::Alias(alias.id));
     }
 
@@ -300,7 +302,7 @@ async fn detect_resource_type(
     // (We'll check domains list later in the function)
 
     // Try as team
-    if let Ok(team) = client.teams().get(identifier).await {
+    if let Ok(team) = client.teams().get(&identifier).await {
         return Ok(ResourceType::Team(team.id));
     }
 
@@ -311,12 +313,12 @@ async fn detect_resource_type(
             let matches_id = project
                 .id
                 .as_ref()
-                .map(|id| id == identifier)
+                .map(|id| id == &identifier)
                 .unwrap_or(false);
             let matches_slug = project
                 .slug
                 .as_ref()
-                .map(|slug| slug == identifier)
+                .map(|slug| slug == &identifier)
                 .unwrap_or(false);
             if matches_id || matches_slug {
                 if let Some(id) = project.id {

@@ -1,5 +1,6 @@
 use crate::client::Client;
 use crate::error::ApiError;
+use std::sync::Arc;
 use crate::models::{
     AddMemberRequest, CreateInvitationRequest, CreateTeamRequest, DeleteResponse, Invitation,
     InvitationsListResponse, Members, MembersListResponse, Team, TeamsListResponse,
@@ -7,12 +8,12 @@ use crate::models::{
 };
 use crate::paths::V0_PREFIX;
 
-pub struct Teams<'a> {
-    client: &'a Client,
+pub struct Teams {
+    client: Arc<Client>,
 }
 
-impl<'a> Teams<'a> {
-    pub fn new(client: &'a Client) -> Self {
+impl Teams {
+    pub fn new(client: Arc<Client>) -> Self {
         Self { client }
     }
 

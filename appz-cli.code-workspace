@@ -11,6 +11,9 @@
 		},
 		{
 			"path": "../appz-dev"
+		},
+		{
+			"path": "../coacharena"
 		}
 	],
 	"settings": {

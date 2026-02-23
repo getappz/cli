@@ -103,7 +103,7 @@ pub async fn poll_rollback_status(
             // Check if requested_at is older than the timeout period
             let timeout_ms = timeout.as_millis() as i64;
             if requested_at_ts == 0 || (now_ts - requested_at_ts) > timeout_ms {
-                spinner = None;
+                let _ = spinner.take();
                 let _ = ui_status::info("No deployment rollback in progress");
                 return Ok(());
             }
@@ -111,14 +111,14 @@ pub async fn poll_rollback_status(
 
         // Check if skipped
         if job_status == Some("skipped") && request_type == Some("rollback") {
-            spinner = None;
+            let _ = spinner.take();
             let _ = ui_status::info("Rollback was skipped");
             return Ok(());
         }
 
         // Check if succeeded
         if job_status == Some("succeeded") {
-            spinner = None;
+            let _ = spinner.take();
             return render_job_succeeded(
                 client,
                 project,
@@ -131,7 +131,7 @@ pub async fn poll_rollback_status(
 
         // Check if failed
         if job_status == Some("failed") {
-            spinner = None;
+            let _ = spinner.take();
             return render_job_failed(
                 client,
                 project_id.clone(),
@@ -143,7 +143,7 @@ pub async fn poll_rollback_status(
 
         // Check if unknown status
         if !matches!(job_status, Some("pending") | Some("in-progress")) {
-            spinner = None;
+            let _ = spinner.take();
             let _ = ui_status::error(&format!(
                 "Unknown rollback status \"{}\"",
                 job_status.unwrap_or("unknown")
@@ -157,7 +157,7 @@ pub async fn poll_rollback_status(
         if requested_at_ts > 0 && (now_ts - requested_at_ts) > timeout.as_millis() as i64
             || Instant::now() >= rollback_timeout
         {
-            spinner = None;
+            let _ = spinner.take();
             let _ = ui_status::error(&format!(
                 "The rollback exceeded its deadline - rerun 'appz rollback {}' to try again",
                 to_deployment_id.unwrap_or("")

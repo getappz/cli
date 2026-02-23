@@ -4,6 +4,10 @@ use crate::commands::install_helpers::{
 };
 use crate::sandbox_helpers::mise_tools_for_execution;
 use crate::session::AppzSession;
+use crate::ddev_helpers::{
+    ddev_config_command, ddev_project_type_for_framework, ddev_web_container_name,
+    has_ddev_config, is_ddev_available, is_ddev_supported_framework,
+};
 use crate::shell::{command_exists, is_shell_script, run_local_with, RunOptions};
 use frameworks::frameworks;
 use sandbox::{create_sandbox, SandboxConfig};
@@ -58,49 +62,59 @@ pub async fn build(session: AppzSession) -> AppResult {
 
     println!("✓ Detected framework: {}", detected.name);
 
-    // Handle ddev setup for Jigsaw
-    if detected.slug.as_deref() == Some("jigsaw") {
-        if !command_exists("ddev") {
-            return Err(miette::miette!(
-                "ddev is required for Jigsaw projects but was not found. Please install ddev first."
-            ));
-        }
+    // Handle DDEV setup for supported PHP/CMS frameworks
+    if let Some(slug) = detected.slug.as_deref() {
+        if is_ddev_supported_framework(slug) {
+            if !is_ddev_available() {
+                return Err(miette::miette!(
+                    "DDEV is required for {} projects but was not found. \
+                     Install it: https://docs.ddev.com/en/stable/users/install/ddev-installation/",
+                    detected.name
+                ));
+            }
 
-        let ddev_config_path = project_path.join(".ddev").join("config.yaml");
-        if !ddev_config_path.exists() {
-            println!("⚙️  Configuring ddev for Jigsaw project...");
-            let mut ctx_config = Context::new();
-            ctx_config.set_working_path(project_path.clone());
-            let config_opts = RunOptions {
+            if !has_ddev_config(&project_path) {
+                if let Some((project_type, docroot)) =
+                    ddev_project_type_for_framework(slug)
+                {
+                    let mut config_cmd =
+                        ddev_config_command(project_type, docroot);
+                    if project_type == "php" {
+                        config_cmd.push_str(" --php-version=8.2");
+                    }
+                    println!("⚙️  Configuring DDEV for {}...", detected.name);
+                    let mut ctx_config = Context::new();
+                    ctx_config.set_working_path(project_path.clone());
+                    let config_opts = RunOptions {
+                        cwd: Some(project_path.clone()),
+                        env: None,
+                        show_output: true,
+                        package_manager: None,
+                        tool_info: None,
+                    };
+                    run_local_with(
+                        &ctx_config,
+                        &config_cmd,
+                        config_opts,
+                    )
+                    .await?;
+                    println!("✓ DDEV configured");
+                }
+            }
+
+            println!("🚀 Starting DDEV...");
+            let mut ctx_start = Context::new();
+            ctx_start.set_working_path(project_path.clone());
+            let start_opts = RunOptions {
                 cwd: Some(project_path.clone()),
                 env: None,
-                show_output: true,
+                show_output: false,
                 package_manager: None,
                 tool_info: None,
             };
-            run_local_with(
-                &ctx_config,
-                "ddev config --project-type=php --php-version=8.2",
-                config_opts,
-            )
-            .await?;
-            println!("✓ ddev configured");
+            let _ = run_local_with(&ctx_start, "ddev start", start_opts).await;
+            println!("✓ DDEV ready");
         }
-
-        // Ensure ddev is started
-        println!("🚀 Starting ddev...");
-        let mut ctx_start = Context::new();
-        ctx_start.set_working_path(project_path.clone());
-        let start_opts = RunOptions {
-            cwd: Some(project_path.clone()),
-            env: None,
-            show_output: false, // ddev start can be verbose
-            package_manager: None,
-            tool_info: None,
-        };
-        // ddev start is idempotent, so it's safe to run even if already started
-        let _ = run_local_with(&ctx_start, "ddev start", start_opts).await;
-        println!("✓ ddev ready");
     }
 
     // Create a minimal context for fallback (run_local_with)
@@ -147,10 +161,17 @@ pub async fn build(session: AppzSession) -> AppResult {
         println!("✓ Using framework build command");
     }
 
-    // Execute install step: check for appz:install recipe task first
+    // Execute install step: skip for WordPress DDEV (Like dev command)
+    let skip_install_for_wordpress_ddev = detected
+        .slug
+        .as_deref()
+        .is_some_and(|s| s == "wordpress" && has_ddev_config(&project_path));
+
     let using_appz_install = registry.get("appz:install").is_some();
 
-    if using_appz_install {
+    if skip_install_for_wordpress_ddev {
+        println!("✓ Skipping install for WordPress DDEV project");
+    } else if using_appz_install {
         println!("✓ Found appz:install recipe task, using recipe install...");
         println!("\n📦 Running install command...");
         run_recipe_task(
@@ -199,8 +220,20 @@ pub async fn build(session: AppzSession) -> AppResult {
         .await?;
     } else {
         // Execute framework build command via sandbox (with fallback)
+        if detected.slug.as_deref() == Some("wordpress")
+            && has_ddev_config(&project_path)
+            && detected.build_command.contains("simply-static")
+        {
+            println!("✓ Using Simply Static Pro for static export");
+            println!("  Configure Local Directory in Simply Static: Settings → Deployment → Local Directory");
+            println!("  Set target to: simply-static-output (or match output_directory in .appz config)");
+        }
         println!("\n🔨 Running build command...");
-        let build_result = if let Some(ref s) = sandbox {
+        // DDEV commands must run on host (not in sandbox)
+        let use_local_for_ddev = detected.build_command.starts_with("ddev ");
+        let build_result = if use_local_for_ddev {
+            run_local_with(&ctx, &detected.build_command, opts.clone()).await
+        } else if let Some(ref s) = sandbox {
             s.exec_interactive(&detected.build_command)
                 .await
                 .map(|_| ())
@@ -237,6 +270,38 @@ pub async fn build(session: AppzSession) -> AppResult {
         tracing::debug!("Skipping .appz/output: {}", e);
     } else {
         println!("✓ Produced standardized output at .appz/output/");
+    }
+
+    // WordPress DDEV: copy .appz/output/static from container to host (handles bind-mount edge cases)
+    let is_wordpress_ddev = detected.slug.as_deref() == Some("wordpress")
+        && has_ddev_config(&project_path);
+    if is_wordpress_ddev {
+        if let Some(container) = ddev_web_container_name(&project_path) {
+            let output_dir = project_path.join(".appz").join("output");
+            let _ = std::fs::create_dir_all(&output_dir);
+            let copy_cmd = format!(
+                "docker cp {}:/var/www/html/.appz/output/static {}",
+                container,
+                output_dir.display()
+            );
+            let mut ctx_cp = Context::new();
+            ctx_cp.set_working_path(project_path.clone());
+            let copy_opts = RunOptions {
+                cwd: Some(project_path.clone()),
+                env: None,
+                show_output: false,
+                package_manager: None,
+                tool_info: None,
+            };
+            if run_local_with(&ctx_cp, &copy_cmd, copy_opts)
+                .await
+                .is_ok()
+            {
+                println!("✓ Synced .appz/output/static from DDEV container");
+            } else {
+                tracing::debug!("DDEV container copy skipped (path may not exist in container)");
+            }
+        }
     }
 
     Ok(None)

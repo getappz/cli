@@ -1,6 +1,6 @@
 //! Args structs for Commands (Moon-style tuple variants).
 
-use clap::Args;
+use clap::{Args, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Args, Debug, Clone)]
@@ -24,8 +24,16 @@ pub struct RecipeValidateArgs {
     pub path: Option<String>,
 }
 
+#[derive(Subcommand, Debug, Clone)]
+pub enum DevSubcommand {
+    /// Stop DDEV containers (DDEV projects only)
+    Stop,
+}
+
 #[derive(Args, Debug, Clone)]
 pub struct DevArgs {
+    #[command(subcommand)]
+    pub command: Option<DevSubcommand>,
     /// Share the dev server with a public URL using cloudflared
     #[arg(long)]
     pub share: bool,

@@ -176,7 +176,12 @@ where
                 })
                 .await;
 
-            const CONCURRENCY: usize = 50; // Vercel-aligned
+            // Reduce concurrency for local wrangler to avoid "Broken pipe" (workerd disconnects under load)
+            let concurrency = std::env::var("APPZ_DEPLOY_UPLOAD_CONCURRENCY")
+                .ok()
+                .and_then(|s| s.parse::<usize>().ok())
+                .filter(|n| *n > 0)
+                .unwrap_or(50);
             let client = client.clone();
             let uploaded = std::sync::Arc::new(AtomicU64::new(0));
             let uploaded_for_progress = std::sync::Arc::clone(&uploaded);
@@ -212,7 +217,7 @@ where
             });
 
             let results: Vec<_> = stream::iter(upload_futures)
-                .buffer_unordered(CONCURRENCY)
+                .buffer_unordered(concurrency)
                 .collect()
                 .await;
 

@@ -2,7 +2,7 @@ use crate::client::Client;
 use crate::error::ApiError;
 use std::sync::Arc;
 use crate::models::{
-    AddEnvRequest, CreateProjectRequest, CreateTransferRequestBody, DeleteResponse, Project,
+    AddEnvRequest, Alias, CreateProjectRequest, CreateTransferRequestBody, DeleteResponse, Project,
     ProjectEnvListResponse, ProjectEnvPullResponse, ProjectsListResponse,
     TransferRequestResponse,
 };
@@ -152,5 +152,44 @@ impl Projects {
             env,
             buildEnv: std::collections::HashMap::new(),
         })
+    }
+
+    /// Add a domain/alias to a project for the given environment (Vercel parity).
+    ///
+    /// Vercel: `POST /projects/:project/alias` with `{ target: 'PRODUCTION', domain }`.
+    /// Appz: `POST /v0/projects/:id/aliases` with `{ alias, environment }`.
+    /// The domain will resolve to the latest deployment for that project+environment.
+    #[tracing::instrument(skip(self))]
+    pub async fn add_alias(
+        &self,
+        project_id: &str,
+        alias: &str,
+        team_id: Option<String>,
+        environment: Option<&str>,
+    ) -> Result<Alias, ApiError> {
+        #[derive(serde::Serialize)]
+        struct AddAliasRequest<'a> {
+            alias: &'a str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            environment: Option<&'a str>,
+        }
+        let env = environment.unwrap_or("production");
+        let body = AddAliasRequest {
+            alias,
+            environment: Some(env),
+        };
+
+        if let Some(ref team_id_val) = team_id {
+            self.client.set_team_id(Some(team_id_val.clone())).await;
+        }
+
+        let path = format!("{}/projects/{}/aliases", V0_PREFIX, project_id);
+        let result = self.client.post(path, Some(body)).await;
+
+        if team_id.is_some() {
+            self.client.set_team_id(None).await;
+        }
+
+        result
     }
 }

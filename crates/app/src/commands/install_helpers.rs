@@ -80,7 +80,7 @@ pub async fn handle_shell_script_fallback(
     framework_cmd: Option<&String>,
     default_cmd: Option<String>,
     ctx: &Context,
-    opts: &RunOptions,
+    _opts: &RunOptions,
 ) -> Result<()> {
     if result.is_ok() {
         return Ok(());
@@ -92,10 +92,10 @@ pub async fn handle_shell_script_fallback(
             eprintln!("⚠️  Warning: Shell script detected. Falling back to framework command.");
             if let Some(framework_cmd) = framework_cmd {
                 println!("✓ Using framework command");
-                run_local_with(ctx, framework_cmd, opts.clone()).await?;
+                run_local_with(ctx, framework_cmd, _opts.clone()).await?;
             } else if let Some(ref default_cmd) = default_cmd {
                 println!("✓ Using default command");
-                run_local_with(ctx, default_cmd, opts.clone()).await?;
+                run_local_with(ctx, default_cmd, _opts.clone()).await?;
             } else {
                 result?; // No fallback available, return error
             }

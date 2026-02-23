@@ -8,6 +8,7 @@ mod config;
 pub mod commands;
 mod telemetry;
 mod context;
+mod ddev_helpers;
 mod host;
 mod http;
 mod importer;

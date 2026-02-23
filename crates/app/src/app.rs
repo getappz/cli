@@ -191,12 +191,14 @@ pub enum Commands {
         #[arg(long)]
         to_team: Option<String>,
     },
-    /// Manage aliases
+    /// Manage aliases (Vercel parity: alias set | ls | rm)
+    #[command(name = "alias", alias = "aliases")]
     Aliases {
         #[command(subcommand)]
         command: crate::commands::aliases::AliasesCommands,
     },
-    /// Manage domains
+    /// Manage domains (Vercel parity: domains ls | add | rm)
+    #[command(name = "domains", alias = "domain")]
     Domains {
         #[command(subcommand)]
         command: crate::commands::domains::DomainsCommands,

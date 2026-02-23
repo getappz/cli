@@ -34,16 +34,16 @@
         "value": null
       },
       "buildCommand": {
-        "placeholder": "`composer install --no-dev --optimize-autoloader`",
-        "value": null
+        "placeholder": "`ddev exec wp simply-static run` (Simply Static Pro)",
+        "value": "ddev exec wp simply-static run"
       },
       "devCommand": {
         "placeholder": "`php -S localhost:8000` or `wp server`",
         "value": "php -S localhost:8000"
       },
       "outputDirectory": {
-        "placeholder": "WordPress root directory",
-        "value": null
+        "placeholder": "Simply Static export dir (set in plugin: Settings → Deployment → Local Directory)",
+        "value": "simply-static-output"
       }
     },
     "recommendedIntegrations": null,

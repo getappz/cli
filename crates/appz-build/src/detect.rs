@@ -125,6 +125,7 @@ fn default_output_directory(slug: Option<&str>) -> String {
         Some("astro") | Some("sveltekit") => "dist".to_string(),
         Some("nuxt") | Some("vue") => "dist".to_string(),
         Some("docusaurus") => "build".to_string(),
+        Some("wordpress") => "simply-static-output".to_string(),
         _ => "dist".to_string(),
     }
 }

@@ -27,6 +27,18 @@ pub fn resolve_source(source: &str) -> InitResult<ResolvedSource> {
         return Err(InitError::SourceNotFound("empty".to_string()));
     }
 
+    // WordPress slug (full CMS from wordpress.org)
+    if source.eq_ignore_ascii_case("wordpress") {
+        let provider = create_provider_registry()
+            .into_iter()
+            .find(|p| p.slug() == "wordpress")
+            .ok_or_else(|| InitError::SourceNotFound("wordpress".to_string()))?;
+        return Ok(ResolvedSource {
+            provider,
+            source: "wordpress".to_string(),
+        });
+    }
+
     // npm: prefix
     if source.starts_with("npm:") {
         let provider = create_provider_registry()
@@ -177,5 +189,12 @@ mod tests {
         let r = resolve_source("astro").unwrap();
         assert_eq!(r.provider.slug(), "framework");
         assert_eq!(r.source, "astro");
+    }
+
+    #[test]
+    fn test_resolve_wordpress() {
+        let r = resolve_source("wordpress").unwrap();
+        assert_eq!(r.provider.slug(), "wordpress");
+        assert_eq!(r.source, "wordpress");
     }
 }

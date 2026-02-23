@@ -49,8 +49,8 @@ pub const BUILTIN_TEMPLATES: &[(&str, &str, &str, Option<&str>)] = &[
     (
         "wordpress",
         "WordPress",
-        "WordPress/WordPress",
-        Some("wp-content/themes/twentytwentyfour"),
+        "wordpress.org",
+        None,
     ),
     ("sculpin", "Sculpin", "sculpin/sculpin", Some("skeleton")),
     ("spress", "Spress", "spress/Spress", Some("skeleton")),

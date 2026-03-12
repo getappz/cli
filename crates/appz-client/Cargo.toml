@@ -1,0 +1,21 @@
+[package]
+name = "appz-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+api = { path = "../api" }
+tokio = { workspace = true, features = ["fs", "sync"] }
+futures = { workspace = true }
+futures-util = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha1_smol = "1.0"
+walkdir = "2"
+thiserror = { workspace = true }
+miette = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

@@ -1,0 +1,51 @@
+---
+description: Use appz git instead of raw git when Superpowers skills would run git operations
+alwaysApply: true
+---
+
+# Appz Git — Superpowers Override
+
+When using Superpowers skills that run git operations (`using-git-worktrees`, `finishing-a-development-branch`, `requesting-code-review`), **use `appz git` instead of raw `git` commands**.
+
+## Command Mapping
+
+| Superpowers → raw git | Use instead |
+|----------------------|-------------|
+| `git check-ignore -q .worktrees` (or path) | `appz git check-ignore <path>` |
+| `git worktree add "$path" -b "$BRANCH"` | `appz git worktree create <branch> [--dir <path>] [--setup] [--verify]` |
+| `git worktree list` | `appz git worktree list` |
+| `git worktree remove <path>` | `appz git worktree remove [path]` |
+| `git merge-base HEAD main` (or master) | `appz git merge-base [branch]` |
+| Merge flow: checkout, pull, merge, branch -d | `appz git branch finish merge` |
+| Push + PR: push, gh pr create | `appz git branch finish pr` |
+| Keep as-is | `appz git branch finish keep` |
+| Discard: checkout, branch -D | `appz git branch finish discard --yes` |
+| `BASE_SHA=$(git rev-parse ...)`, `HEAD_SHA=...` | `appz git review prepare [--base <ref>]` |
+
+## Usage
+
+1. **Worktree creation** — Instead of `git worktree add .worktrees/feat -b feat`, run:  
+   `appz git worktree create feat`  
+   (Uses `.worktrees/feat` or `worktrees/feat` by default; `--setup` and `--verify` run install + tests)
+
+2. **Check ignore** — Before creating worktree:  
+   `appz git check-ignore .worktrees` or `appz git check-ignore worktrees`
+
+3. **Finish branch** — After implementation:  
+   `appz git branch finish merge` | `pr` | `keep` | `discard`
+
+4. **Code review** — Get SHAs for reviewer dispatch:  
+   `appz git review prepare`  
+   Output: BASE_SHA, HEAD_SHA, template
+
+5. **Verification before completion** (verification-before-completion, finishing-a-development-branch) —  
+   `appz check --verify`  
+   Runs lint (check) → build → tests. Use instead of ad-hoc `npm test` / `cargo test`.
+
+6. **Command execution** — When agents need to run arbitrary commands (npm, cargo, pytest, etc.), use  
+   `appz exec <cmd> [args]`  
+   instead of raw shell for sandbox-isolated, cross-platform execution. Use `--no-sandbox` for host environment, `--json` for machine-readable output (MCP exec tool uses this).
+
+## Why
+
+Appz git uses the `git2` crate and enforces the same workflow the Superpowers skills prescribe (directory priority, ignore verification, setup, baseline tests). Using `appz git` reduces shell parsing errors and keeps behavior consistent.

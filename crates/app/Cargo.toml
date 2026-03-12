@@ -20,6 +20,7 @@ chrono = { workspace = true }
 regex = { workspace = true }
 itertools = "0.14"
 walkdir = "2"
+ai_seo = { path = "../ai-seo" }
 task = { path = "../task" }
 command = { path = "../command" }
 detectors = { path = "../detectors" }
@@ -30,6 +31,8 @@ tokio = { workspace = true, features = ["process"] }
 tokio-util = { workspace = true }
 futures = { workspace = true }
 extism = { workspace = true }
+num_cpus = "1.0"
+rayon = "1.8"
 thiserror = { workspace = true }
 reqwest = { workspace = true, features = ["json", "gzip", "zstd", "blocking"] }
 ssh = { workspace = true }
@@ -52,6 +55,7 @@ self_update = { workspace = true, optional = true }
 webbrowser = "1.0"
 toml = "0.8"
 camino = "1.2"
+rusqlite = { workspace = true }
 sandbox = { path = "../sandbox" }
 appz-build = { path = "../appz-build" }
 plugin-manager = { path = "../plugin-manager" }

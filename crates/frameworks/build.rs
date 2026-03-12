@@ -58,6 +58,7 @@ fn generate_frameworks(json_path: &str, out_path: &Path, source_name: &str) {
 // Auto-generated file - DO NOT EDIT
 // Generated from data/{}
 
+#[allow(unused_imports)]
 use crate::types::*;
 
 static {}: &[Framework] = &[

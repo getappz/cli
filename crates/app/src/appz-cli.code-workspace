@@ -5,6 +5,12 @@
 		},
 		{
 			"path": "../../../../../sites/live/hugo"
+		},
+		{
+			"path": "../../../../../code-ref/vercel"
+		},
+		{
+			"path": "../../../../../sites/dev/astroplate"
 		}
 	],
 	"settings": {}

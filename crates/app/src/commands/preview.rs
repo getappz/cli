@@ -1,12 +1,10 @@
 //! Preview command - serve static files from build output directory
 
-use detectors::{detect_framework_record, DetectFrameworkRecordOptions, StdFilesystem};
 use crate::session::AppzSession;
 use crate::tunnel::{CloudflaredTunnel, TunnelService};
+use crate::utils::build::detect_build_output_dir;
 use dev_server::{DevServer, ServerConfig};
-use frameworks::frameworks;
 use starbase::AppResult;
-use std::sync::Arc;
 use tokio::signal;
 use tracing::instrument;
 
@@ -35,85 +33,8 @@ pub async fn preview(session: AppzSession, args: crate::args::PreviewArgs) -> Ap
         ));
     }
 
-    // Create filesystem detector
-    let fs = Arc::new(StdFilesystem::new(Some(project_path.clone())));
-
-    // Get all available frameworks
-    let framework_list: Vec<_> = frameworks().to_vec();
-
-    // Detect framework
-    let options = DetectFrameworkRecordOptions { fs, framework_list };
-
-    let output_dir = match detect_framework_record(options).await {
-        Ok(Some((fw, _version, _package_manager))) => {
-            // If explicit directory provided, use it
-            if let Some(ref d) = dir {
-                d.clone()
-            } else {
-                // Try to get from framework settings
-                let mut found = None;
-                if let Some(settings) = &fw.settings {
-                    if let Some(output_dir) = &settings.output_directory {
-                        if let Some(value) = output_dir.value {
-                            let dir = project_path.join(value);
-                            if dir.exists() {
-                                found = Some(dir);
-                            }
-                        }
-                    }
-                }
-
-                // Fallback to common output directories if not found in settings
-                found.unwrap_or_else(|| {
-                    let common_dirs = ["dist", "build", ".output/public", "out", ".next"];
-                    for dir_name in &common_dirs {
-                        let dir = project_path.join(dir_name);
-                        if dir.exists() {
-                            return dir;
-                        }
-                    }
-                    // Default to dist if nothing found (will error later if doesn't exist)
-                    project_path.join("dist")
-                })
-            }
-        }
-        Ok(None) => {
-            // No framework detected, try to use explicit dir or common defaults
-            if let Some(ref d) = dir {
-                d.clone()
-            } else {
-                // Try common directories
-                let common_dirs = ["dist", "build", ".output/public", "out"];
-                let mut found = None;
-                for dir_name in &common_dirs {
-                    let dir_path = project_path.join(dir_name);
-                    if dir_path.exists() {
-                        found = Some(dir_path);
-                        break;
-                    }
-                }
-                found.unwrap_or_else(|| project_path.join("dist"))
-            }
-        }
-        Err(e) => {
-            return Err(miette::miette!("Error detecting framework: {}", e));
-        }
-    };
-
-    // Check if output directory exists
-    if !output_dir.exists() {
-        return Err(miette::miette!(
-            "Build output directory not found: {}\n\nPlease run 'appz build' first to build your project.",
-            output_dir.display()
-        ));
-    }
-
-    if !output_dir.is_dir() {
-        return Err(miette::miette!(
-            "Output path is not a directory: {}",
-            output_dir.display()
-        ));
-    }
+    // Detect build output directory using shared utility
+    let output_dir = detect_build_output_dir(&project_path, dir.clone()).await?;
 
     println!("✓ Serving files from: {}", output_dir.display());
 

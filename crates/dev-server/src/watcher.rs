@@ -6,6 +6,7 @@ use tracing::{debug, info};
 
 /// File system watcher that broadcasts changes to subscribers
 pub struct FileWatcher {
+    #[allow(dead_code)]
     root_dir: PathBuf,
     tx: broadcast::Sender<FileChangeEvent>,
     _watcher: RecommendedWatcher,
@@ -26,7 +27,6 @@ impl FileWatcher {
     /// Create a new file watcher
     pub fn new(root_dir: PathBuf) -> Result<(Self, broadcast::Receiver<FileChangeEvent>)> {
         let (tx, rx) = broadcast::channel(100);
-        let root_dir_clone = root_dir.clone();
 
         // Create watcher with async channel
         let (watcher_tx, mut watcher_rx) = tokio::sync::mpsc::channel(100);

@@ -199,4 +199,3 @@ self_update = { version = "0.42", default-features = false, features = ["rustls"
 
 # MCP
 rmcp = { version = "0.15", default-features = false, features = ["server", "transport-io", "schemars", "macros"] }
-

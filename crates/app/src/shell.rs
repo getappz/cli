@@ -23,37 +23,84 @@ fn is_mise_tool(tool: &str) -> bool {
     )
 }
 
-/// Wrap a command with mise, optionally specifying a tool version.
-/// When `pm_version` is provided, produces `mise x tool@version -- tool args` which auto-installs the tool.
-/// When `pm_version` is None, produces `mise x -- command` for existing mise environment.
-fn wrap_with_mise_versioned(cmdline: &str, pm_version: Option<&str>) -> String {
-    // Respect explicit tools; just prefix with `mise x --` when applicable
-    if !has_mise() {
-        return cmdline.to_string();
-    }
-    // Avoid double prefixing
-    if cmdline.trim_start().starts_with("mise ") {
-        return cmdline.to_string();
-    }
-    // Parse the first token robustly
-    if let Ok(parts) = shell_words::split(cmdline) {
-        if let Some(first) = parts.first() {
-            if is_mise_tool(first) {
-                if let Some(version) = pm_version {
-                    // Use versioned mise exec: mise x yarn@3.6.3 -- yarn install
-                    // This auto-installs the tool if not present and runs the full command
-                    // The command after -- is the full command to execute (including the tool name)
-                    return format!("mise x {}@{} -- {}", first, version, cmdline);
+/// Check if a command is a multi-command script (contains && or ||)
+fn is_multi_command(cmd: &str) -> bool {
+    cmd.contains(" && ") || cmd.contains(" || ")
+}
+
+/// Extract all mise tools from a command string
+/// Returns a vector of (tool_name, version_option) tuples
+/// For multi-command scripts, extracts tools from all parts
+fn extract_mise_tools_from_command(
+    cmd: &str,
+    pm_name: Option<&str>,
+    pm_version: Option<&str>,
+) -> Vec<(String, Option<String>)> {
+    eprintln!("[DEBUG] extract_mise_tools_from_command: cmd={:?}, pm_name={:?}, pm_version={:?}", cmd, pm_name, pm_version);
+    let mut tools = Vec::new();
+    let mut seen_tools = std::collections::HashSet::new();
+
+    // Split by && and || to handle multi-command scripts
+    let parts: Vec<&str> = cmd
+        .split(" && ")
+        .flat_map(|s| s.split(" || "))
+        .map(|s| s.trim())
+        .collect();
+    eprintln!("[DEBUG] extract_mise_tools_from_command: split into {} parts: {:?}", parts.len(), parts);
+
+    for part in parts {
+        // Parse the first token from each command part
+        if let Ok(parts) = shell_words::split(part) {
+            if let Some(first) = parts.first() {
+                eprintln!("[DEBUG] extract_mise_tools_from_command: checking first token: {:?}", first);
+                if is_mise_tool(first) {
+                    let tool_name = first.to_string();
+                    eprintln!("[DEBUG] extract_mise_tools_from_command: found mise tool: {}", tool_name);
+                    
+                    // Skip if we've already seen this tool
+                    if seen_tools.contains(&tool_name) {
+                        eprintln!("[DEBUG] extract_mise_tools_from_command: skipping duplicate tool: {}", tool_name);
+                        continue;
+                    }
+                    seen_tools.insert(tool_name.clone());
+
+                    // Determine version for this tool
+                    let version = if tool_name == pm_name.unwrap_or("") {
+                        eprintln!("[DEBUG] extract_mise_tools_from_command: tool {} matches pm_name, using version {:?}", tool_name, pm_version);
+                        pm_version.map(|v| v.to_string())
+                    } else {
+                        eprintln!("[DEBUG] extract_mise_tools_from_command: tool {} doesn't match pm_name, no version", tool_name);
+                        None
+                    };
+
+                    tools.push((tool_name, version));
+                } else {
+                    eprintln!("[DEBUG] extract_mise_tools_from_command: '{}' is not a mise tool", first);
                 }
-                return format!("mise x -- {}", cmdline);
             }
         }
     }
+
+    eprintln!("[DEBUG] extract_mise_tools_from_command: extracted {} tools: {:?}", tools.len(), tools);
+    tools
+}
+
+/// Wrap a command with mise, optionally specifying tool versions.
+/// Now that we add mise shims to PATH, we don't need to wrap commands with `mise x`.
+/// This function now just returns the command as-is, since mise binaries are available via PATH.
+/// `pm_name` is the package manager name (e.g., "yarn", "npm") - `pm_version` is only used when the tool matches `pm_name`
+fn wrap_with_mise_versioned(cmdline: &str, _pm_version: Option<&str>, _pm_name: Option<&str>) -> String {
+    // Avoid double prefixing if command already starts with mise
+    if cmdline.trim_start().starts_with("mise ") {
+        return cmdline.to_string();
+    }
+    
+    // Return command as-is - mise shims are now in PATH, so binaries are available automatically
     cmdline.to_string()
 }
 
 fn wrap_with_mise(cmdline: &str) -> String {
-    wrap_with_mise_versioned(cmdline, None)
+    wrap_with_mise_versioned(cmdline, None, None)
 }
 
 /// Find all node_modules/.bin directories by walking up from the starting directory.
@@ -92,6 +139,132 @@ fn find_node_modules_bin_paths(starting_dir: &Path) -> Vec<PathBuf> {
     paths
 }
 
+/// Check if yarn binary exists in node_modules/.bin
+fn yarn_exists_in_node_modules(project_path: &Path) -> bool {
+    let node_modules_bin_paths = find_node_modules_bin_paths(project_path);
+    for bin_path in node_modules_bin_paths {
+        #[cfg(target_os = "windows")]
+        {
+            let yarn_path = bin_path.join("yarn.cmd");
+            if yarn_path.exists() {
+                return true;
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let yarn_path = bin_path.join("yarn");
+            if yarn_path.exists() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Check if a script contains yarn commands
+fn script_uses_yarn(script: &str) -> bool {
+    // Check for yarn commands - look for "yarn" as a standalone command
+    // This matches patterns like "yarn generate-json", "yarn build", "yarn && something", etc.
+    let script_lower = script.to_lowercase();
+    
+    // Split by common separators and check if any token is exactly "yarn"
+    script_lower
+        .split(&[' ', '\t', '&', '|', '\n', '\r'][..])
+        .any(|token| token.trim() == "yarn")
+}
+
+/// Check if any scripts in package.json use yarn
+fn scripts_use_yarn(package_manager: &Option<crate::detectors::PackageManagerInfo>) -> bool {
+    if let Some(ref pm) = package_manager {
+        // Check all scripts for yarn usage
+        if let Some(ref dev_script) = pm.dev_script {
+            if script_uses_yarn(dev_script) {
+                return true;
+            }
+        }
+        if let Some(ref install_script) = pm.install_script {
+            if script_uses_yarn(install_script) {
+                return true;
+            }
+        }
+        if let Some(ref build_script) = pm.build_script {
+            if script_uses_yarn(build_script) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Check package.json directly for yarn usage in scripts (fallback when package_manager is None)
+fn check_package_json_for_yarn(project_path: &Path) -> bool {
+    let package_json_path = project_path.join("package.json");
+    if !package_json_path.exists() {
+        return false;
+    }
+
+    if let Ok(content) = std::fs::read_to_string(&package_json_path) {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+            if let Some(scripts) = json.get("scripts").and_then(|s| s.as_object()) {
+                for (_, value) in scripts {
+                    if let Some(script_str) = value.as_str() {
+                        if script_uses_yarn(script_str) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Install yarn using npm if it's the detected package manager or used in scripts, and not already installed
+pub async fn ensure_yarn_installed(
+    ctx: &Context,
+    package_manager: &Option<crate::detectors::PackageManagerInfo>,
+    project_path: &Path,
+) -> Result<()> {
+    // Check if yarn is the package manager OR if any scripts use yarn
+    let needs_yarn = if let Some(ref pm) = package_manager {
+        pm.manager == "yarn" || scripts_use_yarn(package_manager)
+    } else {
+        // If no package manager detected, check package.json directly
+        check_package_json_for_yarn(project_path)
+    };
+
+    if needs_yarn {
+        // Check if yarn already exists in node_modules/.bin
+        if !yarn_exists_in_node_modules(project_path) {
+            use tracing::info;
+            info!("Installing yarn...");
+            
+            // Build install command with version if available
+            let install_cmd = if let Some(ref pm) = package_manager {
+                if let Some(ref version) = pm.version {
+                    format!("npm install yarn@{}", version)
+                } else {
+                    "npm install yarn".to_string()
+                }
+            } else {
+                "npm install yarn".to_string()
+            };
+            
+            let opts = RunOptions {
+                cwd: Some(project_path.to_path_buf()),
+                env: None,
+                show_output: true,
+                package_manager: None, // Use npm, not yarn
+                tool_info: None,
+            };
+            
+            run_local_with(ctx, &install_cmd, opts).await?;
+            info!("✓ yarn installed");
+        }
+    }
+    Ok(())
+}
+
 pub fn run_local(cmd: &str) -> Result<()> {
     // Let Command crate handle shell wrapping automatically
     // It will detect the shell and wrap the command appropriately
@@ -99,9 +272,18 @@ pub fn run_local(cmd: &str) -> Result<()> {
     let wrapped = wrap_with_mise(cmd);
     let mut command = Command::new(&wrapped);
 
-    // Add node_modules/.bin to PATH (session-only, non-persistent)
+    // Add mise shims and node_modules/.bin to PATH (session-only, non-persistent)
     if let Ok(current_dir) = std::env::current_dir() {
         let node_modules_bin_paths = find_node_modules_bin_paths(&current_dir);
+        
+        // Add mise shims path first
+        if let Some(shims_path) = get_mise_shims_path() {
+            if let Ok(shims_pathbuf) = PathBuf::from(&shims_path).canonicalize() {
+                command.prepend_paths([shims_pathbuf]);
+            }
+        }
+        
+        // Then add node_modules/.bin paths
         if !node_modules_bin_paths.is_empty() {
             command.prepend_paths(node_modules_bin_paths);
         }
@@ -165,7 +347,19 @@ fn node_modules_paths_to_strings(paths: &[PathBuf]) -> Vec<String> {
         .collect()
 }
 
-/// Build PATH with priority: mise PATH > node_modules/.bin > existing PATH
+/// Get the mise shims directory path
+fn get_mise_shims_path() -> Option<String> {
+    if let Ok(home) = std::env::var("HOME") {
+        let shims_path = format!("{}/.local/share/mise/shims", home);
+        // Check if the path exists
+        if Path::new(&shims_path).exists() {
+            return Some(shims_path);
+        }
+    }
+    None
+}
+
+/// Build PATH with priority: mise shims > mise PATH > node_modules/.bin > existing PATH
 fn build_merged_path(
     mise_path: Option<&str>,
     node_modules_bin_paths: &[PathBuf],
@@ -173,7 +367,12 @@ fn build_merged_path(
 ) -> String {
     let mut path_parts = Vec::new();
 
-    // Add mise PATH first (highest priority)
+    // Add mise shims path first (highest priority)
+    if let Some(shims) = get_mise_shims_path() {
+        path_parts.push(shims);
+    }
+
+    // Add mise PATH second (if available from mise env)
     if let Some(mise) = mise_path {
         path_parts.push(mise.to_string());
     }
@@ -225,8 +424,8 @@ fn merged_env(base: &Context, extra: &Option<HashMap<String, String>>) -> HashMa
                 }
             }
         }
-    } else if !node_modules_bin_paths.is_empty() {
-        // No mise env, but add node_modules/.bin paths to existing PATH
+    } else {
+        // No mise env JSON, but still add mise shims and node_modules/.bin paths to PATH
         let new_path = build_merged_path(None, &node_modules_bin_paths, &current_path);
         env.insert("PATH".to_string(), new_path);
     }
@@ -316,11 +515,12 @@ pub async fn run_local_with(ctx: &Context, cmd: &str, opts: RunOptions) -> Resul
 
     // Build the command normally
     // For shell scripts, don't wrap with package managers - just run as-is
-    // Extract version from package manager info for mise versioned execution
+    // Extract version and name from package manager info for mise versioned execution
     let pm_version = pm_info.as_ref().and_then(|pm| pm.version.as_deref());
+    let pm_name = pm_info.as_ref().map(|pm| pm.manager.as_str());
 
     // Check if we have tool info for non-Node tools (e.g., Hugo)
-    let tool_mise_version = opts.tool_info.as_ref().map(|info| {
+    let _tool_mise_version = opts.tool_info.as_ref().map(|info| {
         let version = info.version.as_deref().unwrap_or("latest");
         if info.extended {
             // Hugo extended version format: extended_0.83.0 or extended_latest
@@ -335,31 +535,36 @@ pub async fn run_local_with(ctx: &Context, cmd: &str, opts: RunOptions) -> Resul
     let first_token = cmd_parts.first().copied().unwrap_or("");
     let is_binary_tool = matches!(first_token, "zola" | "mdbook");
 
+    // Check if command starts with jekyll (not bundle exec jekyll) and if Gemfile exists
+    let needs_bundle_exec = if first_token == "jekyll" && !cmd.trim_start().starts_with("bundle exec") {
+        // Check if Gemfile exists in the project directory
+        if let Some(dir) = search_dir {
+            dir.join("Gemfile").exists()
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
     let final_cmd = if is_sh_script {
         // Shell script - don't wrap with package managers, just use the command as-is
         cmd.to_string()
-    } else if let Some(ref tool_info) = opts.tool_info {
+    } else if needs_bundle_exec {
+        // Jekyll command with Gemfile - wrap with bundle exec
+        format!("bundle exec {}", cmd)
+    } else if opts.tool_info.is_some() {
         // Non-Node tool with version info (e.g., Hugo)
-        // Use mise x hugo@extended_0.83.0 -- hugo server
-        if has_mise() && is_mise_tool(&tool_info.tool) {
-            let mise_version = tool_mise_version.as_deref().unwrap_or("latest");
-            format!("mise x {}@{} -- {}", tool_info.tool, mise_version, cmd)
-        } else {
-            cmd.to_string()
-        }
+        // Since mise shims are in PATH, just use the command as-is
+        cmd.to_string()
     } else if is_binary_tool && has_mise() {
         // Binary tools that mise can install via GitHub backend
-        // Use mise x github:repo/name@latest -- command
-        let repo = match first_token {
-            "zola" => "getzola/zola",
-            "mdbook" => "rust-lang/mdbook",
-            _ => unreachable!(), // We already checked is_binary_tool
-        };
-        format!("mise x github:{}@latest -- {}", repo, cmd)
+        // Since mise shims are in PATH, just use the command as-is
+        cmd.to_string()
     } else if has_pm_prefix {
         // User already specified a package manager, use command as-is (with mise wrapper if needed)
-        // Pass version so mise can auto-install the correct version (e.g., yarn@3.6.3)
-        wrap_with_mise_versioned(cmd, pm_version)
+        // Pass version and name so mise can auto-install the correct version (e.g., yarn@3.6.3)
+        wrap_with_mise_versioned(cmd, pm_version, pm_name)
     } else if let Some(pm_info) = &pm_info {
         // Use detected package manager to run the command
         match pm_info.manager.as_str() {
@@ -372,17 +577,22 @@ pub async fn run_local_with(ctx: &Context, cmd: &str, opts: RunOptions) -> Resul
                 // For npm/pnpm/yarn, run command directly (binaries in node_modules/.bin)
                 // PATH will be set up with node_modules/.bin, so binaries can be found
                 // Use mise with version to ensure the right tool versions are available
-                wrap_with_mise_versioned(cmd, pm_version)
+                wrap_with_mise_versioned(cmd, pm_version, pm_name)
             }
             _ => {
                 // Unknown package manager, use mise as fallback
-                wrap_with_mise_versioned(cmd, pm_version)
+                wrap_with_mise_versioned(cmd, pm_version, pm_name)
             }
         }
     } else {
         // No package manager detected, use mise if command is a node tool
         wrap_with_mise(cmd)
     };
+
+    // Clone final_cmd early to avoid borrow issues
+    let final_cmd_clone = final_cmd.clone();
+    eprintln!("[DEBUG] run_local_with: original cmd={:?}", cmd);
+    eprintln!("[DEBUG] run_local_with: final_cmd={:?}", final_cmd);
 
     // Add node_modules/.bin to PATH (session-only, non-persistent)
     // Only add if not using Bun (Bun handles its own binary resolution)
@@ -391,6 +601,7 @@ pub async fn run_local_with(ctx: &Context, cmd: &str, opts: RunOptions) -> Resul
         .as_ref()
         .map(|pm| pm.manager == "bun")
         .unwrap_or(false);
+    eprintln!("[DEBUG] run_local_with: is_bun={}", is_bun);
 
     // For WSL scripts, we need to modify the command to export PATH
     // Collect node_modules paths first to determine if we need to wrap the command
@@ -403,14 +614,38 @@ pub async fn run_local_with(ctx: &Context, cmd: &str, opts: RunOptions) -> Resul
     } else {
         Vec::new()
     };
+    eprintln!("[DEBUG] run_local_with: node_modules_bin_paths={:?}", node_modules_bin_paths);
+
+    // Vercel's approach: Set PATH as an environment variable, don't modify the command string
+    // This matches Vercel's runPackageJsonScript behavior where they prepend node_modules/.bin
+    // to PATH as an env var, which gets merged with the command's environment (including mise's PATH)
+    eprintln!("[DEBUG] run_local_with: final_cmd={:?}", final_cmd_clone);
 
     // Let Command crate handle shell wrapping automatically
     // It will detect the shell and wrap the command appropriately
-    let mut command = Command::new(&final_cmd);
+    let mut command = Command::new(&final_cmd_clone);
+    
+    // Debug: Show current PATH
+    if let Ok(current_path) = std::env::var("PATH") {
+        eprintln!("[DEBUG] run_local_with: current PATH={}", current_path);
+    }
 
-    // Add node_modules/.bin to PATH (only if not Bun)
+    // Add mise shims path first (highest priority)
+    if let Some(shims_path) = get_mise_shims_path() {
+        if let Ok(shims_pathbuf) = PathBuf::from(&shims_path).canonicalize() {
+            eprintln!("[DEBUG] run_local_with: prepending mise shims to PATH: {:?}", shims_pathbuf);
+            command.prepend_paths([shims_pathbuf]);
+        }
+    }
+
+    // Vercel's approach: Always prepend node_modules/.bin to PATH as an environment variable
+    // This works because mise shims are now in PATH, so binaries are available automatically
+    // This matches Vercel's runPackageJsonScript which sets PATH as an env var
     if !is_bun && !node_modules_bin_paths.is_empty() {
+        eprintln!("[DEBUG] run_local_with: prepending node_modules/.bin to PATH via command.prepend_paths() (Vercel-style)");
         command.prepend_paths(node_modules_bin_paths);
+    } else {
+        eprintln!("[DEBUG] run_local_with: skipping prepend_paths (is_bun={}, has_paths={})", is_bun, !node_modules_bin_paths.is_empty());
     }
 
     // Set working directory

@@ -68,23 +68,38 @@ pub fn init_index(conn: &Connection) -> Result<(), RepomixError> {
     conn.execute_batch(SCHEMA_SQL)
         .map_err(|e| RepomixError(format!("Failed to init index: {}", e)))?;
 
+    // Always attempt to add metadata columns (idempotent; ignore if exists)
+    for sql in [
+        "ALTER TABLE cache_index ADD COLUMN workdir TEXT",
+        "ALTER TABLE cache_index ADD COLUMN style TEXT",
+        "ALTER TABLE cache_index ADD COLUMN file_count INTEGER",
+        "ALTER TABLE cache_index ADD COLUMN workspace TEXT",
+    ] {
+        let _ = conn.execute(sql, []);
+    }
+
     let version: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap_or(0);
     if version < 2 {
-        for sql in [
-            "ALTER TABLE cache_index ADD COLUMN workdir TEXT",
-            "ALTER TABLE cache_index ADD COLUMN style TEXT",
-            "ALTER TABLE cache_index ADD COLUMN file_count INTEGER",
-            "ALTER TABLE cache_index ADD COLUMN workspace TEXT",
-        ] {
-            if conn.execute(sql, []).is_err() {
-                // Ignore "duplicate column name" (column already exists)
-            }
-        }
         conn.execute(
             &format!("PRAGMA user_version = {}", SCHEMA_VERSION),
             [],
         )
         .map_err(|e| RepomixError(format!("Failed to set schema version: {}", e)))?;
+    }
+
+    // Ensure workdir index exists (idempotent). Skip if workdir column missing (very old DB).
+    let has_workdir = conn
+        .query_row(
+            "SELECT 1 FROM pragma_table_info('cache_index') WHERE name='workdir'",
+            [],
+            |r| r.get::<_, i32>(0),
+        )
+        .is_ok();
+    if has_workdir {
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_workdir_created ON cache_index(workdir, created_at)",
+            [],
+        );
     }
     Ok(())
 }
@@ -166,6 +181,37 @@ pub struct ListEntry {
     pub style: Option<String>,
     pub file_count: Option<i64>,
     pub workspace: Option<String>,
+}
+
+/// Get all pack entries for a workdir (most recent first).
+pub fn get_entries_for_workdir(
+    conn: &Connection,
+    workdir: &str,
+) -> Result<Vec<ListEntry>, RepomixError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT input_key, content_hash, COALESCE(created_at, 0), workdir, style, file_count, workspace \
+             FROM cache_index WHERE workdir = ? ORDER BY created_at DESC",
+        )
+        .map_err(|e| RepomixError(format!("Failed to prepare query: {}", e)))?;
+    let rows = stmt
+        .query_map([workdir], |row| {
+            Ok(ListEntry {
+                input_key: row.get(0)?,
+                content_hash: row.get(1)?,
+                created_at: row.get(2)?,
+                workdir: row.get(3)?,
+                style: row.get(4)?,
+                file_count: row.get(5)?,
+                workspace: row.get(6)?,
+            })
+        })
+        .map_err(|e| RepomixError(format!("Failed to query: {}", e)))?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(|e| RepomixError(e.to_string()))?);
+    }
+    Ok(out)
 }
 
 /// List all entries with metadata.

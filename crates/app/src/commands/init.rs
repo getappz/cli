@@ -3,9 +3,15 @@
 //! Handles interactive prompts when args are missing, then calls init::run().
 
 use crate::app_error::UserCancellation;
+use crate::ddev_helpers::{
+    ddev_config_command, ddev_project_type_for_framework, has_ddev_config,
+    is_ddev_available, is_ddev_supported_framework,
+};
 use crate::session::AppzSession;
+use crate::shell::{run_local_with, RunOptions};
 use crate::templates::{get_builtin_template, BUILTIN_TEMPLATES};
 use miette::miette;
+use task::Context;
 use tracing::instrument;
 use starbase::AppResult;
 use std::path::PathBuf;
@@ -33,18 +39,49 @@ pub async fn init(
     let output_dir = output.unwrap_or_else(|| session.working_dir.clone());
 
     init::run(
-        Some(template_source),
-        Some(project_name),
+        Some(template_source.clone()),
+        Some(project_name.clone()),
         None,
         None,
         None,
         skip_install,
         force,
-        Some(output_dir),
+        Some(output_dir.clone()),
         false,
     )
     .await
     .map_err(|e| miette!("{}", e))?;
+
+    // Auto-add DDEV configuration for DDEV-supported PHP/CMS frameworks when DDEV is available
+    let project_path = output_dir.join(&project_name);
+    if is_ddev_supported_framework(&template_source)
+        && is_ddev_available()
+        && !has_ddev_config(&project_path)
+    {
+        if let Some((project_type, docroot)) =
+            ddev_project_type_for_framework(&template_source)
+        {
+            let mut config_cmd = ddev_config_command(project_type, docroot);
+            if project_type == "php" {
+                config_cmd.push_str(" --php-version=8.2");
+            }
+            println!("⚙️  Adding DDEV configuration...");
+            let mut ctx = Context::new();
+            ctx.set_working_path(project_path.clone());
+            let opts = RunOptions {
+                cwd: Some(project_path),
+                env: None,
+                show_output: true,
+                package_manager: None,
+                tool_info: None,
+            };
+            if run_local_with(&ctx, &config_cmd, opts).await.is_ok() {
+                println!("✓ DDEV configured. Run `ddev start` then `ddev launch` to start developing.");
+            }
+        }
+    } else if is_ddev_supported_framework(&template_source) && !is_ddev_available() {
+        println!("Tip: Install DDEV for local PHP development: https://docs.ddev.com/en/stable/users/install/ddev-installation/");
+    }
 
     Ok(None)
 }
@@ -118,6 +155,9 @@ fn resolve_template_source(selected: &str) -> Result<String, miette::Report> {
     }
     // Built-in slug
     let slug = selected;
+    if slug.eq_ignore_ascii_case("wordpress") {
+        return Ok("wordpress".to_string());
+    }
     if init::has_create_command(slug) {
         Ok(slug.to_string())
     } else if let Some((repo, subfolder)) = get_builtin_template(slug) {

@@ -1,42 +1,13 @@
-use app::{AppzSession, Cli, Commands, UserCancellation};
-use clap::Parser;
-use env_var::GlobalEnvBag;
+mod shared;
+
 use mimalloc::MiMalloc;
+use starbase::MainResult;
+use std::env;
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
-use starbase::tracing::TracingOptions;
-use starbase::{App, MainResult};
-use std::env;
-use std::process::ExitCode;
-use tracing::debug;
-use ui::banner;
 
-fn get_version() -> String {
-    let version = env!("CARGO_PKG_VERSION");
-
-    GlobalEnvBag::instance().set("APPZ_VERSION", version);
-
-    version.to_owned()
-}
-
-fn get_tracing_modules() -> Vec<String> {
-    let bag = GlobalEnvBag::instance();
-    let mut modules = vec![
-        "appz".to_string(),
-        "app".to_string(),
-        "starbase".to_string(),
-        "api".to_string(),
-    ];
-
-    if bag.should_debug_wasm() {
-        modules.push("extism".to_string());
-    }
-
-    modules
-}
-
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> MainResult {
     let mut timing = common::timing::TimingDebug::new();
 
@@ -136,7 +107,7 @@ async fn main() -> MainResult {
                 Commands::Seo { command } => {
                     app::commands::seo::run(session, command).await
                 }
-                Commands::Ls => app::commands::ls(session).await,
+                Commands::Ls(args) => app::commands::ls(session, args).await,
                 Commands::Open => app::commands::open(session).await,
                 Commands::Link { project, team } => {
                     app::commands::link(session, project, team).await
@@ -148,8 +119,17 @@ async fn main() -> MainResult {
                     let as_json = json || format.as_deref() == Some("json");
                     app::commands::whoami(session, as_json).await
                 }
-                Commands::Init { template_or_name, name, template, skip_install, force, output } => {
-                    app::commands::init(session, template_or_name, name, template, skip_install, force, output).await
+                Commands::Init(args) => {
+                    app::commands::init(
+                        session,
+                        args.template_or_name.clone(),
+                        args.name.clone(),
+                        args.template.clone(),
+                        args.skip_install,
+                        args.force,
+                        args.output.clone(),
+                    )
+                    .await
                 }
                 Commands::Switch { team } => {
                     // Backward compatibility: route to teams switch

@@ -1,14 +1,15 @@
 use crate::client::Client;
 use crate::error::ApiError;
+use std::sync::Arc;
 use crate::models::{map_better_auth_user_to_cli_user, BetterAuthUserResponse, User};
 use crate::paths::V0_PREFIX;
 
-pub struct Users<'a> {
-    client: &'a Client,
+pub struct Users {
+    client: Arc<Client>,
 }
 
-impl<'a> Users<'a> {
-    pub fn new(client: &'a Client) -> Self {
+impl Users {
+    pub fn new(client: Arc<Client>) -> Self {
         Self { client }
     }
 
@@ -17,7 +18,7 @@ impl<'a> Users<'a> {
     #[tracing::instrument(skip(self))]
     pub async fn get_current(&self) -> Result<User, ApiError> {
         let path = format!("{}/user", V0_PREFIX);
-        let response: BetterAuthUserResponse = self.client.get(&path).await?;
+        let response: BetterAuthUserResponse = self.client.get(path).await?;
         Ok(map_better_auth_user_to_cli_user(response.user))
     }
 
@@ -25,7 +26,7 @@ impl<'a> Users<'a> {
     #[tracing::instrument(skip(self))]
     pub async fn get_telemetry(&self) -> Result<TelemetryPreference, ApiError> {
         let path = format!("{}/user/telemetry", V0_PREFIX);
-        self.client.get(&path).await
+        self.client.get(path).await
     }
 
     /// Set telemetry preference for the current user (requires auth).
@@ -33,7 +34,7 @@ impl<'a> Users<'a> {
     pub async fn set_telemetry(&self, enabled: bool) -> Result<TelemetryPreference, ApiError> {
         let path = format!("{}/user/telemetry", V0_PREFIX);
         self.client
-            .put_json(&path, &TelemetryPreference { enabled })
+            .put_json(path, TelemetryPreference { enabled })
             .await
     }
 }

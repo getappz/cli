@@ -549,6 +549,8 @@ pub struct PluginCheckRunInput {
     pub max_attempts: u32,
     pub ai_verify: Option<bool>,
     pub verbose_ai: bool,
+    #[serde(default)]
+    pub verify: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

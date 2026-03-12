@@ -7,7 +7,10 @@ description = "Pack codebase for AI context using Repomix with pack-style pre-fi
 publish = false
 
 [dependencies]
+code-grep = { path = "../code-grep" }
 dirs = "5.0"
+ignore = "0.4"
+regex = { workspace = true }
 hex = "0.4"
 rusqlite = { version = "0.32", features = ["bundled"] }
 sandbox = { path = "../sandbox" }
@@ -17,3 +20,22 @@ tokio = { workspace = true, features = ["fs", "io-std", "process"] }
 miette = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
+
+[[bench]]
+name = "cache"
+harness = false
+
+[[bench]]
+name = "prefilter"
+harness = false
+
+[[bench]]
+name = "store"
+harness = false
+
+[[bench]]
+name = "search"
+harness = false

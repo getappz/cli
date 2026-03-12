@@ -5,6 +5,7 @@
 
 pub mod banner;
 pub mod empty;
+pub mod guidance;
 pub mod theme;
 pub mod error;
 pub mod format;
@@ -19,6 +20,7 @@ pub mod table;
 pub mod interactive;
 
 // Re-export commonly used types
+pub use guidance::{CommandGuidance, Example, NextStep};
 pub use prompt::{
     checkbox, choose, choose_multiple, confirm, password, prompt, select_with_value,
     text_with_transformer, text_with_validation,

@@ -29,6 +29,8 @@ members = [
     "crates/wp2md",
     "crates/code-search",
     "crates/code-mix",
+    "crates/code-grep",
+    "crates/hypermix",
     "crates/crawl-core",
     "crates/plugins/ssg-migrator",
     "crates/plugins/check",
@@ -36,6 +38,8 @@ members = [
     "crates/plugins/wp2md",
     "crates/plugins/crawl",
     "crates/plugin-build",
+    "crates/appz-client",
+    "crates/appz-build",
 ]
 resolver = "2"
 
@@ -143,6 +147,7 @@ clap = { version = "4.5", features = ["derive", "env"] }
 inquire = "0.9"
 indicatif = "0.18"
 atty = "0.2"
+duct = "1"
 shell-words = "1.1"
 which = "8.0"
 
@@ -186,6 +191,9 @@ toml = "0.8"
 
 # Concurrency
 scc = "3.6"
+
+# Git
+git2 = "0.20"
 
 # Self-update
 self_update = { version = "0.42", default-features = false, features = ["rustls", "signatures"] }

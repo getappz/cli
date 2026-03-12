@@ -4,6 +4,7 @@
 //! Default: list when no subcommand provided
 
 use crate::session::AppzSession;
+use crate::ClientExt;
 use api::Client;
 use clap::Subcommand;
 use starbase::AppResult;
@@ -45,11 +46,11 @@ pub fn user_friendly_list_projects_error(e: &api::ApiError) -> String {
 /// # Returns
 /// The project ID if found, otherwise an error
 pub async fn resolve_project_id(
-    client: &Client,
-    project_identifier: &str,
+    client: std::sync::Arc<Client>,
+    project_identifier: String,
 ) -> Result<String, miette::Error> {
     // Try to get project directly by ID first (faster if it's already an ID)
-    if let Ok(project) = client.projects().get(project_identifier).await {
+    if let Ok(project) = client.projects().get(&project_identifier).await {
         if let Some(id) = project.id {
             return Ok(id);
         }
@@ -66,12 +67,12 @@ pub async fn resolve_project_id(
         let matches_id = project
             .id
             .as_ref()
-            .map(|id| id == project_identifier)
+            .map(|id| id == &project_identifier)
             .unwrap_or(false);
         let matches_slug = project
             .slug
             .as_ref()
-            .map(|slug| slug == project_identifier)
+            .map(|slug| slug == &project_identifier)
             .unwrap_or(false);
 
         if matches_id || matches_slug {

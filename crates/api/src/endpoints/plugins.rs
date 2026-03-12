@@ -1,5 +1,6 @@
 use crate::client::Client;
 use crate::error::ApiError;
+use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 /// Response from the plugin entitlements endpoint.
@@ -9,12 +10,12 @@ pub struct PluginEntitlementsResponse {
     pub tiers: Vec<String>,
 }
 
-pub struct Plugins<'a> {
-    client: &'a Client,
+pub struct Plugins {
+    client: Arc<Client>,
 }
 
-impl<'a> Plugins<'a> {
-    pub fn new(client: &'a Client) -> Self {
+impl Plugins {
+    pub fn new(client: Arc<Client>) -> Self {
         Self { client }
     }
 

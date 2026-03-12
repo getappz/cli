@@ -11,7 +11,8 @@
 //! - `SURGE_TOKEN` environment variable (CI/CD)
 //! - `surge login` interactive flow (local)
 
-use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -61,7 +62,7 @@ impl DeployProvider for SurgeProvider {
 
     async fn check_prerequisites(
         &self,
-        sandbox: &dyn SandboxProvider,
+        sandbox: Arc<dyn SandboxProvider>,
     ) -> DeployResult<PrerequisiteStatus> {
         let cli_ok = sandbox.exec("surge --version").await.map(|o| o.success()).unwrap_or(false);
         let auth_ok = has_env_var("SURGE_TOKEN");
@@ -79,7 +80,7 @@ impl DeployProvider for SurgeProvider {
         }
     }
 
-    async fn detect_config(&self, project_dir: &Path) -> DeployResult<Option<DetectedConfig>> {
+    async fn detect_config(&self, project_dir: PathBuf) -> DeployResult<Option<DetectedConfig>> {
         for dir in &[".", "dist", "build", "public", "_site"] {
             let cname = project_dir.join(dir).join("CNAME");
             if let Ok(content) = tokio::fs::read_to_string(&cname).await {
@@ -105,7 +106,7 @@ impl DeployProvider for SurgeProvider {
 
         let cli_ok = ctx.sandbox.exec("surge --version").await.map(|o| o.success()).unwrap_or(false);
         if !cli_ok {
-            self.ensure_cli(&*ctx.sandbox).await?;
+            self.ensure_cli(ctx.sandbox.clone()).await?;
         }
 
         // Login if needed
@@ -120,7 +121,7 @@ impl DeployProvider for SurgeProvider {
         })
     }
 
-    async fn deploy(&self, ctx: &DeployContext) -> DeployResult<DeployOutput> {
+    async fn deploy(&self, ctx: DeployContext) -> DeployResult<DeployOutput> {
         let start = std::time::Instant::now();
 
         if ctx.dry_run {
@@ -175,7 +176,7 @@ impl DeployProvider for SurgeProvider {
         })
     }
 
-    async fn deploy_preview(&self, _ctx: &DeployContext) -> DeployResult<DeployOutput> {
+    async fn deploy_preview(&self, _ctx: DeployContext) -> DeployResult<DeployOutput> {
         Err(DeployError::Unsupported {
             provider: "Surge".into(),
             operation: "preview deployments".into(),

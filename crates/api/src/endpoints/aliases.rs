@@ -1,14 +1,15 @@
 use crate::client::Client;
 use crate::error::ApiError;
+use std::sync::Arc;
 use crate::models::{Alias, AliasesListResponse, DeleteResponse};
 use crate::paths::V0_PREFIX;
 
-pub struct Aliases<'a> {
-    client: &'a Client,
+pub struct Aliases {
+    client: Arc<Client>,
 }
 
-impl<'a> Aliases<'a> {
-    pub fn new(client: &'a Client) -> Self {
+impl Aliases {
+    pub fn new(client: Arc<Client>) -> Self {
         Self { client }
     }
 
@@ -22,11 +23,11 @@ impl<'a> Aliases<'a> {
         since: Option<i64>,
         until: Option<i64>,
     ) -> Result<AliasesListResponse, ApiError> {
-        let query_params = vec![
-            ("projectId", project_id),
-            ("limit", limit.map(|l| l.to_string())),
-            ("since", since.map(|s| s.to_string())),
-            ("until", until.map(|u| u.to_string())),
+        let query_params: Vec<(String, Option<String>)> = vec![
+            ("projectId".to_string(), project_id),
+            ("limit".to_string(), limit.map(|l| l.to_string())),
+            ("since".to_string(), since.map(|s| s.to_string())),
+            ("until".to_string(), until.map(|u| u.to_string())),
         ];
 
         // Temporarily set team_id if provided
@@ -35,7 +36,7 @@ impl<'a> Aliases<'a> {
         }
 
         let path = format!("{}/aliases", V0_PREFIX);
-        let result = self.client.get_with_query(&path, &query_params).await;
+        let result = self.client.get_with_query(path, query_params).await;
 
         // Reset team_id if we set it
         if team_id.is_some() {
@@ -46,16 +47,35 @@ impl<'a> Aliases<'a> {
     }
 
     /// Get an alias by ID or alias string
+    #[tracing::instrument(skip(self, id_or_alias))]
+    pub async fn get(&self, id_or_alias: impl Into<String>) -> Result<Alias, ApiError> {
+        let id = id_or_alias.into();
+        let path = format!("{}/aliases/{}", V0_PREFIX, id);
+        self.client.get(path).await
+    }
+
+    /// Create an alias: assign a custom domain to a deployment.
+    ///
+    /// Vercel parity: `POST /now/deployments/{id}/aliases` with `{ alias }`.
+    /// Uses `POST /v0/deployments/{id}/aliases` for appz.
     #[tracing::instrument(skip(self))]
-    pub async fn get(&self, id_or_alias: &str) -> Result<Alias, ApiError> {
-        let path = format!("{}/aliases/{}", V0_PREFIX, id_or_alias);
-        self.client.get(&path).await
+    pub async fn create(
+        &self,
+        deployment_id: &str,
+        alias: &str,
+    ) -> Result<Alias, ApiError> {
+        #[derive(serde::Serialize)]
+        struct CreateAliasRequest<'a> {
+            alias: &'a str,
+        }
+        let path = format!("{}/deployments/{}/aliases", V0_PREFIX, deployment_id);
+        self.client.post(path, Some(CreateAliasRequest { alias })).await
     }
 
     /// Delete an alias
     #[tracing::instrument(skip(self))]
     pub async fn delete(&self, alias_id: &str) -> Result<DeleteResponse, ApiError> {
         let path = format!("{}/aliases/{}", V0_PREFIX, alias_id);
-        self.client.delete(&path).await
+        self.client.delete(path).await
     }
 }

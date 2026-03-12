@@ -7,14 +7,14 @@ use crate::models::{
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-pub struct Auth<'a> {
-    client: &'a Client,
+pub struct Auth {
+    client: std::sync::Arc<Client>,
     // Cache for authorization server metadata
     metadata_cache: Arc<RwLock<Option<AuthorizationServerMetadata>>>,
 }
 
-impl<'a> Auth<'a> {
-    pub fn new(client: &'a Client) -> Self {
+impl Auth {
+    pub fn new(client: std::sync::Arc<Client>) -> Self {
         Self {
             client,
             metadata_cache: Arc::new(RwLock::new(None)),
@@ -47,11 +47,12 @@ impl<'a> Auth<'a> {
         email: Option<String>,
         team_id: Option<String>,
     ) -> Result<VerifyResponse, ApiError> {
-        let mut query_params = vec![("token", Some(token))];
+        let mut query_params: Vec<(String, Option<String>)> =
+            vec![("token".to_string(), Some(token))];
 
         // Add email to query params if provided
         if let Some(email) = email {
-            query_params.push(("email", Some(email)));
+            query_params.push(("email".to_string(), Some(email)));
         }
 
         // Temporarily set team_id if provided
@@ -61,7 +62,7 @@ impl<'a> Auth<'a> {
 
         let result = self
             .client
-            .get_with_query("/auth/verify", &query_params)
+            .get_with_query("/auth/verify", query_params)
             .await;
 
         // Reset team_id if we set it

@@ -62,7 +62,7 @@
 //!
 //! let provider = get_provider("vercel")?;
 //! let ctx = DeployContext::new(sb, "dist".into());
-//! let output = provider.deploy(&ctx).await?;
+//! let output = provider.deploy(ctx).await?;
 //! println!("Deployed to: {}", output.url);
 //! # Ok(())
 //! # }

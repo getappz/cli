@@ -1,5 +1,10 @@
+use crate::args::DevSubcommand;
 use crate::commands::install_helpers::{
     get_default_install_command, handle_shell_script_fallback, run_recipe_task,
+};
+use crate::ddev_helpers::{
+    ddev_config_command, ddev_project_type_for_framework, has_ddev_config,
+    is_ddev_available, is_ddev_supported_framework,
 };
 use detectors::{
     detect_framework_record, detect_hugo_info, DetectFrameworkRecordOptions, DetectorFilesystem,
@@ -12,27 +17,62 @@ use crate::tunnel::{CloudflaredTunnel, TunnelService};
 use sandbox::{create_sandbox, SandboxConfig};
 use frameworks::frameworks;
 use starbase::AppResult;
+use std::path::Path;
 use std::sync::Arc;
 use task::Context;
 use tracing::instrument;
 
+/// Stop DDEV containers for a DDEV project.
+async fn dev_stop(project_path: &Path) -> AppResult {
+    if !project_path.exists() {
+        return Err(miette::miette!(
+            "Path does not exist: {}",
+            project_path.display()
+        ));
+    }
+    if !project_path.is_dir() {
+        return Err(miette::miette!(
+            "Path is not a directory: {}",
+            project_path.display()
+        ));
+    }
+    if !has_ddev_config(project_path) {
+        return Err(miette::miette!(
+            "No DDEV project in {}. Stop is only for DDEV projects (WordPress, Drupal, Laravel, etc.).",
+            project_path.display()
+        ));
+    }
+    if !is_ddev_available() {
+        return Err(miette::miette!(
+            "DDEV is required but was not found. Install it: https://docs.ddev.com/en/stable/users/install/ddev-installation/"
+        ));
+    }
+
+    let mut ctx = Context::new();
+    ctx.set_working_path(project_path.to_path_buf());
+    let opts = RunOptions {
+        cwd: Some(project_path.to_path_buf()),
+        env: None,
+        show_output: true,
+        package_manager: None,
+        tool_info: None,
+    };
+    run_local_with(&ctx, "ddev stop", opts).await?;
+    println!("✓ DDEV stopped");
+    Ok(None)
+}
+
 #[instrument(skip_all)]
-pub async fn dev(session: AppzSession) -> AppResult {
-    // Extract CLI flags
-    let share = if let crate::app::Commands::Dev { share, .. } = &session.cli.command {
-        *share
-    } else {
-        false
-    };
-
-    let port = if let crate::app::Commands::Dev { port, .. } = &session.cli.command {
-        port.unwrap_or(3000)
-    } else {
-        3000
-    };
-
-    // Use the working directory from session (already respects --cwd)
+pub async fn dev(session: AppzSession, args: crate::args::DevArgs) -> AppResult {
     let project_path = session.working_dir.clone();
+
+    // Handle `appz dev stop` for DDEV projects
+    if matches!(args.command, Some(DevSubcommand::Stop)) {
+        return dev_stop(&project_path).await;
+    }
+
+    let share = args.share;
+    let port = args.port.unwrap_or(3000);
 
     // Check if path exists
     if !project_path.exists() {
@@ -116,53 +156,103 @@ pub async fn dev(session: AppzSession) -> AppResult {
             println!("✓ Detected framework: {}", framework.name);
             if is_user_script {
                 println!("✓ Using user-defined dev script from package.json");
+            } else if framework
+                .slug
+                .as_ref()
+                .is_some_and(|s| is_ddev_supported_framework(*s))
+            {
+                // Will show "Using DDEV" at dev execution (after ddev config+start)
             } else {
                 println!("✓ Using framework dev command");
             }
 
-            // Handle ddev setup for Jigsaw
-            if framework.slug == Some("jigsaw") {
-                if !command_exists("ddev") {
-                    return Err(miette::miette!(
-                        "ddev is required for Jigsaw projects but was not found. Please install ddev first."
-                    ));
-                }
+            // Handle DDEV setup for supported PHP/CMS frameworks
+            // (WordPress, Drupal, Laravel, Jigsaw, Sculpin, Kirby, Statamic, etc.)
+            if let Some(ref slug) = framework.slug {
+                if is_ddev_supported_framework(slug) {
+                    if !is_ddev_available() {
+                        return Err(miette::miette!(
+                            "DDEV is required for {} projects but was not found. \
+                             Install it: https://docs.ddev.com/en/stable/users/install/ddev-installation/",
+                            framework.name
+                        ));
+                    }
 
-                let ddev_config_path = project_path.join(".ddev").join("config.yaml");
-                if !ddev_config_path.exists() {
-                    println!("⚙️  Configuring ddev for Jigsaw project...");
-                    let mut ctx_config = Context::new();
-                    ctx_config.set_working_path(project_path.clone());
-                    let config_opts = RunOptions {
+                    if !has_ddev_config(&project_path) {
+                        if let Some((project_type, docroot)) =
+                            ddev_project_type_for_framework(slug)
+                        {
+                            let mut config_cmd =
+                                ddev_config_command(project_type, docroot);
+                            if project_type == "php" {
+                                config_cmd.push_str(" --php-version=8.2");
+                            }
+                            println!("⚙️  Configuring DDEV for {}...", framework.name);
+                            let mut ctx_config = Context::new();
+                            ctx_config.set_working_path(project_path.clone());
+                            let config_opts = RunOptions {
+                                cwd: Some(project_path.clone()),
+                                env: None,
+                                show_output: true,
+                                package_manager: None,
+                                tool_info: None,
+                            };
+                            run_local_with(
+                                &ctx_config,
+                                &config_cmd,
+                                config_opts,
+                            )
+                            .await?;
+                            println!("✓ DDEV configured");
+                        }
+                    }
+
+                    println!("🚀 Starting DDEV...");
+                    let mut ctx_start = Context::new();
+                    ctx_start.set_working_path(project_path.clone());
+                    let start_opts = RunOptions {
                         cwd: Some(project_path.clone()),
                         env: None,
-                        show_output: true,
+                        show_output: false,
                         package_manager: None,
                         tool_info: None,
                     };
-                    run_local_with(
-                        &ctx_config,
-                        "ddev config --project-type=php --php-version=8.2",
-                        config_opts,
-                    )
-                    .await?;
-                    println!("✓ ddev configured");
-                }
+                    let _ = run_local_with(&ctx_start, "ddev start", start_opts).await;
+                    println!("✓ DDEV ready");
 
-                // Ensure ddev is started
-                println!("🚀 Starting ddev...");
-                let mut ctx_start = Context::new();
-                ctx_start.set_working_path(project_path.clone());
-                let start_opts = RunOptions {
-                    cwd: Some(project_path.clone()),
-                    env: None,
-                    show_output: false, // ddev start can be verbose
-                    package_manager: None,
-                    tool_info: None,
-                };
-                // ddev start is idempotent, so it's safe to run even if already started
-                let _ = run_local_with(&ctx_start, "ddev start", start_opts).await;
-                println!("✓ ddev ready");
+                    // Verify container can reach internet (common WSL2/Docker DNS issue)
+                    let mut ctx_conn = Context::new();
+                    ctx_conn.set_working_path(project_path.clone());
+                    let conn_opts = RunOptions {
+                        cwd: Some(project_path.clone()),
+                        env: None,
+                        show_output: false,
+                        package_manager: None,
+                        tool_info: None,
+                    };
+                    let has_connectivity = run_local_with(
+                        &ctx_conn,
+                        "ddev exec curl -sSf -o /dev/null --connect-timeout 5 https://github.com",
+                        conn_opts,
+                    )
+                    .await
+                    .is_ok();
+                    if !has_connectivity {
+                        eprintln!();
+                        eprintln!("⚠️  DDEV container has no internet access (DNS resolution failed).");
+                        eprintln!("   This can cause wp core install, nvm, and other features to fail.");
+                        eprintln!();
+                        eprintln!("   Fix (WSL2 + Docker): add DNS to Docker daemon:");
+                        eprintln!("   1. Docker Desktop → Settings → Docker Engine");
+                        eprintln!("   2. Add to JSON: \"dns\": [\"8.8.8.8\", \"1.1.1.1\"]");
+                        eprintln!("   3. Apply & Restart");
+                        eprintln!();
+                        eprintln!("   Or upgrade WSL: wsl --upgrade (WSL 2.2.1+ has DNS tunneling)");
+                        eprintln!("   See docs/plans/ddev-troubleshooting.md for more options.");
+                        eprintln!();
+                    }
+
+                }
             }
 
             // Create filesystem detector for Hugo info detection
@@ -211,7 +301,12 @@ pub async fn dev(session: AppzSession) -> AppResult {
                 tool_info: tool_info.clone(),
             };
 
-            // Install step (same as build flow): resolve install command and run
+            // Install step (same as build flow): skip for DDEV projects (PHP/CMS served by container)
+            let skip_install_for_ddev = framework
+                .slug
+                .as_ref()
+                .is_some_and(|s| is_ddev_supported_framework(s) && has_ddev_config(&project_path));
+
             let user_install_script = package_manager
                 .as_ref()
                 .and_then(|pm| pm.install_script.clone());
@@ -222,15 +317,6 @@ pub async fn dev(session: AppzSession) -> AppResult {
             } else {
                 get_default_install_command(&package_manager)
             };
-
-            // Display which install command is being used
-            if user_install_script.is_some() {
-                println!("✓ Using user-defined install script from package.json");
-            } else if framework_install_cmd.is_some() {
-                println!("✓ Using framework install command");
-            } else {
-                println!("✓ Using package manager default install command");
-            }
 
             // Sandbox for install and dev (mise-managed)
             let config = SandboxConfig::new(project_path.clone())
@@ -245,41 +331,94 @@ pub async fn dev(session: AppzSession) -> AppResult {
                 );
             }
 
-            // Execute install step: check for appz:install recipe task first
-            let registry = session.get_task_registry();
-            let using_appz_install = registry.get("appz:install").is_some();
+            if skip_install_for_ddev {
+                // WordPress DDEV: wp core install as the install step
+                if framework.slug.as_deref() == Some("wordpress") {
+                    println!("✓ Using WordPress install (wp core install)");
+                    let mut ctx_wp = Context::new();
+                    ctx_wp.set_working_path(project_path.clone());
+                    let wp_opts = RunOptions {
+                        cwd: Some(project_path.clone()),
+                        env: None,
+                        show_output: false,
+                        package_manager: None,
+                        tool_info: None,
+                    };
+                    let is_installed = run_local_with(
+                        &ctx_wp,
+                        "ddev exec wp core is-installed",
+                        wp_opts.clone(),
+                    )
+                    .await
+                    .is_ok();
 
-            if using_appz_install {
-                println!("✓ Found appz:install recipe task, using recipe install...");
-                println!("\n📦 Running install command...");
-                run_recipe_task(
-                    &registry,
-                    "appz:install",
-                    project_path.clone(),
-                    session.cli.verbose,
-                )
-                .await?;
-            } else {
-                println!("\n📦 Running install command...");
-                let install_result = if let Some(ref s) = &sandbox {
-                    s.exec_interactive(&install_cmd)
-                        .await
-                        .map(|_| ())
-                        .map_err(|e| miette::miette!("{}", e))
+                    if !is_installed {
+                        println!("\n📦 Running install command...");
+                        let project_name = project_path
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("wordpress");
+                        let url = format!("https://{}.ddev.site", project_name);
+                        let wp_install_cmd = format!(
+                            "ddev exec wp core install --url={} --title=WordPress \
+                             --admin_user=admin --admin_password=admin \
+                             --admin_email=admin@example.com --skip-email",
+                            url
+                        );
+                        let mut opts_show = wp_opts;
+                        opts_show.show_output = true;
+                        run_local_with(&ctx_wp, &wp_install_cmd, opts_show).await?;
+                        println!("✓ WordPress installed (admin / admin)");
+                    } else {
+                        println!("✓ WordPress already installed");
+                    }
                 } else {
-                    run_local_with(&ctx, &install_cmd, opts.clone()).await
-                };
+                    println!("✓ Skipping install for DDEV project");
+                }
+            } else {
+                if user_install_script.is_some() {
+                    println!("✓ Using user-defined install script from package.json");
+                } else if framework_install_cmd.is_some() {
+                    println!("✓ Using framework install command");
+                } else {
+                    println!("✓ Using package manager default install command");
+                }
 
-                handle_shell_script_fallback(
-                    install_result,
-                    is_shell_script(&install_cmd),
-                    user_install_script.is_some(),
-                    framework_install_cmd.as_ref(),
-                    Some(get_default_install_command(&package_manager)),
-                    &ctx,
-                    &opts,
-                )
-                .await?;
+                let registry = session.get_task_registry();
+                let using_appz_install = registry.get("appz:install").is_some();
+
+                if using_appz_install {
+                    println!("✓ Found appz:install recipe task, using recipe install...");
+                    println!("\n📦 Running install command...");
+                    run_recipe_task(
+                        &registry,
+                        "appz:install",
+                        project_path.clone(),
+                        session.cli.verbose,
+                    )
+                    .await?;
+                } else {
+                    println!("\n📦 Running install command...");
+                    let install_result = if let Some(ref s) = &sandbox {
+                        s.exec_interactive(&install_cmd)
+                            .await
+                            .map(|_| ())
+                            .map_err(|e| miette::miette!("{}", e))
+                    } else {
+                        run_local_with(&ctx, &install_cmd, opts.clone()).await
+                    };
+
+                    handle_shell_script_fallback(
+                        install_result,
+                        is_shell_script(&install_cmd),
+                        user_install_script.is_some(),
+                        framework_install_cmd.as_ref(),
+                        Some(get_default_install_command(&package_manager)),
+                        &ctx,
+                        &opts,
+                    )
+                    .await?;
+                }
             }
 
             // If sharing, wait a bit for dev server to start
@@ -288,14 +427,27 @@ pub async fn dev(session: AppzSession) -> AppResult {
                 tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
             }
 
-            // Run the dev command via sandbox (reuse sandbox from install) with fallback to run_local_with
-            let result = match &sandbox {
-                Some(s) => s
-                    .exec_interactive(&dev_cmd)
-                    .await
-                    .map(|_| ())
-                    .map_err(|e| miette::miette!("{}", e)),
-                None => run_local_with(&ctx, &dev_cmd, opts.clone()).await,
+            // For DDEV frameworks: DDEV serves the site — use ddev launch + ddev logs -f
+            // instead of the framework's dev command (e.g. php -S)
+            let use_ddev_dev = framework
+                .slug
+                .as_ref()
+                .is_some_and(|s| is_ddev_supported_framework(s) && has_ddev_config(&project_path));
+
+            let result = if use_ddev_dev {
+                println!("✓ Using DDEV (site served by DDEV)");
+                println!("\n🌐 Opening browser and streaming logs (Ctrl+C to stop)...");
+                let _ = run_local_with(&ctx, "ddev launch", opts.clone()).await;
+                run_local_with(&ctx, "ddev logs -f", opts.clone()).await
+            } else {
+                match &sandbox {
+                    Some(s) => s
+                        .exec_interactive(&dev_cmd)
+                        .await
+                        .map(|_| ())
+                        .map_err(|e| miette::miette!("{}", e)),
+                    None => run_local_with(&ctx, &dev_cmd, opts.clone()).await,
+                }
             };
 
             // Clean up tunnel after command completes (success or failure)
@@ -303,11 +455,13 @@ pub async fn dev(session: AppzSession) -> AppResult {
                 let _ = t.stop().await;
             }
 
-            // Handle shell script fallback on Windows
-            if result.is_err() {
+            // Propagate DDEV errors or handle Windows shell script fallback
+            if let Err(e) = result {
+                if use_ddev_dev {
+                    return Err(e.into());
+                }
                 #[cfg(target_os = "windows")]
                 {
-                    // Check if this was a user script that failed due to shell script on Windows
                     let used_user_script = package_manager
                         .as_ref()
                         .and_then(|pm| pm.dev_script.as_ref())
@@ -315,27 +469,17 @@ pub async fn dev(session: AppzSession) -> AppResult {
                         .unwrap_or(false);
 
                     if used_user_script && is_shell_script(&dev_cmd) {
-                        // Use framework dev command as fallback
                         eprintln!("⚠️  Warning: Shell script detected. Falling back to framework dev command.");
                         println!("✓ Using framework dev command");
                         let mut fallback_opts = opts;
                         fallback_opts.show_output = true;
                         let fallback_result =
                             run_local_with(&ctx, &framework_dev_cmd, fallback_opts).await;
-
-                        // Tunnel already cleaned up above, just return result
                         fallback_result?;
-                        return Ok(None);
-                    } else {
-                        result?; // Not a user script shell script issue, return error
                         return Ok(None);
                     }
                 }
-                #[cfg(not(target_os = "windows"))]
-                {
-                    result?; // On Unix, just return the error
-                    return Ok(None);
-                }
+                return Err(e.into());
             }
         }
         Ok(None) => {

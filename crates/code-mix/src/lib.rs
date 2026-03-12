@@ -6,13 +6,19 @@
 
 mod cache;
 mod prefilter;
+mod search;
 mod repomix;
-mod store;
+pub mod store;
 pub mod templates;
 mod types;
 pub mod workspace;
 
-pub use cache::{list_cached, remove_cached, CacheEntry};
+pub use cache::{
+    compute_content_hash, compute_input_key, get_cached_output, get_packs_for_workdir, list_cached,
+    remove_cached, CacheEntry,
+};
+pub use prefilter::discover_paths_from_patterns;
+pub use search::search_packed;
 pub use repomix::{run_repomix, RepomixError};
 pub use types::PackOptions;
 
@@ -82,13 +88,15 @@ pub async fn pack(workdir: &Path, mut options: PackOptions) -> Result<(), Repomi
             .await
             .map_err(|e| RepomixError(format!("Failed to read repomix output: {}", e)))?;
 
-        let meta = store::PackMetadata {
-            workdir: Some(workdir.to_string_lossy().into_owned()),
-            style: options.style.clone(),
-            file_count: Some(paths.len() as i64),
-            workspace: options.workspace.clone(),
-        };
-        cache::put_cached_output(&input_key, &content, &meta).await?;
+        if !options.no_cache && options.split_output.is_none() {
+            let meta = store::PackMetadata {
+                workdir: Some(workdir.to_string_lossy().into_owned()),
+                style: options.style.clone(),
+                file_count: Some(paths.len() as i64),
+                workspace: options.workspace.clone(),
+            };
+            cache::put_cached_output(&input_key, &content, &meta).await?;
+        }
         return cache::apply_cached_output(&options, &temp_path).await;
     }
 

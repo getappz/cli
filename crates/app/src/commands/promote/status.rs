@@ -3,6 +3,7 @@
 use crate::commands::deployment_utils;
 use crate::project::resolve_project_context;
 use crate::session::AppzSession;
+use crate::ClientExt;
 use api::models::{Deployment, Project};
 use miette::Result;
 use starbase::AppResult;
@@ -19,7 +20,7 @@ pub async fn promote_status(session: AppzSession, timeout: Duration) -> AppResul
     let cwd = session.working_dir.clone();
 
     // Resolve project context
-    let project_context = resolve_project_context(&client, &cwd)
+    let project_context = resolve_project_context(client.clone(), cwd)
         .await?
         .ok_or_else(|| miette::miette!("Project not linked. Run 'appz link' first."))?;
 
@@ -32,7 +33,7 @@ pub async fn promote_status(session: AppzSession, timeout: Duration) -> AppResul
         .await
         .map_err(|e| miette::miette!("Failed to get project: {}", e))?;
 
-    poll_promote_status(&client, &project_id, None, &project, timeout, false).await?;
+    poll_promote_status(client.clone(), project_id.clone(), None, &project, timeout, false).await?;
 
     Ok(None)
 }
@@ -40,8 +41,8 @@ pub async fn promote_status(session: AppzSession, timeout: Duration) -> AppResul
 /// Poll for promotion status until completion or timeout
 #[tracing::instrument(skip(client, deployment, project))]
 pub async fn poll_promote_status(
-    client: &api::Client,
-    project_id: &str,
+    client: std::sync::Arc<api::Client>,
+    project_id: String,
     deployment: Option<&Deployment>,
     project: &Project,
     timeout: Duration,
@@ -69,7 +70,7 @@ pub async fn poll_promote_status(
         // Get updated project to check lastAliasRequest
         let project_check = client
             .projects()
-            .get(project_id)
+            .get(&project_id)
             .await
             .map_err(|e| miette::miette!("Failed to get project: {}", e))?;
 
@@ -102,7 +103,7 @@ pub async fn poll_promote_status(
             // Check if requested_at is older than the timeout period
             let timeout_ms = timeout.as_millis() as i64;
             if requested_at_ts == 0 || (now_ts - requested_at_ts) > timeout_ms {
-                spinner = None;
+                let _ = spinner.take();
                 let _ = ui_status::info("No deployment promotion in progress");
                 return Ok(());
             }
@@ -110,19 +111,19 @@ pub async fn poll_promote_status(
 
         // Check if skipped
         if job_status == Some("skipped") && request_type == Some("promote") {
-            spinner = None;
+            let _ = spinner.take();
             let _ = ui_status::info("Promote deployment was skipped");
             return Ok(());
         }
 
         // Check if succeeded
         if job_status == Some("succeeded") {
-            spinner = None;
+            let _ = spinner.take();
             return render_job_succeeded(
                 client,
                 project,
                 requested_at.unwrap_or(0),
-                to_deployment_id.unwrap_or(""),
+                to_deployment_id.unwrap_or("").to_string(),
                 performing_promote,
             )
             .await;
@@ -130,19 +131,19 @@ pub async fn poll_promote_status(
 
         // Check if failed
         if job_status == Some("failed") {
-            spinner = None;
+            let _ = spinner.take();
             return render_job_failed(
                 client,
-                project_id,
+                project_id.clone(),
                 deployment,
-                to_deployment_id.unwrap_or(""),
+                to_deployment_id.unwrap_or("").to_string(),
             )
             .await;
         }
 
         // Check if unknown status
         if !matches!(job_status, Some("pending") | Some("in-progress")) {
-            spinner = None;
+            let _ = spinner.take();
             let _ = ui_status::error(&format!(
                 "Unknown promote deployment status \"{}\"",
                 job_status.unwrap_or("unknown")
@@ -156,7 +157,7 @@ pub async fn poll_promote_status(
         if requested_at_ts > 0 && (now_ts - requested_at_ts) > timeout.as_millis() as i64
             || Instant::now() >= promote_timeout
         {
-            spinner = None;
+            let _ = spinner.take();
             let _ = ui_status::error(&format!(
                 "The promotion exceeded its deadline - rerun 'appz promote {}' to try again",
                 to_deployment_id.unwrap_or("")
@@ -178,10 +179,10 @@ pub async fn poll_promote_status(
 }
 
 async fn render_job_succeeded(
-    client: &api::Client,
+    client: std::sync::Arc<api::Client>,
     project: &Project,
     requested_at: i64,
-    to_deployment_id: &str,
+    to_deployment_id: String,
     performing_promote: bool,
 ) -> Result<()> {
     let project_name = project
@@ -191,12 +192,12 @@ async fn render_job_succeeded(
         .unwrap_or("project");
 
     // Try to get deployment info
-    let deployment_info = match client.deployments().get(to_deployment_id).await {
+    let deployment_info = match client.deployments().get(&to_deployment_id).await {
         Ok(deployment) => {
-            let url = deployment.url.as_deref().unwrap_or(to_deployment_id);
+            let url = deployment.url.as_deref().unwrap_or(&to_deployment_id);
             format!("{} ({})", url, to_deployment_id)
         }
-        Err(_) => to_deployment_id.to_string(),
+        Err(_) => to_deployment_id.clone(),
     };
 
     let duration = if performing_promote && requested_at > 0 {
@@ -217,10 +218,10 @@ async fn render_job_succeeded(
 }
 
 async fn render_job_failed(
-    client: &api::Client,
-    _project_id: &str,
+    client: std::sync::Arc<api::Client>,
+    _project_id: String,
     deployment: Option<&Deployment>,
-    to_deployment_id: &str,
+    to_deployment_id: String,
 ) -> Result<()> {
     let deployment_name = if let Some(deployment) = deployment {
         deployment
@@ -229,11 +230,11 @@ async fn render_job_failed(
             .unwrap_or(&deployment.id)
             .to_string()
     } else {
-        match client.deployments().get(to_deployment_id).await {
+        match client.deployments().get(&to_deployment_id).await {
             Ok(deployment) => deployment
                 .url
                 .as_deref()
-                .unwrap_or(to_deployment_id)
+                .unwrap_or(&to_deployment_id)
                 .to_string(),
             Err(_) => to_deployment_id.to_string(),
         }

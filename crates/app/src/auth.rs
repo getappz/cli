@@ -1,4 +1,4 @@
-use api::Client;
+use api::{Client, ClientExt};
 use miette::Result;
 use serde::{Deserialize, Serialize};
 use starbase_utils::dirs;
@@ -240,23 +240,23 @@ pub fn clear_token() -> Result<()> {
 pub fn requires_auth(command: &crate::app::Commands) -> bool {
     use crate::app::Commands;
     match command {
-        Commands::Ls
-        | Commands::Run { .. }
-        | Commands::Plan { .. }
-        | Commands::Switch { .. }
+        Commands::Ls(_)
+        | Commands::Run(_)
+        | Commands::Plan(_)
+        | Commands::Switch(_)
         | Commands::Teams { .. }
         | Commands::Projects { .. }
         | Commands::Transfer { .. }
-        | Commands::Whoami { .. }
+        | Commands::Whoami(_)
         | Commands::Aliases { .. }
         | Commands::Domains { .. }
-        | Commands::Promote { .. }
-        | Commands::Rollback { .. }
-        | Commands::Remove { .. } => true,
+        | Commands::Promote(_)
+        | Commands::Rollback(_)
+        | Commands::Remove(_) => true,
         #[cfg(feature = "gen")]
-        Commands::Gen { .. } => true,
+        Commands::Gen(_) => true,
         #[cfg(feature = "deploy")]
-        Commands::Deploy { .. } => true,
+        Commands::Deploy(_) => true,
         _ => false,
     }
 }

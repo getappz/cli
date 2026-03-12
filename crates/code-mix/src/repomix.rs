@@ -24,7 +24,7 @@ pub async fn run_repomix(
     stdin_paths: Option<&[String]>,
     output_override: Option<&Path>,
 ) -> Result<(), RepomixError> {
-    let workdir = sandbox.project_path();
+    let _workdir = sandbox.project_path();
     let mut args: Vec<String> = vec!["npx repomix@latest".to_string()];
 
     // Output: use override when caching, else options
@@ -91,10 +91,16 @@ pub async fn run_repomix(
         args.join(" ")
     };
 
-    let out = sandbox.exec(&cmd).await.map_err(|e| RepomixError(e.to_string()))?;
+    let status = sandbox
+        .exec_interactive(&cmd)
+        .await
+        .map_err(|e| RepomixError(e.to_string()))?;
 
-    if !out.success() {
-        return Err(RepomixError(out.stderr().trim().to_string()));
+    if !status.success() {
+        return Err(RepomixError(format!(
+            "Repomix exited with code {}",
+            status.code().unwrap_or(-1)
+        )));
     }
 
     Ok(())

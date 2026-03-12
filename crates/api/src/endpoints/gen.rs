@@ -1,5 +1,6 @@
 use crate::client::Client;
 use crate::error::ApiError;
+use std::sync::Arc;
 use serde::Serialize;
 
 /// Request body for the generate (AI code gen) endpoint.
@@ -10,12 +11,12 @@ pub struct GenerateRequest {
     pub model: Option<String>,
 }
 
-pub struct Gen<'a> {
-    client: &'a Client,
+pub struct Gen {
+    client: Arc<Client>,
 }
 
-impl<'a> Gen<'a> {
-    pub fn new(client: &'a Client) -> Self {
+impl Gen {
+    pub fn new(client: Arc<Client>) -> Self {
         Self { client }
     }
 

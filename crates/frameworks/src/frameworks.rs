@@ -2,7 +2,11 @@
 include!(concat!(env!("OUT_DIR"), "/frameworks_generated.rs"));
 include!(concat!(env!("OUT_DIR"), "/php_frameworks_generated.rs"));
 
+use std::sync::OnceLock;
+
 use crate::types::Framework;
+
+static ALL_FRAMEWORKS: OnceLock<&'static [Framework]> = OnceLock::new();
 
 /// Get all Node.js frameworks as a reference slice
 ///
@@ -22,13 +26,17 @@ pub fn php_frameworks() -> &'static [Framework] {
 
 /// Get all frameworks (Node.js and PHP) as a reference slice
 ///
-/// This is zero-cost - returns a reference to statically allocated data
-/// that's generated at compile time from data/frameworks.json and data/php-frameworks.json.
-///
-/// Note: This currently returns only Node.js frameworks for backward compatibility.
-/// Use node_frameworks() or php_frameworks() for specific runtime frameworks.
+/// Combines node_frameworks() and php_frameworks() into a single slice.
+/// Uses lazy allocation on first call; subsequent calls return the same static slice.
 pub fn frameworks() -> &'static [Framework] {
-    node_frameworks()
+    *ALL_FRAMEWORKS.get_or_init(|| {
+        let combined: Vec<Framework> = node_frameworks()
+            .iter()
+            .chain(php_frameworks().iter())
+            .cloned()
+            .collect();
+        Box::leak(combined.into_boxed_slice())
+    })
 }
 
 /// Find a framework by its slug using O(1) perfect hash lookup

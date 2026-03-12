@@ -12,7 +12,8 @@
 //! - `SWA_CLI_DEPLOYMENT_TOKEN` environment variable (CI/CD)
 //! - `swa login` interactive flow (local)
 
-use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -65,7 +66,7 @@ impl DeployProvider for AzureStaticProvider {
     }
 
     /// Override: the npm package is `@azure/static-web-apps-cli`, not `swa`.
-    async fn ensure_cli(&self, sandbox: &dyn SandboxProvider) -> DeployResult<()> {
+    async fn ensure_cli(&self, sandbox: Arc<dyn SandboxProvider>) -> DeployResult<()> {
         let _ = ui::status::info("Installing SWA CLI...");
         let output = sandbox.exec("npm install -g @azure/static-web-apps-cli").await?;
         if !output.success() {
@@ -79,7 +80,7 @@ impl DeployProvider for AzureStaticProvider {
 
     async fn check_prerequisites(
         &self,
-        sandbox: &dyn SandboxProvider,
+        sandbox: Arc<dyn SandboxProvider>,
     ) -> DeployResult<PrerequisiteStatus> {
         let cli_ok = sandbox.exec("swa --version").await.map(|o| o.success()).unwrap_or(false);
         let auth_ok = has_env_var("SWA_CLI_DEPLOYMENT_TOKEN");
@@ -97,7 +98,7 @@ impl DeployProvider for AzureStaticProvider {
         }
     }
 
-    async fn detect_config(&self, project_dir: &Path) -> DeployResult<Option<DetectedConfig>> {
+    async fn detect_config(&self, project_dir: PathBuf) -> DeployResult<Option<DetectedConfig>> {
         for name in &["staticwebapp.config.json", "swa-cli.config.json"] {
             if project_dir.join(name).exists() {
                 return Ok(Some(DetectedConfig {
@@ -120,7 +121,7 @@ impl DeployProvider for AzureStaticProvider {
 
         let cli_ok = ctx.sandbox.exec("swa --version").await.map(|o| o.success()).unwrap_or(false);
         if !cli_ok {
-            self.ensure_cli(&*ctx.sandbox).await?;
+            self.ensure_cli(ctx.sandbox.clone()).await?;
         }
 
         let _ = ui::status::info("Initializing SWA CLI...");
@@ -139,7 +140,7 @@ impl DeployProvider for AzureStaticProvider {
         })
     }
 
-    async fn deploy(&self, ctx: &DeployContext) -> DeployResult<DeployOutput> {
+    async fn deploy(&self, ctx: DeployContext) -> DeployResult<DeployOutput> {
         let start = std::time::Instant::now();
 
         if ctx.dry_run {
@@ -186,7 +187,7 @@ impl DeployProvider for AzureStaticProvider {
         })
     }
 
-    async fn deploy_preview(&self, ctx: &DeployContext) -> DeployResult<DeployOutput> {
+    async fn deploy_preview(&self, ctx: DeployContext) -> DeployResult<DeployOutput> {
         let start = std::time::Instant::now();
 
         if ctx.dry_run {

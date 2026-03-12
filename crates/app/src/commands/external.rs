@@ -45,8 +45,9 @@ pub async fn run(session: AppzSession, args: Vec<String>) -> AppResult {
         &command_name
     );
 
-    // Create sandbox scoped to the user's working directory
-    let sandbox_config = SandboxConfig::new(&session.working_dir)
+    // Create sandbox scoped to the user's working directory (clone to avoid capturing &Path in Send future)
+    let working_dir = session.working_dir.clone();
+    let sandbox_config = SandboxConfig::new(working_dir.clone())
         .with_settings(SandboxSettings {
             auto_install_mise: false,
             quiet: !session.cli.verbose,
@@ -58,7 +59,7 @@ pub async fn run(session: AppzSession, args: Vec<String>) -> AppResult {
         .map_err(|e| miette::miette!("Failed to create sandbox: {}", e))?;
 
     let scoped_fs = Arc::new(
-        sandbox::ScopedFs::new(&session.working_dir)
+        sandbox::ScopedFs::new(&working_dir)
             .map_err(|e| miette::miette!("Failed to create scoped filesystem: {}", e))?,
     );
 

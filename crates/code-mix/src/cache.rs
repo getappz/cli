@@ -131,10 +131,15 @@ async fn apply_output(options: &PackOptions, from_path: &Path) -> Result<(), Rep
     }
 
     if let Some(ref out) = options.output {
+        if let Some(parent) = out.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| RepomixError(format!("Failed to create output dir: {}", e)))?;
+        }
         fs::write(out, content)
             .await
             .map_err(|e| RepomixError(format!("Failed to write output: {}", e)))?;
     }
+    // Default: no file written; output is in cache for appz code search
 
     Ok(())
 }
@@ -226,6 +231,43 @@ pub fn list_cached(verbose: bool) -> Result<Vec<CacheEntry>, RepomixError> {
         });
     }
     Ok(entries)
+}
+
+/// Get packs for a workdir, with object paths. Returns entries with paths, most recent first.
+pub fn get_packs_for_workdir(
+    workdir: &Path,
+) -> Result<Vec<(CacheEntry, PathBuf)>, RepomixError> {
+    let canonical = workdir
+        .canonicalize()
+        .map_err(|e| RepomixError(format!("Invalid workdir: {}", e)))?;
+    let workdir_str = canonical.to_string_lossy().into_owned();
+
+    let root = store::store_root()?;
+    let conn = store::open_index(&root)?;
+    let rows = store::get_entries_for_workdir(&conn, &workdir_str)?;
+
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        if !store::object_exists(&root, &row.content_hash) {
+            continue;
+        }
+        let path = store::object_path(&root, &row.content_hash);
+        let size_bytes = store::object_size(&root, &row.content_hash);
+        out.push((
+            CacheEntry {
+                input_key: row.input_key,
+                content_hash: row.content_hash,
+                created_at: row.created_at,
+                size_bytes,
+                workdir: row.workdir,
+                style: row.style,
+                file_count: row.file_count,
+                workspace: row.workspace,
+            },
+            path,
+        ));
+    }
+    Ok(out)
 }
 
 /// Validate content hash format (64 hex chars).

@@ -127,7 +127,7 @@ impl TelemetryEventStore {
         );
     }
 
-    /// Flush events to backend. Non-blocking; spawns task. Safe to call multiple times (no-op after first).
+    /// Flush events to backend. Blocks until send completes. Safe to call multiple times (no-op after first).
     pub async fn flush(&self) {
         if self.flushed.swap(true, Ordering::SeqCst) {
             return;
@@ -179,11 +179,9 @@ impl TelemetryEventStore {
             return;
         }
 
-        tokio::spawn(async move {
-            if let Err(e) = send_telemetry(&ndjson).await {
-                debug!("Telemetry flush failed: {}", e);
-            }
-        });
+        if let Err(e) = send_telemetry(&ndjson).await {
+            debug!("Telemetry flush failed: {}", e);
+        }
     }
 }
 
@@ -193,56 +191,70 @@ impl Default for TelemetryEventStore {
     }
 }
 
-/// Record the current command from the CLI. Call at start of command dispatch.
-pub async fn record_command(store: &TelemetryEventStore, command: &crate::app::Commands) {
+/// Extract command name from Commands for telemetry (takes owned clone to avoid refs in Send futures).
+pub fn command_name_for_telemetry(command: crate::app::Commands) -> String {
     use crate::app::Commands;
-    let cmd_name = match command {
+    let name = match command {
         Commands::List => "list",
-        Commands::Plan { .. } => "plan",
-        Commands::Run { .. } => "run",
-        Commands::RecipeValidate { .. } => "recipe-validate",
-        Commands::Dev { .. } => "dev",
+        Commands::Plan(_) => "plan",
+        Commands::Run(_) => "run",
+        Commands::RecipeValidate(_) => "recipe-validate",
+        Commands::Dev(_) => "dev",
         #[cfg(feature = "dev-server")]
-        Commands::DevServer { .. } => "dev-server",
+        Commands::DevServer(_) => "dev-server",
         Commands::Build => "build",
         #[cfg(feature = "dev-server")]
-        Commands::Preview { .. } => "preview",
-        Commands::Ls => "ls",
+        Commands::Preview(_) => "preview",
+        Commands::Ls(_) => "ls",
         Commands::Open => "open",
-        Commands::Link { .. } => "link",
+        Commands::Link(_) => "link",
         Commands::Unlink => "unlink",
         Commands::Login => "login",
         Commands::Logout => "logout",
-        Commands::Whoami { .. } => "whoami",
-        Commands::Init { .. } => "init",
-        Commands::Switch { .. } => "switch",
+        Commands::Whoami(_) => "whoami",
+        Commands::Init(_) => "init",
+        Commands::Switch(_) => "switch",
         Commands::Teams { .. } => "teams",
         Commands::Telemetry { .. } => "telemetry",
         Commands::Projects { .. } => "project",
         Commands::Transfer { .. } => "transfer",
         Commands::Aliases { .. } => "aliases",
         Commands::Domains { .. } => "domains",
-        Commands::Promote { .. } => "promote",
-        Commands::Rollback { .. } => "rollback",
-        Commands::Remove { .. } => "remove",
+        Commands::Pull(_) => "pull",
+        Commands::Logs(_) => "logs",
+        Commands::Inspect(_) => "inspect",
+        Commands::Env { .. } => "env",
+        Commands::Promote(_) => "promote",
+        Commands::Rollback(_) => "rollback",
+        Commands::Remove(_) => "remove",
         #[cfg(feature = "gen")]
-        Commands::Gen { .. } => "gen",
+        Commands::Gen(_) => "gen",
         #[cfg(feature = "deploy")]
-        Commands::Deploy { .. } => "deploy",
+        Commands::Deploy(_) => "deploy",
         #[cfg(feature = "deploy")]
-        Commands::DeployInit { .. } => "deploy-init",
+        Commands::DeployInit(_) => "deploy-init",
         #[cfg(feature = "deploy")]
-        Commands::DeployList { .. } => "deploy-list",
+        Commands::DeployList(_) => "deploy-list",
+        Commands::Pack(_) => "pack",
         Commands::Code { .. } => "code",
         Commands::Skills { .. } => "skills",
         Commands::Plugin { .. } => "plugin",
+        Commands::Git { .. } => "git",
+        Commands::Exec(_) => "exec",
         #[cfg(feature = "mcp")]
         Commands::McpServer => "mcp",
         #[cfg(feature = "self_update")]
-        Commands::SelfUpdate { .. } => "self-update",
+        Commands::SelfUpdate(_) => "self-update",
         Commands::External(_) => "external",
     };
-    store.track_command(cmd_name, cmd_name).await;
+    name.to_string()
+}
+
+/// Record the current command from the CLI. Call at start of command dispatch.
+/// Takes owned `store` and `cmd_name` to avoid capturing references in the async future (Send).
+pub async fn record_command(store: std::sync::Arc<TelemetryEventStore>, cmd_name: String) {
+    let s = cmd_name.as_str();
+    store.track_command(s, s).await;
 }
 
 async fn send_telemetry(ndjson: &str) -> Result<(), String> {

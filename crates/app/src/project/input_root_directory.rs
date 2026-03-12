@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use tracing::instrument;
 
 /// Validate root directory (async version using spawn_blocking)
-async fn validate_root_directory(cwd: &Path, root_dir: &Path) -> Result<bool> {
-    let full_path = cwd.join(root_dir);
+async fn validate_root_directory(cwd: PathBuf, root_dir: PathBuf) -> Result<bool> {
+    let full_path = cwd.join(&root_dir);
 
     // Use spawn_blocking for file I/O in async context (following workspace rules)
     let full_path_clone = full_path.clone();
@@ -30,7 +30,7 @@ async fn validate_root_directory(cwd: &Path, root_dir: &Path) -> Result<bool> {
     }
 
     // Check that root directory is within cwd (this is a path operation, no I/O needed)
-    if !full_path.starts_with(cwd) {
+    if !full_path.starts_with(&cwd) {
         return Err(miette!(
             "Root directory must be within the project directory"
         ));
@@ -44,7 +44,7 @@ async fn validate_root_directory(cwd: &Path, root_dir: &Path) -> Result<bool> {
 /// Prompts user for the directory where code is located.
 /// Returns None if root (current directory) or empty.
 #[instrument(skip(cwd))]
-pub async fn input_root_directory(cwd: &Path, auto_confirm: bool) -> Result<Option<String>> {
+pub async fn input_root_directory(cwd: PathBuf, auto_confirm: bool) -> Result<Option<String>> {
     if auto_confirm {
         return Ok(None);
     }
@@ -68,7 +68,7 @@ pub async fn input_root_directory(cwd: &Path, auto_confirm: bool) -> Result<Opti
         }
 
         // Validate the directory
-        match validate_root_directory(cwd, Path::new(&root_directory)).await {
+        match validate_root_directory(cwd.clone(), PathBuf::from(&root_directory)).await {
             Ok(_) => return Ok(Some(root_directory)),
             Err(e) => {
                 tracing::warn!("{} Please choose a different one.", e);

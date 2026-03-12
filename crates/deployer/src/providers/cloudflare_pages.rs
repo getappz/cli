@@ -11,7 +11,8 @@
 //! - `CLOUDFLARE_API_TOKEN` environment variable (CI/CD)
 //! - `wrangler login` interactive flow (local)
 
-use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -65,7 +66,7 @@ impl DeployProvider for CloudflarePagesProvider {
 
     async fn check_prerequisites(
         &self,
-        sandbox: &dyn SandboxProvider,
+        sandbox: Arc<dyn SandboxProvider>,
     ) -> DeployResult<PrerequisiteStatus> {
         let cli_ok = sandbox.exec("wrangler --version").await.map(|o| o.success()).unwrap_or(false);
         let auth_ok = has_env_var("CLOUDFLARE_API_TOKEN") || has_env_var("CLOUDFLARE_ACCOUNT_ID");
@@ -83,7 +84,7 @@ impl DeployProvider for CloudflarePagesProvider {
         }
     }
 
-    async fn detect_config(&self, project_dir: &Path) -> DeployResult<Option<DetectedConfig>> {
+    async fn detect_config(&self, project_dir: PathBuf) -> DeployResult<Option<DetectedConfig>> {
         for config_name in &["wrangler.toml", "wrangler.json", "wrangler.jsonc"] {
             let config_path = project_dir.join(config_name);
             if config_path.exists() {
@@ -107,7 +108,7 @@ impl DeployProvider for CloudflarePagesProvider {
 
         let cli_ok = ctx.sandbox.exec("wrangler --version").await.map(|o| o.success()).unwrap_or(false);
         if !cli_ok {
-            self.ensure_cli(&*ctx.sandbox).await?;
+            self.ensure_cli(ctx.sandbox.clone()).await?;
         }
 
         // Ensure logged in
@@ -131,7 +132,7 @@ impl DeployProvider for CloudflarePagesProvider {
         })
     }
 
-    async fn deploy(&self, ctx: &DeployContext) -> DeployResult<DeployOutput> {
+    async fn deploy(&self, ctx: DeployContext) -> DeployResult<DeployOutput> {
         let start = std::time::Instant::now();
 
         if ctx.dry_run {
@@ -190,7 +191,7 @@ impl DeployProvider for CloudflarePagesProvider {
         })
     }
 
-    async fn deploy_preview(&self, ctx: &DeployContext) -> DeployResult<DeployOutput> {
+    async fn deploy_preview(&self, ctx: DeployContext) -> DeployResult<DeployOutput> {
         let start = std::time::Instant::now();
 
         if ctx.dry_run {

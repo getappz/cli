@@ -1,18 +1,48 @@
 use crate::client::Client;
 use crate::error::ApiError;
-use crate::models::{DeleteResponse, Deployment, DeploymentsListResponse};
+use std::sync::Arc;
+use crate::http::response_handler::error_from_status_body_headers;
+use crate::models::{
+    DeleteResponse, Deployment, DeploymentCreateRequest, DeploymentCreateResult,
+    DeploymentLogsResponse, DeploymentsListResponse, PreparedFile,
+};
 use crate::paths::V0_PREFIX;
+use reqwest_middleware::reqwest::StatusCode;
+use url::Url;
 
-pub struct Deployments<'a> {
-    client: &'a Client,
+/// Extract deployment identifier for API path. For URLs (e.g. https://project-xxx.preview.appz.dev),
+/// returns the hostname so the backend can resolve by url column. For raw IDs (UUID), returns as-is.
+fn deployment_id_for_path(deployment_id_or_url: &str) -> String {
+    if deployment_id_or_url.starts_with("http://") || deployment_id_or_url.starts_with("https://") {
+        if let Ok(u) = Url::parse(deployment_id_or_url) {
+            if let Some(host) = u.host_str() {
+                // Pass hostname (e.g. project-xxx.preview.appz.dev) for backend url lookup
+                return host.to_string();
+            }
+        }
+        // Fallback: take part after last /
+        deployment_id_or_url
+            .split('/')
+            .filter(|s| !s.is_empty() && !s.contains(":"))
+            .next_back()
+            .unwrap_or(deployment_id_or_url)
+            .to_string()
+    } else {
+        deployment_id_or_url.to_string()
+    }
 }
 
-impl<'a> Deployments<'a> {
-    pub fn new(client: &'a Client) -> Self {
+pub struct Deployments {
+    client: Arc<Client>,
+}
+
+impl Deployments {
+    pub fn new(client: Arc<Client>) -> Self {
         Self { client }
     }
 
-    /// List deployments with optional pagination and filters
+    /// List deployments with optional pagination and filters.
+    /// Policy: e.g. [("errored", "6m"), ("preview", "12m")] for retention policy display (Vercel parity).
     #[tracing::instrument(skip(self))]
     pub async fn list(
         &self,
@@ -21,21 +51,26 @@ impl<'a> Deployments<'a> {
         since: Option<i64>,
         until: Option<i64>,
         team_id: Option<String>,
+        policy: Option<Vec<(String, String)>>,
     ) -> Result<DeploymentsListResponse, ApiError> {
-        let query_params = vec![
-            ("projectId", project_id),
-            ("limit", limit.map(|l| l.to_string())),
-            ("since", since.map(|s| s.to_string())),
-            ("until", until.map(|u| u.to_string())),
+        let mut query_params: Vec<(String, Option<String>)> = vec![
+            ("projectId".to_string(), project_id),
+            ("limit".to_string(), limit.map(|l| l.to_string())),
+            ("since".to_string(), since.map(|s| s.to_string())),
+            ("until".to_string(), until.map(|u| u.to_string())),
         ];
-
+        if let Some(p) = policy {
+            for (k, v) in p {
+                query_params.push((format!("policy-{}", k), Some(v)));
+            }
+        }
         // Temporarily set team_id if provided
         if let Some(ref team_id_val) = team_id {
             self.client.set_team_id(Some(team_id_val.clone())).await;
         }
 
         let path = format!("{}/deployments", V0_PREFIX);
-        let result = self.client.get_with_query(&path, &query_params).await;
+        let result = self.client.get_with_query(path, query_params).await;
 
         // Reset team_id if we set it
         if team_id.is_some() {
@@ -46,42 +81,39 @@ impl<'a> Deployments<'a> {
     }
 
     /// Get a deployment by ID or URL
-    #[tracing::instrument(skip(self))]
-    pub async fn get(&self, deployment_id_or_url: &str) -> Result<Deployment, ApiError> {
-        // Extract deployment ID from URL if it's a URL
-        let deployment_id = if deployment_id_or_url.starts_with("http://")
-            || deployment_id_or_url.starts_with("https://")
-        {
-            // Extract ID from URL (format: https://xxx.appz.dev or similar)
-            // For now, assume the ID is the last part after splitting by /
-            deployment_id_or_url
-                .split('/')
-                .next_back()
-                .unwrap_or(deployment_id_or_url)
-        } else {
-            deployment_id_or_url
-        };
-
-        let path = format!("{}/deployments/{}", V0_PREFIX, deployment_id);
-        self.client.get(&path).await
+    #[tracing::instrument(skip(self, deployment_id_or_url))]
+    pub async fn get(
+        &self,
+        deployment_id_or_url: impl Into<String>,
+    ) -> Result<Deployment, ApiError> {
+        let id = deployment_id_for_path(&deployment_id_or_url.into());
+        let path = format!("{}/deployments/{}", V0_PREFIX, id);
+        self.client.get(path).await
     }
 
     /// Promote a deployment to production
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self, project_id, deployment_id))]
     pub async fn promote(
         &self,
-        project_id: &str,
-        deployment_id: &str,
+        project_id: impl Into<String>,
+        deployment_id: impl Into<String>,
         team_id: Option<String>,
     ) -> Result<DeleteResponse, ApiError> {
-        let path = format!("{}/projects/{}/promote/{}", V0_PREFIX, project_id, deployment_id);
+        let project_id = project_id.into();
+        let deployment_id = deployment_id.into();
+        let path = format!(
+            "{}/projects/{}/promote/{}",
+            V0_PREFIX,
+            project_id,
+            deployment_id
+        );
 
         // Temporarily set team_id if provided
         if let Some(ref team_id_val) = team_id {
             self.client.set_team_id(Some(team_id_val.clone())).await;
         }
 
-        let result = self.client.post(&path, Some(serde_json::json!({}))).await;
+        let result = self.client.post(path, Some(serde_json::json!({}))).await;
 
         // Reset team_id if we set it
         if team_id.is_some() {
@@ -92,21 +124,28 @@ impl<'a> Deployments<'a> {
     }
 
     /// Rollback to a previous deployment
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self, project_id, deployment_id))]
     pub async fn rollback(
         &self,
-        project_id: &str,
-        deployment_id: &str,
+        project_id: impl Into<String>,
+        deployment_id: impl Into<String>,
         team_id: Option<String>,
     ) -> Result<DeleteResponse, ApiError> {
-        let path = format!("{}/projects/{}/rollback/{}", V0_PREFIX, project_id, deployment_id);
+        let project_id = project_id.into();
+        let deployment_id = deployment_id.into();
+        let path = format!(
+            "{}/projects/{}/rollback/{}",
+            V0_PREFIX,
+            project_id,
+            deployment_id
+        );
 
         // Temporarily set team_id if provided
         if let Some(ref team_id_val) = team_id {
             self.client.set_team_id(Some(team_id_val.clone())).await;
         }
 
-        let result = self.client.post(&path, Some(serde_json::json!({}))).await;
+        let result = self.client.post(path, Some(serde_json::json!({}))).await;
 
         // Reset team_id if we set it
         if team_id.is_some() {
@@ -116,21 +155,205 @@ impl<'a> Deployments<'a> {
         result
     }
 
-    /// Delete a deployment by ID or URL (soft delete)
-    #[tracing::instrument(skip(self))]
-    pub async fn delete(&self, deployment_id_or_url: &str) -> Result<DeleteResponse, ApiError> {
-        let deployment_id = if deployment_id_or_url.starts_with("http://")
-            || deployment_id_or_url.starts_with("https://")
-        {
-            deployment_id_or_url
-                .split('/')
-                .next_back()
-                .unwrap_or(deployment_id_or_url)
-        } else {
-            deployment_id_or_url
-        };
+    /// Create a deployment (prebuilt flow).
+    ///
+    /// Sends file list to API. Returns either a created deployment or a list of
+    /// missing file SHAs that must be uploaded before calling [`continue_deployment`](Self::continue_deployment).
+    #[tracing::instrument(skip(self, payload))]
+    pub async fn create_deployment(
+        &self,
+        payload: DeploymentCreateRequest,
+    ) -> Result<DeploymentCreateResult, ApiError> {
+        let path = format!("{}/deployments", V0_PREFIX);
+        let response = self.client.post_raw(path, Some(payload)).await?;
+        let status = response.status();
+        let headers = response.headers().clone();
+        let text = response
+            .text()
+            .await
+            .map_err(|e| ApiError::HttpMiddleware(format!("Failed to read response: {}", e)))?;
 
-        let path = format!("{}/deployments/{}", V0_PREFIX, deployment_id);
-        self.client.delete(&path).await
+        if status.is_success() {
+            let deployment: Deployment = serde_json::from_str(&text).map_err(ApiError::Json)?;
+            return Ok(DeploymentCreateResult::Created(deployment));
+        }
+
+        if status == StatusCode::BAD_REQUEST {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                let code = json
+                    .get("error")
+                    .and_then(|e| e.get("code"))
+                    .or_else(|| json.get("code"))
+                    .and_then(|c| c.as_str());
+                if code == Some("missing_files") {
+                    let missing = json
+                        .get("error")
+                        .and_then(|e| e.get("missing"))
+                        .or_else(|| json.get("missing"))
+                        .and_then(|m| serde_json::from_value(m.clone()).ok())
+                        .unwrap_or_default();
+                    let deployment_id = json
+                        .get("error")
+                        .and_then(|e| e.get("deploymentId").and_then(|v| v.as_str()))
+                        .or_else(|| json.get("deploymentId").and_then(|v| v.as_str()))
+                        .unwrap_or_default()
+                        .to_string();
+                    return Ok(DeploymentCreateResult::MissingFiles {
+                        deployment_id,
+                        missing,
+                    });
+                }
+            }
+        }
+
+        Err(error_from_status_body_headers(
+            status,
+            &text,
+            &headers,
+        ))
+    }
+
+    /// Upload a single file to a deployment (content-addressed by SHA).
+    /// Uses `POST /v0/deployments/:id/files` with `x-now-digest` and `x-now-size` headers.
+    #[tracing::instrument(skip(self, deployment_id, sha, data))]
+    pub async fn upload_file(
+        &self,
+        deployment_id: impl Into<String>,
+        sha: impl Into<String>,
+        data: Vec<u8>,
+    ) -> Result<(), ApiError> {
+        let deployment_id = deployment_id.into();
+        let sha = sha.into();
+        let path = format!("{}/deployments/{}/files", V0_PREFIX, deployment_id);
+        let size_str = data.len().to_string();
+        let headers = vec![
+            ("Content-Type".to_string(), "application/octet-stream".to_string()),
+            ("x-now-digest".to_string(), sha),
+            ("x-now-size".to_string(), size_str),
+        ];
+        let response = self.client.post_bytes(path, data, headers).await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let headers = response.headers().clone();
+            let text = response.text().await.unwrap_or_default();
+            return Err(error_from_status_body_headers(status, &text, &headers));
+        }
+        Ok(())
+    }
+
+    /// Upload a file with byte-level progress (streaming body, 16KB chunks).
+    #[tracing::instrument(skip(self, deployment_id, sha, data, on_progress))]
+    pub async fn upload_file_with_progress(
+        &self,
+        deployment_id: impl Into<String>,
+        sha: impl Into<String>,
+        data: impl Into<Vec<u8>>,
+        on_progress: std::sync::Arc<dyn Fn(u64) + Send + Sync>,
+    ) -> Result<(), ApiError> {
+        let deployment_id = deployment_id.into();
+        let sha = sha.into();
+        let path = format!("{}/deployments/{}/files", V0_PREFIX, deployment_id);
+        let data = data.into();
+        let size_str = data.len().to_string();
+        let headers = vec![
+            ("Content-Type".to_string(), "application/octet-stream".to_string()),
+            ("x-now-digest".to_string(), sha),
+            ("x-now-size".to_string(), size_str),
+        ];
+        let response = self
+            .client
+            .post_bytes_stream(path, data, headers, on_progress)
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let headers = response.headers().clone();
+            let text = response.text().await.unwrap_or_default();
+            return Err(error_from_status_body_headers(status, &text, &headers));
+        }
+        Ok(())
+    }
+
+    /// Continue deployment after uploading files (Vercel-aligned flow).
+    /// May return `MissingFiles` if more files are needed.
+    #[tracing::instrument(skip(self, deployment_id, files))]
+    pub async fn continue_deployment(
+        &self,
+        deployment_id: impl Into<String>,
+        files: Vec<PreparedFile>,
+    ) -> Result<DeploymentCreateResult, ApiError> {
+        let deployment_id = deployment_id.into();
+        let path = format!("{}/deployments/{}/continue", V0_PREFIX, deployment_id);
+        let body = serde_json::json!({ "files": files });
+
+        let response = self.client.post_raw(path, Some(body)).await?;
+        let status = response.status();
+        let headers = response.headers().clone();
+        let text = response
+            .text()
+            .await
+            .map_err(|e| ApiError::HttpMiddleware(format!("Failed to read response: {}", e)))?;
+
+        if status.is_success() {
+            let deployment: Deployment = serde_json::from_str(&text).map_err(ApiError::Json)?;
+            return Ok(DeploymentCreateResult::Created(deployment));
+        }
+
+        if status == StatusCode::BAD_REQUEST {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                let code = json
+                    .get("error")
+                    .and_then(|e| e.get("code"))
+                    .or_else(|| json.get("code"))
+                    .and_then(|c| c.as_str());
+                if code == Some("missing_files") {
+                    let missing = json
+                        .get("error")
+                        .and_then(|e| e.get("missing"))
+                        .or_else(|| json.get("missing"))
+                        .and_then(|m| serde_json::from_value(m.clone()).ok())
+                        .unwrap_or_default();
+                    let deployment_id = json
+                        .get("error")
+                        .and_then(|e| e.get("deploymentId").and_then(|v| v.as_str()))
+                        .or_else(|| json.get("deploymentId").and_then(|v| v.as_str()))
+                        .map(str::to_string)
+                        .unwrap_or_else(|| deployment_id.to_string());
+                    return Ok(DeploymentCreateResult::MissingFiles {
+                        deployment_id,
+                        missing,
+                    });
+                }
+            }
+        }
+
+        Err(error_from_status_body_headers(
+            status,
+            &text,
+            &headers,
+        ))
+    }
+
+    /// Get logs for a deployment.
+    #[tracing::instrument(skip(self, deployment_id_or_url))]
+    pub async fn logs(
+        &self,
+        deployment_id_or_url: impl Into<String>,
+    ) -> Result<DeploymentLogsResponse, ApiError> {
+        let id = deployment_id_for_path(&deployment_id_or_url.into());
+        let path = format!("{}/deployments/{}/logs", V0_PREFIX, id);
+        self.client.get(path).await
+    }
+
+    /// Delete a deployment by ID or URL (soft delete)
+    #[tracing::instrument(skip(self, deployment_id_or_url))]
+    pub async fn delete(
+        &self,
+        deployment_id_or_url: impl Into<String>,
+    ) -> Result<DeleteResponse, ApiError> {
+        let id = deployment_id_for_path(&deployment_id_or_url.into());
+        let path = format!("{}/deployments/{}", V0_PREFIX, id);
+        self.client.delete(path).await
     }
 }

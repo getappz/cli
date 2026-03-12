@@ -142,6 +142,14 @@ pub fn appz_plugin_info() -> FnResult<Json<PluginInfo>> {
                     required: false,
                     default: None,
                 },
+                PluginArgDef {
+                    name: "verify".to_string(),
+                    short: None,
+                    long: Some("verify".to_string()),
+                    help: Some("Full verification: lint + build + tests (Superpowers)".to_string()),
+                    required: false,
+                    default: None,
+                },
             ],
             subcommands: vec![],
         }],
@@ -221,5 +229,6 @@ fn build_check_run_input(
         max_attempts: u32_arg("max-attempts", 3),
         ai_verify: optional_bool("ai-verify"),
         verbose_ai: bool_arg("verbose-ai"),
+        verify: bool_arg("verify"),
     }
 }

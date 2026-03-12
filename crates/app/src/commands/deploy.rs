@@ -9,6 +9,9 @@
 //! 6. Deploy via the provider (all exec goes through sandbox).
 //! 7. Display results (or JSON output for CI).
 
+use std::io::Write;
+use std::process::Command;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 
 use deployer::{
@@ -23,6 +26,253 @@ use crate::app_error::UserCancellation;
 use crate::session::AppzSession;
 
 // ---------------------------------------------------------------------------
+// Appz platform deploy (when linked)
+// ---------------------------------------------------------------------------
+
+/// Parse KEY=VALUE strings into a JSON map for deployment meta.
+fn parse_meta_kv(meta: &[String]) -> Option<serde_json::Map<String, serde_json::Value>> {
+    if meta.is_empty() {
+        return None;
+    }
+    let mut map = serde_json::Map::new();
+    for kv in meta {
+        if let Some((k, v)) = kv.split_once('=') {
+            map.insert(k.to_string(), serde_json::Value::String(v.to_string()));
+        }
+    }
+    if map.is_empty() {
+        None
+    } else {
+        Some(map)
+    }
+}
+
+/// Add git_branch and git_commit to meta when in a git repo (Vercel parity).
+fn enrich_meta_with_git(
+    project_dir: &std::path::Path,
+    base: Option<serde_json::Map<String, serde_json::Value>>,
+) -> Option<serde_json::Map<String, serde_json::Value>> {
+    let branch = Command::new("git")
+        .args(["branch", "--show-current"])
+        .current_dir(project_dir)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    let commit = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(project_dir)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    match (base, branch, commit) {
+        (None, None, None) => None,
+        (mut map, br, cm) => {
+            if map.is_none() && (br.is_some() || cm.is_some()) {
+                map = Some(serde_json::Map::new());
+            }
+            if let Some(m) = &mut map {
+                if let Some(b) = br {
+                    m.insert("git_branch".to_string(), serde_json::Value::String(b));
+                }
+                if let Some(c) = cm {
+                    m.insert("git_commit".to_string(), serde_json::Value::String(c));
+                }
+            }
+            map
+        }
+    }
+}
+
+/// Deploy to Appz when project is linked (.appz/project.json).
+#[cfg(feature = "deploy")]
+async fn deploy_to_appz(
+    session: AppzSession,
+    project_dir: std::path::PathBuf,
+    output_dir: String,
+    preview: bool,
+    no_build: bool,
+    dry_run: bool,
+    json_output: bool,
+    meta: Vec<String>,
+    skip_domain: bool,
+    force: bool,
+) -> AppResult {
+    let link = crate::project::read_project_link(&project_dir)
+        .map_err(|e| miette!("{}", e))?
+        .ok_or_else(|| miette!("Project link not found"))?;
+
+    let output_path = project_dir.join(&output_dir);
+    if !dry_run && !output_path.exists() {
+        if !no_build {
+            crate::commands::build(session.clone()).await?;
+        }
+        if !output_path.exists() {
+            return Err(miette!(
+                "Build output directory not found: {}\n\
+                 Run 'appz build' first or check outputDirectory in appz.json.",
+                output_path.display()
+            ));
+        }
+    }
+
+    if dry_run {
+        let _ = ui::status::info(&format!(
+            "Would deploy {} to Appz (preview={})",
+            output_path.display(),
+            preview
+        ));
+        return Ok(None);
+    }
+
+    let client = session.get_api_client();
+    if client.get_token().await.is_none() {
+        return Err(miette!(
+            "Not logged in. Run 'appz login' or set APPZ_TOKEN."
+        ));
+    }
+
+    let ctx = appz_client::DeployContext {
+        output_dir: output_path,
+        project_id: link.link.project_id.clone(),
+        team_id: Some(link.link.team_id.clone()),
+        target: if preview { "preview" } else { "production" }.to_string(),
+        name: link.link.project_name.clone(),
+        meta: enrich_meta_with_git(&project_dir, parse_meta_kv(&meta)),
+        skip_domain,
+        force,
+    };
+
+    if !json_output {
+        let _ = ui::layout::blank_line();
+        let _ = ui::layout::section_title("Deploying to Appz");
+    }
+
+    let is_tty = atty::is(atty::Stream::Stderr);
+    let sp = if !json_output {
+        Some(ui::progress::spinner("Deploying to Appz..."))
+    } else {
+        None
+    };
+
+    let output = if json_output {
+        appz_client::deploy_prebuilt(client.clone(), ctx.clone())
+            .await
+            .map_err(|e| miette!("{}", e))?
+    } else {
+        let last_printed_pct = Arc::new(AtomicU8::new(0));
+        appz_client::deploy_prebuilt_stream(client, ctx, move |ev| {
+            if let Some(sp) = sp.as_ref() {
+                match ev {
+                    appz_client::DeployEvent::Preparing => {
+                        sp.set_message("Deploying to Appz...");
+                    }
+                    appz_client::DeployEvent::FileCount {
+                        total_bytes,
+                        ..
+                    } => {
+                        // Show initial upload progress so user sees we're uploading
+                        if total_bytes > 0 {
+                            let msg = format!(
+                                "Uploading [{}] (0 B/{})",
+                                ui::progress::bar_string(0, total_bytes, 20),
+                                ui::format::bytes(total_bytes)
+                            );
+                            sp.set_message(&msg);
+                        }
+                    }
+                    appz_client::DeployEvent::UploadProgress {
+                        uploaded_bytes,
+                        total_bytes,
+                    } => {
+                        let should_update = if is_tty {
+                            true
+                        } else {
+                            let pct = if total_bytes > 0 {
+                                ((uploaded_bytes as f64 / total_bytes as f64) * 100.0) as u8
+                            } else {
+                                100
+                            };
+                            let stepped = (pct / 25) * 25;
+                            let prev = last_printed_pct.load(Ordering::Relaxed);
+                            if stepped > prev {
+                                last_printed_pct.store(stepped, Ordering::Relaxed);
+                                true
+                            } else {
+                                false
+                            }
+                        };
+                        if should_update {
+                            let msg = format!(
+                                "Uploading [{}] ({}/{})",
+                                ui::progress::bar_string(uploaded_bytes, total_bytes, 20),
+                                ui::format::bytes(uploaded_bytes),
+                                ui::format::bytes(total_bytes)
+                            );
+                            sp.set_message(&msg);
+                        }
+                    }
+                    appz_client::DeployEvent::Processing => {
+                        sp.set_message("Processing deployment...");
+                    }
+                    appz_client::DeployEvent::Ready {
+                        url,
+                        inspect_url,
+                        is_production,
+                        created_at,
+                        ..
+                    } => {
+                        sp.finish();
+                        // Vercel: print to stderr (same as spinner) for incremental display
+                        let _ = std::io::stderr().write_all(b"\n");
+                        let _ = std::io::stderr().flush();
+                        if let Some(inspect) = &inspect_url {
+                            let _ = std::io::stderr().write_all(format!("  Inspect: {}\n", inspect).as_bytes());
+                            let _ = std::io::stderr().flush();
+                        }
+                        let deploy_type = if is_production { "Production" } else { "Preview" };
+                        let _ = std::io::stderr().write_all(
+                            format!("  {}: {} {}\n", deploy_type, url, ui::format::deploy_stamp(created_at)).as_bytes()
+                        );
+                        let _ = std::io::stderr().flush();
+                        sp.finish_with_message("Deployed!");
+                    }
+                    appz_client::DeployEvent::Error(_) => {
+                        sp.finish();
+                    }
+                    _ => {}
+                }
+            }
+        })
+        .await
+        .map_err(|e| miette!("{}", e))?
+    };
+
+    let deploy_output = deployer::DeployOutput {
+        url: output.url.clone(),
+        status: deployer::DeployStatus::Ready,
+        provider: "appz".to_string(),
+        is_preview: preview,
+        deployment_id: Some(output.deployment_id),
+        additional_urls: vec![],
+        duration_ms: None,
+        created_at: Some(chrono::Utc::now()),
+    };
+
+    display_deploy_result(&deploy_output, json_output, true)?;
+    write_ci_output(&deploy_output);
+
+    Ok(None)
+}
+
+// ---------------------------------------------------------------------------
 // Sandbox creation helper
 // ---------------------------------------------------------------------------
 
@@ -32,9 +282,9 @@ use crate::session::AppzSession;
 /// access, and tool management. All provider operations go through it
 /// instead of raw `tokio::process::Command`.
 async fn create_deploy_sandbox(
-    project_dir: &std::path::Path,
+    project_dir: std::path::PathBuf,
 ) -> Result<Arc<dyn sandbox::SandboxProvider>> {
-    let config = sandbox::SandboxConfig::new(project_dir)
+    let config = sandbox::SandboxConfig::new(&project_dir)
         .with_settings(sandbox::SandboxSettings::default().quiet());
 
     let sb = sandbox::create_sandbox(config)
@@ -44,19 +294,56 @@ async fn create_deploy_sandbox(
     Ok(Arc::from(sb))
 }
 
-/// Main deploy command entry point.
+/// Main deploy command entry point (Vercel-parity options).
+#[allow(clippy::too_many_arguments)]
 pub async fn deploy(
     session: AppzSession,
+    project_path: Option<std::path::PathBuf>,
     provider_arg: Option<String>,
-    preview: bool,
+    prod: bool,
+    _preview: bool,
+    target: Option<String>,
+    prebuilt: bool,
     no_build: bool,
+    build_env: Vec<String>,
+    env: Vec<String>,
+    force: bool,
+    guidance: bool,
+    logs: bool,
+    meta: Vec<String>,
+    no_wait: bool,
+    public: bool,
+    skip_domain: bool,
+    with_cache: bool,
     dry_run: bool,
     json_output: bool,
     deploy_all: bool,
     yes: bool,
 ) -> AppResult {
-    let project_dir = session.working_dir.clone();
+    // Resolve project directory (Vercel: [project-path])
+    let project_dir = match project_path {
+        Some(p) => session
+            .working_dir
+            .join(&p)
+            .canonicalize()
+            .unwrap_or_else(|_| session.working_dir.join(p)),
+        None => session.working_dir.clone(),
+    };
+
+    // Resolve target (Vercel-parity): --prod => production, --target production => production, else preview
+    let is_production_target = target
+        .as_ref()
+        .map(|t| t == "production" || t == "prod")
+        .unwrap_or(false);
+    let is_preview = !prod && !is_production_target;
+
+    // Skip build when --prebuilt or --no-build
+    let no_build = no_build || prebuilt;
+
     let is_ci = is_ci_environment() || yes;
+
+    // Stub for options not yet wired to backend: logs, no_wait, public, with_cache, build_env
+    let _ = (logs, no_wait, public, with_cache, build_env);
 
     // 1. Load existing deploy config
     let deploy_config = read_deploy_config(&project_dir)
@@ -64,18 +351,39 @@ pub async fn deploy(
         .unwrap_or_default();
 
     // 2. Determine output directory
-    let output_dir = resolve_output_dir(&session);
+    let output_dir = resolve_output_dir(&project_dir);
+
+    // 2b. If linked to Appz project and no explicit provider (or appz), use Appz platform
+    let use_appz = provider_arg.as_ref().map(|s| s == "appz").unwrap_or(true);
+    if crate::project::is_project_linked(&project_dir)
+        && (provider_arg.is_none() || use_appz)
+        && !deploy_all
+    {
+        return deploy_to_appz(
+            session.clone(),
+            project_dir.clone(),
+            output_dir.clone(),
+            is_preview,
+            no_build,
+            dry_run,
+            json_output,
+            meta.clone(),
+            skip_domain,
+            force,
+        )
+            .await;
+    }
 
     // 3. Create sandbox for command execution
-    let sandbox = create_deploy_sandbox(&project_dir).await?;
+    let sandbox = create_deploy_sandbox(project_dir.clone()).await?;
 
     // 4. Handle --all flag
     if deploy_all {
         return deploy_to_all_targets(
             sandbox.clone(),
-            &output_dir,
-            &deploy_config,
-            preview,
+            output_dir.clone(),
+            deploy_config.clone(),
+            is_preview,
             no_build,
             dry_run,
             json_output,
@@ -86,9 +394,9 @@ pub async fn deploy(
 
     // 5. Resolve the provider
     let provider = resolve_provider(
-        provider_arg.as_deref(),
-        &project_dir,
-        &deploy_config,
+        provider_arg.clone(),
+        project_dir.clone(),
+        deploy_config.clone(),
         is_ci,
     )
     .await?;
@@ -99,24 +407,35 @@ pub async fn deploy(
     }
 
     // 6. Check prerequisites via sandbox
-    handle_prerequisites(&*provider, &*sandbox, is_ci).await?;
+    let provider = handle_prerequisites(provider, sandbox.clone(), is_ci).await?;
 
     // 7. Build before deploy (unless --no-build)
     if !no_build && !dry_run {
-        run_build_step(&session, json_output).await?;
+        run_build_step(session.clone(), project_dir.clone(), json_output).await?;
     }
 
     // 8. Run before_deploy hook via sandbox
     if let Some(ref hooks) = deploy_config.hooks {
         if let Some(ref before) = hooks.before_deploy {
-            run_hook("before_deploy", before, &sandbox, json_output).await?;
+            run_hook(
+                "before_deploy".to_string(),
+                before.clone(),
+                sandbox.clone(),
+                json_output,
+            )
+            .await?;
         }
     }
 
     // 9. Build deploy context with sandbox
-    let env_vars = deploy_config.env_for(if preview { "preview" } else { "production" });
+    let mut env_vars = deploy_config.env_for(if is_preview { "preview" } else { "production" });
+    for kv in &env {
+        if let Some((k, v)) = kv.split_once('=') {
+            env_vars.insert(k.to_string(), v.to_string());
+        }
+    }
     let ctx = DeployContext::new(sandbox.clone(), output_dir)
-        .with_preview(preview)
+        .with_preview(is_preview)
         .with_config(deploy_config.clone())
         .with_env(env_vars)
         .with_dry_run(dry_run)
@@ -135,7 +454,7 @@ pub async fn deploy(
     }
 
     // 11. Deploy (with spinner when interactive, like sandbox init)
-    let deploy_label = if preview {
+    let deploy_label = if is_preview {
         format!("{} (preview)", provider.name())
     } else {
         format!("{} (production)", provider.name())
@@ -143,18 +462,18 @@ pub async fn deploy(
 
     let result = if !json_output && !dry_run {
         let sp = ui::progress::spinner(&format!("Deploying to {}...", deploy_label));
-        let r = if preview {
-            provider.deploy_preview(&ctx).await
+        let r = if is_preview {
+            provider.deploy_preview(ctx.clone()).await
         } else {
-            provider.deploy(&ctx).await
+            provider.deploy(ctx.clone()).await
         };
         let msg = if r.is_ok() { "Deployed!" } else { "Failed" };
         sp.finish_with_message(msg);
         r
-    } else if preview {
-        provider.deploy_preview(&ctx).await
+    } else if is_preview {
+        provider.deploy_preview(ctx).await
     } else {
-        provider.deploy(&ctx).await
+        provider.deploy(ctx).await
     };
 
     let output = result.map_err(|e| miette!("{}", e))?;
@@ -162,15 +481,26 @@ pub async fn deploy(
     // 12. Run after_deploy hook via sandbox
     if let Some(ref hooks) = deploy_config.hooks {
         if let Some(ref after) = hooks.after_deploy {
-            run_hook("after_deploy", after, &sandbox, json_output).await?;
+            run_hook(
+                "after_deploy".to_string(),
+                after.clone(),
+                sandbox.clone(),
+                json_output,
+            )
+            .await?;
         }
     }
 
     // 13. Display results
-    display_deploy_result(&output, json_output)?;
+    display_deploy_result(&output, json_output, false)?;
 
     // 14. Write GitHub Actions output if applicable
     write_ci_output(&output);
+
+    // 15. --guidance: show suggested next steps and examples (Vercel-parity)
+    if guidance {
+        ui::guidance::deploy_guidance(&output.url, output.is_preview).display(json_output);
+    }
 
     Ok(None)
 }
@@ -204,10 +534,10 @@ pub async fn deploy_init(
         .map_err(|e| miette!("{}", e))?
         .unwrap_or_default();
 
-    let output_dir = resolve_output_dir(&session);
+    let output_dir = resolve_output_dir(&project_dir);
 
     // Create sandbox for setup operations
-    let sandbox = create_deploy_sandbox(&project_dir).await?;
+    let sandbox = create_deploy_sandbox(project_dir.clone()).await?;
 
     let mut setup_ctx = SetupContext::new(sandbox);
     setup_ctx.deploy_config = deploy_config.clone();
@@ -246,7 +576,7 @@ pub async fn deploy_list(
         .map_err(|e| miette!("{}", e))?
         .unwrap_or_default();
 
-    let output_dir = resolve_output_dir(&session);
+    let output_dir = resolve_output_dir(&project_dir);
 
     let provider_slug = match provider_arg {
         Some(slug) => slug,
@@ -259,13 +589,13 @@ pub async fn deploy_list(
     let provider = get_provider(&provider_slug).map_err(|e| miette!("{}", e))?;
 
     // Create sandbox for the list operation
-    let sandbox = create_deploy_sandbox(&project_dir).await?;
+    let sandbox = create_deploy_sandbox(project_dir.clone()).await?;
 
     let ctx = DeployContext::new(sandbox, output_dir)
         .with_config(deploy_config);
 
     let deployments = provider
-        .list_deployments(&ctx)
+        .list_deployments(ctx)
         .await
         .map_err(|e| miette!("{}", e))?;
 
@@ -289,14 +619,14 @@ pub async fn deploy_list(
 
 /// Resolve which provider to use based on arg, detection, and config.
 async fn resolve_provider(
-    provider_arg: Option<&str>,
-    project_dir: &std::path::Path,
-    deploy_config: &DeployConfig,
+    provider_arg: Option<String>,
+    project_dir: std::path::PathBuf,
+    deploy_config: DeployConfig,
     is_ci: bool,
 ) -> Result<Box<dyn DeployProvider>> {
     // 1. Explicit provider arg
     if let Some(slug) = provider_arg {
-        return get_provider(slug).map_err(|e| miette!("{}", e));
+        return get_provider(&slug).map_err(|e| miette!("{}", e));
     }
 
     // 2. Default from config
@@ -337,7 +667,7 @@ async fn resolve_provider(
                 get_provider(&platform.slug).map_err(|e| miette!("{}", e))
             } else {
                 // Prompt the user to choose
-                let slug = prompt_detected_selection(&detected).await?;
+                let slug = prompt_detected_selection(detected).await?;
                 get_provider(&slug).map_err(|e| miette!("{}", e))
             }
         }
@@ -346,19 +676,19 @@ async fn resolve_provider(
 
 /// Handle prerequisite checks — install CLI tools or show auth instructions.
 async fn handle_prerequisites(
-    provider: &dyn DeployProvider,
-    sandbox: &dyn sandbox::SandboxProvider,
+    provider: Box<dyn DeployProvider>,
+    sandbox: Arc<dyn sandbox::SandboxProvider>,
     is_ci: bool,
-) -> Result<()> {
+) -> Result<Box<dyn DeployProvider>> {
     use deployer::PrerequisiteStatus;
 
     let status = provider
-        .check_prerequisites(sandbox)
+        .check_prerequisites(sandbox.clone())
         .await
         .map_err(|e| miette!("{}", e))?;
 
     match status {
-        PrerequisiteStatus::Ready => Ok(()),
+        PrerequisiteStatus::Ready => Ok(provider),
         PrerequisiteStatus::CliMissing { tool, install_hint } => {
             if is_ci {
                 Err(miette!(
@@ -392,7 +722,7 @@ async fn handle_prerequisites(
                     login_hint
                 ));
                 // In interactive mode, let the provider's deploy handle login
-                Ok(())
+                Ok(provider)
             }
         }
         PrerequisiteStatus::Multiple(issues) => {
@@ -407,13 +737,18 @@ async fn handle_prerequisites(
 }
 
 /// Run the build step before deploying.
-async fn run_build_step(session: &AppzSession, json_output: bool) -> Result<()> {
+/// When project_dir override is provided (e.g. from --project-path), use it as working_dir for the build.
+async fn run_build_step(
+    session: AppzSession,
+    project_dir: std::path::PathBuf,
+    json_output: bool,
+) -> Result<()> {
     if !json_output {
         let _ = ui::status::info("Building project before deployment...");
     }
 
-    // Build takes AppzSession by value, so clone it
-    let build_session = session.clone();
+    let mut build_session = session.clone();
+    build_session.working_dir = project_dir;
     crate::commands::build(build_session).await?;
 
     if !json_output {
@@ -425,9 +760,9 @@ async fn run_build_step(session: &AppzSession, json_output: bool) -> Result<()> 
 
 /// Run a deploy lifecycle hook via the sandbox.
 async fn run_hook(
-    name: &str,
-    command: &str,
-    sandbox: &Arc<dyn sandbox::SandboxProvider>,
+    name: String,
+    command: String,
+    sandbox: Arc<dyn sandbox::SandboxProvider>,
     quiet: bool,
 ) -> Result<()> {
     if !quiet {
@@ -435,7 +770,7 @@ async fn run_hook(
     }
 
     let status = sandbox
-        .exec_interactive(command)
+        .exec_interactive(&command)
         .await
         .map_err(|e| miette!("Failed to run {} hook: {}", name, e))?;
 
@@ -453,8 +788,8 @@ async fn run_hook(
 /// Deploy to all configured targets in parallel.
 async fn deploy_to_all_targets(
     sandbox: Arc<dyn sandbox::SandboxProvider>,
-    output_dir: &str,
-    deploy_config: &DeployConfig,
+    output_dir: String,
+    deploy_config: DeployConfig,
     preview: bool,
     _no_build: bool,
     dry_run: bool,
@@ -482,6 +817,7 @@ async fn deploy_to_all_targets(
     let mut results: Vec<Result<DeployOutput, String>> = Vec::new();
 
     for slug in &target_slugs {
+        let slug_owned = slug.clone();
         let provider = match get_provider(slug) {
             Ok(p) => p,
             Err(e) => {
@@ -491,7 +827,7 @@ async fn deploy_to_all_targets(
         };
 
         let env_vars = deploy_config.env_for(if preview { "preview" } else { "production" });
-        let ctx = DeployContext::new(sandbox.clone(), output_dir.to_string())
+        let ctx = DeployContext::new(sandbox.clone(), output_dir.clone())
             .with_preview(preview)
             .with_config(deploy_config.clone())
             .with_env(env_vars)
@@ -500,11 +836,11 @@ async fn deploy_to_all_targets(
 
         handles.push(async move {
             let result = if preview {
-                provider.deploy_preview(&ctx).await
+                provider.deploy_preview(ctx).await
             } else {
-                provider.deploy(&ctx).await
+                provider.deploy(ctx).await
             };
-            (slug.clone(), result)
+            (slug_owned, result)
         });
     }
 
@@ -548,42 +884,58 @@ async fn deploy_to_all_targets(
 }
 
 /// Display the deployment result.
-fn display_deploy_result(output: &DeployOutput, json_output: bool) -> Result<()> {
+/// When `phased_output_done` is true (Appz phased UI), skip success message and URL since already printed.
+fn display_deploy_result(
+    output: &DeployOutput,
+    json_output: bool,
+    phased_output_done: bool,
+) -> Result<()> {
     if json_output {
         let json = serde_json::to_string_pretty(output)
             .map_err(|e| miette!("JSON serialization failed: {}", e))?;
         println!("{}", json);
     } else {
-        let _ = ui::layout::blank_line();
-
-        let deploy_type = if output.is_preview {
-            "Preview"
+        // Vercel: use stderr when phased so output appears incrementally with spinner
+        let out: &mut dyn Write = if phased_output_done {
+            &mut std::io::stderr()
         } else {
-            "Production"
+            &mut std::io::stdout()
         };
 
-        let _ = ui::status::success(&format!(
-            "{} deployment to {} is {}!",
-            deploy_type, output.provider, output.status
-        ));
+        let _ = writeln!(out);
+        let _ = out.flush();
 
-        println!();
-        println!("  URL: {}", output.url);
+        if !phased_output_done {
+            let deploy_type = if output.is_preview {
+                "Preview"
+            } else {
+                "Production"
+            };
 
-        for url in &output.additional_urls {
-            println!("  Alias: {}", url);
+            let _ = ui::status::success(&format!(
+                "{} deployment to {} is {}!",
+                deploy_type, output.provider, output.status
+            ));
+
+            let _ = writeln!(out);
+            let _ = writeln!(out, "  URL: {}", output.url);
+
+            for url in &output.additional_urls {
+                let _ = writeln!(out, "  Alias: {}", url);
+            }
         }
 
         if let Some(id) = &output.deployment_id {
-            println!("  Deployment ID: {}", id);
+            let _ = writeln!(out, "  Deployment ID: {}", id);
         }
 
         if let Some(duration) = output.duration_ms {
             let secs = duration as f64 / 1000.0;
-            println!("  Duration: {:.1}s", secs);
+            let _ = writeln!(out, "  Duration: {:.1}s", secs);
         }
 
-        let _ = ui::layout::blank_line();
+        let _ = writeln!(out);
+        let _ = out.flush();
     }
 
     Ok(())
@@ -638,12 +990,21 @@ fn write_ci_output(output: &DeployOutput) {
     }
 }
 
-/// Resolve the build output directory from session and config.
-fn resolve_output_dir(session: &AppzSession) -> String {
+/// Resolve the build output directory from project path and config.
+///
+/// Prefers `.appz/output` (Build Output v3) when `config.json` exists,
+/// else uses `appz.json` outputDirectory or common fallbacks.
+fn resolve_output_dir(project_dir: &std::path::Path) -> String {
+    // Prefer standardized build output when present
+    let appz_output = project_dir.join(".appz/output");
+    if appz_output.join("config.json").exists() {
+        return ".appz/output".to_string();
+    }
+
     // Try to read outputDirectory from appz.json
-    if let Ok(root) = starbase_utils::json::read_file::<serde_json::Value>(
-        session.working_dir.join("appz.json"),
-    ) {
+    if let Ok(root) =
+        starbase_utils::json::read_file::<serde_json::Value>(project_dir.join("appz.json"))
+    {
         if let Some(dir) = root.get("outputDirectory").and_then(|v| v.as_str()) {
             return dir.to_string();
         }
@@ -651,7 +1012,7 @@ fn resolve_output_dir(session: &AppzSession) -> String {
 
     // Default to common output directories
     for dir in &["dist", "build", "out", "public", "_site"] {
-        if session.working_dir.join(dir).exists() {
+        if project_dir.join(dir).exists() {
             return dir.to_string();
         }
     }
@@ -683,7 +1044,7 @@ async fn prompt_provider_selection() -> Result<String> {
 }
 
 /// Prompt the user to select from detected platforms.
-async fn prompt_detected_selection(detected: &[DetectedPlatform]) -> Result<String> {
+async fn prompt_detected_selection(detected: Vec<DetectedPlatform>) -> Result<String> {
     let options: Vec<String> = detected
         .iter()
         .map(|p| format!("{} (detected: {})", p.name, p.config_files.join(", ")))

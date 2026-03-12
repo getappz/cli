@@ -1,17 +1,19 @@
 use crate::client::Client;
 use crate::error::ApiError;
+use std::sync::Arc;
 use crate::models::{
-    CreateProjectRequest, CreateTransferRequestBody, DeleteResponse, Project,
-    ProjectsListResponse, TransferRequestResponse,
+    AddEnvRequest, Alias, CreateProjectRequest, CreateTransferRequestBody, DeleteResponse, Project,
+    ProjectEnvListResponse, ProjectEnvPullResponse, ProjectsListResponse,
+    TransferRequestResponse,
 };
 use crate::paths::V0_PREFIX;
 
-pub struct Projects<'a> {
-    client: &'a Client,
+pub struct Projects {
+    client: Arc<Client>,
 }
 
-impl<'a> Projects<'a> {
-    pub fn new(client: &'a Client) -> Self {
+impl Projects {
+    pub fn new(client: Arc<Client>) -> Self {
         Self { client }
     }
 
@@ -23,14 +25,14 @@ impl<'a> Projects<'a> {
         since: Option<i64>,
         until: Option<i64>,
     ) -> Result<ProjectsListResponse, ApiError> {
-        let query_params = vec![
-            ("limit", limit.map(|l| l.to_string())),
-            ("since", since.map(|s| s.to_string())),
-            ("until", until.map(|u| u.to_string())),
+        let query_params: Vec<(String, Option<String>)> = vec![
+            ("limit".to_string(), limit.map(|l| l.to_string())),
+            ("since".to_string(), since.map(|s| s.to_string())),
+            ("until".to_string(), until.map(|u| u.to_string())),
         ];
 
         let path = format!("{}/projects", V0_PREFIX);
-        self.client.get_with_query(&path, &query_params).await
+        self.client.get_with_query(path, query_params).await
     }
 
     /// Create a new project
@@ -47,21 +49,22 @@ impl<'a> Projects<'a> {
             teamId: team_id,
         };
         let path = format!("{}/projects", V0_PREFIX);
-        self.client.post(&path, Some(request)).await
+        self.client.post(path, Some(request)).await
     }
 
     /// Get a project by ID
-    #[tracing::instrument(skip(self))]
-    pub async fn get(&self, id: &str) -> Result<Project, ApiError> {
+    #[tracing::instrument(skip(self, id))]
+    pub async fn get(&self, id: impl Into<String>) -> Result<Project, ApiError> {
+        let id = id.into();
         let path = format!("{}/projects/{}", V0_PREFIX, id);
-        self.client.get(&path).await
+        self.client.get(path).await
     }
 
     /// Delete a project
     #[tracing::instrument(skip(self))]
     pub async fn delete(&self, id: &str) -> Result<DeleteResponse, ApiError> {
         let path = format!("{}/projects/{}", V0_PREFIX, id);
-        self.client.delete(&path).await
+        self.client.delete(path).await
     }
 
     /// Create a project transfer request (Vercel-aligned).
@@ -76,7 +79,7 @@ impl<'a> Projects<'a> {
             callbackUrl: callback_url,
         };
         let path = format!("{}/projects/{}/transfer-request", V0_PREFIX, id_or_name);
-        self.client.post(&path, Some(body)).await
+        self.client.post(path, Some(body)).await
     }
 
     /// Accept a project transfer request by code into the current team.
@@ -87,8 +90,106 @@ impl<'a> Projects<'a> {
             V0_PREFIX,
             urlencoding::encode(code)
         );
-        self.client
-            .put_json(&path, serde_json::json!({}))
-            .await
+        self.client.put_json(path, serde_json::json!({})).await
+    }
+
+    /// List env vars for a project (Vercel-aligned).
+    #[tracing::instrument(skip(self))]
+    pub async fn list_env(
+        &self,
+        project_id: &str,
+        target: Option<&str>,
+        decrypt: bool,
+    ) -> Result<ProjectEnvListResponse, ApiError> {
+        let mut query_params: Vec<(String, Option<String>)> = vec![
+            ("decrypt".to_string(), Some(decrypt.to_string())),
+            ("source".to_string(), Some("appz-cli:env:ls".to_string())),
+        ];
+        if let Some(t) = target {
+            query_params.push(("target".to_string(), Some(t.to_string())));
+        }
+        let path = format!("{}/projects/{}/env", V0_PREFIX, project_id);
+        self.client.get_with_query(path, query_params).await
+    }
+
+    /// Add an env var to a project.
+    #[tracing::instrument(skip(self, body))]
+    pub async fn add_env(
+        &self,
+        project_id: &str,
+        body: &AddEnvRequest,
+        upsert: bool,
+    ) -> Result<(), ApiError> {
+        let suffix = if upsert { "?upsert=true" } else { "" };
+        let path = format!("{}/projects/{}/env{}", V0_PREFIX, project_id, suffix);
+        let _ = self.client.post::<serde_json::Value>(path, Some(body)).await?;
+        Ok(())
+    }
+
+    /// Remove an env var by ID.
+    #[tracing::instrument(skip(self))]
+    pub async fn remove_env(&self, project_id: &str, env_id: &str) -> Result<(), ApiError> {
+        let path = format!("{}/projects/{}/env/{}", V0_PREFIX, project_id, env_id);
+        self.client.delete_no_content(path).await
+    }
+
+    /// Pull env vars (decrypted) for a target.
+    /// Uses list with decrypt and builds key-value map.
+    #[tracing::instrument(skip(self))]
+    pub async fn pull_env(
+        &self,
+        project_id: &str,
+        target: &str,
+    ) -> Result<ProjectEnvPullResponse, ApiError> {
+        let list = self.list_env(project_id, Some(target), true).await?;
+        let mut env = std::collections::HashMap::new();
+        for ev in list.envs {
+            if let Some(v) = ev.value {
+                env.insert(ev.key, v);
+            }
+        }
+        Ok(ProjectEnvPullResponse {
+            env,
+            buildEnv: std::collections::HashMap::new(),
+        })
+    }
+
+    /// Add a domain/alias to a project for the given environment (Vercel parity).
+    ///
+    /// Vercel: `POST /projects/:project/alias` with `{ target: 'PRODUCTION', domain }`.
+    /// Appz: `POST /v0/projects/:id/aliases` with `{ alias, environment }`.
+    /// The domain will resolve to the latest deployment for that project+environment.
+    #[tracing::instrument(skip(self))]
+    pub async fn add_alias(
+        &self,
+        project_id: &str,
+        alias: &str,
+        team_id: Option<String>,
+        environment: Option<&str>,
+    ) -> Result<Alias, ApiError> {
+        #[derive(serde::Serialize)]
+        struct AddAliasRequest<'a> {
+            alias: &'a str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            environment: Option<&'a str>,
+        }
+        let env = environment.unwrap_or("production");
+        let body = AddAliasRequest {
+            alias,
+            environment: Some(env),
+        };
+
+        if let Some(ref team_id_val) = team_id {
+            self.client.set_team_id(Some(team_id_val.clone())).await;
+        }
+
+        let path = format!("{}/projects/{}/aliases", V0_PREFIX, project_id);
+        let result = self.client.post(path, Some(body)).await;
+
+        if team_id.is_some() {
+            self.client.set_team_id(None).await;
+        }
+
+        result
     }
 }

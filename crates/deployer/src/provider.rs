@@ -20,7 +20,7 @@
 //! 2. Register it in [`create_provider_registry`].
 //! 3. Add detection rules in `src/detect.rs`.
 
-use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -68,7 +68,7 @@ pub trait DeployProvider: Send + Sync {
     /// rather than raw `which::which` or `tokio::process::Command`.
     async fn check_prerequisites(
         &self,
-        sandbox: &dyn SandboxProvider,
+        sandbox: Arc<dyn SandboxProvider>,
     ) -> DeployResult<PrerequisiteStatus>;
 
     /// The CLI tool name this provider requires (e.g. "vercel", "netlify", "wrangler").
@@ -81,7 +81,7 @@ pub trait DeployProvider: Send + Sync {
     ///
     /// Default implementation runs `npm install -g <cli_tool>` through the sandbox.
     /// Providers can override to use mise, npx, or a custom installer.
-    async fn ensure_cli(&self, sandbox: &dyn SandboxProvider) -> DeployResult<()> {
+    async fn ensure_cli(&self, sandbox: Arc<dyn SandboxProvider>) -> DeployResult<()> {
         let tool = self.cli_tool();
         let cmd = format!("npm install -g {}", tool);
         let _ = ui::status::info(&format!("Installing {} CLI...", tool));
@@ -102,7 +102,7 @@ pub trait DeployProvider: Send + Sync {
     /// Detect if this provider is already configured in the project.
     ///
     /// Checks for platform-specific config files (vercel.json, netlify.toml, etc.).
-    async fn detect_config(&self, project_dir: &Path) -> DeployResult<Option<DetectedConfig>>;
+    async fn detect_config(&self, project_dir: PathBuf) -> DeployResult<Option<DetectedConfig>>;
 
     /// Run the interactive setup wizard for this provider.
     ///
@@ -119,20 +119,17 @@ pub trait DeployProvider: Send + Sync {
     // ------------------------------------------------------------------
 
     /// Deploy to production.
-    async fn deploy(&self, ctx: &DeployContext) -> DeployResult<DeployOutput>;
+    async fn deploy(&self, ctx: DeployContext) -> DeployResult<DeployOutput>;
 
     /// Deploy a preview/staging build.
-    async fn deploy_preview(&self, ctx: &DeployContext) -> DeployResult<DeployOutput>;
+    async fn deploy_preview(&self, ctx: DeployContext) -> DeployResult<DeployOutput>;
 
     // ------------------------------------------------------------------
     // History and management
     // ------------------------------------------------------------------
 
     /// List recent deployments.
-    async fn list_deployments(
-        &self,
-        ctx: &DeployContext,
-    ) -> DeployResult<Vec<DeploymentInfo>> {
+    async fn list_deployments(&self, ctx: DeployContext) -> DeployResult<Vec<DeploymentInfo>> {
         let _ = ctx;
         Err(DeployError::Unsupported {
             provider: self.name().to_string(),
@@ -143,8 +140,8 @@ pub trait DeployProvider: Send + Sync {
     /// Rollback to a previous deployment.
     async fn rollback(
         &self,
-        ctx: &DeployContext,
-        deployment_id: &str,
+        ctx: DeployContext,
+        deployment_id: String,
     ) -> DeployResult<DeployOutput> {
         let _ = (ctx, deployment_id);
         Err(DeployError::Unsupported {
@@ -154,7 +151,7 @@ pub trait DeployProvider: Send + Sync {
     }
 
     /// Tear down / remove the project from this provider.
-    async fn teardown(&self, ctx: &DeployContext) -> DeployResult<()> {
+    async fn teardown(&self, ctx: DeployContext) -> DeployResult<()> {
         let _ = ctx;
         Err(DeployError::Unsupported {
             provider: self.name().to_string(),

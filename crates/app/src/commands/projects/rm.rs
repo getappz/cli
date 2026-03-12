@@ -1,5 +1,6 @@
 use crate::commands::projects::resolve_project_id;
 use crate::session::AppzSession;
+use crate::ClientExt;
 use starbase::AppResult;
 use tracing::instrument;
 use ui::prompt::confirm;
@@ -20,7 +21,7 @@ pub async fn rm(
 ) -> AppResult {
     let client = session.get_api_client();
 
-    let project_id = resolve_project_id(&client, &project).await?;
+    let project_id = resolve_project_id(client.clone(), project.clone()).await?;
 
     let project_details = client
         .projects()
@@ -39,6 +40,7 @@ pub async fn rm(
                 None,
                 None,
                 team_id,
+                None,
             )
             .await
         {

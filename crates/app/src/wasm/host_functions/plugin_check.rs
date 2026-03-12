@@ -7,6 +7,7 @@ use extism::{convert::Json, host_fn};
 use std::path::Path;
 
 use crate::commands::check::run_check_with_sandbox;
+use crate::verify;
 use crate::wasm::plugin::PluginHostData;
 use crate::wasm::types::*;
 
@@ -83,10 +84,29 @@ host_fn!(pub appz_pcheck_run(
     });
 
     match result {
-        Ok(exit_code) => Ok(Json(PluginCheckRunOutput {
-            exit_code,
-            message: None,
-        })),
+        Ok(exit_code) => {
+            // When --verify: after lint passes, run build + tests (Superpowers: verification-before-completion)
+            if input.verify && exit_code == 0 {
+                let project_dir = Path::new(&working_dir).to_path_buf();
+                let verify_result = tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async {
+                        verify::run_build(&project_dir).await?;
+                        verify::run_tests(&project_dir).await?;
+                        Ok::<(), miette::Report>(())
+                    })
+                });
+                if let Err(e) = verify_result {
+                    return Ok(Json(PluginCheckRunOutput {
+                        exit_code: 1,
+                        message: Some(format!("Verification failed: {}", e)),
+                    }));
+                }
+            }
+            Ok(Json(PluginCheckRunOutput {
+                exit_code,
+                message: None,
+            }))
+        }
         Err(e) => Ok(Json(PluginCheckRunOutput {
             exit_code: 1,
             message: Some(format!("{}", e)),

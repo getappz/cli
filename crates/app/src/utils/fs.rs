@@ -39,6 +39,7 @@ pub fn make_executable<P: AsRef<Path>>(_path: P) -> Result<()> {
 /// Uses `tokio::fs` intentionally: starbase_utils does not expose async set_permissions with
 /// `PermissionsExt` for executable bits.
 #[cfg(unix)]
+#[allow(dead_code)]
 pub async fn make_executable_async<P: AsRef<Path>>(path: P) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
@@ -56,6 +57,7 @@ pub async fn make_executable_async<P: AsRef<Path>>(path: P) -> Result<()> {
 
 /// Make a file executable (async version, no-op on Windows)
 #[cfg(windows)]
+#[allow(dead_code)]
 pub async fn make_executable_async<P: AsRef<Path>>(_path: P) -> Result<()> {
     // Windows doesn't have executable permissions in the same way
     Ok(())

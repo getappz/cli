@@ -1,10 +1,14 @@
 mod app;
 mod app_error;
+mod args;
+pub mod exec;
 mod auth;
+mod verify;
 mod config;
 pub mod commands;
 mod telemetry;
 mod context;
+mod ddev_helpers;
 mod host;
 mod http;
 mod importer;
@@ -22,7 +26,8 @@ mod tunnel;
 mod utils;
 pub mod wasm;
 
+pub use api::ClientExt;
 pub use app::*;
 pub use app_error::*;
 pub use session::*;
-pub use telemetry::{record_command, TelemetryEventStore};
+pub use telemetry::{command_name_for_telemetry, record_command, TelemetryEventStore};

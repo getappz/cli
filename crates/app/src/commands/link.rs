@@ -15,10 +15,10 @@ pub async fn link(
     _team: Option<String>,
 ) -> AppResult {
     let client = session.get_api_client();
-    let cwd = &session.working_dir;
+    let cwd = session.working_dir.clone();
 
     // Check if already linked
-    if crate::project::is_project_linked(cwd) {
+    if crate::project::is_project_linked(&cwd) {
         status::warning("This directory is already linked to a project.")
             .map_err(|e| miette::miette!("Failed to display message: {}", e))?;
         status::info("Run 'appz unlink' to remove the link first.")
@@ -28,7 +28,7 @@ pub async fn link(
 
     // Use setup_and_link for Vercel-style flow
     // Note: project and team parameters are handled within setup_and_link via prompts
-    setup_and_link(&client, cwd, false, Some("Link"), project.as_deref())
+    setup_and_link(client, cwd.clone(), false, Some("Link".to_string()), project)
         .await
         .map_err(|e| miette::miette!("Failed to link project: {}", e))?;
 

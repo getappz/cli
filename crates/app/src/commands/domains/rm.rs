@@ -1,4 +1,5 @@
 use crate::session::AppzSession;
+use crate::ClientExt;
 use starbase::AppResult;
 use tracing::instrument;
 use ui::prompt::confirm;

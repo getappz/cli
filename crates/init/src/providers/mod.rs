@@ -5,3 +5,4 @@ pub mod git;
 pub mod local;
 pub mod npm;
 pub mod remote_archive;
+pub mod wordpress;

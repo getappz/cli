@@ -5,6 +5,7 @@ mod status;
 use crate::commands::deployment_utils;
 use crate::project::resolve_project_context;
 use crate::session::AppzSession;
+use crate::ClientExt;
 use api::models::Deployment;
 use miette::Result;
 use starbase::AppResult;
@@ -24,7 +25,7 @@ pub async fn promote(
     let cwd = session.working_dir.clone();
 
     // Resolve project context
-    let project_context = resolve_project_context(&client, &cwd)
+    let project_context = resolve_project_context(client.clone(), cwd)
         .await?
         .ok_or_else(|| miette::miette!("Project not linked. Run 'appz link' first."))?;
 
@@ -48,12 +49,12 @@ pub async fn promote(
 
     // Resolve deployment
     let deployment =
-        deployment_utils::resolve_deployment_by_id_or_url(&client, &deployment_id_or_url).await?;
+        deployment_utils::resolve_deployment_by_id_or_url(client.clone(), deployment_id_or_url.clone()).await?;
 
     // Request promotion
     request_promote(
-        &client,
-        &project_id,
+        client.clone(),
+        project_id,
         &deployment,
         team_id,
         timeout_duration,
@@ -67,8 +68,8 @@ pub async fn promote(
 /// Request a promotion and poll for completion
 #[tracing::instrument(skip(client, deployment, team_id))]
 async fn request_promote(
-    client: &api::Client,
-    project_id: &str,
+    client: std::sync::Arc<api::Client>,
+    project_id: String,
     deployment: &Deployment,
     team_id: String,
     timeout: Duration,
@@ -85,7 +86,7 @@ async fn request_promote(
 
     let promote_result = client
         .deployments()
-        .promote(project_id, &deployment_id, Some(team_id))
+        .promote(&project_id, &deployment_id, Some(team_id))
         .await;
 
     match promote_result {
@@ -96,13 +97,13 @@ async fn request_promote(
             // Get project to check status
             let project = client
                 .projects()
-                .get(project_id)
+                .get(&project_id)
                 .await
                 .map_err(|e| miette::miette!("Failed to get project: {}", e))?;
 
             status::poll_promote_status(
                 client,
-                project_id,
+                project_id.clone(),
                 Some(deployment),
                 &project,
                 timeout,

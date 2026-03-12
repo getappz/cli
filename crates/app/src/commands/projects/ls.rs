@@ -1,5 +1,6 @@
 use crate::commands::projects::user_friendly_list_projects_error;
 use crate::session::AppzSession;
+use crate::ClientExt;
 use starbase::AppResult;
 use tracing::instrument;
 use ui::{format, pagination, table};

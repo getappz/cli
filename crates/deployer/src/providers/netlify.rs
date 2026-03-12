@@ -12,7 +12,8 @@
 //! - `NETLIFY_AUTH_TOKEN` environment variable (CI/CD)
 //! - `netlify login` interactive flow (local)
 
-use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -63,7 +64,7 @@ impl DeployProvider for NetlifyProvider {
     }
 
     /// Override default ensure_cli since the npm package is `netlify-cli`, not `netlify`.
-    async fn ensure_cli(&self, sandbox: &dyn SandboxProvider) -> DeployResult<()> {
+    async fn ensure_cli(&self, sandbox: Arc<dyn SandboxProvider>) -> DeployResult<()> {
         let _ = ui::status::info("Installing Netlify CLI...");
         let output = sandbox.exec("npm install -g netlify-cli").await?;
         if !output.success() {
@@ -77,7 +78,7 @@ impl DeployProvider for NetlifyProvider {
 
     async fn check_prerequisites(
         &self,
-        sandbox: &dyn SandboxProvider,
+        sandbox: Arc<dyn SandboxProvider>,
     ) -> DeployResult<PrerequisiteStatus> {
         let cli_ok = sandbox.exec("netlify --version").await.map(|o| o.success()).unwrap_or(false);
         let auth_ok = has_env_var("NETLIFY_AUTH_TOKEN");
@@ -102,7 +103,7 @@ impl DeployProvider for NetlifyProvider {
         }
     }
 
-    async fn detect_config(&self, project_dir: &Path) -> DeployResult<Option<DetectedConfig>> {
+    async fn detect_config(&self, project_dir: PathBuf) -> DeployResult<Option<DetectedConfig>> {
         let state_path = project_dir.join(".netlify/state.json");
         if state_path.exists() {
             let content = tokio::fs::read_to_string(&state_path).await?;
@@ -140,7 +141,7 @@ impl DeployProvider for NetlifyProvider {
 
         let cli_ok = ctx.sandbox.exec("netlify --version").await.map(|o| o.success()).unwrap_or(false);
         if !cli_ok {
-            self.ensure_cli(&*ctx.sandbox).await?;
+            self.ensure_cli(ctx.sandbox.clone()).await?;
         }
 
         let _ = ui::status::info("Linking project to Netlify...");
@@ -173,7 +174,7 @@ impl DeployProvider for NetlifyProvider {
         })
     }
 
-    async fn deploy(&self, ctx: &DeployContext) -> DeployResult<DeployOutput> {
+    async fn deploy(&self, ctx: DeployContext) -> DeployResult<DeployOutput> {
         let start = std::time::Instant::now();
 
         if ctx.dry_run {
@@ -222,7 +223,7 @@ impl DeployProvider for NetlifyProvider {
         })
     }
 
-    async fn deploy_preview(&self, ctx: &DeployContext) -> DeployResult<DeployOutput> {
+    async fn deploy_preview(&self, ctx: DeployContext) -> DeployResult<DeployOutput> {
         let start = std::time::Instant::now();
 
         if ctx.dry_run {

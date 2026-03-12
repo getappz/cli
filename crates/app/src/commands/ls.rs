@@ -1,16 +1,41 @@
 use api::error::ApiError as ApiErrorType;
+use crate::args::LsArgs;
 use crate::session::AppzSession;
+use crate::ClientExt;
 use starbase::AppResult;
 use tracing::instrument;
 use ui::{format, pagination, table};
 
+/// Parse policy args like ["errored=6m", "preview=12m"] into vec of (k,v).
+fn parse_policy(policy: &[String]) -> Option<Vec<(String, String)>> {
+    if policy.is_empty() {
+        return None;
+    }
+    let parsed: Vec<(String, String)> = policy
+        .iter()
+        .filter_map(|s| {
+            let eq = s.find('=')?;
+            let (k, v) = s.split_at(eq);
+            Some((k.trim().to_string(), v[1..].trim().to_string()))
+        })
+        .collect();
+    if parsed.is_empty() {
+        None
+    } else {
+        Some(parsed)
+    }
+}
+
+/// List deployments. Project context is ensured in session analyze (bootstrap).
 #[instrument(skip_all)]
-pub async fn ls(session: AppzSession) -> AppResult {
+pub async fn ls(session: AppzSession, args: LsArgs) -> AppResult {
     let client = session.get_api_client();
 
-    let project_context = session
-        .get_project_context()
-        .ok_or_else(|| miette::miette!("Project context not available - this should not happen"))?;
+    let project_context = session.get_project_context().ok_or_else(|| {
+        miette::miette!(
+            "No project linked. Run `appz link` to link this directory to an Appz project before listing deployments."
+        )
+    })?;
 
     let project_id = project_context.link.project_id.clone();
 
@@ -21,9 +46,18 @@ pub async fn ls(session: AppzSession) -> AppResult {
             .await;
     }
 
+    let policy_params = parse_policy(&args.policy);
+    let show_policy = policy_params.is_some();
     let deployments_response = match client
         .deployments()
-        .list(Some(project_id), None, None, None, None)
+        .list(
+            Some(project_id),
+            None,
+            None,
+            None,
+            None,
+            policy_params.clone(),
+        )
         .await
     {
         Ok(r) => r,
@@ -44,24 +78,82 @@ pub async fn ls(session: AppzSession) -> AppResult {
         return Ok(None);
     }
 
-    // Prepare table data
-    let headers = vec!["ID", "Status", "Project ID", "Created"];
+    // Match Vercel CLI format: Age | Deployment | Status | Environment | [Duration | Username] or Proposed Expiration
+    let mut headers = vec![
+        "Age",
+        "Deployment",
+        "Status",
+        "Environment",
+    ];
+    if !show_policy {
+        headers.push("Duration");
+        headers.push("Username");
+    } else {
+        headers.push("Proposed Expiration");
+    }
     let mut rows = Vec::new();
 
     for deployment in &deployments_response.deployments {
         let status = deployment.status.as_deref().unwrap_or("unknown");
-        let status_badge = format::status_badge(status);
-        let project_id = deployment.projectId.as_deref().unwrap_or("N/A");
+        let status_display = format!("● {}", format::status_badge(status));
+        let url = deployment
+            .url
+            .as_deref()
+            .unwrap_or("–")
+            .to_string();
+        let env = deployment
+            .env_type
+            .as_deref()
+            .map(|t| {
+                if t.eq_ignore_ascii_case("production") {
+                    "Production"
+                } else {
+                    "Preview"
+                }
+            })
+            .unwrap_or("Preview");
+        let age = format::timestamp_age_short(deployment.createdAt);
+        let duration = if status.eq_ignore_ascii_case("ready")
+            || status.eq_ignore_ascii_case("completed")
+        {
+            let dur_secs = (deployment.updatedAt - deployment.createdAt) / 1000;
+            if dur_secs >= 0 {
+                format::duration(dur_secs as u64)
+            } else {
+                "–".to_string()
+            }
+        } else {
+            "–".to_string()
+        };
+        let username = deployment
+            .createdBy
+            .as_deref()
+            .unwrap_or("–")
+            .to_string();
 
-        // Format timestamp
-        let created = format::timestamp(deployment.createdAt);
+        let proposed_exp = deployment
+            .proposedExpiration
+            .map(|ts| format::timestamp_auto(ts))
+            .unwrap_or_else(|| "No expiration".to_string());
 
-        rows.push(vec![
-            deployment.id.clone(),
-            status_badge,
-            project_id.to_string(),
-            created,
-        ]);
+        if show_policy {
+            rows.push(vec![
+                age,
+                url,
+                status_display,
+                env.to_string(),
+                proposed_exp,
+            ]);
+        } else {
+            rows.push(vec![
+                age,
+                url,
+                status_display,
+                env.to_string(),
+                duration,
+                username,
+            ]);
+        }
     }
 
     // Display table with professional formatting

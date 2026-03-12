@@ -234,6 +234,36 @@ pub struct CodeSearchParams {
     pub limit: Option<usize>,
 }
 
+// --- Grep search (packed code) ---
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GrepSearchParams {
+    pub query: String,
+    #[serde(default)]
+    pub workdir: Option<String>,
+    #[serde(default)]
+    pub is_regex: Option<bool>,
+    #[serde(default)]
+    pub file_glob: Option<String>,
+    #[serde(default)]
+    pub max_results: Option<usize>,
+    #[serde(default)]
+    pub pack_hash: Option<String>,
+}
+
+// --- Exec (appz exec - sandbox-by-default, optional no_sandbox) ---
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ExecParams {
+    pub command: String,
+    #[serde(default)]
+    pub workdir: Option<String>,
+    #[serde(default)]
+    pub shell: bool,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+    #[serde(default)]
+    pub no_sandbox: bool,
+}
+
 // --- Shell (sandboxed) ---
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ShellParams {
@@ -503,6 +533,98 @@ impl AppzTool {
         ))
     }
 
+    /// Search packed code (grep over cached pack from appz code pack). No shell, no flag injection.
+    #[tool]
+    async fn grep_search(
+        &self,
+        _context: RequestContext<RoleServer>,
+        Parameters(params): Parameters<GrepSearchParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let workdir = resolve_workdir(params.workdir.as_deref())?;
+        let packs = code_mix::get_packs_for_workdir(&workdir)
+            .map_err(|e| McpError::internal_error(e.0, None))?;
+
+        if packs.is_empty() {
+            return Err(McpError::invalid_params(
+                "No packed code found for this project. Run 'appz code pack' first.".to_string(),
+                None,
+            ));
+        }
+
+        let (_, pack_path) = if let Some(ref hash) = params.pack_hash {
+            packs
+                .into_iter()
+                .find(|(e, _)| e.content_hash == *hash)
+                .ok_or_else(|| {
+                    McpError::invalid_params(
+                        format!("Pack with hash '{}' not found for this project", hash),
+                        None,
+                    )
+                })?
+        } else {
+            packs
+                .into_iter()
+                .next()
+                .expect("packs not empty")
+        };
+
+        let req = code_grep::SearchRequest {
+            query: params.query,
+            is_regex: params.is_regex,
+            file_glob: params.file_glob,
+            max_results: params.max_results,
+        };
+
+        let results = code_mix::search_packed(&req, &pack_path)
+            .map_err(|e| McpError::internal_error(e.0, None))?;
+
+        let out: Vec<serde_json::Value> = results
+            .into_iter()
+            .map(|r| {
+                serde_json::json!({
+                    "file": r.file,
+                    "line": r.line,
+                    "column": r.column,
+                    "snippet": r.snippet,
+                })
+            })
+            .collect();
+        Ok(CallToolResult::success(vec![Content::json(serde_json::json!({
+            "results": out
+        }))?]))
+    }
+
+    /// Execute a command via appz exec (sandbox-by-default). Returns JSON with exit_code, stdout, stderr, timed_out.
+    #[tool]
+    async fn exec(
+        &self,
+        _context: RequestContext<RoleServer>,
+        Parameters(params): Parameters<ExecParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let mut args = vec!["exec".to_string(), "--json".to_string(), params.command.clone()];
+        if params.shell {
+            args.push("--shell".to_string());
+        }
+        if let Some(t) = params.timeout_ms {
+            args.extend(["--timeout".to_string(), (t / 1000).to_string()]);
+        }
+        if params.no_sandbox {
+            args.push("--no-sandbox".to_string());
+        }
+        let workdir = params.workdir.as_deref();
+        let out = run_appz(&args, workdir).await?;
+        // appz exec --json prints ExecResult to stdout; run_appz captures it
+        let result: serde_json::Value = serde_json::from_str(&out.stdout).unwrap_or_else(|_| {
+            serde_json::json!({
+                "exit_code": out.exit_code,
+                "stdout": out.stdout,
+                "stderr": out.stderr,
+                "timed_out": false
+            })
+        });
+        Ok(CallToolResult::success(vec![Content::json(result)?]))
+    }
+
     /// Run a shell command inside the appz sandbox (project-root scoped, mise environment).
     #[tool]
     async fn shell(
@@ -565,9 +687,10 @@ impl ServerHandler for AppzTool {
             server_info: Implementation::from_build_env(),
             instructions: Some(
                 "This server provides tools to run appz CLI commands: init, build, dev, deploy, run, \
-                 plan, ls, skills, code_index, code_search, and a sandboxed shell. Auth-required tools \
-                 (run, plan, ls, etc.) need 'appz login' or APPZ_API_TOKEN. code_index indexes the \
-                 codebase with Repomix+Qdrant; code_search runs semantic search over it."
+                 plan, ls, skills, code_index, code_search, grep_search, exec, and a sandboxed shell. Auth-required tools \
+                 (run, plan, ls, etc.) need 'appz login' or APPZ_API_TOKEN. exec runs arbitrary commands \
+                 (e.g. npm, cargo) with sandbox-by-default. code_index indexes the codebase with Repomix+Qdrant; \
+                 code_search runs semantic search over it. grep_search searches packed code (from appz code pack) with ripgrep."
                     .to_string(),
             ),
         }

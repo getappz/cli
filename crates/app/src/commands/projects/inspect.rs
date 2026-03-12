@@ -5,6 +5,7 @@
 
 use crate::commands::projects::resolve_project_id;
 use crate::session::AppzSession;
+use crate::ClientExt;
 use starbase::AppResult;
 use tracing::instrument;
 use ui::status;
@@ -23,7 +24,7 @@ pub async fn inspect(
     let client = session.get_api_client();
 
     let project_id = if let Some(ref n) = name {
-        resolve_project_id(&client, n).await?
+        resolve_project_id(client.clone(), n.clone()).await?
     } else {
         // Use linked project from CWD
         let project_context = session.get_project_context().ok_or_else(|| {

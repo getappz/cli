@@ -1,6 +1,7 @@
 //! Generate a website from a natural-language prompt (AI, via Appz API).
 
 use crate::session::AppzSession;
+use crate::ClientExt;
 use appz_studio::{parse_and_apply, scaffold};
 use miette::{miette, Result};
 use starbase::AppResult;

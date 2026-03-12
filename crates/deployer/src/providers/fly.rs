@@ -11,7 +11,8 @@
 //! - `FLY_API_TOKEN` environment variable (CI/CD)
 //! - `fly auth login` interactive flow (local)
 
-use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -76,7 +77,7 @@ impl DeployProvider for FlyProvider {
 
     async fn check_prerequisites(
         &self,
-        sandbox: &dyn SandboxProvider,
+        sandbox: Arc<dyn SandboxProvider>,
     ) -> DeployResult<PrerequisiteStatus> {
         let has_fly = sandbox.exec("fly version").await.map(|o| o.success()).unwrap_or(false);
         let has_flyctl = sandbox.exec("flyctl version").await.map(|o| o.success()).unwrap_or(false);
@@ -90,7 +91,7 @@ impl DeployProvider for FlyProvider {
                 install_hint: "curl -L https://fly.io/install.sh | sh".into(),
             }),
             (true, false) => {
-                let cmd = resolve_fly_cmd(sandbox).await;
+                let cmd = resolve_fly_cmd(&*sandbox).await;
                 let result = sandbox.exec(&format!("{} auth whoami", cmd)).await;
                 if result.map(|o| o.success()).unwrap_or(false) {
                     Ok(PrerequisiteStatus::Ready)
@@ -104,7 +105,7 @@ impl DeployProvider for FlyProvider {
         }
     }
 
-    async fn detect_config(&self, project_dir: &Path) -> DeployResult<Option<DetectedConfig>> {
+    async fn detect_config(&self, project_dir: PathBuf) -> DeployResult<Option<DetectedConfig>> {
         if project_dir.join("fly.toml").exists() {
             return Ok(Some(DetectedConfig {
                 config_file: "fly.toml".into(),
@@ -150,7 +151,7 @@ impl DeployProvider for FlyProvider {
         })
     }
 
-    async fn deploy(&self, ctx: &DeployContext) -> DeployResult<DeployOutput> {
+    async fn deploy(&self, ctx: DeployContext) -> DeployResult<DeployOutput> {
         let start = std::time::Instant::now();
 
         if ctx.dry_run {
@@ -194,7 +195,7 @@ impl DeployProvider for FlyProvider {
         })
     }
 
-    async fn deploy_preview(&self, _ctx: &DeployContext) -> DeployResult<DeployOutput> {
+    async fn deploy_preview(&self, _ctx: DeployContext) -> DeployResult<DeployOutput> {
         Err(DeployError::Unsupported {
             provider: "Fly.io".into(),
             operation: "preview deployments".into(),

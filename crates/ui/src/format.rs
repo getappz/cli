@@ -52,6 +52,51 @@ pub fn timestamp_auto(ts: i64) -> String {
     timestamp(ts_seconds)
 }
 
+/// Format a timestamp to Vercel-style short age (e.g., "45s", "2m", "3h", "1d").
+///
+/// Accepts seconds or milliseconds (auto-detected). Use for deployment "Age" column.
+///
+/// # Arguments
+/// * `ts` - Unix timestamp in seconds, milliseconds, or microseconds
+///
+/// # Returns
+/// Short age string (e.g., "45s", "2m", "3h", "1d") or "N/A" if invalid
+pub fn timestamp_age_short(ts: i64) -> String {
+    if ts <= 0 {
+        return "N/A".to_string();
+    }
+
+    let ts_seconds = if ts > 1_000_000_000_000_000 {
+        ts / 1_000_000
+    } else if ts > 4_102_444_800 {
+        ts / 1000
+    } else {
+        ts
+    };
+
+    match DateTime::from_timestamp(ts_seconds, 0) {
+        Some(dt) => {
+            let now = Utc::now();
+            let duration = now.signed_duration_since(dt);
+            let secs = duration.num_seconds();
+            if secs < 0 {
+                "now".to_string()
+            } else if secs < 60 {
+                format!("{}s", secs)
+            } else if secs < 3600 {
+                format!("{}m", secs / 60)
+            } else if secs < 86400 {
+                format!("{}h", secs / 3600)
+            } else if secs < 2592000 {
+                format!("{}d", secs / 86400)
+            } else {
+                dt.format("%Y-%m-%d").to_string()
+            }
+        }
+        None => "N/A".to_string(),
+    }
+}
+
 /// Format a Unix timestamp to a relative time string (e.g., "2 hours ago").
 ///
 /// # Arguments
@@ -165,6 +210,30 @@ pub fn colored_diff(plain: &str) -> String {
     out
 }
 
+/// Deploy stamp: relative age for display next to URL (e.g. "[2m]").
+/// `ts`: Unix timestamp in seconds or milliseconds (auto-detected via `timestamp_age_short`).
+pub fn deploy_stamp(ts: i64) -> String {
+    let s = timestamp_age_short(ts);
+    format!("[{}]", s)
+}
+
+/// Format byte count to human-readable string (e.g. "1.2 MB", "500 KB").
+/// Matches Vercel's bytes package: 1 decimal place.
+pub fn bytes(n: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+    if n < KB {
+        format!("{} B", n)
+    } else if n < MB {
+        format!("{:.1} KB", n as f64 / KB as f64)
+    } else if n < GB {
+        format!("{:.1} MB", n as f64 / MB as f64)
+    } else {
+        format!("{:.1} GB", n as f64 / GB as f64)
+    }
+}
+
 /// Format a duration in seconds to a human-readable string.
 ///
 /// # Arguments
@@ -214,17 +283,17 @@ mod tests {
         // Seconds (2021-01-01 00:00:00 UTC)
         assert!(timestamp_auto(1609459200).contains("2021"));
 
-        // Milliseconds (Feb 19, 2026)
+        // Milliseconds (Feb 19, 2025)
         let ms = 1739961333000i64;
         assert!(
-            timestamp_auto(ms).contains("2026"),
+            timestamp_auto(ms).contains("2025"),
             "milliseconds should format correctly"
         );
 
         // Microseconds (CLI-created teams from D1/etc.)
         let us = 1739961333000000i64;
         assert!(
-            timestamp_auto(us).contains("2026"),
+            timestamp_auto(us).contains("2025"),
             "microseconds should format correctly, not overflow to year 58108"
         );
     }
@@ -242,6 +311,16 @@ mod tests {
         assert_eq!(truncate("hello", 10), "hello");
         assert_eq!(truncate("hello world", 5), "he...");
         assert_eq!(truncate("hi", 5), "hi");
+    }
+
+    #[test]
+    fn test_bytes() {
+        assert_eq!(bytes(0), "0 B");
+        assert_eq!(bytes(100), "100 B");
+        assert_eq!(bytes(1024), "1.0 KB");
+        assert_eq!(bytes(1536), "1.5 KB");
+        assert_eq!(bytes(1024 * 1024), "1.0 MB");
+        assert_eq!(bytes(1024 * 1024 * 2), "2.0 MB");
     }
 
     #[test]

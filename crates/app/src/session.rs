@@ -83,15 +83,15 @@ impl AppzSession {
     }
 }
 
-/// Check if a command requires project context (must be linked)
-/// Commands that return an error if not linked
+/// Check if a command requires project context (must be linked).
+/// Project context is loaded in analyze (bootstrap) for these commands.
 pub fn requires_project_context(command: &crate::app::Commands) -> bool {
     use crate::app::Commands;
     use crate::commands::projects::ProjectsCommands;
     use crate::commands::transfer::TransferCommands;
     matches!(
         command,
-        Commands::Ls
+        Commands::Ls(_)
             | Commands::Projects {
                 command: Some(ProjectsCommands::Inspect { name: None, .. }),
                 ..
@@ -108,17 +108,18 @@ pub fn requires_project_context(command: &crate::app::Commands) -> bool {
     )
 }
 
-/// Whether project inspect --yes was passed (skip link confirmation)
-fn project_inspect_yes(command: &crate::app::Commands) -> bool {
+/// Whether --yes was passed for project link (skip confirmation in non-interactive)
+fn project_link_auto_confirm(command: &crate::app::Commands) -> bool {
     use crate::app::Commands;
     use crate::commands::projects::ProjectsCommands;
-    matches!(
-        command,
+    match command {
+        Commands::Ls(args) => args.yes,
         Commands::Projects {
-            command: Some(ProjectsCommands::Inspect { yes: true, .. }),
+            command: Some(ProjectsCommands::Inspect { yes, .. }),
             ..
-        }
-    )
+        } => *yes,
+        _ => false,
+    }
 }
 
 #[async_trait]
@@ -144,9 +145,12 @@ impl AppSession for AppzSession {
         let client =
             Client::new().map_err(|e| miette::miette!("Failed to create API client: {}", e))?;
 
+        // Wrap client in Arc early so we can use it in async functions (Send requirement)
+        let client_arc = Arc::new(client);
+
         // Set token on client if we found one
         if let Some(ref token) = token {
-            client.set_token(token.clone()).await;
+            client_arc.set_token(token.clone()).await;
         }
 
         // Resolve team_id from available sources (--scope > env > auth.json)
@@ -157,9 +161,14 @@ impl AppSession for AppzSession {
             // If --scope was provided, it may be a team ID or slug, so resolve it
             if self.cli.scope.is_some() {
                 // Resolve team identifier (ID or slug) to team ID
-                match crate::commands::teams::resolve_team_id(&client, identifier).await {
+                match crate::commands::teams::resolve_team_id(
+                    client_arc.clone(),
+                    identifier.clone(),
+                )
+                .await
+                {
                     Ok(resolved_team_id) => {
-                        client.set_team_id(Some(resolved_team_id)).await;
+                        client_arc.set_team_id(Some(resolved_team_id)).await;
                     }
                     Err(e) => {
                         // Log warning but don't fail startup - the command will handle the error
@@ -172,12 +181,9 @@ impl AppSession for AppzSession {
                 }
             } else {
                 // For env var or auth.json, assume it's already a team ID
-                client.set_team_id(Some(identifier.clone())).await;
+                client_arc.set_team_id(Some(identifier.clone())).await;
             }
         }
-
-        // Wrap client in Arc for sharing
-        let client_arc = Arc::new(client);
 
         // Set up unauthorized callback for automatic login
         // This will be called when API requests return Unauthorized errors
@@ -316,15 +322,15 @@ impl AppSession for AppzSession {
             t.write().unwrap().checkpoint("analyze: task_registry + recipes");
         }
 
-        // Load project context if command requires it
-        // This will automatically link the project if not already linked
+        // Load project context if command requires it (bootstrap phase).
+        // This will automatically link the project if not already linked.
         if requires_project_context(&self.cli.command) {
             let client = self.get_api_client();
-            let auto_confirm = project_inspect_yes(&self.cli.command);
+            let auto_confirm = project_link_auto_confirm(&self.cli.command);
             match crate::project::ensure_project_link(
-                "command",
-                &client,
-                &self.working_dir,
+                "command".to_string(),
+                client,
+                self.working_dir.clone(),
                 auto_confirm,
             )
             .await

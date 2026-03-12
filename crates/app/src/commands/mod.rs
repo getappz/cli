@@ -4,6 +4,7 @@ mod install_helpers;
 #[cfg(feature = "check")]
 pub mod check;
 pub mod code;
+pub mod pack;
 #[cfg(feature = "deploy")]
 pub mod deploy;
 pub mod deployment_utils;
@@ -11,7 +12,13 @@ pub mod dev;
 #[cfg(feature = "dev-server")]
 pub mod dev_server;
 pub mod domains;
+pub mod env;
+pub mod exec;
 pub mod external;
+pub mod git;
+pub mod inspect;
+pub mod logs;
+pub mod pull;
 #[cfg(feature = "gen")]
 pub mod gen;
 pub mod init;
@@ -58,6 +65,11 @@ pub use dev::dev;
 #[cfg(feature = "dev-server")]
 pub use dev_server::dev_server;
 pub use domains::*;
+pub use env::{run as env_run, EnvCommands};
+pub use exec::exec;
+pub use inspect::inspect;
+pub use logs::logs;
+pub use pull::pull;
 pub use init::init;
 pub use link::link;
 pub use list::list;
@@ -80,6 +92,7 @@ pub use seo::{run as seo_run, SeoCommands};
 pub use self_upgrade::{append_self_update_instructions, upgrade_instructions_text};
 #[cfg(feature = "self_update")]
 pub use self_upgrade::{append_self_update_instructions, upgrade_instructions_text, SelfUpdate};
+pub use git::{run as git_run, GitCommands};
 pub use plugin::PluginCommands;
 pub use skills_lib::SkillsCommands;
 pub use switch::switch;

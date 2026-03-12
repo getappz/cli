@@ -43,6 +43,7 @@ package-lock.json
 yarn.lock
 
 # Project specific
+.worktrees/
 .mise/
 test-monorepo/
 scripts/signing_key.key

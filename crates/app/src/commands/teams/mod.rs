@@ -6,6 +6,7 @@
 //! - Inviting users to teams
 
 use crate::session::AppzSession;
+use crate::ClientExt;
 use api::Client;
 use clap::Subcommand;
 use starbase::AppResult;
@@ -34,11 +35,11 @@ pub use switch::switch;
 /// # Returns
 /// The team ID if found, otherwise an error
 pub async fn resolve_team_id(
-    client: &Client,
-    team_identifier: &str,
+    client: std::sync::Arc<Client>,
+    team_identifier: String,
 ) -> Result<String, miette::Error> {
     // Try to get team directly by ID first (faster if it's already an ID)
-    if let Ok(team) = client.teams().get(team_identifier).await {
+    if let Ok(team) = client.teams().get(&team_identifier).await {
         return Ok(team.id);
     }
 

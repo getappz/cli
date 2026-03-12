@@ -1,5 +1,6 @@
 use crate::auth;
 use crate::session::AppzSession;
+use crate::ClientExt;
 use miette::Result;
 use regex::Regex;
 use starbase::AppResult;

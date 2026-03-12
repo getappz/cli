@@ -326,16 +326,91 @@ pub struct Deployment {
     pub status: Option<String>,
     #[serde(default)]
     pub url: Option<String>,
+    #[serde(default, rename = "type")]
+    pub env_type: Option<String>,
     #[serde(default)]
     pub createdBy: Option<String>,
     pub createdAt: i64,
     pub updatedAt: i64,
+    /// When listing with --policy: computed expiration based on retention (Vercel parity).
+    #[serde(default)]
+    pub proposedExpiration: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeploymentsListResponse {
     pub deployments: Vec<Deployment>,
     pub pagination: Pagination,
+}
+
+/// Deployment log entry (Vercel-aligned).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeploymentLogEntry {
+    #[serde(default)]
+    pub timestamp: Option<i64>,
+    #[serde(default)]
+    pub message: Option<String>,
+    #[serde(default)]
+    pub level: Option<String>,
+    #[serde(default)]
+    pub id: Option<String>,
+}
+
+/// Response for deployment logs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeploymentLogsResponse {
+    #[serde(default)]
+    pub logs: Vec<DeploymentLogEntry>,
+}
+
+/// Minimal payload for creating a deployment (Vercel-aligned).
+/// Used by appz-client for prebuilt deployments.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeploymentCreateRequest {
+    /// Project ID (required)
+    pub projectId: String,
+    /// Optional deployment name
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Target environment: "preview" or "production"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    /// Arbitrary metadata (from -m KEY=VALUE)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub meta: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Skip automatic domain promotion (from --skip-domain)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skipDomain: Option<bool>,
+    /// Force new deployment (from -f)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub force: Option<bool>,
+    /// File list with paths and SHAs (content-addressed)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<PreparedFile>>,
+}
+
+/// Single file entry for deployment create/continue (path + SHA for dedup).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PreparedFile {
+    pub file: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sha: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    pub mode: u32,
+}
+
+/// Result of deployment creation: either a deployment or a list of missing file SHAs.
+#[derive(Debug, Clone)]
+pub enum DeploymentCreateResult {
+    /// Deployment created (may be BUILDING until files are uploaded).
+    Created(Deployment),
+    /// Backend needs these files; client must upload them then call continue.
+    /// deployment_id is present when backend creates deployment in "waiting for files" state.
+    MissingFiles {
+        deployment_id: String,
+        missing: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -362,6 +437,55 @@ pub struct PromoteResponse {
     pub inspectorUrl: Option<String>,
     #[serde(default)]
     pub id: Option<String>,
+}
+
+// Environment variables (Vercel-aligned)
+
+/// Project environment variable (Vercel-aligned).
+/// Target: production, preview, or development.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectEnvVariable {
+    pub id: String,
+    pub key: String,
+    #[serde(default)]
+    pub value: Option<String>,
+    #[serde(default)]
+    pub r#type: Option<String>,
+    #[serde(default)]
+    pub target: Option<serde_json::Value>,
+    #[serde(default)]
+    pub gitBranch: Option<String>,
+    #[serde(default)]
+    pub createdAt: Option<i64>,
+    #[serde(default)]
+    pub updatedAt: Option<i64>,
+}
+
+/// Response for listing project env vars.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectEnvListResponse {
+    pub envs: Vec<ProjectEnvVariable>,
+}
+
+/// Response for env pull (decrypted key-value map).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectEnvPullResponse {
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub buildEnv: std::collections::HashMap<String, String>,
+}
+
+/// Request body for adding an env var.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AddEnvRequest {
+    pub key: String,
+    pub value: String,
+    #[serde(default)]
+    pub r#type: Option<String>,
+    pub target: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gitBranch: Option<String>,
 }
 
 // OAuth 2.0 Device Flow Models

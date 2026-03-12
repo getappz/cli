@@ -106,9 +106,10 @@ impl Auth {
         let metadata = self.discovery().await?;
         let form_data = [("client_id", client_id), ("scope", "openid offline_access")];
 
-        self.client
-            .post_form(&metadata.device_authorization_endpoint, &form_data)
-            .await
+        // Normalize the endpoint URL to use the client's base URL
+        let endpoint = self.client.normalize_endpoint_url(&metadata.device_authorization_endpoint);
+
+        self.client.post_form(&endpoint, &form_data).await
     }
 
     /// Poll for device token
@@ -119,13 +120,15 @@ impl Auth {
         device_code: &str,
     ) -> Result<Result<TokenSet, OAuthPollError>, ApiError> {
         let metadata = self.discovery().await?;
-        let url = &metadata.token_endpoint;
+        
+        // Normalize the endpoint URL to use the client's base URL
+        let url = self.client.normalize_endpoint_url(&metadata.token_endpoint);
 
         // Make request directly to handle OAuth errors properly
         let response = self
             .client
             .post_form_raw(
-                url,
+                &url,
                 &[
                     ("client_id", client_id),
                     ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
@@ -187,9 +190,10 @@ impl Auth {
             ("refresh_token", refresh_token),
         ];
 
-        self.client
-            .post_form(&metadata.token_endpoint, &form_data)
-            .await
+        // Normalize the endpoint URL to use the client's base URL
+        let endpoint = self.client.normalize_endpoint_url(&metadata.token_endpoint);
+
+        self.client.post_form(&endpoint, &form_data).await
     }
 
     /// Introspect token
@@ -198,19 +202,24 @@ impl Auth {
         let metadata = self.discovery().await?;
         let form_data = [("token", token)];
 
-        self.client
-            .post_form(&metadata.introspection_endpoint, &form_data)
-            .await
+        // Normalize the endpoint URL to use the client's base URL
+        let endpoint = self.client.normalize_endpoint_url(&metadata.introspection_endpoint);
+
+        self.client.post_form(&endpoint, &form_data).await
     }
 
     /// Revoke token
     #[tracing::instrument(skip(self, token))]
     pub async fn revoke_token(&self, client_id: &str, token: &str) -> Result<(), ApiError> {
         let metadata = self.discovery().await?;
+        
+        // Normalize the endpoint URL to use the client's base URL
+        let endpoint = self.client.normalize_endpoint_url(&metadata.revocation_endpoint);
+        
         let response = self
             .client
             .post_form_raw(
-                &metadata.revocation_endpoint,
+                &endpoint,
                 &[("token", token), ("client_id", client_id)],
             )
             .await?;

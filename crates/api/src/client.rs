@@ -193,6 +193,46 @@ impl Client {
         self.team_id.read().await.clone()
     }
 
+    /// Normalize an endpoint URL to use the client's base URL
+    /// If the URL is a full URL that doesn't match the client's base URL,
+    /// extract the path and return it as a relative path.
+    /// This is useful when discovery metadata returns absolute URLs from a different server.
+    pub fn normalize_endpoint_url(&self, url: &str) -> String {
+        // If it's not a full URL, return as-is (it's already a path)
+        if !url.starts_with("http://") && !url.starts_with("https://") {
+            return url.to_string();
+        }
+
+        // Parse both URLs to compare their bases
+        if let (Ok(parsed_url), Ok(parsed_base)) = (
+            url::Url::parse(url),
+            url::Url::parse(&self.base_url),
+        ) {
+            let url_authority = parsed_url.authority();
+            let base_authority = parsed_base.authority();
+            
+            // If the URL's authority matches the client's base authority, use it as-is
+            if url_authority == base_authority {
+                return url.to_string();
+            }
+
+            // Otherwise, extract the path (and query/fragment if present)
+            let mut path = parsed_url.path().to_string();
+            if let Some(query) = parsed_url.query() {
+                path.push('?');
+                path.push_str(query);
+            }
+            if let Some(fragment) = parsed_url.fragment() {
+                path.push('#');
+                path.push_str(fragment);
+            }
+            return path;
+        }
+
+        // If parsing fails, return as-is
+        url.to_string()
+    }
+
     /// Set a callback to be invoked when an Unauthorized error is encountered
     /// The callback should return a new authentication token
     #[tracing::instrument(skip(self, callback))]

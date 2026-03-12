@@ -318,7 +318,7 @@ pub struct RunOptions {
     pub cwd: Option<PathBuf>,
     pub env: Option<HashMap<String, String>>, // additional env
     pub show_output: bool,
-    pub package_manager: Option<crate::detectors::PackageManagerInfo>,
+    pub package_manager: Option<detectors::PackageManagerInfo>,
     /// Tool version info for non-Node mise-managed tools (e.g., Hugo)
     pub tool_info: Option<ToolVersionInfo>,
 }
@@ -497,11 +497,11 @@ pub async fn run_local_with(ctx: &Context, cmd: &str, opts: RunOptions) -> Resul
         Some(pm)
     } else {
         // Create filesystem detector for package manager detection
-        use crate::detectors::{detect_package_manager, StdFilesystem};
+        use detectors::{detect_package_manager, StdFilesystem};
         use std::path::PathBuf;
         use std::sync::Arc;
 
-        let fs: Arc<dyn crate::detectors::filesystem::DetectorFilesystem> =
+        let fs: Arc<dyn detectors::DetectorFilesystem> =
             if let Some(dir) = search_dir {
                 Arc::new(StdFilesystem::new(Some(dir.to_path_buf())))
             } else if let Ok(current_dir) = std::env::current_dir() {

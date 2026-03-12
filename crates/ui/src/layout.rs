@@ -1,24 +1,20 @@
 //! Layout utilities for consistent spacing and formatting.
 
-use owo_colors::OwoColorize;
+use crate::theme;
+use design::{layout as design_layout, spacing as design_spacing, ColorRole};
 use std::io::{self, Write};
 
-/// Spacing constants for consistent layout
+/// Spacing constants (re-exported from design crate).
 pub mod spacing {
-    /// Vertical spacing between major sections
-    pub const SECTION_SPACING: usize = 1;
-
-    /// Vertical spacing between items in a list
-    pub const ITEM_SPACING: usize = 0;
-
-    /// Padding around tables
-    pub const TABLE_PADDING: usize = 0;
-
-    /// Indentation for nested items
-    pub const INDENT: &str = "  ";
-
-    /// Double indentation
-    pub const DOUBLE_INDENT: &str = "    ";
+    pub use design::{
+        DOUBLE_INDENT, INDENT, ITEM, SECTION, SEPARATOR_WIDTH, TABLE_CELL, TABLE_COLUMN_MIN,
+    };
+    /// Alias for backward compatibility.
+    pub const SECTION_SPACING: usize = design::SECTION;
+    /// Alias for backward compatibility.
+    pub const ITEM_SPACING: usize = design::ITEM;
+    /// Alias for backward compatibility.
+    pub const TABLE_PADDING: usize = design::TABLE_CELL;
 }
 
 /// Print a blank line for spacing
@@ -37,7 +33,7 @@ pub fn blank_lines(count: usize) -> io::Result<()> {
 
 /// Print a section title with proper formatting
 pub fn section_title(title: &str) -> io::Result<()> {
-    println!("{}", title.bold());
+    println!("{}", theme::style_accent_bold(title));
     io::stdout().flush()
 }
 
@@ -49,19 +45,23 @@ pub fn subsection_title(title: &str) -> io::Result<()> {
 
 /// Print a separator line
 pub fn separator() -> io::Result<()> {
-    println!("{}", "─".repeat(80).bright_black());
+    let line = design_layout::SEPARATOR_CHAR
+        .to_string()
+        .repeat(design_spacing::SEPARATOR_WIDTH);
+    println!("{}", theme::style(&line, ColorRole::Border));
     io::stdout().flush()
 }
 
 /// Print a separator with custom character
 pub fn separator_with_char(ch: char) -> io::Result<()> {
-    println!("{}", ch.to_string().repeat(80).bright_black());
+    let line = ch.to_string().repeat(design_spacing::SEPARATOR_WIDTH);
+    println!("{}", theme::style(&line, ColorRole::Border));
     io::stdout().flush()
 }
 
 /// Print indented text
 pub fn indented(text: &str, level: usize) -> io::Result<()> {
-    let indent = spacing::INDENT.repeat(level);
+    let indent = design_spacing::INDENT.repeat(level);
     println!("{}{}", indent, text);
     io::stdout().flush()
 }

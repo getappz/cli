@@ -1,6 +1,7 @@
 use crate::client::Client;
 use crate::error::ApiError;
 use crate::models::{DeleteResponse, Deployment, DeploymentsListResponse};
+use crate::paths::V0_PREFIX;
 
 pub struct Deployments<'a> {
     client: &'a Client,
@@ -33,10 +34,8 @@ impl<'a> Deployments<'a> {
             self.client.set_team_id(Some(team_id_val.clone())).await;
         }
 
-        let result = self
-            .client
-            .get_with_query("/deployments", &query_params)
-            .await;
+        let path = format!("{}/deployments", V0_PREFIX);
+        let result = self.client.get_with_query(&path, &query_params).await;
 
         // Reset team_id if we set it
         if team_id.is_some() {
@@ -63,7 +62,7 @@ impl<'a> Deployments<'a> {
             deployment_id_or_url
         };
 
-        let path = format!("/deployments/{}", deployment_id);
+        let path = format!("{}/deployments/{}", V0_PREFIX, deployment_id);
         self.client.get(&path).await
     }
 
@@ -75,7 +74,7 @@ impl<'a> Deployments<'a> {
         deployment_id: &str,
         team_id: Option<String>,
     ) -> Result<DeleteResponse, ApiError> {
-        let path = format!("/projects/{}/promote/{}", project_id, deployment_id);
+        let path = format!("{}/projects/{}/promote/{}", V0_PREFIX, project_id, deployment_id);
 
         // Temporarily set team_id if provided
         if let Some(ref team_id_val) = team_id {
@@ -100,7 +99,7 @@ impl<'a> Deployments<'a> {
         deployment_id: &str,
         team_id: Option<String>,
     ) -> Result<DeleteResponse, ApiError> {
-        let path = format!("/projects/{}/rollback/{}", project_id, deployment_id);
+        let path = format!("{}/projects/{}/rollback/{}", V0_PREFIX, project_id, deployment_id);
 
         // Temporarily set team_id if provided
         if let Some(ref team_id_val) = team_id {
@@ -115,5 +114,23 @@ impl<'a> Deployments<'a> {
         }
 
         result
+    }
+
+    /// Delete a deployment by ID or URL (soft delete)
+    #[tracing::instrument(skip(self))]
+    pub async fn delete(&self, deployment_id_or_url: &str) -> Result<DeleteResponse, ApiError> {
+        let deployment_id = if deployment_id_or_url.starts_with("http://")
+            || deployment_id_or_url.starts_with("https://")
+        {
+            deployment_id_or_url
+                .split('/')
+                .next_back()
+                .unwrap_or(deployment_id_or_url)
+        } else {
+            deployment_id_or_url
+        };
+
+        let path = format!("{}/deployments/{}", V0_PREFIX, deployment_id);
+        self.client.delete(&path).await
     }
 }

@@ -160,7 +160,7 @@ fn setup_docker_alias() -> miette::Result<()> {
             };
             let alias_line = "alias docker=podman\n";
             // Check if alias already exists
-            if let Ok(content) = std::fs::read_to_string(&config_file) {
+            if let Ok(content) = starbase_utils::fs::read_file(&config_file) {
                 if content.contains("alias docker=podman") {
                     info("Docker alias to Podman already exists in shell config");
                     return Ok(());

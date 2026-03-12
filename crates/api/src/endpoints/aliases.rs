@@ -1,6 +1,7 @@
 use crate::client::Client;
 use crate::error::ApiError;
 use crate::models::{Alias, AliasesListResponse, DeleteResponse};
+use crate::paths::V0_PREFIX;
 
 pub struct Aliases<'a> {
     client: &'a Client,
@@ -33,7 +34,8 @@ impl<'a> Aliases<'a> {
             self.client.set_team_id(Some(team_id_val.clone())).await;
         }
 
-        let result = self.client.get_with_query("/aliases", &query_params).await;
+        let path = format!("{}/aliases", V0_PREFIX);
+        let result = self.client.get_with_query(&path, &query_params).await;
 
         // Reset team_id if we set it
         if team_id.is_some() {
@@ -46,14 +48,14 @@ impl<'a> Aliases<'a> {
     /// Get an alias by ID or alias string
     #[tracing::instrument(skip(self))]
     pub async fn get(&self, id_or_alias: &str) -> Result<Alias, ApiError> {
-        let path = format!("/aliases/{}", id_or_alias);
+        let path = format!("{}/aliases/{}", V0_PREFIX, id_or_alias);
         self.client.get(&path).await
     }
 
     /// Delete an alias
     #[tracing::instrument(skip(self))]
     pub async fn delete(&self, alias_id: &str) -> Result<DeleteResponse, ApiError> {
-        let path = format!("/aliases/{}", alias_id);
+        let path = format!("{}/aliases/{}", V0_PREFIX, alias_id);
         self.client.delete(&path).await
     }
 }

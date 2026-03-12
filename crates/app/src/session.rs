@@ -1,9 +1,11 @@
 use crate::app::Cli;
+use crate::app_error::UserCancellation;
 use crate::auth;
 use crate::context::AppContext;
 use crate::importer;
 use crate::project::ProjectContext;
 use crate::recipe;
+use crate::telemetry::TelemetryEventStore;
 use crate::wasm;
 use api::{error::ApiError as ApiErrorType, Client};
 use async_trait::async_trait;
@@ -18,22 +20,38 @@ pub struct AppzSession {
     pub cli: Cli,
     pub working_dir: PathBuf,
 
+    // Telemetry event store (shared across session)
+    pub telemetry_store: Arc<TelemetryEventStore>,
+
     // Lazy components
     task_registry: OnceLock<Arc<TaskRegistry>>,
     api_client: OnceLock<Arc<Client>>,
     project_context: OnceLock<Option<ProjectContext>>,
+
+    // Performance debugging (APPZ_DEBUG_TIMING=1); Arc for Clone, RwLock for Sync
+    timing: Option<std::sync::Arc<std::sync::RwLock<common::timing::TimingDebug>>>,
 }
 
 impl AppzSession {
-    pub fn new(cli: Cli) -> Self {
+    pub fn new(cli: Cli, telemetry_store: Arc<TelemetryEventStore>) -> Self {
         debug!("Creating new application session");
+
+        let timing = if common::timing::TimingDebug::new().enabled() {
+            Some(std::sync::Arc::new(std::sync::RwLock::new(
+                common::timing::TimingDebug::new(),
+            )))
+        } else {
+            None
+        };
 
         Self {
             working_dir: PathBuf::new(),
+            telemetry_store,
             task_registry: OnceLock::new(),
             api_client: OnceLock::new(),
             project_context: OnceLock::new(),
             cli,
+            timing,
         }
     }
 
@@ -69,15 +87,54 @@ impl AppzSession {
 /// Commands that return an error if not linked
 pub fn requires_project_context(command: &crate::app::Commands) -> bool {
     use crate::app::Commands;
-    matches!(command, Commands::Ls | Commands::Build)
+    use crate::commands::projects::ProjectsCommands;
+    use crate::commands::transfer::TransferCommands;
+    matches!(
+        command,
+        Commands::Ls
+            | Commands::Projects {
+                command: Some(ProjectsCommands::Inspect { name: None, .. }),
+                ..
+            }
+            | Commands::Transfer {
+                command: None,
+                project: None,
+                ..
+            }
+            | Commands::Transfer {
+                command: Some(TransferCommands::Create { project: None, .. }),
+                ..
+            }
+    )
+}
+
+/// Whether project inspect --yes was passed (skip link confirmation)
+fn project_inspect_yes(command: &crate::app::Commands) -> bool {
+    use crate::app::Commands;
+    use crate::commands::projects::ProjectsCommands;
+    matches!(
+        command,
+        Commands::Projects {
+            command: Some(ProjectsCommands::Inspect { yes: true, .. }),
+            ..
+        }
+    )
 }
 
 #[async_trait]
 impl AppSession for AppzSession {
     /// Setup initial state for the session
     async fn startup(&mut self) -> AppResult {
+        if let Some(ref t) = self.timing {
+            t.write().unwrap().checkpoint("startup: get_working_dir (pre)");
+        }
+
         // Determine working directory (respects --cwd if provided)
         self.working_dir = crate::systems::startup::get_working_dir(&self.cli)?;
+
+        if let Some(ref t) = self.timing {
+            t.write().unwrap().checkpoint("startup: get_working_dir");
+        }
 
         // Resolve token from available sources (CLI > env > auth.json)
         // Do NOT prompt for login here - that happens in analyze() if needed
@@ -142,7 +199,7 @@ impl AppSession for AppzSession {
                     // Run device flow login
                     let token = auth::device_flow_login(&temp_client)
                         .await
-                        .map_err(|e| ApiErrorType::Unauthorized(format!("Login failed: {}", e)))?;
+                        .map_err(|e| ApiErrorType::Unauthorized(format!("Couldn't sign you back in. {}", e)))?;
 
                     // Save token to auth.json
                     let auth_config = auth::AuthConfig::with_token(token.clone());
@@ -161,11 +218,18 @@ impl AppSession for AppzSession {
         // Store client in session (may be authenticated or unauthenticated)
         let _ = self.api_client.set(client_arc);
 
+        if let Some(ref t) = self.timing {
+            t.write().unwrap().checkpoint("startup: full");
+        }
+
         Ok(None)
     }
 
     /// Analyze the current state and build necessary components
     async fn analyze(&mut self) -> AppResult {
+        if let Some(ref t) = self.timing {
+            t.write().unwrap().checkpoint("analyze: (pre)");
+        }
         // Check if current command requires authentication
         if auth::requires_auth(&self.cli.command) {
             let client = self.get_api_client();
@@ -237,22 +301,31 @@ impl AppSession for AppzSession {
             if let Err(e) = plugin_manager.load_plugin(&mut reg, plugin_id.clone(), plugin_path) {
                 eprintln!("Warning: Failed to load plugin: {}", e);
             } else {
-                eprintln!("Loaded plugin '{}' from {}", plugin_id, plugin_path);
+                eprintln!(
+                    "Loaded plugin '{}' from {}",
+                    plugin_id,
+                    common::user_config::path_for_display(std::path::Path::new(plugin_path))
+                );
             }
         }
 
         // Store registry in session
         let _ = self.task_registry.set(Arc::new(reg));
 
+        if let Some(ref t) = self.timing {
+            t.write().unwrap().checkpoint("analyze: task_registry + recipes");
+        }
+
         // Load project context if command requires it
         // This will automatically link the project if not already linked
         if requires_project_context(&self.cli.command) {
             let client = self.get_api_client();
+            let auto_confirm = project_inspect_yes(&self.cli.command);
             match crate::project::ensure_project_link(
                 "command",
                 &client,
                 &self.working_dir,
-                false, // Don't auto-confirm, but will link interactively
+                auto_confirm,
             )
             .await
             {
@@ -260,25 +333,44 @@ impl AppSession for AppzSession {
                     let _ = self.project_context.set(Some(ctx));
                 }
                 Err(e) => {
-                    // If linking fails, return error (don't proceed without project context)
+                    // Pass through user cancellation; other errors get wrapped
+                    if e.downcast_ref::<UserCancellation>().is_some() {
+                        return Err(e);
+                    }
                     return Err(miette::miette!("Failed to ensure project link: {}", e));
                 }
             }
+        }
+
+        if let Some(ref t) = self.timing {
+            t.write().unwrap().checkpoint("analyze: full");
         }
 
         Ok(None)
     }
 
     async fn execute(&mut self) -> AppResult {
+        if let Some(ref t) = self.timing {
+            t.write().unwrap().checkpoint("execute: (pre)");
+        }
+
         // Check for new version (non-blocking, won't fail command execution)
         if let Err(e) = crate::systems::version_check::check_for_new_version().await {
             debug!("Failed to check for new version: {}", e);
+        }
+
+        if let Some(ref t) = self.timing {
+            t.write().unwrap().checkpoint("execute: version_check");
         }
 
         Ok(None)
     }
 
     async fn shutdown(&mut self) -> AppResult {
+        if let Some(ref t) = self.timing {
+            t.write().unwrap().checkpoint("shutdown");
+            t.read().unwrap().print();
+        }
         // Cleanup resources if needed
         Ok(None)
     }

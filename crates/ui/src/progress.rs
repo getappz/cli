@@ -9,12 +9,12 @@ use std::time::Duration;
 /// Tick interval for spinner (250ms, matching mise)
 const TICK_INTERVAL: Duration = Duration::from_millis(250);
 
-/// Spinner template (matching mise's pattern)
+/// Spinner template (accent color for brand consistency)
 static SPINNER_TEMPLATE: Lazy<ProgressStyle> = Lazy::new(|| {
-    ProgressStyle::with_template("{spinner:.blue} {msg} {elapsed:>3.dim.italic}").unwrap()
+    ProgressStyle::with_template("{spinner:.cyan} {msg} {elapsed:>3.dim.italic}").unwrap()
 });
 
-/// Progress bar template (matching mise's pattern)
+/// Progress bar template (accent color for brand consistency)
 static PROGRESS_TEMPLATE: Lazy<ProgressStyle> = Lazy::new(|| {
     ProgressStyle::with_template(
         "{msg} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} ({eta})",
@@ -192,6 +192,20 @@ impl ProgressBarHandle {
     /// Finish the progress bar.
     pub fn finish(&self) {
         self.pb.finish();
+    }
+}
+
+impl grab::Progress for ProgressBarHandle {
+    fn set_length(&self, len: u64) {
+        ProgressBarHandle::set_length(self, len);
+    }
+
+    fn inc(&self, n: u64) {
+        self.inc_by(n);
+    }
+
+    fn finish(&self) {
+        ProgressBarHandle::finish(self);
     }
 }
 

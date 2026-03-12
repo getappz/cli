@@ -1,0 +1,20 @@
+[package]
+name = "wp2md-plugin"
+version = "0.1.2"
+edition = "2021"
+license.workspace = true
+publish = false
+description = "WASM plugin entry point for the WordPress-to-Markdown converter"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# The wp2md crate with default-features=false (no reqwest).
+# All core logic compiles into the WASM module.
+wp2md = { path = "../../wp2md", default-features = false }
+appz_pdk = { path = "../../appz_pdk" }
+extism-pdk = "1.4.0"
+serde = { workspace = true, features = ["derive"] }
+serde_json = "1.0"
+miette = { workspace = true }

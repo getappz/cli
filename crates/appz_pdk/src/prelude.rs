@@ -5,4 +5,5 @@
 //! use appz_pdk::prelude::*;
 //! ```
 
+pub use crate::security;
 pub use crate::types::*;

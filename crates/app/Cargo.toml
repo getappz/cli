@@ -2,6 +2,7 @@
 name = "app"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 publish = false
 
 [dependencies]
@@ -16,11 +17,12 @@ shell-words = { workspace = true }
 starbase_utils = { workspace = true }
 chrono = { workspace = true }
 regex = { workspace = true }
-itertools = "0.13"
+itertools = "0.14"
 walkdir = "2"
 ai_seo = { path = "../ai-seo" }
 task = { path = "../task" }
 command = { path = "../command" }
+detectors = { path = "../detectors" }
 frameworks = { path = "../frameworks" }
 env_var = { path = "../env_var" }
 async-trait = "0.1"
@@ -32,18 +34,18 @@ num_cpus = "1.0"
 rayon = "1.8"
 thiserror = { workspace = true }
 reqwest = { workspace = true, features = ["json", "gzip", "zstd", "blocking"] }
-ssh = { package = "ssh-rs", workspace = true }
-starbase = "0.10"
-starbase_styles = "0.6"
+ssh = { workspace = true }
+starbase = { workspace = true }
+starbase_styles = { workspace = true }
 starbase_events = "0.7"
 starbase_shell = "0.10"
 tracing = "0.1"
 api = { path = "../api" }
+grab = { path = "../grab" }
 ui = { path = "../ui" }
 common = { path = "../common" }
 atty = { workspace = true }
 starbase_archive = { workspace = true }
-dev-server = { path = "../dev-server" }
 tempfile = { workspace = true }
 tokio-retry = { workspace = true }
 url = { workspace = true }
@@ -51,10 +53,47 @@ indicatif = { workspace = true }
 self_update = { workspace = true, optional = true }
 webbrowser = "1.0"
 toml = "0.8"
-ssg-migrator = { path = "../ssg-migrator" }
 camino = "1.2"
-rusqlite = { workspace = true}
+rusqlite = { workspace = true }
+sandbox = { path = "../sandbox" }
+plugin-manager = { path = "../plugin-manager" }
+init = { path = "../init" }
+skills_lib = { path = "../skills", package = "skills" }
+uuid = { workspace = true }
 
+# Optional heavy dependencies — gated behind feature flags so the core CLI
+# can be kept small as an orchestration / delegator tool.
+dev-server = { path = "../dev-server", optional = true }
+deployer = { path = "../deployer", optional = true }
+checker = { path = "../checker", optional = true }
+site-builder = { path = "../site-builder", optional = true }
+appz-studio = { path = "../studio", optional = true }
+mcp-server = { path = "../mcp-server", optional = true }
+code-mix = { path = "../code-mix" }
 [features]
-default = ["self_update"]
+default = ["self_update", "dev-server", "deploy", "mcp", "gen"]
+
+# Situational TUI components (select, confirm) - used when commands need interactive input
+tui = ["ui/tui"]
+
+# Bundled dev server (appz dev-server, appz preview)
+dev-server = ["dep:dev-server"]
+
+# Third-party deployment providers (appz deploy, deploy-init, deploy-list)
+deploy = ["dep:deployer"]
+
+# Code quality checker (plugin host function for appz check)
+check = ["dep:checker"]
+
+# AI-powered site builder (plugin host function for appz site)
+site = ["dep:site-builder"]
+
+# MCP protocol server for AI assistants (appz mcp)
+mcp = ["dep:mcp-server"]
+
+# Semantic search MCP tools (code_index, code_search) — requires mcp-server
+code-search = ["dep:mcp-server", "mcp-server/code-search"]
+
+# AI website generation (appz gen)
+gen = ["dep:appz-studio"]
 

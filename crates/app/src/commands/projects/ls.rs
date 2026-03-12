@@ -1,3 +1,4 @@
+use crate::commands::projects::user_friendly_list_projects_error;
 use crate::session::AppzSession;
 use starbase::AppResult;
 use tracing::instrument;
@@ -16,21 +17,12 @@ pub async fn ls(session: AppzSession) -> AppResult {
         .projects()
         .list(None, None, None)
         .await
-        .map_err(|e| {
-            let error_msg = match &e {
-                api::ApiError::Validation(msg) => format!("Validation error: {}", msg),
-                api::ApiError::ApiError { code, message } => {
-                    format!("API error {}: {}", code, message)
-                }
-                _ => format!("Failed to list projects: {}", e),
-            };
-            miette::miette!("{}", error_msg)
-        })?;
+        .map_err(|e| miette::miette!("{}", user_friendly_list_projects_error(&e)))?;
 
     if projects_response.projects.is_empty() {
         ui::empty::display(
             "No projects found",
-            Some("Try creating a project first with 'projects add'"),
+            Some("Try creating a project first with 'appz project add <name>'"),
         )?;
         return Ok(None);
     }

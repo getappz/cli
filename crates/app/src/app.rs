@@ -151,6 +151,7 @@ pub enum Commands {
         port: Option<u16>,
     },
     /// Start a local development server with hot reloading
+    #[cfg(feature = "dev-server")]
     DevServer {
         /// Port to bind to (default: 3000)
         #[arg(short, long, default_value = "3000")]
@@ -164,10 +165,14 @@ pub enum Commands {
         /// Enable form data processing
         #[arg(long)]
         enable_forms: bool,
+        /// Enable SPA mode: serve index.html for route-like 404s
+        #[arg(long)]
+        spa_fallback: bool,
     },
     /// Build the project (install dependencies and build)
     Build,
     /// Preview the built project by serving static files from output directory
+    #[cfg(feature = "dev-server")]
     Preview {
         /// Port to bind to (default: 3000)
         #[arg(short, long, default_value = "3000")]
@@ -178,6 +183,9 @@ pub enum Commands {
         /// Share the preview server with a public URL using cloudflared
         #[arg(long)]
         share: bool,
+        /// Enable SPA mode: serve index.html for route-like 404s
+        #[arg(long)]
+        spa_fallback: bool,
     },
     /// SEO commands
     Seo {
@@ -186,6 +194,8 @@ pub enum Commands {
     },
     /// List all deployments
     Ls,
+    /// Open the linked project in the Appz Dashboard
+    Open,
     /// Link current directory to a project
     Link {
         /// Project ID or slug to link to
@@ -200,6 +210,15 @@ pub enum Commands {
     Login,
     /// Log out and clear authentication token
     Logout,
+    /// Show the username of the currently logged-in user
+    Whoami {
+        /// Output as JSON (username, email, name)
+        #[arg(long)]
+        json: bool,
+        /// Output format (e.g. json)
+        #[arg(long)]
+        format: Option<String>,
+    },
     /// Initialize a new project from a template
     Init {
         /// Template source (GitHub URL, npm package, local path, or built-in template name) or project name
@@ -229,10 +248,29 @@ pub enum Commands {
         #[command(subcommand)]
         command: crate::commands::teams::TeamsCommands,
     },
-    /// Manage projects
-    Projects {
+    /// Enable or disable telemetry collection (Vercel-aligned)
+    Telemetry {
         #[command(subcommand)]
-        command: crate::commands::projects::ProjectsCommands,
+        command: crate::commands::telemetry::TelemetryCommands,
+    },
+    /// Manage projects (Vercel-aligned: project ls | add | inspect | rm)
+    #[command(name = "project", alias = "projects")]
+    Projects {
+        /// Subcommand (defaults to list when omitted)
+        #[command(subcommand)]
+        command: Option<crate::commands::projects::ProjectsCommands>,
+    },
+    /// Transfer projects between teams (Vercel-aligned: transfer <project> | transfer accept <code>)
+    #[command(subcommand_required = false)]
+    Transfer {
+        #[command(subcommand)]
+        command: Option<crate::commands::transfer::TransferCommands>,
+        /// Project to transfer (optional – uses linked project from CWD if omitted)
+        #[arg(required = false)]
+        project: Option<String>,
+        /// Target team for direct transfer (with project)
+        #[arg(long)]
+        to_team: Option<String>,
     },
     /// Manage aliases
     Aliases {
@@ -266,32 +304,105 @@ pub enum Commands {
         #[arg(long)]
         yes: bool,
     },
-    /// Remove resources (projects, aliases, domains, teams)
+    /// Remove deployments (by URL/ID) or project (by name). Alias: rm.
+    #[command(alias = "rm")]
     Remove {
-        /// Resource identifiers (project IDs/slugs, alias IDs/strings, domain names, team IDs/slugs)
+        /// Deployment URL(s)/ID(s) or project name (Vercel-aligned: deployments by URL, project by name removes entire project)
         resources: Vec<String>,
         /// Skip confirmation prompt
-        #[arg(long)]
+        #[arg(long, short = 'y')]
         yes: bool,
-        /// Skip resources with active aliases (not fully implemented)
-        #[arg(long)]
+        /// When removing a project: skip if it has deployments with active preview/production URL
+        #[arg(long, short = 's')]
         safe: bool,
     },
-    /// Migrate React SPA to Astro SSG
-    Migrate {
-        /// Source React SPA directory (default: current directory)
+    /// Generate a website from a natural-language prompt (AI)
+    #[cfg(feature = "gen")]
+    Gen {
+        /// Natural-language prompt describing the website to generate
+        #[arg(required = true, trailing_var_arg = true)]
+        prompt: Vec<String>,
+        /// Output directory (default: ./gen-output or ./<name> if --name set)
         #[arg(short, long)]
-        source: Option<std::path::PathBuf>,
-        /// Output directory for Astro project
-        #[arg(short, long)]
-        output: Option<std::path::PathBuf>,
-        /// Project name for Astro app
+        output: Option<PathBuf>,
+        /// Project name (used as output dir name if --output not set)
         #[arg(short, long)]
         name: Option<String>,
-        /// Overwrite existing directory
-        #[arg(long)]
-        force: bool,
+        /// AI model to use (backend default if not set)
+        #[arg(short, long)]
+        model: Option<String>,
     },
+    /// Deploy to a hosting provider (Vercel, Netlify, Cloudflare Pages, etc.)
+    #[cfg(feature = "deploy")]
+    Deploy {
+        /// Target provider (vercel, netlify, cloudflare-pages, github-pages, etc.)
+        /// Auto-detected if not specified.
+        provider: Option<String>,
+
+        /// Deploy as preview instead of production
+        #[arg(long)]
+        preview: bool,
+
+        /// Skip the build step before deploying
+        #[arg(long)]
+        no_build: bool,
+
+        /// Show what would happen without actually deploying
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Output results as JSON (useful for CI/CD)
+        #[arg(long)]
+        json: bool,
+
+        /// Deploy to all configured targets in parallel
+        #[arg(long)]
+        all: bool,
+
+        /// Skip confirmation prompts (for CI/CD)
+        #[arg(long, short)]
+        yes: bool,
+    },
+    /// Set up deployment configuration for a provider
+    #[cfg(feature = "deploy")]
+    DeployInit {
+        /// Target provider to configure (vercel, netlify, etc.)
+        provider: Option<String>,
+    },
+    /// List recent deployments
+    #[cfg(feature = "deploy")]
+    DeployList {
+        /// Provider to list deployments from
+        provider: Option<String>,
+    },
+    // NOTE: The `check` command has been extracted to a downloadable plugin.
+    // It is now handled by the External(Vec<String>) variant below.
+    // NOTE: The `site` command has been extracted to a downloadable plugin (pro tier).
+    // It is now handled by the External(Vec<String>) variant below.
+    /// Pack codebase for AI context (Repomix with pre-filters)
+    Code {
+        #[command(subcommand)]
+        command: crate::commands::code::CodeCommands,
+    },
+    /// Manage Agent Skills (install, list, remove, validate, audit, find, init, create, check, update)
+    Skills {
+        #[command(subcommand)]
+        command: skills_lib::SkillsCommands,
+    },
+    /// Manage downloadable plugins (list, update)
+    Plugin {
+        #[command(subcommand)]
+        command: crate::commands::plugin::PluginCommands,
+    },
+    /// Run the MCP (Model Context Protocol) server for AI assistants (Cursor, Claude, etc.)
+    #[cfg(feature = "mcp")]
+    #[command(name = "mcp")]
+    McpServer,
+    // NOTE: The `convert` command has been extracted to the ssg-migrator plugin.
+    // It is now handled by the External(Vec<String>) variant below.
+    // NOTE: The `migrate` command has been extracted to a downloadable plugin.
+    // It is now handled by the External(Vec<String>) variant below.
+    // Users run `appz migrate ...` which triggers the plugin system.
     /// Update appz itself to the latest version
     #[cfg(feature = "self_update")]
     SelfUpdate {
@@ -304,4 +415,7 @@ pub enum Commands {
         #[arg(long, short)]
         yes: bool,
     },
+    /// Commands provided by downloadable plugins
+    #[command(external_subcommand)]
+    External(Vec<String>),
 }

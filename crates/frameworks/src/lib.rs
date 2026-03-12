@@ -1,3 +1,4 @@
+pub mod detector_types;
 pub mod frameworks;
 pub mod types;
 

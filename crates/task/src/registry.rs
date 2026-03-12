@@ -99,7 +99,7 @@ impl<'a> NamespacedRegistry<'a> {
         self.base.fail(tgt, hk);
     }
 
-    pub fn with_namespace<S: Into<String>>(&mut self, ns: S) -> NamespacedRegistry {
+    pub fn with_namespace<S: Into<String>>(&mut self, ns: S) -> NamespacedRegistry<'_> {
         NamespacedRegistry {
             base: self.base,
             ns: format!("{}:{}", self.ns, ns.into()),

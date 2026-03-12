@@ -1,3 +1,4 @@
+use api::error::ApiError as ApiErrorType;
 use crate::session::AppzSession;
 use starbase::AppResult;
 use tracing::instrument;
@@ -5,22 +6,35 @@ use ui::{format, pagination, table};
 
 #[instrument(skip_all)]
 pub async fn ls(session: AppzSession) -> AppResult {
-    // Get authenticated API client from session
     let client = session.get_api_client();
 
-    // Get project context (should already be loaded in analyze phase)
     let project_context = session
         .get_project_context()
         .ok_or_else(|| miette::miette!("Project context not available - this should not happen"))?;
 
     let project_id = project_context.link.project_id.clone();
 
-    // List deployments for this project
-    let deployments_response = client
+    // Match Vercel: set team scope before fetch (use --scope if set, else project's team)
+    if client.get_team_id().await.is_none() {
+        client
+            .set_team_id(Some(project_context.link.team_id.clone()))
+            .await;
+    }
+
+    let deployments_response = match client
         .deployments()
         .list(Some(project_id), None, None, None, None)
         .await
-        .map_err(|e| miette::miette!("Failed to list deployments: {}", e))?;
+    {
+        Ok(r) => r,
+        Err(ApiErrorType::Forbidden(_)) => {
+            return Err(miette::miette!(
+                "Access denied: this project belongs to a different team. \
+                 Switch to the project's team or use --scope to list deployments."
+            ));
+        }
+        Err(e) => return Err(miette::miette!("Failed to list deployments: {}", e)),
+    };
 
     if deployments_response.deployments.is_empty() {
         ui::empty::display(

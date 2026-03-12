@@ -1,0 +1,1 @@
+{"version":3,"file":"queue-status.js","sourceRoot":"","sources":["../../src/controllers/queue-status.ts"],"names":[],"mappings":"AAGA,MAAM,CAAC,KAAK,UAAU,qBAAqB,CAAC,CAAkB;IAC5D,OAAO,CAAC,CAAC,IAAI,CAAC;QACZ,OAAO,EAAE,IAAI;QACb,KAAK,EAAE,EAAE;KACV,CAAC,CAAC;AACL,CAAC"}

@@ -109,7 +109,7 @@ pub fn load_auth() -> Result<AuthConfig> {
             }
             Err(miette::miette!(
                 "Failed to read/parse auth file {}: {}",
-                auth_path.display(),
+                common::user_config::path_for_display(&auth_path),
                 e
             ))
         }
@@ -128,12 +128,21 @@ pub fn save_auth(config: &AuthConfig) -> Result<()> {
     // Create .appz directory if it doesn't exist
     if !auth_dir.exists() {
         fs::create_dir_all(auth_dir).map_err(|e| {
-            miette::miette!("Failed to create directory {}: {}", auth_dir.display(), e)
+            miette::miette!(
+                "Failed to create directory {}: {}",
+                common::user_config::path_for_display(auth_dir),
+                e
+            )
         })?;
     }
 
-    json::write_file(&auth_path, config, true)
-        .map_err(|e| miette::miette!("Failed to write auth file {}: {}", auth_path.display(), e))?;
+    json::write_file(&auth_path, config, true).map_err(|e| {
+        miette::miette!(
+            "Failed to write auth file {}: {}",
+            common::user_config::path_for_display(&auth_path),
+            e
+        )
+    })?;
 
     Ok(())
 }
@@ -229,20 +238,27 @@ pub fn clear_token() -> Result<()> {
 
 /// Determine if a command requires authentication
 pub fn requires_auth(command: &crate::app::Commands) -> bool {
-    matches!(
-        command,
-        crate::app::Commands::Ls
-            | crate::app::Commands::Run { .. }
-            | crate::app::Commands::Plan { .. }
-            | crate::app::Commands::Switch { .. }
-            | crate::app::Commands::Teams { .. }
-            | crate::app::Commands::Projects { .. }
-            | crate::app::Commands::Aliases { .. }
-            | crate::app::Commands::Domains { .. }
-            | crate::app::Commands::Promote { .. }
-            | crate::app::Commands::Rollback { .. }
-            | crate::app::Commands::Remove { .. }
-    )
+    use crate::app::Commands;
+    match command {
+        Commands::Ls
+        | Commands::Run { .. }
+        | Commands::Plan { .. }
+        | Commands::Switch { .. }
+        | Commands::Teams { .. }
+        | Commands::Projects { .. }
+        | Commands::Transfer { .. }
+        | Commands::Whoami { .. }
+        | Commands::Aliases { .. }
+        | Commands::Domains { .. }
+        | Commands::Promote { .. }
+        | Commands::Rollback { .. }
+        | Commands::Remove { .. } => true,
+        #[cfg(feature = "gen")]
+        Commands::Gen { .. } => true,
+        #[cfg(feature = "deploy")]
+        Commands::Deploy { .. } => true,
+        _ => false,
+    }
 }
 
 /// Get OAuth 2.0 Device Flow client ID from environment variable or use default
@@ -253,6 +269,33 @@ pub fn requires_auth(command: &crate::app::Commands) -> bool {
 fn get_cli_client_id() -> String {
     std::env::var("OAUTH_CLI_CLIENT_ID")
         .unwrap_or_else(|_| "cl_appz_cli_550e8400e29b41d4a716446655440000".to_string())
+}
+
+/// Map API errors to user-friendly messages for authentication flow.
+fn user_friendly_auth_error(e: &api::ApiError) -> String {
+    use api::ApiError;
+    match e {
+        ApiError::ApiError { code: 503, .. } => {
+            "The sign-in service is temporarily unavailable. Please try again in a few moments."
+                .to_string()
+        }
+        ApiError::ApiError { code: 502, .. } | ApiError::ApiError { code: 504, .. } => {
+            "The sign-in service is experiencing issues. Please try again shortly.".to_string()
+        }
+        ApiError::ApiError { code: 500, .. } => {
+            "Something went wrong on our end. Please try again.".to_string()
+        }
+        ApiError::Http(e) => {
+            let s = e.to_string().to_lowercase();
+            if s.contains("connection") || s.contains("timeout") || s.contains("dns") {
+                "Couldn't reach the sign-in service. Please check your internet connection."
+                    .to_string()
+            } else {
+                "Unable to connect to the sign-in service. Please try again.".to_string()
+            }
+        }
+        _ => format!("{}", e),
+    }
 }
 
 /// Run OAuth 2.0 Device Flow login
@@ -269,7 +312,7 @@ pub async fn device_flow_login(client: &Client) -> Result<String> {
         .auth()
         .device_authorize(&client_id)
         .await
-        .map_err(|e| miette::miette!("Failed to request device authorization: {}", e))?;
+        .map_err(|e| miette::miette!("{}", user_friendly_auth_error(&e)))?;
 
     let device_code = auth_response.device_code.clone();
     let user_code = auth_response.user_code.clone();
@@ -392,7 +435,7 @@ pub async fn device_flow_login(client: &Client) -> Result<String> {
                     continue;
                 } else {
                     // Fatal error (not a network issue)
-                    return Err(miette::miette!("Failed to get token: {}", e));
+                    return Err(miette::miette!("{}", user_friendly_auth_error(&e)));
                 }
             }
         }

@@ -25,7 +25,7 @@ pub async fn rm(session: AppzSession, domain: String, yes: bool) -> AppResult {
         );
 
         if !confirm(&confirm_msg, false)? {
-            println!("Canceled");
+            let _ = status::info("Cancelled.");
             return Ok(None);
         }
     }

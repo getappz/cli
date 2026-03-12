@@ -1,0 +1,16 @@
+{
+  "name": "appcrawl-engine",
+  "version": "0.0.0",
+  "description": "",
+ "private": true,
+
+    "scripts": {
+      "build": "worker-build --release",	
+      "deploy": "wrangler deploy",
+      "dev": "wrangler dev"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.23.0"
+}

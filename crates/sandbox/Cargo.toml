@@ -1,0 +1,27 @@
+[package]
+name = "sandbox"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Scoped sandbox environment for static site development"
+
+[dependencies]
+command = { path = "../command" }
+common = { path = "../common" }
+ui = { path = "../ui" }
+async-trait = "0.1"
+miette = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+starbase_utils = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+rayon = "1.8"
+toml = "0.8"
+glob = "0.3"
+which = { workspace = true }
+shell-words = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

@@ -1,0 +1,35 @@
+---
+interface Stat {
+  value: string;
+  label: string;
+}
+
+interface Props {
+  stats: Stat[];
+  variant?: 'default' | 'card';
+}
+
+const { stats = [], variant = 'default' } = Astro.props;
+---
+
+{variant === 'card' ? (
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-6">
+    {stats.map((stat) => (
+      <div class="bg-white rounded-xl border border-gray-100 p-8 text-center shadow-sm">
+        <div class="font-heading text-3xl md:text-4xl font-bold text-primary mb-2">{stat.value}</div>
+        <div class="text-text-secondary text-sm font-medium uppercase tracking-wide">{stat.label}</div>
+      </div>
+    ))}
+  </div>
+) : (
+  <div class="bg-primary/5 rounded-2xl py-12 px-8">
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-8">
+      {stats.map((stat) => (
+        <div class="text-center">
+          <div class="font-heading text-3xl md:text-4xl font-bold text-primary mb-2">{stat.value}</div>
+          <div class="text-text-secondary text-sm font-medium">{stat.label}</div>
+        </div>
+      ))}
+    </div>
+  </div>
+)}

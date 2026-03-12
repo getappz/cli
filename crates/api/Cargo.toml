@@ -2,9 +2,11 @@
 name = "api"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 publish = false
 
 [dependencies]
+chrono = { workspace = true }
 miette = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -12,9 +14,8 @@ tokio = { workspace = true }
 futures = { workspace = true }
 thiserror = { workspace = true }
 tracing = "0.1"
-reqwest = { version = "0.12", features = ["json"] }
-reqwest-middleware = "0.4"
-reqwest-retry = "0.4"
+reqwest = { workspace = true, features = ["json"] }
+reqwest-middleware = { workspace = true }
 anyhow = "1.0"
 async-trait = "0.1"
 http = "1.1"

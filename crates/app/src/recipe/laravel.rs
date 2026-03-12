@@ -243,10 +243,11 @@ pub fn register_laravel(reg: &mut TaskRegistry) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
     use task::{Context, TaskRegistry};
 
-    #[test]
-    fn artisan_skip_if_no_env() {
+    #[tokio::test]
+    async fn artisan_skip_if_no_env() {
         let mut reg = TaskRegistry::new();
         let t = Task::new(
             "artisan:test:skip",
@@ -260,14 +261,14 @@ mod tests {
             ),
         );
         reg.register(t);
-        let mut ctx = Context::new();
+        let ctx = Arc::new(Context::new());
         // Should not error and not require php
-        let res = (reg.get("artisan:test:skip").unwrap().action)(&mut ctx);
+        let res = (reg.get("artisan:test:skip").unwrap().action)(ctx).await;
         assert!(res.is_ok());
     }
 
-    #[test]
-    fn artisan_fail_if_no_env() {
+    #[tokio::test]
+    async fn artisan_fail_if_no_env() {
         let mut reg = TaskRegistry::new();
         let t = Task::new(
             "artisan:test:fail",
@@ -281,8 +282,8 @@ mod tests {
             ),
         );
         reg.register(t);
-        let mut ctx = Context::new();
-        let res = (reg.get("artisan:test:fail").unwrap().action)(&mut ctx);
+        let ctx = Arc::new(Context::new());
+        let res = (reg.get("artisan:test:fail").unwrap().action)(ctx).await;
         assert!(res.is_err());
     }
 }

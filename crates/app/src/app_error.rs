@@ -77,3 +77,24 @@ pub enum AppError {
     #[error(transparent)]
     Inquire(#[from] inquire::InquireError),
 }
+
+/// User-initiated cancellation (e.g. Esc, No, Ctrl+C). Not an error — exit gracefully.
+#[derive(Error, Debug, Diagnostic)]
+#[error("{message}")]
+pub struct UserCancellation {
+    pub message: String,
+}
+
+impl UserCancellation {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self { message: message.into() }
+    }
+
+    pub fn project_setup() -> Self {
+        Self::new("Project setup cancelled.")
+    }
+
+    pub fn selection() -> Self {
+        Self::new("Selection cancelled.")
+    }
+}

@@ -3,13 +3,16 @@ pub mod endpoints;
 pub mod error;
 mod middleware;
 pub mod models;
+pub mod paths;
 pub mod http {
     pub mod error_mapper;
     pub mod response_handler;
 }
 
 pub use client::Client;
-pub use endpoints::{Aliases, Auth, Deployments, Domains, OAuthPollError, Projects, Teams, Users};
+pub use endpoints::{
+    Aliases, Auth, Deployments, Domains, Gen, OAuthPollError, Plugins, Projects, Teams, Users,
+};
 pub use error::ApiError;
 pub use models::*;
 
@@ -47,5 +50,15 @@ impl Client {
     /// Get project endpoints
     pub fn projects(&self) -> Projects<'_> {
         Projects::new(self)
+    }
+
+    /// Get gen (AI code generation) endpoints
+    pub fn gen(&self) -> Gen<'_> {
+        Gen::new(self)
+    }
+
+    /// Get plugin management endpoints
+    pub fn plugins(&self) -> Plugins<'_> {
+        Plugins::new(self)
     }
 }

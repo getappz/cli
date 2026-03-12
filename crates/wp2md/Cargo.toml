@@ -1,0 +1,27 @@
+[package]
+name = "wp2md"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+publish = false
+description = "Convert WordPress WXR export XML to Markdown files"
+
+[features]
+default = ["native"]
+# Native mode: adds reqwest for image downloading and std::fs for file I/O.
+native = ["dep:reqwest"]
+
+[dependencies]
+# Core dependencies (always compiled — WASM-safe)
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+miette = { workspace = true }
+regex = { workspace = true }
+chrono = { workspace = true }
+url = { workspace = true }
+urlencoding = { workspace = true }
+quick-xml = { version = "0.39", features = ["serde", "serialize"] }
+htmd = "0.5"
+
+# Native-only dependencies
+reqwest = { workspace = true, optional = true }

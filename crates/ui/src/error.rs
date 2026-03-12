@@ -1,8 +1,10 @@
 //! Error display and formatting utilities.
 
 use crate::layout;
+use crate::theme;
+use design::icons;
+use design::ColorRole;
 use miette::Result;
-use owo_colors::OwoColorize;
 use std::error::Error;
 use std::fmt::Display;
 use std::io::{self, Write};
@@ -17,10 +19,14 @@ use std::io::{self, Write};
 /// `Result` indicating success or failure
 pub fn display(message: &str, error: Option<&dyn Error>) -> Result<()> {
     layout::blank_line().map_err(|e| miette::miette!("Failed to print blank line: {}", e))?;
-    eprintln!("{} {}", "✗".red(), message.red());
+    eprintln!(
+        "{} {}",
+        theme::style(icons::ERROR, ColorRole::Error),
+        theme::style(message, ColorRole::Error)
+    );
 
     if let Some(err) = error {
-        eprintln!("  {}", err.to_string().bright_red());
+        eprintln!("  {}", theme::style(&err.to_string(), ColorRole::Error));
     }
 
     layout::blank_line().map_err(|e| miette::miette!("Failed to print blank line: {}", e))?;
@@ -40,10 +46,15 @@ pub fn display(message: &str, error: Option<&dyn Error>) -> Result<()> {
 /// # Returns
 /// `Result` indicating success or failure
 pub fn display_with_prefix(prefix: &str, message: &str, error: Option<&dyn Error>) -> Result<()> {
-    eprintln!("{} {}: {}", "✗".red(), prefix.red(), message.red());
+    eprintln!(
+        "{} {}: {}",
+        theme::style(icons::ERROR, ColorRole::Error),
+        theme::style(prefix, ColorRole::Error),
+        theme::style(message, ColorRole::Error)
+    );
 
     if let Some(err) = error {
-        eprintln!("  {}", err.to_string().bright_red());
+        eprintln!("  {}", theme::style(&err.to_string(), ColorRole::Error));
     }
 
     io::stderr()
@@ -66,7 +77,11 @@ pub fn display_api_error(
     status_code: Option<u16>,
     details: Option<&dyn Display>,
 ) -> Result<()> {
-    eprint!("{} {}", "✗".red(), message.red());
+    eprint!(
+        "{} {}",
+        theme::style(icons::ERROR, ColorRole::Error),
+        theme::style(message, ColorRole::Error)
+    );
 
     if let Some(code) = status_code {
         eprint!(" (HTTP {})", code);
@@ -75,7 +90,7 @@ pub fn display_api_error(
     eprintln!();
 
     if let Some(details) = details {
-        eprintln!("  {}", details.to_string().bright_red());
+        eprintln!("  {}", theme::style(&details.to_string(), ColorRole::Error));
     }
 
     io::stderr()

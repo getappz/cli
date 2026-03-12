@@ -1,0 +1,12 @@
+[package]
+name = "grab"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Async file download with optional parallel chunk downloads and progress"
+
+[dependencies]
+bytes = "1"
+reqwest = { workspace = true, features = ["stream"] }
+tokio = { workspace = true, features = ["fs", "io-util", "sync", "time"] }
+thiserror = { workspace = true }

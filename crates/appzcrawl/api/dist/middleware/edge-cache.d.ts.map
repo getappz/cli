@@ -1,0 +1,1 @@
+{"version":3,"file":"edge-cache.d.ts","sourceRoot":"","sources":["../../src/middleware/edge-cache.ts"],"names":[],"mappings":"AAAA;;;;;;;;;GASG;AAEH,OAAO,KAAK,EAAE,iBAAiB,EAAE,MAAM,MAAM,CAAC;AAK9C,OAAO,KAAK,EAAE,MAAM,EAAE,MAAM,UAAU,CAAC;AA8HvC;;;GAGG;AACH,eAAO,MAAM,mBAAmB,EAAE,iBAAiB,CAAC,MAAM,CAkGzD,CAAC"}

@@ -1,17 +1,32 @@
 pub mod aliases;
 pub mod build;
+mod install_helpers;
+#[cfg(feature = "check")]
+pub mod check;
+pub mod code;
+#[cfg(feature = "deploy")]
+pub mod deploy;
 pub mod deployment_utils;
 pub mod dev;
+#[cfg(feature = "dev-server")]
 pub mod dev_server;
 pub mod domains;
+pub mod external;
+#[cfg(feature = "gen")]
+pub mod gen;
 pub mod init;
 pub mod link;
 pub mod list;
 pub mod login;
+pub mod open;
 pub mod logout;
 pub mod ls;
+#[cfg(feature = "mcp")]
+pub mod mcp_server;
 pub mod migrate;
 pub mod plan;
+pub mod plugin;
+#[cfg(feature = "dev-server")]
 pub mod preview;
 pub mod projects;
 pub mod promote;
@@ -22,24 +37,37 @@ pub mod run;
 pub mod seo;
 #[cfg_attr(not(feature = "self_update"), path = "self_upgrade_stub.rs")]
 pub mod self_upgrade;
+#[cfg(feature = "site")]
+pub mod site;
+pub mod skills;
 pub mod switch;
 pub mod teams;
+pub mod telemetry;
+pub mod transfer;
 pub mod unlink;
 pub mod version;
+pub mod whoami;
 
 pub use aliases::*;
 pub use build::build;
+#[cfg(feature = "check")]
+pub use check::check;
+#[cfg(feature = "deploy")]
+pub use deploy::{deploy, deploy_init, deploy_list};
 pub use dev::dev;
+#[cfg(feature = "dev-server")]
 pub use dev_server::dev_server;
 pub use domains::*;
 pub use init::init;
 pub use link::link;
 pub use list::list;
 pub use login::login;
+pub use open::open;
 pub use logout::logout;
 pub use ls::ls;
-pub use migrate::migrate;
+// migrate is now a downloadable plugin; no public exports needed
 pub use plan::plan;
+#[cfg(feature = "dev-server")]
 pub use preview::preview;
 pub use projects::{resolve_project_id, run as projects_run, ProjectsCommands};
 pub use promote::{promote, status as promote_status};
@@ -52,7 +80,12 @@ pub use seo::{run as seo_run, SeoCommands};
 pub use self_upgrade::{append_self_update_instructions, upgrade_instructions_text};
 #[cfg(feature = "self_update")]
 pub use self_upgrade::{append_self_update_instructions, upgrade_instructions_text, SelfUpdate};
+pub use plugin::PluginCommands;
+pub use skills_lib::SkillsCommands;
 pub use switch::switch;
 pub use teams::{resolve_team_id, run as teams_run, TeamsCommands};
+pub use telemetry::{run as telemetry_run, TelemetryCommands};
+pub use transfer::{run as transfer_run, TransferCommands};
 pub use unlink::unlink;
 pub use version::{ARCH, OS};
+pub use whoami::whoami;

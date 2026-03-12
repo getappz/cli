@@ -1,7 +1,8 @@
 //! Status message components for success, error, warning, and info messages.
 
 use crate::layout;
-use owo_colors::OwoColorize;
+use crate::theme;
+use design::{icons, ColorRole};
 use std::io::{self, Write};
 
 /// Print a success message with a checkmark icon.
@@ -12,7 +13,11 @@ use std::io::{self, Write};
 /// # Returns
 /// `io::Result` indicating success or failure
 pub fn success(message: &str) -> io::Result<()> {
-    println!("{} {}", "✓".green(), message.green());
+    println!(
+        "{} {}",
+        theme::style(icons::SUCCESS, ColorRole::Success),
+        theme::style(message, ColorRole::Success)
+    );
     io::stdout().flush()
 }
 
@@ -37,7 +42,11 @@ pub fn success_with_spacing(message: &str) -> io::Result<()> {
 /// # Returns
 /// `io::Result` indicating success or failure
 pub fn error(message: &str) -> io::Result<()> {
-    eprintln!("{} {}", "✗".red(), message.red());
+    eprintln!(
+        "{} {}",
+        theme::style(icons::ERROR, ColorRole::Error),
+        theme::style(message, ColorRole::Error)
+    );
     io::stderr().flush()
 }
 
@@ -49,7 +58,11 @@ pub fn error(message: &str) -> io::Result<()> {
 /// # Returns
 /// `io::Result` indicating success or failure
 pub fn warning(message: &str) -> io::Result<()> {
-    eprintln!("{} {}", "⚠".yellow(), message.yellow());
+    eprintln!(
+        "{} {}",
+        theme::style(icons::WARNING, ColorRole::Warning),
+        theme::style(message, ColorRole::Warning)
+    );
     io::stderr().flush()
 }
 
@@ -61,7 +74,11 @@ pub fn warning(message: &str) -> io::Result<()> {
 /// # Returns
 /// `io::Result` indicating success or failure
 pub fn info(message: &str) -> io::Result<()> {
-    println!("{} {}", "ℹ".blue(), message.blue());
+    println!(
+        "{} {}",
+        theme::style(icons::INFO, ColorRole::Info),
+        theme::style(message, ColorRole::Info)
+    );
     io::stdout().flush()
 }
 
@@ -73,7 +90,7 @@ pub fn info(message: &str) -> io::Result<()> {
 /// # Returns
 /// `io::Result` indicating success or failure
 pub fn success_plain(message: &str) -> io::Result<()> {
-    println!("{}", message.green());
+    println!("{}", theme::style(message, ColorRole::Success));
     io::stdout().flush()
 }
 
@@ -85,6 +102,6 @@ pub fn success_plain(message: &str) -> io::Result<()> {
 /// # Returns
 /// `io::Result` indicating success or failure
 pub fn error_plain(message: &str) -> io::Result<()> {
-    eprintln!("{}", message.red());
+    eprintln!("{}", theme::style(message, ColorRole::Error));
     io::stderr().flush()
 }

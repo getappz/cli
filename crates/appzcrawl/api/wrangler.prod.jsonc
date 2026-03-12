@@ -1,0 +1,104 @@
+{
+  "$schema": "../../../node_modules/wrangler/config-schema.json",
+  "name": "appzcrawl-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-09-15",
+  // Ensure .wasm files are bundled as compiled WebAssembly modules
+  "rules": [
+    { "type": "CompiledWasm", "globs": ["**/*.wasm"], "fallthrough": true }
+  ],
+  "routes": [
+    {
+      "pattern": "crawl.api.appz.dev",
+      "zone_name": "appz.dev",
+      "custom_domain": true
+    }
+  ],
+  "ai": {
+    "binding": "AI"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "appzcrawl-db",
+      "migrations_dir": "./migrations",
+      "database_id": "ba4514e8-7869-4743-982d-1946c5ad9dd4"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "BUCKET",
+      "bucket_name": "appzcrawl-bucket"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "CRAWL_QUEUE",
+        "queue": "appzcrawl-crawl-queue"
+      },
+      {
+        "binding": "SCRAPE_QUEUE",
+        "queue": "appzcrawl-scrape-queue"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "appzcrawl-crawl-queue",
+        "max_batch_size": 1,
+        "max_concurrency": 10,
+        "max_retries": 3,
+        "dead_letter_queue": "appzcrawl-crawl-dlq"
+      },
+      {
+        "queue": "appzcrawl-scrape-queue",
+        "max_batch_size": 10,
+        "max_concurrency": 20,
+        "max_retries": 3,
+        "dead_letter_queue": "appzcrawl-scrape-dlq"
+      }
+    ]
+  },
+  "containers": [
+    {
+      "class_name": "AppzcrawlContainer",
+      "image": "../containers/appzcrawl/Dockerfile",
+      "max_instances": 10
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "APPZCRAWL_CONTAINER",
+        "class_name": "AppzcrawlContainer"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["AppzcrawlContainer"]
+    }
+  ],
+  // Cron triggers for scheduled data cleanup (mirrors Firecrawl pg_cron jobs).
+  // Runs every 15 minutes: expired crawls/extracts/agents, old scrapes/cache, audit logs.
+  "triggers": {
+    "crons": ["*/15 * * * *"]
+  },
+  "observability": {
+    "enabled": true
+  },
+  "placement": {
+    "mode": "smart"
+  },
+  "services": [
+    {
+      "binding": "BROWSER_SERVICE",
+      "service": "appz-browser"
+    },
+    {
+      "binding": "APPZCRAWL_ENGINE",
+      "service": "appzcrawl-engine"
+    }
+  ]
+}

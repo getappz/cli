@@ -1,8 +1,9 @@
 //! Empty state display components.
 
 use crate::layout;
+use crate::theme;
+use design::ColorRole;
 use miette::Result;
-use owo_colors::OwoColorize;
 use std::io::{self, Write};
 
 /// Display an empty state message.
@@ -15,10 +16,10 @@ use std::io::{self, Write};
 /// `Result` indicating success or failure
 pub fn display(message: &str, suggestion: Option<&str>) -> Result<()> {
     layout::blank_line().map_err(|e| miette::miette!("Failed to print blank line: {}", e))?;
-    println!("{}", message.bright_black());
+    println!("{}", theme::style(message, ColorRole::Muted));
 
     if let Some(suggestion) = suggestion {
-        println!("  {}", suggestion.bright_black().italic());
+        println!("  {}", theme::style_muted_italic(suggestion));
     }
 
     layout::blank_line().map_err(|e| miette::miette!("Failed to print blank line: {}", e))?;
@@ -38,10 +39,14 @@ pub fn display(message: &str, suggestion: Option<&str>) -> Result<()> {
 /// # Returns
 /// `Result` indicating success or failure
 pub fn display_with_icon(icon: &str, message: &str, suggestion: Option<&str>) -> Result<()> {
-    println!("{} {}", icon.bright_black(), message.bright_black());
+    println!(
+        "{} {}",
+        theme::style(icon, ColorRole::Muted),
+        theme::style(message, ColorRole::Muted)
+    );
 
     if let Some(suggestion) = suggestion {
-        println!("  {}", suggestion.bright_black().italic());
+        println!("  {}", theme::style_muted_italic(suggestion));
     }
 
     io::stdout()

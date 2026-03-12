@@ -1,0 +1,26 @@
+[package]
+name = "crawl-core"
+version = "0.1.0"
+edition = "2021"
+description = "Link filtering, sitemap parsing, and HTML processing for crawl/scrape"
+publish = false
+
+[lib]
+crate-type = ["rlib"]
+
+[features]
+default = []
+# When enabled, provides async versions of functions; when disabled, sync only (for WASM)
+native = []
+
+[dependencies]
+kuchikiki = "0.8.2"
+nodesig = { git = "https://github.com/firecrawl/nodesig" }
+psl = "2.1.140"
+quick-xml = "0.36"
+regex = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+texting_robots = "0.2.2"
+url = { workspace = true }
+htmd = "0.1"

@@ -2,6 +2,20 @@ use serde::{Deserialize, Serialize};
 
 // Models match the OpenAPI specification which uses camelCase
 
+/// Parse optional timestamp from JSON value (number as ms, or ISO 8601 string).
+fn timestamp_from_value(v: &serde_json::Value) -> Option<i64> {
+    v.as_i64()
+        .or_else(|| v.as_f64().map(|f| f as i64))
+        .or_else(|| {
+            v.as_str().and_then(|s| {
+                chrono::DateTime::parse_from_rfc3339(s)
+                    .ok()
+                    .map(|dt| dt.timestamp_millis())
+                    .or_else(|| s.parse::<i64>().ok())
+            })
+        })
+}
+
 #[allow(non_snake_case)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {
@@ -78,7 +92,9 @@ pub struct Invitation {
     #[serde(default)]
     pub createdBy: Option<String>,
     pub createdAt: i64,
-    pub updatedAt: i64,
+    /// Optional: create-invitation response from v0 does not include updatedAt
+    #[serde(default)]
+    pub updatedAt: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -145,6 +161,56 @@ pub struct Pagination {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserResponse {
     pub user: User,
+}
+
+/// Better Auth user shape (from get-session or /v0/user).
+/// Maps to CLI User via `map_better_auth_user_to_cli_user`.
+/// Uses Value for timestamps to accept both number (ms) and ISO 8601 string.
+#[allow(non_snake_case)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BetterAuthUser {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub image: Option<String>,
+    #[serde(default)]
+    pub createdAt: Option<serde_json::Value>,
+    #[serde(default)]
+    pub updatedAt: Option<serde_json::Value>,
+}
+
+/// Response when API returns Better Auth user shape.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BetterAuthUserResponse {
+    pub user: BetterAuthUser,
+}
+
+/// Map Better Auth user to CLI User model.
+/// Derives username from name, email prefix, or id.
+pub fn map_better_auth_user_to_cli_user(ba: BetterAuthUser) -> User {
+    let username = ba
+        .name
+        .clone()
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            ba.email
+                .as_ref()
+                .and_then(|e| e.split('@').next().map(String::from))
+        })
+        .or_else(|| ba.id.clone())
+        .unwrap_or_else(|| "user".to_string());
+    User {
+        id: ba.id,
+        username,
+        name: ba.name,
+        email: ba.email,
+        createdAt: ba.createdAt.as_ref().and_then(timestamp_from_value),
+        updatedAt: ba.updatedAt.as_ref().and_then(timestamp_from_value),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -275,6 +341,19 @@ pub struct DeploymentsListResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeleteResponse {
     pub status: String,
+}
+
+/// Request body for creating a project transfer request (Vercel-aligned).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateTransferRequestBody {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub callbackUrl: Option<String>,
+}
+
+/// Response from creating a project transfer request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransferRequestResponse {
+    pub code: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

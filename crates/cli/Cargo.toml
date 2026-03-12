@@ -2,6 +2,7 @@
 name = "cli"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 publish = false
 
 [[bin]]
@@ -9,17 +10,38 @@ name = "appz"
 path = "src/main.rs"
 
 [dependencies]
-app = { path = "../app", features = ["self_update"] }
+app = { path = "../app", default-features = false }
+mimalloc = "0.1"
+common = { path = "../common" }
 ui = { path = "../ui" }
 env_var = { path = "../env_var" }
 clap = { workspace = true }
 miette = { workspace = true }
-starbase = "0.10"
-starbase_styles = "0.6"
+starbase = { workspace = true }
+starbase_styles = { workspace = true }
 starbase_utils = { workspace = true }
 tokio = { workspace = true }
 tracing = "0.1"
 
+[dev-dependencies]
+tempfile = { workspace = true }
+
 [features]
-default = ["self_update"]
-self_update = []
+default = ["full"]
+
+# Build with all bundled modules. Plugin-only features (check, site)
+# are excluded — those plugins work via the External command handler.
+# Note: migrate has been removed entirely — the ssg-migrator plugin is
+# self-contained and no longer needs host-side migration code.
+full = ["dev-server", "deploy", "mcp", "gen", "self_update"]
+
+# Individual feature flags — forwarded to the `app` crate.
+dev-server = ["app/dev-server"]
+deploy = ["app/deploy"]
+check = ["app/check"]
+site = ["app/site"]
+mcp = ["app/mcp"]
+gen = ["app/gen"]
+self_update = ["app/self_update"]
+code-search = ["app/code-search"]
+tui = ["app/tui", "ui/tui"]

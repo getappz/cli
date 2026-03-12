@@ -153,8 +153,7 @@ fn get_cache_file_path() -> Result<PathBuf> {
 /// It's called from async contexts but the operation is fast enough that
 /// blocking briefly is acceptable.
 fn get_file_age(path: &PathBuf) -> Option<Duration> {
-    // Quick metadata check - acceptable to use std::fs directly for this fast operation
-    let metadata = std::fs::metadata(path).ok()?;
+    let metadata = starbase_utils::fs::metadata(path).ok()?;
     let modified = metadata.modified().ok()?;
     modified.elapsed().ok()
 }

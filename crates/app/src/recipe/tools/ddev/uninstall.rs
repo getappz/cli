@@ -28,12 +28,12 @@ pub fn uninstall() -> miette::Result<()> {
         let ddev_dir = home.join(".ddev");
         if ddev_dir.exists() {
             info("Removing global .ddev directory...");
-            let _ = std::fs::remove_dir_all(&ddev_dir);
+            let _ = starbase_utils::fs::remove_dir_all(&ddev_dir);
         }
         let mutagen_dir = home.join(".ddev_mutagen_data_directory");
         if mutagen_dir.exists() {
             info("Removing Mutagen data directory...");
-            let _ = std::fs::remove_dir_all(&mutagen_dir);
+            let _ = starbase_utils::fs::remove_dir_all(&mutagen_dir);
         }
     }
 

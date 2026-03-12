@@ -1,0 +1,14 @@
+---
+description: Use starbase_utils for fs/json and follow Moon-like patterns when adding commands
+globs: "**/*.rs"
+alwaysApply: false
+---
+
+# Starbase/Moon Conventions
+
+When editing Rust files in appz-cli:
+
+- **Filesystem:** Use `starbase_utils::fs` (not `std::fs`) for read_file, write_file, read_dir, create_dir_all, remove_file, remove_dir_all, metadata, exists. Use `std::fs` only for operations starbase_utils does not expose (e.g. executable bits).
+- **JSON file I/O:** Use `starbase_utils::json::read_file` and `starbase_utils::json::write_file` instead of manual `fs::read_file` + `serde_json::from_str`.
+- **Config/cache paths:** Use `starbase_utils::dirs` (home_dir, cache_dir, config_dir).
+- **Commands:** Add `#[tracing::instrument]` to command handlers. Use `starbase::AppResult` for return types.

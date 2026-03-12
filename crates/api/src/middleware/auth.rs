@@ -1,7 +1,6 @@
 use http::Extensions;
 use reqwest_middleware::reqwest::Request;
 use reqwest_middleware::{Middleware, Next, Result as MiddlewareResult};
-use std::io::Write;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -15,31 +14,19 @@ pub(crate) fn requires_auth(path: &str) -> bool {
         "/auth/token",
         "/auth/introspect",
         "/auth/revoke",
+        "/auth/device",        // Device flow at api.appz.dev/auth
+        "/auth/revoke",        // Token revocation
+        "/auth/introspect",    // Token introspection
         "/oauth/device-authorization", // OAuth 2.0 Device Authorization Flow endpoint
-        "/oauth/token",                // OAuth 2.0 Token endpoint (for device code exchange)
-        "/oauth/authorize",            // OAuth 2.0 Authorization endpoint
-        "/oauth/register",             // OAuth 2.0 Dynamic Client Registration
-        "/.well-known",                // OpenID Connect Discovery and JWKS
+        "/oauth/token",        // OAuth 2.0 Token endpoint (for device code exchange)
+        "/oauth/authorize",    // OAuth 2.0 Authorization endpoint
+        "/oauth/register",     // OAuth 2.0 Dynamic Client Registration
+        "/.well-known",       // OpenID Connect Discovery and JWKS
     ];
 
     // Check if the path starts with any public path
-    let is_public = public_paths.iter().any(|public_path| {
-        let matches = path.starts_with(public_path);
-        if matches {
-            eprintln!(
-                "[DEBUG] Path '{}' matches public endpoint '{}'",
-                path, public_path
-            );
-        }
-        matches
-    });
-
-    let requires = !is_public;
-    eprintln!(
-        "[DEBUG] Path: '{}', is_public: {}, requires_auth: {}",
-        path, is_public, requires
-    );
-    requires
+    let is_public = public_paths.iter().any(|public_path| path.starts_with(public_path));
+    !is_public
 }
 
 /// Authentication middleware that automatically adds Bearer token headers
@@ -66,21 +53,9 @@ impl Middleware for AuthenticationMiddleware {
         // Check if this endpoint requires authentication
         let url = req.url();
         let path = url.path();
-
-        // Force output immediately - these should always appear
-        let _ = std::io::stderr()
-            .write_all(format!("[AUTH MIDDLEWARE] URL: {}, Path: '{}'\n", url, path).as_bytes());
-        let _ = std::io::stderr().flush();
-
         let needs_auth = requires_auth(path);
 
-        let _ = std::io::stderr()
-            .write_all(format!("[AUTH MIDDLEWARE] needs_auth: {}\n", needs_auth).as_bytes());
-        let _ = std::io::stderr().flush();
-
-        // Also ensure tracing can see this
-        tracing::debug!(url = %url, path = %path, needs_auth = needs_auth, "Auth middleware check");
-        tracing::debug!(path = %path, needs_auth = needs_auth, "Checking authentication requirement");
+        tracing::debug!(url = %url, path = %path, needs_auth, "Auth middleware");
         if needs_auth {
             // Read the token
             let token = self.token.read().await;
@@ -141,14 +116,20 @@ mod tests {
         assert!(!requires_auth("/oauth/token"));
         assert!(!requires_auth("/oauth/authorize"));
         assert!(!requires_auth("/oauth/register"));
+
+        // Auth endpoints at api.appz.dev/auth
+        assert!(!requires_auth("/auth/device/code"));
+        assert!(!requires_auth("/auth/device/token"));
+        assert!(!requires_auth("/auth/revoke"));
+        assert!(!requires_auth("/auth/introspect"));
     }
 
     #[test]
     fn test_protected_endpoints() {
-        // Other endpoints should require auth
-        assert!(requires_auth("/teams"));
-        assert!(requires_auth("/projects"));
-        assert!(requires_auth("/user"));
-        assert!(requires_auth("/aliases"));
+        // Platform API endpoints under /v0 require auth
+        assert!(requires_auth("/v0/teams"));
+        assert!(requires_auth("/v0/projects"));
+        assert!(requires_auth("/v0/user"));
+        assert!(requires_auth("/v0/aliases"));
     }
 }

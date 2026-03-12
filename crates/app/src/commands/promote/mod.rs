@@ -72,7 +72,7 @@ async fn request_promote(
     deployment: &Deployment,
     team_id: String,
     timeout: Duration,
-    yes: bool,
+    _yes: bool,
 ) -> Result<()> {
     let deployment_id = deployment.id.clone();
 

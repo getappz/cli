@@ -1,0 +1,19 @@
+[package]
+name = "code-mix"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Pack codebase for AI context using Repomix with pack-style pre-filters"
+publish = false
+
+[dependencies]
+dirs = "5.0"
+hex = "0.4"
+rusqlite = { version = "0.32", features = ["bundled"] }
+sandbox = { path = "../sandbox" }
+tempfile = { workspace = true }
+sha2 = "0.10"
+tokio = { workspace = true, features = ["fs", "io-std", "process"] }
+miette = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }

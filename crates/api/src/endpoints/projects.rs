@@ -1,6 +1,10 @@
 use crate::client::Client;
 use crate::error::ApiError;
-use crate::models::{CreateProjectRequest, DeleteResponse, Project, ProjectsListResponse};
+use crate::models::{
+    CreateProjectRequest, CreateTransferRequestBody, DeleteResponse, Project,
+    ProjectsListResponse, TransferRequestResponse,
+};
+use crate::paths::V0_PREFIX;
 
 pub struct Projects<'a> {
     client: &'a Client,
@@ -25,7 +29,8 @@ impl<'a> Projects<'a> {
             ("until", until.map(|u| u.to_string())),
         ];
 
-        self.client.get_with_query("/projects", &query_params).await
+        let path = format!("{}/projects", V0_PREFIX);
+        self.client.get_with_query(&path, &query_params).await
     }
 
     /// Create a new project
@@ -41,20 +46,49 @@ impl<'a> Projects<'a> {
             name,
             teamId: team_id,
         };
-        self.client.post("/projects", Some(request)).await
+        let path = format!("{}/projects", V0_PREFIX);
+        self.client.post(&path, Some(request)).await
     }
 
     /// Get a project by ID
     #[tracing::instrument(skip(self))]
     pub async fn get(&self, id: &str) -> Result<Project, ApiError> {
-        let path = format!("/projects/{}", id);
+        let path = format!("{}/projects/{}", V0_PREFIX, id);
         self.client.get(&path).await
     }
 
     /// Delete a project
     #[tracing::instrument(skip(self))]
     pub async fn delete(&self, id: &str) -> Result<DeleteResponse, ApiError> {
-        let path = format!("/projects/{}", id);
+        let path = format!("{}/projects/{}", V0_PREFIX, id);
         self.client.delete(&path).await
+    }
+
+    /// Create a project transfer request (Vercel-aligned).
+    /// Returns a code valid for 24 hours to accept the transfer.
+    #[tracing::instrument(skip(self))]
+    pub async fn create_transfer_request(
+        &self,
+        id_or_name: &str,
+        callback_url: Option<String>,
+    ) -> Result<TransferRequestResponse, ApiError> {
+        let body = CreateTransferRequestBody {
+            callbackUrl: callback_url,
+        };
+        let path = format!("{}/projects/{}/transfer-request", V0_PREFIX, id_or_name);
+        self.client.post(&path, Some(body)).await
+    }
+
+    /// Accept a project transfer request by code into the current team.
+    #[tracing::instrument(skip(self))]
+    pub async fn accept_transfer_request(&self, code: &str) -> Result<Project, ApiError> {
+        let path = format!(
+            "{}/projects/transfer-request/{}",
+            V0_PREFIX,
+            urlencoding::encode(code)
+        );
+        self.client
+            .put_json(&path, serde_json::json!({}))
+            .await
     }
 }

@@ -2,26 +2,36 @@
 name = "ssg-migrator"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 publish = false
 
-[dependencies]
-# Biome crates for parsing and AST manipulation
-biome_js_parser = { path = "../../../code-ref/biome/crates/biome_js_parser" }
-biome_js_syntax = { path = "../../../code-ref/biome/crates/biome_js_syntax" }
-biome_rowan = { path = "../../../code-ref/biome/crates/biome_rowan" }
-biome_fs = { path = "../../../code-ref/biome/crates/biome_fs" }
-biome_glob = { path = "../../../code-ref/biome/crates/biome_glob" }
+[features]
+default = ["native"]
+# Native mode: adds walkdir, git2, ast-grep for the NativeFs implementation
+# and full AST-based transformations.
+native = [
+    "dep:walkdir",
+    "dep:git2",
+    "dep:ast-grep-core",
+    "dep:ast-grep-language",
+]
 
-# Core dependencies
+[dependencies]
+# Core dependencies (always compiled)
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 miette = { workspace = true }
 thiserror = { workspace = true }
-walkdir = "2"
 regex = { workspace = true }
 camino = "1.2"
 
-# ast-grep for efficient pattern matching
-ast-grep-core = "0.39.7"
-ast-grep-language = "0.39.7"
+# Biome parsing crates — pure Rust, compile to both native and WASM.
+biome_js_parser = { path = "../../../code-ref/biome/crates/biome_js_parser" }
+biome_js_syntax = { path = "../../../code-ref/biome/crates/biome_js_syntax" }
+biome_rowan = { path = "../../../code-ref/biome/crates/biome_rowan" }
 
+# Native-only dependencies
+walkdir = { version = "2", optional = true }
+git2 = { version = "0.20", optional = true }
+ast-grep-core = { version = "0.40", optional = true }
+ast-grep-language = { version = "0.40", optional = true }

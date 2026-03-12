@@ -1,0 +1,25 @@
+# Plugin build Makefile
+# Usage: make -f scripts/Makefile.plugins build
+
+.PHONY: build package publish install-target clean
+
+# Default WASM target (wasm32-wasip1 on newer Rust, wasm32-wasi on older)
+WASM_TARGET ?= wasm32-wasip1
+
+install-target:
+	rustup target add $(WASM_TARGET)
+
+build: install-target
+	cargo run -p plugin-build -- build --output dist/plugins
+
+package: build
+	cargo run -p plugin-build -- package --output dist/plugins
+
+publish:
+	cargo run -p plugin-build -- publish --output dist/plugins
+
+publish-dry:
+	cargo run -p plugin-build -- publish --dry-run --output dist/plugins
+
+clean:
+	rm -rf dist/plugins

@@ -1,0 +1,33 @@
+[package]
+name = "init"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Project initialization from git, templates, and framework create commands"
+
+[dependencies]
+grab = { path = "../grab" }
+sandbox = { path = "../sandbox" }
+command = { path = "../command" }
+common = { path = "../common" }
+ui = { path = "../ui" }
+env_var = { path = "../env_var" }
+frameworks = { path = "../frameworks" }
+async-trait = "0.1"
+miette = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true, features = ["json", "gzip", "zstd", "blocking", "stream"] }
+starbase_archive = { workspace = true }
+starbase_utils = { workspace = true }
+tempfile = { workspace = true }
+tracing = "0.1"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "parse_git"
+harness = false

@@ -30,6 +30,7 @@ testResults.xml
 .env
 .env.local
 *.local
+.dev.vars
 
 # Temporary files
 *.tmp
@@ -43,10 +44,13 @@ yarn.lock
 
 # Project specific
 .mise/
+test-monorepo/
+scripts/signing_key.key
 megalinter-reports/
 .dev/
 comment.md
 .claude/settings.local.json
+.wrangler
 
 # Snapcraft
 *.snap

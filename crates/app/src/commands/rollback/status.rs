@@ -9,6 +9,7 @@ use starbase::AppResult;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
 use tracing::instrument;
+use ui::progress;
 use ui::status as ui_status;
 
 /// Check rollback status
@@ -62,6 +63,8 @@ pub async fn poll_rollback_status(
         format!("Checking rollback status of {}", project_name)
     };
 
+    let mut spinner: Option<progress::SpinnerHandle> = None;
+
     loop {
         // Get updated project to check lastAliasRequest
         let project_check = client
@@ -77,10 +80,14 @@ pub async fn poll_rollback_status(
         let to_deployment_id = last_alias_request.and_then(|lar| lar.toDeploymentId.as_deref());
         let request_type = last_alias_request.and_then(|lar| lar.type_.as_deref());
 
-        // Check if job is not active
-        if (job_status.is_none() || (!matches!(job_status, Some("pending") | Some("in-progress"))))
-            && counter == 0
-        {
+        // Show spinner when polling; one-time info when not active on first iteration
+        if matches!(job_status, Some("pending") | Some("in-progress")) {
+            if spinner.is_none() {
+                spinner = Some(progress::spinner(&spinner_message));
+            } else {
+                spinner.as_ref().unwrap().set_message(&spinner_message);
+            }
+        } else if counter == 0 {
             let _ = ui_status::info(&format!("{}...", spinner_message));
         }
 
@@ -95,6 +102,7 @@ pub async fn poll_rollback_status(
             // Check if requested_at is older than the timeout period
             let timeout_ms = timeout.as_millis() as i64;
             if requested_at_ts == 0 || (now_ts - requested_at_ts) > timeout_ms {
+                spinner = None;
                 let _ = ui_status::info("No deployment rollback in progress");
                 return Ok(());
             }
@@ -102,12 +110,14 @@ pub async fn poll_rollback_status(
 
         // Check if skipped
         if job_status == Some("skipped") && request_type == Some("rollback") {
+            spinner = None;
             let _ = ui_status::info("Rollback was skipped");
             return Ok(());
         }
 
         // Check if succeeded
         if job_status == Some("succeeded") {
+            spinner = None;
             return render_job_succeeded(
                 client,
                 project,
@@ -120,6 +130,7 @@ pub async fn poll_rollback_status(
 
         // Check if failed
         if job_status == Some("failed") {
+            spinner = None;
             return render_job_failed(
                 client,
                 project_id,
@@ -131,6 +142,7 @@ pub async fn poll_rollback_status(
 
         // Check if unknown status
         if !matches!(job_status, Some("pending") | Some("in-progress")) {
+            spinner = None;
             let _ = ui_status::error(&format!(
                 "Unknown rollback status \"{}\"",
                 job_status.unwrap_or("unknown")
@@ -144,6 +156,7 @@ pub async fn poll_rollback_status(
         if requested_at_ts > 0 && (now_ts - requested_at_ts) > timeout.as_millis() as i64
             || Instant::now() >= rollback_timeout
         {
+            spinner = None;
             let _ = ui_status::error(&format!(
                 "The rollback exceeded its deadline - rerun 'appz rollback {}' to try again",
                 to_deployment_id.unwrap_or("")
@@ -154,12 +167,9 @@ pub async fn poll_rollback_status(
         // Update spinner message on first poll
         if counter == 0 && deployment.is_none() {
             if let Some(ts) = requested_at {
-                // Format timestamp (simplified - just show the timestamp)
                 spinner_message = format!("{} requested at {}", spinner_message, ts);
             }
         }
-
-        let _ = ui_status::info(&format!("{}...", spinner_message));
 
         // Sleep before next poll
         sleep(Duration::from_millis(250)).await;

@@ -1,0 +1,52 @@
+---
+interface Card {
+  title: string;
+  description: string;
+  imageUrl?: string;
+  href?: string;
+  icon?: string;
+}
+
+interface Props {
+  cards: Card[];
+  columns?: 2 | 3 | 4;
+  variant?: 'default' | 'icon' | 'minimal';
+}
+
+const { cards = [], columns = 3, variant = 'default' } = Astro.props;
+
+const gridCols = {
+  2: 'md:grid-cols-2',
+  3: 'md:grid-cols-2 lg:grid-cols-3',
+  4: 'md:grid-cols-2 lg:grid-cols-4',
+}[columns];
+---
+
+<div class={`grid gap-8 ${gridCols}`}>
+  {cards.map((card) => (
+    <div class="group bg-white border border-gray-100 rounded-xl overflow-hidden hover:shadow-xl hover:shadow-black/5 hover:-translate-y-1 transition-all duration-300">
+      {card.imageUrl && variant !== 'minimal' && (
+        <div class="overflow-hidden">
+          <img src={card.imageUrl} alt={card.title} class="w-full h-52 object-cover group-hover:scale-105 transition-transform duration-500" />
+        </div>
+      )}
+      <div class="p-7">
+        {card.icon && variant === 'icon' && (
+          <div class="w-12 h-12 bg-primary/10 rounded-xl flex items-center justify-center mb-4">
+            <span class="text-2xl">{card.icon}</span>
+          </div>
+        )}
+        <h3 class="font-heading text-xl font-bold mb-3 text-text-primary group-hover:text-primary transition-colors">{card.title}</h3>
+        <p class="text-text-secondary leading-relaxed text-sm">{card.description}</p>
+        {card.href && (
+          <a href={card.href} class="inline-flex items-center mt-5 text-primary font-semibold text-sm hover:gap-2 gap-1 transition-all">
+            Learn more
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+            </svg>
+          </a>
+        )}
+      </div>
+    </div>
+  ))}
+</div>

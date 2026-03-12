@@ -1,0 +1,1 @@
+{"version":3,"file":"sendToSearchIndex.d.ts","sourceRoot":"","sources":["../../../../src/scraper/scrapeURL/transformers/sendToSearchIndex.ts"],"names":[],"mappings":"AAAA;;;;;;;;;GASG;AAEH,OAAO,EAAE,QAAQ,EAAE,MAAM,+BAA+B,CAAC;AAIzD,OAAO,EAAE,IAAI,EAAE,MAAM,IAAI,CAAC;AAyD1B;;GAEG;AACH,wBAAsB,yBAAyB,CAC7C,IAAI,EAAE,IAAI,EACV,QAAQ,EAAE,QAAQ,GACjB,OAAO,CAAC,QAAQ,CAAC,CAiFnB"}

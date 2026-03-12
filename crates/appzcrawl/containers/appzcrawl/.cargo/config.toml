@@ -1,0 +1,5 @@
+# Configuration for wasm32-unknown-unknown builds.
+# Only applies when building for this target (e.g. via wasm-pack).
+# Does not affect native builds (server crate, Docker container).
+[target.wasm32-unknown-unknown]
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']

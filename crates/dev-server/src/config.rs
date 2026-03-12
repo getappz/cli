@@ -35,7 +35,7 @@ impl Default for ServerConfig {
             upload_dir: None,
             cors: true,
             directory_listing: false,
-            spa_fallback: true,
+            spa_fallback: false,
         }
     }
 }

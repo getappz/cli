@@ -1,0 +1,82 @@
+# Plugin Development
+
+## Plugin Crate Structure
+
+Every downloadable plugin lives in crates/plugins/<name>/ and must:
+
+- Set crate-type = ["cdylib"] in Cargo.toml
+- Export three #[plugin_fn] functions: appz_plugin_handshake, appz_plugin_info, appz_plugin_execute
+- Depend on appz_pdk for types and extism-pdk for the plugin runtime
+
+```toml
+# Example Cargo.toml
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+appz_pdk = { path = "../../appz_pdk" }
+extism-pdk = "1.4.0"
+serde = { workspace = true, features = ["derive"] }
+serde_json = "1.0"
+```
+
+## Host Function Declaration
+
+Plugins declare host functions in their lib.rs using the #[host_fn] macro:
+
+```rust
+#[host_fn]
+extern "ExtismHost" {
+    fn appz_pfs_read_file(input: Json<PluginFsReadInput>) -> Json<PluginFsReadOutput>;
+    // ...
+}
+```
+
+The generated functions return Result<Json<T>, extism_pdk::Error> -- always handle the Result before accessing .0 on the Json wrapper.
+
+## Security Handshake
+
+Every plugin must implement the HMAC handshake:
+
+```rust
+#[plugin_fn]
+pub fn appz_plugin_handshake(
+    input: Json<PluginHandshakeChallenge>,
+) -> FnResult<Json<PluginHandshakeResponse>> {
+    let response = appz_pdk::security::compute_handshake(&input.0);
+    Ok(Json(response))
+}
+```
+
+## Feature Flag Conventions
+
+- Host functions for plugin-only features (check, site) use stubs when the feature is disabled
+- Stubs live in crates/app/src/wasm/host_functions/stubs.rs
+- Self-contained plugins (like ssg-migrator) do NOT need feature flags or stubs -- they use only the generic appz_pfs_* / appz_pgit_* host functions
+
+## PDK Types
+
+All shared types between host and plugin are in crates/appz_pdk/src/types.rs. When adding a new host function:
+1. Define Input/Output structs in appz_pdk/src/types.rs
+2. Re-export them from appz_pdk::prelude
+3. Use the same types on both the host side (crates/app/src/wasm/types.rs) and plugin side
+
+## Testing
+
+```bash
+# Type-check plugin for WASM
+cargo check -p <plugin>-plugin --target wasm32-wasip1
+
+# Build the WASM binary
+cargo build -p <plugin>-plugin --target wasm32-wasip1 --release
+
+# Dev override (skip CDN download)
+APPZ_DEV_PLUGIN_MIGRATE=target/wasm32-wasip1/debug/ssg_migrator_plugin.wasm appz migrate .
+```
+
+## Common Mistakes
+
+- Forgetting to handle the Result from unsafe host_fn_call(input) -- host functions return Result<Json<T>, Error>, not Json<T> directly
+- Using std::fs in a plugin crate -- use the Vfs trait or host functions instead
+- Including C-binding dependencies (like ast-grep) in WASM builds -- gate them behind #[cfg(feature = "native")]
+- Forgetting to register a new host function in register_plugin_host_functions() in plugin.rs

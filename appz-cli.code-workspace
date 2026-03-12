@@ -1,0 +1,16 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../lovable-ref"
+		},
+		{
+			"path": "../appz-ref"
+		}
+	],
+	"settings": {
+		"git.ignoreLimitWarning": true
+	}
+}

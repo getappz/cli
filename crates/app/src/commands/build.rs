@@ -1,119 +1,19 @@
-use crate::detectors::{detect_framework_record, detect_hugo_info, DetectFrameworkRecordOptions, StdFilesystem};
+use crate::commands::install_helpers::{
+    get_default_install_command, handle_shell_script_fallback, run_recipe_task,
+};
+use detectors::{
+    detect_framework_record, detect_hugo_info, DetectFrameworkRecordOptions, DetectorFilesystem,
+    StdFilesystem,
+};
+use crate::sandbox_helpers::mise_tools_for_execution;
 use crate::session::AppzSession;
 use crate::shell::{command_exists, is_shell_script, run_local_with, RunOptions, ToolVersionInfo};
+use sandbox::{create_sandbox, SandboxConfig};
 use frameworks::frameworks;
-use miette::Result;
 use starbase::AppResult;
-use std::path::PathBuf;
 use std::sync::Arc;
-use task::{Context, Runner, TaskRegistry};
-use tokio_util::sync::CancellationToken;
+use task::Context;
 use tracing::instrument;
-
-/// Get default install command based on package manager
-fn get_default_install_command(
-    package_manager: &Option<crate::detectors::PackageManagerInfo>,
-) -> String {
-    if let Some(ref pm) = package_manager {
-        match pm.manager.as_str() {
-            "yarn" => "yarn install".to_string(),
-            "pnpm" => "pnpm install".to_string(),
-            "bun" => "bun install".to_string(),
-            _ => "npm install".to_string(), // Default to npm
-        }
-    } else {
-        "npm install".to_string() // Default fallback
-    }
-}
-
-/// Execute a recipe task with cancellation support
-async fn run_recipe_task(
-    registry: &TaskRegistry,
-    task_name: &str,
-    working_path: PathBuf,
-    verbose: bool,
-) -> Result<()> {
-    let mut ctx = Context::new();
-    ctx.set_working_path(working_path);
-    let mut runner = if verbose {
-        Runner::new_verbose(registry)
-    } else {
-        Runner::new(registry)
-    };
-
-    // Create cancellation token for graceful shutdown on Ctrl+C
-    let cancellation_token = CancellationToken::new();
-
-    // Spawn task to listen for Ctrl+C and cancel execution
-    let cancellation_token_clone = cancellation_token.clone();
-    let verbose_clone = verbose;
-    tokio::spawn(async move {
-        if let Err(e) = tokio::signal::ctrl_c().await {
-            eprintln!("Failed to listen for Ctrl+C: {}", e);
-            return;
-        }
-        if verbose_clone {
-            eprintln!("\nReceived Ctrl+C, cancelling tasks...");
-        }
-        cancellation_token_clone.cancel();
-    });
-
-    let res = runner
-        .invoke_async(
-            task_name,
-            &mut ctx,
-            Some(cancellation_token.clone()),
-            false,
-            false,
-        )
-        .await;
-
-    // If cancelled via Ctrl+C, exit cleanly with code 130
-    if cancellation_token.is_cancelled() {
-        eprintln!("Cancelled.");
-        std::process::exit(130);
-    }
-
-    res.map_err(|e| miette::miette!("{} failed: {}", task_name, e))
-}
-
-/// Handle shell script fallback on Windows for framework commands
-async fn handle_shell_script_fallback(
-    result: Result<()>,
-    is_shell_script: bool,
-    has_user_script: bool,
-    framework_cmd: Option<&String>,
-    default_cmd: Option<String>,
-    ctx: &Context,
-    opts: &RunOptions,
-) -> Result<()> {
-    if result.is_ok() {
-        return Ok(());
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        if has_user_script && is_shell_script {
-            eprintln!("⚠️  Warning: Shell script detected. Falling back to framework command.");
-            if let Some(framework_cmd) = framework_cmd {
-                println!("✓ Using framework command");
-                run_local_with(ctx, framework_cmd, opts.clone()).await?;
-            } else if let Some(ref default_cmd) = default_cmd {
-                println!("✓ Using default command");
-                run_local_with(ctx, default_cmd, opts.clone()).await?;
-            } else {
-                result?; // No fallback available, return error
-            }
-            Ok(())
-        } else {
-            result // Not a shell script issue, return error
-        }
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        result // On Unix, just return the error
-    }
-}
 
 /// Build the project.
 ///
@@ -142,7 +42,8 @@ pub async fn build(session: AppzSession) -> AppResult {
     let registry = session.get_task_registry();
 
     // Create filesystem detector
-    let fs = Arc::new(StdFilesystem::new(Some(project_path.clone())));
+    let fs: Arc<dyn DetectorFilesystem> =
+        Arc::new(StdFilesystem::new(Some(project_path.clone())));
 
     // Get all available frameworks
     let framework_list: Vec<_> = frameworks().to_vec();
@@ -251,7 +152,7 @@ pub async fn build(session: AppzSession) -> AppResult {
             // Detect Hugo-specific info if this is a Hugo project
             let tool_info = if framework.slug == Some("hugo") {
                 let fs_for_hugo = Arc::new(StdFilesystem::new(Some(project_path.clone())));
-                let fs_dyn: Arc<dyn crate::detectors::filesystem::DetectorFilesystem> =
+                let fs_dyn: Arc<dyn DetectorFilesystem> =
                     fs_for_hugo.clone();
                 match detect_hugo_info(&fs_dyn).await {
                     Ok(Some(hugo_info)) => {
@@ -297,7 +198,7 @@ pub async fn build(session: AppzSession) -> AppResult {
                 println!("✓ Using framework build command");
             }
 
-            // Create a minimal context for running the commands
+            // Create a minimal context for fallback (run_local_with)
             let mut ctx = Context::new();
             ctx.set_working_path(project_path.clone());
             let opts = RunOptions {
@@ -308,10 +209,14 @@ pub async fn build(session: AppzSession) -> AppResult {
                 tool_info,
             };
 
-            // Install yarn if it's the detected package manager
-            use crate::shell::ensure_yarn_installed;
-            if let Err(e) = ensure_yarn_installed(&ctx, &package_manager, &project_path).await {
-                eprintln!("⚠️  Warning: Failed to install yarn, but continuing: {}", e);
+            // Sandbox for install/build (mise-managed, node_modules/.bin in PATH)
+            let config = SandboxConfig::new(project_path.clone())
+                .with_settings(mise_tools_for_execution(&package_manager, None));
+            let sandbox = create_sandbox(config).await.ok();
+            if sandbox.is_none() {
+                tracing::debug!(
+                    "Sandbox setup failed, will use run_local_with fallback for install/build"
+                );
             }
 
             // Execute install step: check for appz:install recipe task first
@@ -328,9 +233,16 @@ pub async fn build(session: AppzSession) -> AppResult {
                 )
                 .await?;
             } else {
-                // Execute framework install command
+                // Execute framework install command via sandbox (with fallback)
                 println!("\n📦 Running install command...");
-                let install_result = run_local_with(&ctx, &install_cmd, opts.clone()).await;
+                let install_result = if let Some(ref s) = sandbox {
+                    s.exec_interactive(&install_cmd)
+                        .await
+                        .map(|_| ())
+                        .map_err(|e| miette::miette!("{}", e))
+                } else {
+                    run_local_with(&ctx, &install_cmd, opts.clone()).await
+                };
 
                 // Handle shell script fallback on Windows
                 handle_shell_script_fallback(
@@ -359,9 +271,16 @@ pub async fn build(session: AppzSession) -> AppResult {
                 )
                 .await?;
             } else {
-                // Execute framework build command
+                // Execute framework build command via sandbox (with fallback)
                 println!("\n🔨 Running build command...");
-                let build_result = run_local_with(&ctx, &build_cmd, opts.clone()).await;
+                let build_result = if let Some(ref s) = sandbox {
+                    s.exec_interactive(&build_cmd)
+                        .await
+                        .map(|_| ())
+                        .map_err(|e| miette::miette!("{}", e))
+                } else {
+                    run_local_with(&ctx, &build_cmd, opts.clone()).await
+                };
 
                 // Handle shell script fallback on Windows
                 handle_shell_script_fallback(

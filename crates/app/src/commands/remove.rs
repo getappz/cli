@@ -1,7 +1,7 @@
-//! Top-level remove command - intelligently remove multiple resources.
+//! Top-level remove command - Vercel-aligned.
 //!
-//! This command can remove projects, aliases, domains, and teams by automatically
-//! detecting the resource type from the identifier.
+//! Removes deployments (by URL/ID) or projects (by name). Also supports aliases,
+//! domains, and teams. Auto-detects resource type from the identifier.
 
 use crate::session::AppzSession;
 use starbase::AppResult;
@@ -12,18 +12,20 @@ use ui::status;
 /// Resource types that can be removed
 #[derive(Debug, Clone)]
 enum ResourceType {
-    Project(String), // project_id
-    Alias(i64),      // alias_id
-    Domain(String),  // domain_name
-    Team(String),    // team_id
+    Deployment(String), // deployment_id
+    Project(String),     // project_id
+    Alias(i64),         // alias_id
+    Domain(String),     // domain_name
+    Team(String),       // team_id
 }
 
 /// Remove multiple resources by automatically detecting their types.
 ///
+/// Vercel-aligned: deployments by URL/ID, project by name removes entire project.
 /// # Arguments
-/// * `resources` - Vector of resource identifiers (projects, aliases, domains, teams)
+/// * `resources` - Deployment URLs/IDs, project names, alias IDs, domain names, team IDs
 /// * `yes` - Skip confirmation prompt if true
-/// * `safe` - Skip resources with active aliases (not fully implemented yet)
+/// * `safe` - When removing project: skip if it has deployments with active preview/production URL
 #[instrument(skip_all)]
 pub async fn remove(
     session: AppzSession,
@@ -40,21 +42,56 @@ pub async fn remove(
     let client = session.get_api_client();
 
     // Group resources by type
+    let mut deployments = Vec::new();
     let mut projects = Vec::new();
     let mut aliases = Vec::new();
     let mut domains = Vec::new();
     let mut teams = Vec::new();
     let mut not_found = Vec::new();
 
-    // Detect resource types by attempting to resolve each identifier
+    // Detect resource types (deployment first for URL/UUID, then project, alias, domain, team)
     for resource_id in &resources {
         match detect_resource_type(&client, resource_id).await {
+            Ok(ResourceType::Deployment(id)) => {
+                deployments.push((id.clone(), resource_id.clone()))
+            }
             Ok(ResourceType::Project(id)) => projects.push((id.clone(), resource_id.clone())),
             Ok(ResourceType::Alias(id)) => aliases.push((id, resource_id.clone())),
             Ok(ResourceType::Domain(name)) => domains.push((name.clone(), resource_id.clone())),
             Ok(ResourceType::Team(id)) => teams.push((id.clone(), resource_id.clone())),
             Err(_) => not_found.push(resource_id.clone()),
         }
+    }
+
+    // --safe: filter out projects that have deployments with active preview/production URL
+    if safe && !projects.is_empty() {
+        let team_id = client.get_team_id().await;
+        let mut filtered = Vec::new();
+        for (project_id, orig) in projects {
+            let list = client
+                .deployments()
+                .list(
+                    Some(project_id.clone()),
+                    Some(50),
+                    None,
+                    None,
+                    team_id.clone(),
+                )
+                .await;
+            let has_active = list
+                .as_ref()
+                .map(|r| {
+                    r.deployments.iter().any(|d| {
+                        d.url.as_ref()
+                            .is_some_and(|u| !u.is_empty())
+                    })
+                })
+                .unwrap_or(false);
+            if !has_active {
+                filtered.push((project_id, orig));
+            }
+        }
+        projects = filtered;
     }
 
     // Report not found resources
@@ -66,13 +103,25 @@ pub async fn remove(
     }
 
     // Check if we have any resources to remove
-    if projects.is_empty() && aliases.is_empty() && domains.is_empty() && teams.is_empty() {
+    if deployments.is_empty()
+        && projects.is_empty()
+        && aliases.is_empty()
+        && domains.is_empty()
+        && teams.is_empty()
+    {
         return Err(miette::miette!("No valid resources found to remove"));
     }
 
     // Show confirmation prompt unless --yes flag is set
     if !yes {
         println!("\nThe following resources will be permanently removed:");
+
+        if !deployments.is_empty() {
+            println!("\n  Deployments ({}):", deployments.len());
+            for (id, _) in &deployments {
+                println!("    - {}", id);
+            }
+        }
 
         if !projects.is_empty() {
             println!("\n  Projects ({}):", projects.len());
@@ -105,14 +154,27 @@ pub async fn remove(
         println!();
 
         if !confirm("Are you sure? This action cannot be undone.", false)? {
-            println!("Canceled");
+            let _ = ui::status::info("Cancelled.");
             return Ok(None);
         }
     }
 
-    // Remove all resources in parallel
+    // Remove all resources
     let mut errors = Vec::new();
     let mut success_count = 0;
+
+    // Remove deployments (Vercel primary use case)
+    for (deployment_id, original_id) in deployments {
+        match client.deployments().delete(&deployment_id).await {
+            Ok(_) => {
+                success_count += 1;
+                tracing::info!("Deleted deployment: {}", deployment_id);
+            }
+            Err(e) => {
+                errors.push(format!("Failed to delete deployment '{}': {}", original_id, e));
+            }
+        }
+    }
 
     // Remove projects
     for (project_id, original_id) in projects {
@@ -187,14 +249,42 @@ pub async fn remove(
     Ok(None)
 }
 
+/// Check if identifier looks like a deployment URL or UUID (try deployment first).
+fn looks_like_deployment(identifier: &str) -> bool {
+    identifier.starts_with("http://") || identifier.starts_with("https://")
+        || uuid_like(identifier)
+}
+
+/// Simple UUID format check (8-4-4-4-12 hex).
+fn uuid_like(s: &str) -> bool {
+    if s.len() != 36 {
+        return false;
+    }
+    let parts: Vec<&str> = s.split('-').collect();
+    parts.len() == 5
+        && parts[0].len() == 8
+        && parts[1].len() == 4
+        && parts[2].len() == 4
+        && parts[3].len() == 4
+        && parts[4].len() == 12
+        && parts.iter().all(|p| p.chars().all(|c| c.is_ascii_hexdigit()))
+}
+
 /// Detect the resource type by attempting to resolve the identifier.
 ///
-/// Tries in order: project → alias → domain → team
+/// Vercel-aligned: deployment (URL/UUID) first, then project → alias → domain → team
 async fn detect_resource_type(
     client: &api::Client,
     identifier: &str,
 ) -> Result<ResourceType, miette::Error> {
-    // Try as project first
+    // Try deployment first when identifier looks like URL or UUID (Vercel primary use case)
+    if looks_like_deployment(identifier) {
+        if let Ok(deployment) = client.deployments().get(identifier).await {
+            return Ok(ResourceType::Deployment(deployment.id));
+        }
+    }
+
+    // Try as project
     if let Ok(project) = client.projects().get(identifier).await {
         if let Some(id) = project.id {
             return Ok(ResourceType::Project(id));

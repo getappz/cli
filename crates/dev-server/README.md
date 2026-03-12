@@ -7,7 +7,7 @@ A high-performance local development server with hot reloading and form data pro
 - **Static File Serving**: Serve static files from a configurable directory
 - **Hot Reloading**: WebSocket-based live reload for automatic browser refresh on file changes
 - **Form Data Processing**: Handle multipart/form-data and application/x-www-form-urlencoded requests
-- **SPA Support**: Automatic fallback to index.html for 404 errors (Single Page Application support)
+- **SPA Support** (opt-in): Serve index.html for route-like 404s when `--spa-fallback` is used. Regular static apps get proper 404s by default
 - **SEO-Friendly URLs**: Automatic redirects and URL rewriting for clean URLs
   - `/index.html` → `/`
   - `/demo.html` → `/demo`
@@ -33,7 +33,7 @@ let config = ServerConfig {
     upload_dir: None,
     cors: true,
     directory_listing: false,
-    spa_fallback: true,
+    spa_fallback: false,  // set true for SPA apps
 };
 
 let mut server = DevServer::new(config)?;
@@ -57,6 +57,9 @@ appz dev-server --no-reload
 
 # Enable form data processing
 appz dev-server --enable-forms
+
+# Enable SPA mode (serve index.html for route-like 404s)
+appz dev-server --spa-fallback
 ```
 
 ## Configuration
@@ -71,7 +74,7 @@ appz dev-server --enable-forms
 - `upload_dir`: Directory for uploaded files (default: root_dir/uploads)
 - `cors`: Enable CORS headers (default: true)
 - `directory_listing`: Enable directory listing (default: false)
-- `spa_fallback`: Fallback to index.html for 404s (default: true)
+- `spa_fallback`: Serve index.html for route-like 404s (default: false). Use for SPA apps; regular static apps should keep this off
 
 ## Hot Reloading
 
@@ -107,9 +110,9 @@ When serving a path like `/demo`, the server tries files in this order:
 
 1. `demo.html` (if exists, serves directly)
 2. `demo/index.html` (if exists, serves directly)
-3. SPA fallback to `index.html` (if enabled)
+3. SPA fallback to `index.html` (only if `spa_fallback` is enabled and path has no file extension)
 
-This allows you to organize your files flexibly while maintaining clean URLs.
+SPA fallback applies only to route-like paths (no extension). Missing assets (e.g. `/assets/main.js`) return 404 to avoid serving HTML when the browser expects JS/CSS.
 
 ## Form Data Processing
 

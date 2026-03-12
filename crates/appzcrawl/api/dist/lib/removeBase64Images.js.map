@@ -1,0 +1,1 @@
+{"version":3,"file":"removeBase64Images.js","sourceRoot":"","sources":["../../src/lib/removeBase64Images.ts"],"names":[],"mappings":"AAAA;;;GAGG;AAEH,MAAM,KAAK,GAAG,2CAA2C,CAAC;AAC1D,MAAM,WAAW,GAAG,4BAA4B,CAAC;AAEjD,MAAM,UAAU,8BAA8B,CAAC,QAAgB;IAC7D,OAAO,QAAQ,CAAC,OAAO,CAAC,KAAK,EAAE,WAAW,CAAC,CAAC;AAC9C,CAAC"}

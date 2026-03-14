@@ -244,34 +244,6 @@ pub enum Commands {
     // It is now handled by the External(Vec<String>) variant below.
     // NOTE: The `site` command has been extracted to a downloadable plugin (pro tier).
     // It is now handled by the External(Vec<String>) variant below.
-    /// Pack codebase for AI context (config-driven or imperative)
-    Pack(PackArgs),
-    /// Search packed code and other code operations
-    Code {
-        #[command(subcommand)]
-        command: crate::commands::code::CodeCommands,
-    },
-    /// Manage Agent Skills (install, list, remove, validate, audit, find, init, create, check, update)
-    Skills {
-        #[command(subcommand)]
-        command: skills_lib::SkillsCommands,
-    },
-    /// Manage downloadable plugins (list, update)
-    Plugin {
-        #[command(subcommand)]
-        command: crate::commands::plugin::PluginCommands,
-    },
-    /// Git tooling for Superpowers workflow (worktrees, branch finish, review prepare)
-    Git {
-        #[command(subcommand)]
-        command: crate::commands::git::GitCommands,
-    },
-    /// Execute a command with sandbox (agents, MCP, users)
-    Exec(ExecArgs),
-    /// Run the MCP (Model Context Protocol) server for AI assistants (Cursor, Claude, etc.)
-    #[cfg(feature = "mcp")]
-    #[command(name = "mcp")]
-    McpServer,
     // NOTE: The `convert` command has been extracted to the ssg-migrator plugin.
     // It is now handled by the External(Vec<String>) variant below.
     // NOTE: The `migrate` command has been extracted to a downloadable plugin.

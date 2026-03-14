@@ -299,31 +299,6 @@ pub async fn run_cli(args: Vec<OsString>) -> MainResult {
                     Commands::DeployList(args) => {
                         app::commands::deploy_list(session, args.provider).await
                     }
-                    Commands::Pack(args) => {
-                        app::commands::pack::run(
-                            session,
-                            args.subcommand,
-                            args.run_opts,
-                        )
-                        .await
-                    }
-                    Commands::Code { command } => {
-                        app::commands::code::run(session, command).await
-                    }
-                    Commands::Skills { command } => {
-                        app::commands::skills::run(session, command).await
-                    }
-                    Commands::Plugin { command } => {
-                        app::commands::plugin::run(session, command).await
-                    }
-                    Commands::Git { command } => {
-                        app::commands::git::run(session, command).await
-                    }
-                    Commands::Exec(args) => app::commands::exec(session, args).await,
-                    #[cfg(feature = "mcp")]
-                    Commands::McpServer => {
-                        app::commands::mcp_server::mcp_server(session).await
-                    }
                     #[cfg(feature = "self_update")]
                     Commands::SelfUpdate(args) => {
                         use app::commands::SelfUpdate;

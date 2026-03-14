@@ -33,14 +33,12 @@ default = ["full"]
 # are excluded — those plugins work via the External command handler.
 # Note: migrate has been removed entirely — the ssg-migrator plugin is
 # self-contained and no longer needs host-side migration code.
-full = ["dev-server", "deploy", "mcp", "self_update"]
+full = ["dev-server", "deploy", "self_update"]
 
 # Individual feature flags — forwarded to the `app` crate.
 dev-server = ["app/dev-server"]
 deploy = ["app/deploy"]
 check = ["app/check"]
-mcp = ["app/mcp"]
 appz-cloud = ["app/appz-cloud"]
 self_update = ["app/self_update"]
-code-search = ["app/code-search"]
 tui = ["app/tui", "ui/tui"]

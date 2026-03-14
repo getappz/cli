@@ -21,33 +21,6 @@ pub struct DevArgs {
     pub port: Option<u16>,
 }
 
-#[derive(Args, Debug, Clone)]
-pub struct ExecArgs {
-    /// Command to run (e.g. npm, cargo). Use `--` before args that look like flags (e.g. appz exec -- npm --version).
-    pub command: String,
-    /// Arguments for the command (e.g. run build, test). Use trailing args.
-    #[arg(trailing_var_arg = true)]
-    pub args: Vec<String>,
-    /// Skip sandbox (run in host environment)
-    #[arg(long)]
-    pub no_sandbox: bool,
-    /// Stream output to terminal
-    #[arg(long)]
-    pub stream: bool,
-    /// Output as JSON (stdout, stderr, exit_code)
-    #[arg(long)]
-    pub json: bool,
-    /// Working directory (matches global --cwd type for consistency)
-    #[arg(long)]
-    pub cwd: Option<String>,
-    /// Use shell for pipes/redirects
-    #[arg(long)]
-    pub shell: bool,
-    /// Timeout in seconds
-    #[arg(long)]
-    pub timeout: Option<u64>,
-}
-
 #[cfg(feature = "dev-server")]
 #[derive(Args, Debug, Clone)]
 pub struct DevServerArgs {
@@ -310,14 +283,6 @@ pub struct DeployInitArgs {
 pub struct DeployListArgs {
     /// Provider to list deployments from
     pub provider: Option<String>,
-}
-
-#[derive(Args, Debug, Clone)]
-pub struct PackArgs {
-    #[command(subcommand)]
-    pub subcommand: Option<crate::commands::pack::PackSubcommand>,
-    #[command(flatten)]
-    pub run_opts: crate::commands::pack::PackRunOpts,
 }
 
 #[cfg(feature = "self_update")]

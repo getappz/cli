@@ -245,14 +245,6 @@ pub fn command_name_for_telemetry(command: crate::app::Commands) -> String {
         Commands::DeployInit(_) => "deploy-init",
         #[cfg(feature = "deploy")]
         Commands::DeployList(_) => "deploy-list",
-        Commands::Pack(_) => "pack",
-        Commands::Code { .. } => "code",
-        Commands::Skills { .. } => "skills",
-        Commands::Plugin { .. } => "plugin",
-        Commands::Git { .. } => "git",
-        Commands::Exec(_) => "exec",
-        #[cfg(feature = "mcp")]
-        Commands::McpServer => "mcp",
         #[cfg(feature = "self_update")]
         Commands::SelfUpdate(_) => "self-update",
         Commands::External(_) => "external",

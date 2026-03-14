@@ -4,8 +4,6 @@ pub mod build;
 mod install_helpers;
 #[cfg(feature = "check")]
 pub mod check;
-pub mod code;
-pub mod pack;
 #[cfg(feature = "deploy")]
 pub mod deploy;
 pub mod deployment_utils;
@@ -16,9 +14,7 @@ pub mod dev_server;
 pub mod domains;
 #[cfg(feature = "appz-cloud")]
 pub mod env;
-pub mod exec;
 pub mod external;
-pub mod git;
 #[cfg(feature = "appz-cloud")]
 pub mod inspect;
 #[cfg(feature = "appz-cloud")]
@@ -34,11 +30,8 @@ pub mod open;
 pub mod logout;
 #[cfg(feature = "appz-cloud")]
 pub mod ls;
-#[cfg(feature = "mcp")]
-pub mod mcp_server;
 pub mod migrate;
 pub mod plan;
-pub mod plugin;
 #[cfg(feature = "dev-server")]
 pub mod preview;
 pub mod projects;
@@ -52,7 +45,6 @@ pub mod rollback;
 pub mod run;
 #[cfg_attr(not(feature = "self_update"), path = "self_upgrade_stub.rs")]
 pub mod self_upgrade;
-pub mod skills;
 #[cfg(feature = "appz-cloud")]
 pub mod switch;
 pub mod teams;
@@ -78,7 +70,6 @@ pub use dev_server::dev_server;
 pub use domains::*;
 #[cfg(feature = "appz-cloud")]
 pub use env::{run as env_run, EnvCommands};
-pub use exec::exec;
 #[cfg(feature = "appz-cloud")]
 pub use inspect::inspect;
 #[cfg(feature = "appz-cloud")]
@@ -113,9 +104,6 @@ pub use run::run;
 pub use self_upgrade::{append_self_update_instructions, upgrade_instructions_text};
 #[cfg(feature = "self_update")]
 pub use self_upgrade::{append_self_update_instructions, upgrade_instructions_text, SelfUpdate};
-pub use git::{run as git_run, GitCommands};
-pub use plugin::PluginCommands;
-pub use skills_lib::SkillsCommands;
 #[cfg(feature = "appz-cloud")]
 pub use switch::switch;
 pub use teams::resolve_team_id;

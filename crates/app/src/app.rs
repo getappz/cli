@@ -144,11 +144,6 @@ pub enum Commands {
     /// Preview the built project by serving static files from output directory
     #[cfg(feature = "dev-server")]
     Preview(PreviewArgs),
-    /// SEO commands
-    Seo {
-        #[command(subcommand)]
-        command: crate::commands::seo::SeoCommands,
-    },
     /// List all deployments (Vercel parity: appz list [project] [--policy KEY=value])
     Ls(LsArgs),
     /// Open the linked project in the Appz Dashboard

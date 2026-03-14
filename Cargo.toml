@@ -150,6 +150,9 @@ duct = "1"
 shell-words = "1.1"
 which = "8.0"
 
+# Database
+rusqlite = { version = "0.32", features = ["bundled"] }
+
 # Utilities
 regex = "1.10"
 rustc-hash = "2.1"

@@ -1,6 +1,6 @@
 //! Build output directory detection utilities
 
-use crate::detectors::{detect_framework_record, DetectFrameworkRecordOptions, StdFilesystem};
+use detectors::{detect_framework_record, DetectFrameworkRecordOptions, StdFilesystem};
 use frameworks::frameworks;
 use miette::{miette, Result};
 use std::path::{Path, PathBuf};

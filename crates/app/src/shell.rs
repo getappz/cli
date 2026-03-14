@@ -174,7 +174,7 @@ fn script_uses_yarn(script: &str) -> bool {
 }
 
 /// Check if any scripts in package.json use yarn
-fn scripts_use_yarn(package_manager: &Option<crate::detectors::PackageManagerInfo>) -> bool {
+fn scripts_use_yarn(package_manager: &Option<detectors::PackageManagerInfo>) -> bool {
     if let Some(ref pm) = package_manager {
         // Check all scripts for yarn usage
         if let Some(ref dev_script) = pm.dev_script {
@@ -222,7 +222,7 @@ fn check_package_json_for_yarn(project_path: &Path) -> bool {
 /// Install yarn using npm if it's the detected package manager or used in scripts, and not already installed
 pub async fn ensure_yarn_installed(
     ctx: &Context,
-    package_manager: &Option<crate::detectors::PackageManagerInfo>,
+    package_manager: &Option<detectors::PackageManagerInfo>,
     project_path: &Path,
 ) -> Result<()> {
     // Check if yarn is the package manager OR if any scripts use yarn

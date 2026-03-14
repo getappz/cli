@@ -122,7 +122,7 @@ pub async fn run_cli(args: Vec<OsString>) -> MainResult {
     let telemetry_store = std::sync::Arc::new(app::TelemetryEventStore::new());
 
     // Extract command for closure (satisfies Send); restore so session.analyze() sees real command
-    let command = std::mem::replace(&mut cli.command, Commands::List);
+    let command = std::mem::replace(&mut cli.command, Commands::Build);
     cli.command = command.clone();
 
     let run_result = app
@@ -134,17 +134,6 @@ pub async fn run_cli(args: Vec<OsString>) -> MainResult {
                     app::record_command(session.telemetry_store.clone(), cmd_name).await;
 
                     match command {
-                    Commands::List => app::commands::list(session).await,
-                    Commands::Plan(args) => {
-                        app::commands::plan(session, args.task).await
-                    }
-                    Commands::Run(args) => {
-                        app::commands::run(session, args.task, args.force, args.changed)
-                            .await
-                    }
-                    Commands::RecipeValidate(args) => {
-                        app::commands::recipe_validate(session, args.path).await
-                    }
                     Commands::Dev(args) => app::commands::dev(session, args).await,
                     #[cfg(feature = "dev-server")]
                     Commands::DevServer(args) => {
@@ -155,7 +144,9 @@ pub async fn run_cli(args: Vec<OsString>) -> MainResult {
                     Commands::Preview(args) => {
                         app::commands::preview(session, args).await
                     }
+                    #[cfg(feature = "appz-cloud")]
                     Commands::Ls(args) => app::commands::ls(session, args).await,
+                    #[cfg(feature = "appz-cloud")]
                     Commands::Open => app::commands::open(session).await,
                     Commands::Link(args) => {
                         app::commands::link(session, args.project, args.team).await
@@ -180,20 +171,25 @@ pub async fn run_cli(args: Vec<OsString>) -> MainResult {
                         )
                         .await
                     }
+                    #[cfg(feature = "appz-cloud")]
                     Commands::Switch(args) => {
                         app::commands::teams::switch(session, args.team).await
                     }
+                    #[cfg(feature = "appz-cloud")]
                     Commands::Teams { command } => {
                         app::commands::teams::run(session, command).await
                     }
+                    #[cfg(feature = "appz-cloud")]
                     Commands::Telemetry { command } => {
                         app::commands::telemetry::run(command).await
                     }
+                    #[cfg(feature = "appz-cloud")]
                     Commands::Projects { command } => {
                         let cmd = command
                             .unwrap_or(app::commands::projects::ProjectsCommands::Ls);
                         app::commands::projects::run(session, cmd).await
                     }
+                    #[cfg(feature = "appz-cloud")]
                     Commands::Transfer {
                         command,
                         project,
@@ -207,19 +203,24 @@ pub async fn run_cli(args: Vec<OsString>) -> MainResult {
                         )
                         .await
                     }
+                    #[cfg(feature = "appz-cloud")]
                     Commands::Aliases { command } => {
                         app::commands::aliases::run(session, command).await
                     }
+                    #[cfg(feature = "appz-cloud")]
                     Commands::Domains { command } => {
                         app::commands::domains::run(session, command).await
                     }
+                    #[cfg(feature = "appz-cloud")]
                     Commands::Pull(args) => {
                         app::commands::pull(session, args.environment, args.yes)
                             .await
                     }
+                    #[cfg(feature = "appz-cloud")]
                     Commands::Logs(args) => {
                         app::commands::logs(session, args.deployment).await
                     }
+                    #[cfg(feature = "appz-cloud")]
                     Commands::Inspect(args) => {
                         app::commands::inspect(
                             session,
@@ -228,9 +229,11 @@ pub async fn run_cli(args: Vec<OsString>) -> MainResult {
                         )
                         .await
                     }
+                    #[cfg(feature = "appz-cloud")]
                     Commands::Env { command } => {
                         app::commands::env::run(session, command).await
                     }
+                    #[cfg(feature = "appz-cloud")]
                     Commands::Promote(args) => {
                         app::commands::promote(
                             session,
@@ -240,6 +243,7 @@ pub async fn run_cli(args: Vec<OsString>) -> MainResult {
                         )
                         .await
                     }
+                    #[cfg(feature = "appz-cloud")]
                     Commands::Rollback(args) => {
                         app::commands::rollback(
                             session,
@@ -249,6 +253,7 @@ pub async fn run_cli(args: Vec<OsString>) -> MainResult {
                         )
                         .await
                     }
+                    #[cfg(feature = "appz-cloud")]
                     Commands::Remove(args) => {
                         app::commands::remove(
                             session,

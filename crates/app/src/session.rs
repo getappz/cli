@@ -85,6 +85,7 @@ impl AppzSession {
 
 /// Check if a command requires project context (must be linked).
 /// Project context is loaded in analyze (bootstrap) for these commands.
+#[cfg(feature = "appz-cloud")]
 pub fn requires_project_context(command: &crate::app::Commands) -> bool {
     use crate::app::Commands;
     use crate::commands::projects::ProjectsCommands;
@@ -108,7 +109,13 @@ pub fn requires_project_context(command: &crate::app::Commands) -> bool {
     )
 }
 
+#[cfg(not(feature = "appz-cloud"))]
+pub fn requires_project_context(_command: &crate::app::Commands) -> bool {
+    false
+}
+
 /// Whether --yes was passed for project link (skip confirmation in non-interactive)
+#[cfg(feature = "appz-cloud")]
 fn project_link_auto_confirm(command: &crate::app::Commands) -> bool {
     use crate::app::Commands;
     use crate::commands::projects::ProjectsCommands;
@@ -120,6 +127,11 @@ fn project_link_auto_confirm(command: &crate::app::Commands) -> bool {
         } => *yes,
         _ => false,
     }
+}
+
+#[cfg(not(feature = "appz-cloud"))]
+fn project_link_auto_confirm(_command: &crate::app::Commands) -> bool {
+    false
 }
 
 #[async_trait]

@@ -89,6 +89,9 @@ deploy = ["dep:deployer", "dep:appz-client"]
 # Code quality checker (plugin host function for appz check)
 check = ["dep:checker"]
 
+# Appz Cloud platform management (teams, projects, domains, aliases, env, etc.)
+appz-cloud = []
+
 # AI-powered site builder (extracted to feature/site-builder branch)
 # site = ["dep:site-builder"]
 

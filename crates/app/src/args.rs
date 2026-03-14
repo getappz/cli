@@ -3,27 +3,6 @@
 use clap::{Args, Subcommand};
 use std::path::PathBuf;
 
-#[derive(Args, Debug, Clone)]
-pub struct PlanArgs {
-    pub task: String,
-}
-
-#[derive(Args, Debug, Clone)]
-pub struct RunArgs {
-    pub task: String,
-    /// Always execute tasks, ignoring source changes
-    #[arg(long)]
-    pub force: bool,
-    /// Only run tasks with changed sources
-    #[arg(long)]
-    pub changed: bool,
-}
-
-#[derive(Args, Debug, Clone)]
-pub struct RecipeValidateArgs {
-    pub path: Option<String>,
-}
-
 #[derive(Subcommand, Debug, Clone)]
 pub enum DevSubcommand {
     /// Stop DDEV containers (DDEV projects only)
@@ -106,6 +85,7 @@ pub struct PreviewArgs {
     pub spa_fallback: bool,
 }
 
+#[cfg(feature = "appz-cloud")]
 #[derive(Args, Debug, Clone)]
 pub struct LsArgs {
     /// See deployments with deployment retention policies (e.g. -p errored=6m -p preview=12m)
@@ -156,12 +136,14 @@ pub struct InitArgs {
     pub output: Option<PathBuf>,
 }
 
+#[cfg(feature = "appz-cloud")]
 #[derive(Args, Debug, Clone)]
 pub struct SwitchArgs {
     /// Team ID or slug
     pub team: String,
 }
 
+#[cfg(feature = "appz-cloud")]
 #[derive(Args, Debug, Clone)]
 pub struct PullArgs {
     /// Target environment (development, preview, production) [default: development]
@@ -172,12 +154,14 @@ pub struct PullArgs {
     pub yes: bool,
 }
 
+#[cfg(feature = "appz-cloud")]
 #[derive(Args, Debug, Clone)]
 pub struct LogsArgs {
     /// Deployment URL or ID (uses latest from linked project if omitted)
     pub deployment: Option<String>,
 }
 
+#[cfg(feature = "appz-cloud")]
 #[derive(Args, Debug, Clone)]
 pub struct InspectArgs {
     /// Deployment URL or ID
@@ -187,6 +171,7 @@ pub struct InspectArgs {
     pub json: bool,
 }
 
+#[cfg(feature = "appz-cloud")]
 #[derive(Args, Debug, Clone)]
 pub struct PromoteArgs {
     /// Deployment ID or URL to promote
@@ -199,6 +184,7 @@ pub struct PromoteArgs {
     pub yes: bool,
 }
 
+#[cfg(feature = "appz-cloud")]
 #[derive(Args, Debug, Clone)]
 pub struct RollbackArgs {
     /// Deployment ID or URL to rollback to
@@ -211,6 +197,7 @@ pub struct RollbackArgs {
     pub yes: bool,
 }
 
+#[cfg(feature = "appz-cloud")]
 #[derive(Args, Debug, Clone)]
 pub struct RemoveArgs {
     /// Deployment URL(s)/ID(s) or project name (Vercel-aligned: deployments by URL, project by name removes entire project)

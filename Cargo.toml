@@ -84,6 +84,7 @@ dev-server = ["app/dev-server"]
 deploy = ["app/deploy"]
 check = ["app/check"]
 mcp = ["app/mcp"]
+appz-cloud = ["app/appz-cloud"]
 self_update = ["app/self_update"]
 # Semantic search MCP tools (code_index, code_search) — optional for mcp-server
 code-search = ["app/code-search"]

@@ -126,14 +126,6 @@ impl LogLevel {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum Commands {
-    /// List all tasks
-    List,
-    /// Show execution plan for a task
-    Plan(PlanArgs),
-    /// Run a task
-    Run(RunArgs),
-    /// Validate the recipe file (YAML/JSON) without registering tasks
-    RecipeValidate(RecipeValidateArgs),
     /// Detect and print the framework used in the project
     Dev(DevArgs),
     /// Start a local development server with hot reloading
@@ -145,8 +137,10 @@ pub enum Commands {
     #[cfg(feature = "dev-server")]
     Preview(PreviewArgs),
     /// List all deployments (Vercel parity: appz list [project] [--policy KEY=value])
+    #[cfg(feature = "appz-cloud")]
     Ls(LsArgs),
     /// Open the linked project in the Appz Dashboard
+    #[cfg(feature = "appz-cloud")]
     Open,
     /// Link current directory to a project
     Link(LinkArgs),
@@ -161,18 +155,22 @@ pub enum Commands {
     /// Initialize a new project from a template
     Init(InitArgs),
     /// Switch the active team context
+    #[cfg(feature = "appz-cloud")]
     Switch(SwitchArgs),
     /// Manage teams
+    #[cfg(feature = "appz-cloud")]
     Teams {
         #[command(subcommand)]
         command: crate::commands::teams::TeamsCommands,
     },
     /// Enable or disable telemetry collection (Vercel-aligned)
+    #[cfg(feature = "appz-cloud")]
     Telemetry {
         #[command(subcommand)]
         command: crate::commands::telemetry::TelemetryCommands,
     },
     /// Manage projects (Vercel-aligned: project ls | add | inspect | rm)
+    #[cfg(feature = "appz-cloud")]
     #[command(name = "project", alias = "projects")]
     Projects {
         /// Subcommand (defaults to list when omitted)
@@ -180,6 +178,7 @@ pub enum Commands {
         command: Option<crate::commands::projects::ProjectsCommands>,
     },
     /// Transfer projects between teams (Vercel-aligned: transfer <project> | transfer accept <code>)
+    #[cfg(feature = "appz-cloud")]
     #[command(subcommand_required = false)]
     Transfer {
         #[command(subcommand)]
@@ -192,34 +191,43 @@ pub enum Commands {
         to_team: Option<String>,
     },
     /// Manage aliases (Vercel parity: alias set | ls | rm)
+    #[cfg(feature = "appz-cloud")]
     #[command(name = "alias", alias = "aliases")]
     Aliases {
         #[command(subcommand)]
         command: crate::commands::aliases::AliasesCommands,
     },
     /// Manage domains (Vercel parity: domains ls | add | rm)
+    #[cfg(feature = "appz-cloud")]
     #[command(name = "domains", alias = "domain")]
     Domains {
         #[command(subcommand)]
         command: crate::commands::domains::DomainsCommands,
     },
     /// Pull project config and env from Appz (writes .appz/project.json, .env[.environment].local)
+    #[cfg(feature = "appz-cloud")]
     Pull(PullArgs),
     /// Show deployment logs
+    #[cfg(feature = "appz-cloud")]
     Logs(LogsArgs),
     /// Inspect deployment details
+    #[cfg(feature = "appz-cloud")]
     Inspect(InspectArgs),
     /// Manage environment variables (Vercel-aligned: env ls | add | rm | pull)
+    #[cfg(feature = "appz-cloud")]
     #[command(name = "env")]
     Env {
         #[command(subcommand)]
         command: crate::commands::env::EnvCommands,
     },
     /// Promote a deployment to production
+    #[cfg(feature = "appz-cloud")]
     Promote(PromoteArgs),
     /// Rollback to a previous deployment
+    #[cfg(feature = "appz-cloud")]
     Rollback(RollbackArgs),
     /// Remove deployments (by URL/ID) or project (by name). Alias: rm.
+    #[cfg(feature = "appz-cloud")]
     #[command(alias = "rm")]
     Remove(RemoveArgs),
     /// Deploy to a hosting provider (Vercel, Netlify, Cloudflare Pages, Appz, etc.)

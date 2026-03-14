@@ -240,14 +240,13 @@ pub fn clear_token() -> Result<()> {
 pub fn requires_auth(command: &crate::app::Commands) -> bool {
     use crate::app::Commands;
     match command {
+        Commands::Whoami(_) => true,
+        #[cfg(feature = "appz-cloud")]
         Commands::Ls(_)
-        | Commands::Run(_)
-        | Commands::Plan(_)
         | Commands::Switch(_)
         | Commands::Teams { .. }
         | Commands::Projects { .. }
         | Commands::Transfer { .. }
-        | Commands::Whoami(_)
         | Commands::Aliases { .. }
         | Commands::Domains { .. }
         | Commands::Promote(_)

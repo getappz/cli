@@ -222,9 +222,6 @@ pub enum Commands {
     /// Remove deployments (by URL/ID) or project (by name). Alias: rm.
     #[command(alias = "rm")]
     Remove(RemoveArgs),
-    /// Generate a website from a natural-language prompt (AI)
-    #[cfg(feature = "gen")]
-    Gen(GenArgs),
     /// Deploy to a hosting provider (Vercel, Netlify, Cloudflare Pages, Appz, etc.)
     /// Vercel-parity: project-path, --prod, --prebuilt, -e, -b, -f, --logs, --target, etc.
     #[cfg(feature = "deploy")]

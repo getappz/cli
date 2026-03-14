@@ -69,14 +69,12 @@ dev-server = { path = "../dev-server", optional = true }
 deployer = { path = "../deployer", optional = true }
 appz-client = { path = "../appz-client", optional = true }
 checker = { path = "../checker", optional = true }
-site-builder = { path = "../site-builder", optional = true }
-appz-studio = { path = "../studio", optional = true }
 mcp-server = { path = "../mcp-server", optional = true }
 code-grep = { path = "../code-grep" }
 code-mix = { path = "../code-mix" }
 hypermix = { path = "../hypermix" }
 [features]
-default = ["self_update", "dev-server", "deploy", "mcp", "gen"]
+default = ["self_update", "dev-server", "deploy", "mcp"]
 
 # Situational TUI components (select, confirm) - used when commands need interactive input
 tui = ["ui/tui"]
@@ -91,8 +89,8 @@ deploy = ["dep:deployer", "dep:appz-client"]
 # Code quality checker (plugin host function for appz check)
 check = ["dep:checker"]
 
-# AI-powered site builder (plugin host function for appz site)
-site = ["dep:site-builder"]
+# AI-powered site builder (extracted to feature/site-builder branch)
+# site = ["dep:site-builder"]
 
 # MCP protocol server for AI assistants (appz mcp)
 mcp = ["dep:mcp-server"]
@@ -100,6 +98,6 @@ mcp = ["dep:mcp-server"]
 # Semantic search MCP tools (code_index, code_search) — requires mcp-server
 code-search = ["dep:mcp-server", "mcp-server/code-search"]
 
-# AI website generation (appz gen)
-gen = ["dep:appz-studio"]
+# AI website generation (extracted to feature/site-builder branch)
+# gen = ["dep:appz-studio"]
 

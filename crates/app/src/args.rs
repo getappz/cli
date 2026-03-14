@@ -223,23 +223,6 @@ pub struct RemoveArgs {
     pub safe: bool,
 }
 
-#[cfg(feature = "gen")]
-#[derive(Args, Debug, Clone)]
-pub struct GenArgs {
-    /// Natural-language prompt describing the website to generate
-    #[arg(required = true, trailing_var_arg = true)]
-    pub prompt: Vec<String>,
-    /// Output directory (default: ./gen-output or ./<name> if --name set)
-    #[arg(short, long)]
-    pub output: Option<PathBuf>,
-    /// Project name (used as output dir name if --output not set)
-    #[arg(short, long)]
-    pub name: Option<String>,
-    /// AI model to use (backend default if not set)
-    #[arg(short, long)]
-    pub model: Option<String>,
-}
-
 #[cfg(feature = "deploy")]
 #[derive(Args, Debug, Clone)]
 pub struct DeployArgs {

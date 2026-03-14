@@ -253,8 +253,6 @@ pub fn requires_auth(command: &crate::app::Commands) -> bool {
         | Commands::Promote(_)
         | Commands::Rollback(_)
         | Commands::Remove(_) => true,
-        #[cfg(feature = "gen")]
-        Commands::Gen(_) => true,
         #[cfg(feature = "deploy")]
         Commands::Deploy(_) => true,
         _ => false,

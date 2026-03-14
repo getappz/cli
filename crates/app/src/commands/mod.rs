@@ -19,8 +19,6 @@ pub mod git;
 pub mod inspect;
 pub mod logs;
 pub mod pull;
-#[cfg(feature = "gen")]
-pub mod gen;
 pub mod init;
 pub mod link;
 pub mod list;
@@ -43,8 +41,6 @@ pub mod rollback;
 pub mod run;
 #[cfg_attr(not(feature = "self_update"), path = "self_upgrade_stub.rs")]
 pub mod self_upgrade;
-#[cfg(feature = "site")]
-pub mod site;
 pub mod skills;
 pub mod switch;
 pub mod teams;

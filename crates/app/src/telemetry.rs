@@ -227,8 +227,6 @@ pub fn command_name_for_telemetry(command: crate::app::Commands) -> String {
         Commands::Promote(_) => "promote",
         Commands::Rollback(_) => "rollback",
         Commands::Remove(_) => "remove",
-        #[cfg(feature = "gen")]
-        Commands::Gen(_) => "gen",
         #[cfg(feature = "deploy")]
         Commands::Deploy(_) => "deploy",
         #[cfg(feature = "deploy")]

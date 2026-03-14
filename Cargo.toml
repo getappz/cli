@@ -17,12 +17,10 @@ members = [
     "crates/tui",
     "crates/ui",
     "crates/appz_pdk", 
-    "crates/studio",
     "crates/sandbox",
     "crates/deployer",
     "crates/checker",
     "crates/init",
-    "crates/site-builder",
     "crates/skills",
     "crates/plugin-manager",
     "crates/wp2md",
@@ -79,15 +77,13 @@ default = ["full"]
 # are excluded — those plugins work via the External command handler.
 # Note: migrate has been removed entirely — the ssg-migrator plugin is
 # self-contained and no longer needs host-side migration code.
-full = ["dev-server", "deploy", "mcp", "gen", "self_update"]
+full = ["dev-server", "deploy", "mcp", "self_update"]
 
 # Individual feature flags — forwarded to the `app` crate.
 dev-server = ["app/dev-server"]
 deploy = ["app/deploy"]
 check = ["app/check"]
-site = ["app/site"]
 mcp = ["app/mcp"]
-gen = ["app/gen"]
 self_update = ["app/self_update"]
 # Semantic search MCP tools (code_index, code_search) — optional for mcp-server
 code-search = ["app/code-search"]

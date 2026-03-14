@@ -258,17 +258,6 @@ pub async fn run_cli(args: Vec<OsString>) -> MainResult {
                         )
                         .await
                     }
-                    #[cfg(feature = "gen")]
-                    Commands::Gen(args) => {
-                        app::commands::gen::run(
-                            session,
-                            args.prompt,
-                            args.output,
-                            args.name,
-                            args.model,
-                        )
-                        .await
-                    }
                     #[cfg(feature = "deploy")]
                     Commands::Deploy(args) => {
                         app::commands::deploy(

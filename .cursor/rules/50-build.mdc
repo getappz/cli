@@ -1,0 +1,31 @@
+---
+description: Cargo build and binary invocation for appz-cli workspace
+globs: Cargo.toml,crates/**/Cargo.toml,**/*.rs
+alwaysApply: false
+---
+
+# Build & Run (appz-cli)
+
+## Cargo Target Directory
+
+**Always set `CARGO_TARGET_DIR` when building the appz binary** so the output lands in the workspace target and the correct binary is used:
+
+```bash
+# From workspace root
+cd /path/to/appz-cli
+CARGO_TARGET_DIR="$PWD/target" cargo build --bin appz
+```
+
+### Why
+
+Cursor's sandbox may use a different target directory. Without `CARGO_TARGET_DIR`, the built `./target/debug/appz` can be stale or from a different build, leading to:
+- Missing subcommands (e.g. `appz code search` not appearing)
+- Outdated behavior after code changes
+
+### Run the binary
+
+```bash
+./target/debug/appz ...
+# or with explicit path:
+$(pwd)/target/debug/appz ...
+```

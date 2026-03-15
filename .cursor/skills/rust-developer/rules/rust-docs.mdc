@@ -1,0 +1,17 @@
+---
+description: Use M-CANONICAL-DOCS format for public Rust docs (summary < 15 words, Examples, Errors, Panics, Safety, Abort sections as applicable)
+alwaysApply: true
+globs: ["**/*.rs"]
+---
+
+# Rust documentation
+
+For public library items, use the canonical doc sections:
+
+- Summary sentence (first line, < 15 words)
+- Extended documentation
+- `# Examples` when usage is non-obvious
+- `# Errors` when the function returns `Result`
+- `# Panics` when the function may panic
+- `# Safety` when the item contains `unsafe` code
+- `# Abort` when the function may abort

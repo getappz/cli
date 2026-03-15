@@ -1,0 +1,18 @@
+FROM docker.io/library/rust:1-bookworm AS builder
+
+WORKDIR /src
+COPY . .
+RUN cargo build --release 2>&1 && cp target/release/appz /usr/local/bin/appz
+
+FROM docker.io/library/debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates git curl && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /usr/local/bin/appz /usr/local/bin/appz
+COPY tests/smoke.sh /tests/smoke.sh
+RUN chmod +x /tests/smoke.sh
+
+WORKDIR /workspace
+ENTRYPOINT ["/tests/smoke.sh"]

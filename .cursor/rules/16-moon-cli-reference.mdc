@@ -1,0 +1,41 @@
+---
+description: Refer to Moon CLI for Rust CLI architecture, features, and structural changes
+alwaysApply: true
+---
+
+# Moon CLI Reference — Architecture Alignment
+
+Appz CLI architecture follows Moon's patterns. **When adding or modifying CLI features, commands, or structure**, consult the Moon source for implementation details and architecture decisions.
+
+## Reference Location
+
+```
+~/workspace/appz-ref/moon/
+```
+
+Or absolute path: `/home/avihs/workspace/appz-ref/moon/`
+
+## When to Use
+
+- **New commands** — Check how Moon defines Args, handlers, and subcommands
+- **Commands enum changes** — Use Moon-style tuple variants (`Plan(PlanArgs)`) where applicable
+- **CLI flow / main** — Reference `run_cli`, session handling, and command dispatch
+- **Structural refactors** — Align with Moon's crate layout, module boundaries, and patterns
+
+## Key Paths
+
+| Area | Path |
+|------|------|
+| CLI entry / run flow | `crates/cli/src/shared.rs` |
+| Commands enum | `moon_app` (moon's app crate) |
+| Command handlers | `moon_app::commands::*` |
+| Args structs | Per-command in moon_app |
+| Session / lifecycle | `MoonSession`, starbase `App::run` usage |
+
+## Usage
+
+Before implementing:
+1. Search or read the relevant Moon module
+2. Adopt the same structure (Args, tuple variants, handler signatures) where practical
+3. Port patterns to appz, adjusting for appz-specific features
+4. Note: Both are Rust; prefer direct alignment on architecture and idioms

@@ -1,0 +1,9 @@
+---
+description: Write Rust comments in American English unless otherwise specified
+alwaysApply: true
+globs: ["**/*.rs"]
+---
+
+# Rust comments
+
+Comments must be written in American English unless the user explicitly requests another language (e.g. "write comments in French").

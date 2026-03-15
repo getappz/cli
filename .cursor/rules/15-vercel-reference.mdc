@@ -1,0 +1,42 @@
+---
+description: Refer to Vercel reference when adding or modifying features (Vercel parity)
+alwaysApply: true
+---
+
+# Vercel Reference — Feature Parity
+
+Appz is cloning Vercel features. **When adding or modifying any feature**, consult the Vercel source for implementation details and UX patterns.
+
+## Reference Location
+
+```
+~/workspace/appz-ref/vercel/
+```
+
+Or absolute path: `/home/avihs/workspace/appz-ref/vercel/`
+
+## When to Use
+
+- **Feature additions** — Check how Vercel implements the feature before designing or coding
+- **Modifications** — Compare existing behavior with Vercel's approach
+- **CLI behavior** — Reference `packages/cli/src/` for commands, output, and UX
+- **API/client flows** — Reference `packages/client/src/` for deployment, upload, and API patterns
+- **Build output** — Reference `.vercel/output` and Build Output API
+
+## Key Paths
+
+| Area | Path |
+|------|------|
+| Deploy flow | `packages/cli/src/util/deploy/process-deployment.ts` |
+| Deploy command | `packages/cli/src/commands/deploy/` |
+| Client upload | `packages/client/src/upload.ts` |
+| Output/progress | `packages/cli/src/util/output/progress.ts` |
+| Config/parsing | `packages/cli/src/util/config/` |
+
+## Usage
+
+Before implementing:
+1. Search or read the relevant Vercel module
+2. Adopt the same UX (messages, progress, formats) where practical
+3. Port patterns to Rust, adjusting for appz API and idioms
+4. Note: Vercel is TypeScript; port to Rust while preserving behavior

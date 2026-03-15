@@ -77,6 +77,11 @@ test $MOON_TEST="true" name="":
 test-ci $MOON_TEST="true":
 	cargo nextest run --workspace --config-file ./.cargo/nextest.toml --profile ci
 
+# Container smoke tests — builds the CLI in a container and runs tests/smoke.sh
+test-docker:
+	podman build -f Dockerfile.test -t appz-test .
+	podman run --rm appz-test
+
 # CODE COVERAGE
 
 cov:

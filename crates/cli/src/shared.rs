@@ -148,12 +148,17 @@ pub async fn run_cli(args: Vec<OsString>) -> MainResult {
                     Commands::Ls(args) => app::commands::ls(session, args).await,
                     #[cfg(feature = "appz-cloud")]
                     Commands::Open => app::commands::open(session).await,
+                    #[cfg(feature = "appz-cloud")]
                     Commands::Link(args) => {
                         app::commands::link(session, args.project, args.team).await
                     }
+                    #[cfg(feature = "appz-cloud")]
                     Commands::Unlink => app::commands::unlink(session).await,
+                    #[cfg(feature = "appz-cloud")]
                     Commands::Login => app::commands::login(session).await,
+                    #[cfg(feature = "appz-cloud")]
                     Commands::Logout => app::commands::logout(session).await,
+                    #[cfg(feature = "appz-cloud")]
                     Commands::Whoami(args) => {
                         let as_json =
                             args.json || args.format.as_deref() == Some("json");
@@ -179,7 +184,6 @@ pub async fn run_cli(args: Vec<OsString>) -> MainResult {
                     Commands::Teams { command } => {
                         app::commands::teams::run(session, command).await
                     }
-                    #[cfg(feature = "appz-cloud")]
                     Commands::Telemetry { command } => {
                         app::commands::telemetry::run(command).await
                     }
@@ -265,35 +269,35 @@ pub async fn run_cli(args: Vec<OsString>) -> MainResult {
                     }
                     #[cfg(feature = "deploy")]
                     Commands::Deploy(args) => {
-                        app::commands::deploy(
-                            session,
-                            args.project_path,
-                            args.provider,
-                            args.prod,
-                            args.preview,
-                            args.target,
-                            args.prebuilt,
-                            args.no_build,
-                            args.build_env,
-                            args.env,
-                            args.force,
-                            args.guidance,
-                            args.logs,
-                            args.meta,
-                            args.no_wait,
-                            args.public,
-                            args.skip_domain,
-                            args.with_cache,
-                            args.dry_run,
-                            args.json,
-                            args.all,
-                            args.yes,
-                        )
-                        .await
-                    }
-                    #[cfg(feature = "deploy")]
-                    Commands::DeployInit(args) => {
-                        app::commands::deploy_init(session, args.provider).await
+                        if args.init {
+                            app::commands::deploy_init(session, args.provider).await
+                        } else {
+                            app::commands::deploy(
+                                session,
+                                args.project_path,
+                                args.provider,
+                                args.prod,
+                                args.preview,
+                                args.target,
+                                args.prebuilt,
+                                args.no_build,
+                                args.build_env,
+                                args.env,
+                                args.force,
+                                args.guidance,
+                                args.logs,
+                                args.meta,
+                                args.no_wait,
+                                args.public,
+                                args.skip_domain,
+                                args.with_cache,
+                                args.dry_run,
+                                args.json,
+                                args.all,
+                                args.yes,
+                            )
+                            .await
+                        }
                     }
                     #[cfg(feature = "deploy")]
                     Commands::DeployList(args) => {

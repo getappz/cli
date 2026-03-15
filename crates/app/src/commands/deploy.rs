@@ -801,7 +801,7 @@ async fn deploy_to_all_targets(
     if target_slugs.is_empty() {
         return Err(miette!(
             "No deploy targets configured in appz.json.\n\
-             Add targets with 'appz deploy-init <provider>' first."
+             Add targets with 'appz deploy --init' first."
         ));
     }
 

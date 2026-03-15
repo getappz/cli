@@ -22,11 +22,14 @@ pub mod logs;
 #[cfg(feature = "appz-cloud")]
 pub mod pull;
 pub mod init;
+#[cfg(feature = "appz-cloud")]
 pub mod link;
 pub mod list;
+#[cfg(feature = "appz-cloud")]
 pub mod login;
 #[cfg(feature = "appz-cloud")]
 pub mod open;
+#[cfg(feature = "appz-cloud")]
 pub mod logout;
 #[cfg(feature = "appz-cloud")]
 pub mod ls;
@@ -48,12 +51,13 @@ pub mod self_upgrade;
 #[cfg(feature = "appz-cloud")]
 pub mod switch;
 pub mod teams;
-#[cfg(feature = "appz-cloud")]
 pub mod telemetry;
 #[cfg(feature = "appz-cloud")]
 pub mod transfer;
+#[cfg(feature = "appz-cloud")]
 pub mod unlink;
 pub mod version;
+#[cfg(feature = "appz-cloud")]
 pub mod whoami;
 
 #[cfg(feature = "appz-cloud")]
@@ -77,11 +81,14 @@ pub use logs::logs;
 #[cfg(feature = "appz-cloud")]
 pub use pull::pull;
 pub use init::init;
+#[cfg(feature = "appz-cloud")]
 pub use link::link;
 pub use list::list;
+#[cfg(feature = "appz-cloud")]
 pub use login::login;
 #[cfg(feature = "appz-cloud")]
 pub use open::open;
+#[cfg(feature = "appz-cloud")]
 pub use logout::logout;
 #[cfg(feature = "appz-cloud")]
 pub use ls::ls;
@@ -109,10 +116,11 @@ pub use switch::switch;
 pub use teams::resolve_team_id;
 #[cfg(feature = "appz-cloud")]
 pub use teams::{run as teams_run, TeamsCommands};
-#[cfg(feature = "appz-cloud")]
 pub use telemetry::{run as telemetry_run, TelemetryCommands};
 #[cfg(feature = "appz-cloud")]
 pub use transfer::{run as transfer_run, TransferCommands};
+#[cfg(feature = "appz-cloud")]
 pub use unlink::unlink;
 pub use version::{ARCH, OS};
+#[cfg(feature = "appz-cloud")]
 pub use whoami::whoami;

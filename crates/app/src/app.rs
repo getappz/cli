@@ -143,14 +143,19 @@ pub enum Commands {
     #[cfg(feature = "appz-cloud")]
     Open,
     /// Link current directory to a project
+    #[cfg(feature = "appz-cloud")]
     Link(LinkArgs),
     /// Unlink current directory from project
+    #[cfg(feature = "appz-cloud")]
     Unlink,
     /// Log in to your Appz account
+    #[cfg(feature = "appz-cloud")]
     Login,
     /// Log out and clear authentication token
+    #[cfg(feature = "appz-cloud")]
     Logout,
     /// Show the username of the currently logged-in user
+    #[cfg(feature = "appz-cloud")]
     Whoami(WhoamiArgs),
     /// Initialize a new project from a template
     Init(InitArgs),
@@ -164,7 +169,6 @@ pub enum Commands {
         command: crate::commands::teams::TeamsCommands,
     },
     /// Enable or disable telemetry collection (Vercel-aligned)
-    #[cfg(feature = "appz-cloud")]
     Telemetry {
         #[command(subcommand)]
         command: crate::commands::telemetry::TelemetryCommands,
@@ -234,9 +238,6 @@ pub enum Commands {
     /// Vercel-parity: project-path, --prod, --prebuilt, -e, -b, -f, --logs, --target, etc.
     #[cfg(feature = "deploy")]
     Deploy(DeployArgs),
-    /// Set up deployment configuration for a provider
-    #[cfg(feature = "deploy")]
-    DeployInit(DeployInitArgs),
     /// List recent deployments
     #[cfg(feature = "deploy")]
     DeployList(DeployListArgs),

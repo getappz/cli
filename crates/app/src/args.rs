@@ -269,13 +269,10 @@ pub struct DeployArgs {
     /// Use default options and skip all prompts (for CI/CD)
     #[arg(long, short = 'y')]
     pub yes: bool,
-}
 
-#[cfg(feature = "deploy")]
-#[derive(Args, Debug, Clone)]
-pub struct DeployInitArgs {
-    /// Target provider to configure (vercel, netlify, etc.)
-    pub provider: Option<String>,
+    /// Set up deployment configuration for a provider (interactive wizard)
+    #[arg(long)]
+    pub init: bool,
 }
 
 #[cfg(feature = "deploy")]

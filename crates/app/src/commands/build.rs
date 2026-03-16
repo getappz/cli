@@ -1,4 +1,5 @@
 use appz_build::{detect_framework, produce_standardized_output, resolve_build_output_dir, validate_output_dir};
+use blueprint::WordPressRuntime;
 use crate::commands::install_helpers::{
     get_default_install_command, handle_shell_script_fallback, run_recipe_task,
 };
@@ -103,16 +104,9 @@ pub async fn build(session: AppzSession) -> AppResult {
             }
 
             println!("🚀 Starting DDEV...");
-            let mut ctx_start = Context::new();
-            ctx_start.set_working_path(project_path.clone());
-            let start_opts = RunOptions {
-                cwd: Some(project_path.clone()),
-                env: None,
-                show_output: false,
-                package_manager: None,
-                tool_info: None,
-            };
-            let _ = run_local_with(&ctx_start, "ddev start", start_opts).await;
+            let ddev_runtime = blueprint::DdevRuntime::new();
+            ddev_runtime.start(&project_path)
+                .map_err(|e| miette::miette!("{}", e))?;
             println!("✓ DDEV ready");
         }
     }

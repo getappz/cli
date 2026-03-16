@@ -237,14 +237,20 @@ impl DdevRuntime {
             .args(["describe", "-j"])
             .current_dir(project_path)
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .output();
 
         match output {
             Ok(out) if out.status.success() => {
+                // ddev outputs JSON to stdout; try both stdout and stderr
                 let stdout = String::from_utf8_lossy(&out.stdout);
-                // ddev describe -j returns JSON with "status": "running"
-                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&stdout) {
+                let to_try = if stdout.trim().is_empty() {
+                    String::from_utf8_lossy(&out.stderr).to_string()
+                } else {
+                    stdout.to_string()
+                };
+                // ddev describe -j returns {"level":"info","msg":"...","raw":{...},"time":"..."}
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&to_try) {
                     val.get("raw")
                         .and_then(|r| r.get("status"))
                         .and_then(|s| s.as_str())

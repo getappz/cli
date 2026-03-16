@@ -410,10 +410,7 @@ pub async fn deploy(
     let provider = handle_prerequisites(provider, sandbox.clone(), is_ci).await?;
 
     // 7. Build before deploy (unless --no-build or static export exists)
-    let has_static_export = project_dir.join(".appz/output/static").is_dir()
-        && std::fs::read_dir(project_dir.join(".appz/output/static"))
-            .map(|mut d| d.next().is_some())
-            .unwrap_or(false);
+    let has_static_export = project_dir.join(".appz/output/static").is_dir();
     if !no_build && !dry_run && !has_static_export {
         run_build_step(session.clone(), project_dir.clone(), json_output).await?;
     } else if has_static_export && !json_output {
@@ -1012,7 +1009,7 @@ pub fn resolve_output_dir(project_dir: &std::path::Path) -> String {
 
     // Check for static export output (from appz wp-export)
     let static_output = project_dir.join(".appz/output/static");
-    if static_output.is_dir() && std::fs::read_dir(&static_output).map(|mut d| d.next().is_some()).unwrap_or(false) {
+    if static_output.is_dir() {
         return ".appz/output/static".to_string();
     }
 

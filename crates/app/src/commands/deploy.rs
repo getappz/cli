@@ -409,8 +409,11 @@ pub async fn deploy(
     // 6. Check prerequisites via sandbox
     let provider = handle_prerequisites(provider, sandbox.clone(), is_ci).await?;
 
-    // 7. Build before deploy (unless --no-build or static export exists)
-    let has_static_export = project_dir.join(".appz/output/static").is_dir();
+    // 7. Build before deploy (unless --no-build or static export exists with files)
+    let has_static_export = project_dir.join(".appz/output/static").is_dir()
+        && std::fs::read_dir(project_dir.join(".appz/output/static"))
+            .map(|mut d| d.next().is_some())
+            .unwrap_or(false);
     if !no_build && !dry_run && !has_static_export {
         run_build_step(session.clone(), project_dir.clone(), json_output).await?;
     } else if has_static_export && !json_output {
@@ -447,13 +450,23 @@ pub async fn deploy(
         .with_dry_run(dry_run)
         .with_json_output(json_output);
 
-    // 10. Validate output directory exists (unless dry run)
+    // 10. Validate output directory exists and is non-empty (unless dry run)
     if !dry_run {
         let output_path = ctx.output_path();
         if !output_path.exists() {
             return Err(miette!(
                 "Build output directory not found: {}\n\
                  Run 'appz build' first or check 'outputDirectory' in appz.json.",
+                output_path.display()
+            ));
+        }
+        let is_empty = std::fs::read_dir(&output_path)
+            .map(|mut d| d.next().is_none())
+            .unwrap_or(true);
+        if is_empty {
+            return Err(miette!(
+                "Build output directory is empty: {}\n\
+                 Run 'appz build' or 'appz wp-export' first to generate output files.",
                 output_path.display()
             ));
         }
@@ -1007,9 +1020,11 @@ pub fn resolve_output_dir(project_dir: &std::path::Path) -> String {
         return ".appz/output".to_string();
     }
 
-    // Check for static export output (from appz wp-export)
+    // Check for static export output (from appz wp-export) — must be non-empty
     let static_output = project_dir.join(".appz/output/static");
-    if static_output.is_dir() {
+    if static_output.is_dir()
+        && std::fs::read_dir(&static_output).map(|mut d| d.next().is_some()).unwrap_or(false)
+    {
         return ".appz/output/static".to_string();
     }
 

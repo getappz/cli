@@ -29,9 +29,12 @@ pub async fn detect_build_output_dir(
     project_path: &Path,
     explicit_dir: Option<PathBuf>,
 ) -> Result<PathBuf> {
-    // Check .appz/output/static first (WordPress static export, custom builds)
+    // Check .appz/output/static first (WordPress static export, custom builds) — must be non-empty
     let appz_static = project_path.join(".appz/output/static");
-    if explicit_dir.is_none() && appz_static.is_dir() {
+    if explicit_dir.is_none()
+        && appz_static.is_dir()
+        && std::fs::read_dir(&appz_static).map(|mut d| d.next().is_some()).unwrap_or(false)
+    {
         return Ok(appz_static);
     }
 

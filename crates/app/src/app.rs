@@ -239,6 +239,8 @@ pub enum Commands {
     #[cfg(feature = "appz-cloud")]
     #[command(alias = "rm")]
     Remove(RemoveArgs),
+    /// Export a WordPress site as static HTML for deployment to Vercel/Netlify
+    WpExport(WpExportArgs),
     /// Deploy to a hosting provider (Vercel, Netlify, Cloudflare Pages, Appz, etc.)
     /// Vercel-parity: project-path, --prod, --prebuilt, -e, -b, -f, --logs, --target, etc.
     #[cfg(feature = "deploy")]

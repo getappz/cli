@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use crate::runtime::RuntimeError;
+
 #[derive(Debug, thiserror::Error)]
 pub enum BlueprintError {
     #[error("Failed to read blueprint file {path}: {source}")]
@@ -18,13 +20,10 @@ pub enum BlueprintError {
         message: String,
     },
 
-    #[error("DDEV command failed: {command}\n{message}")]
-    DdevFailed { command: String, message: String },
+    #[error(transparent)]
+    Runtime(#[from] RuntimeError),
 
-    #[error("DDEV is not available. Install it: https://docs.ddev.com/en/stable/users/install/ddev-installation/")]
-    DdevNotAvailable,
-
-    #[error("Not a WordPress DDEV project. blueprint apply requires a WordPress project with DDEV configured.")]
+    #[error("Not a WordPress project. blueprint commands require a WordPress project with a runtime configured.")]
     NotWordPressProject,
 
     #[error("Unsupported resource type: {0}")]

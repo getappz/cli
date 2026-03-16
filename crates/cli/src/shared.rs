@@ -174,6 +174,7 @@ pub async fn run_cli(args: Vec<OsString>) -> MainResult {
                             args.force,
                             args.output,
                             args.blueprint,
+                            args.playground,
                         )
                         .await
                     }
@@ -270,6 +271,9 @@ pub async fn run_cli(args: Vec<OsString>) -> MainResult {
                             args.safe,
                         )
                         .await
+                    }
+                    Commands::WpExport(args) => {
+                        app::commands::wp_export(session, args).await
                     }
                     #[cfg(feature = "deploy")]
                     Commands::Deploy(args) => {

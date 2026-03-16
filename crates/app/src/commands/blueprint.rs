@@ -1,9 +1,11 @@
 use crate::args::{BlueprintApplyArgs, BlueprintGenArgs};
 use crate::ddev_helpers::{has_ddev_config, is_ddev_available};
+use crate::wp_runtime;
 use crate::session::AppzSession;
 use clap::Subcommand;
 use starbase::AppResult;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum BlueprintCommands {
@@ -26,7 +28,8 @@ pub async fn run(session: AppzSession, command: BlueprintCommands) -> AppResult 
 
 async fn apply(session: AppzSession, args: BlueprintApplyArgs) -> AppResult {
     let project_path = session.working_dir.clone();
-    validate_wordpress_project(&project_path)?;
+    let runtime = resolve_runtime(&project_path, args.playground)?;
+    validate_wordpress_project(&project_path, runtime.as_ref())?;
 
     let blueprint_path = args
         .file
@@ -35,17 +38,28 @@ async fn apply(session: AppzSession, args: BlueprintApplyArgs) -> AppResult {
     if args.dry_run {
         dry_run_blueprint(&blueprint_path)?;
     } else {
-        apply_blueprint(&project_path, &blueprint_path)?;
+        apply_blueprint_with_runtime(&project_path, &blueprint_path, runtime)?;
     }
 
     Ok(None)
 }
 
-/// Apply a blueprint file to a WordPress DDEV project.
+/// Apply a blueprint file to a WordPress project using the DDEV runtime.
 /// Shared between `appz blueprint apply` and `appz init wordpress --blueprint`.
+/// This is the backward-compatible entry point.
 pub fn apply_blueprint(
     project_path: &Path,
     blueprint_path: &Path,
+) -> Result<(), miette::Report> {
+    let runtime: Arc<dyn blueprint::WordPressRuntime> = Arc::new(blueprint::DdevRuntime::new());
+    apply_blueprint_with_runtime(project_path, blueprint_path, runtime)
+}
+
+/// Apply a blueprint file to a WordPress project using a specific runtime.
+pub fn apply_blueprint_with_runtime(
+    project_path: &Path,
+    blueprint_path: &Path,
+    runtime: Arc<dyn blueprint::WordPressRuntime>,
 ) -> Result<(), miette::Report> {
     println!("Loading blueprint: {}", blueprint_path.display());
 
@@ -68,12 +82,13 @@ pub fn apply_blueprint(
 
     if step_count > 0 || shorthand_count > 0 {
         println!(
-            "Applying {} step(s)...",
-            step_count + shorthand_count
+            "Applying {} step(s) via {}...",
+            step_count + shorthand_count,
+            runtime.name()
         );
     }
 
-    let executor = blueprint::BlueprintExecutor::new(project_path.to_path_buf());
+    let executor = blueprint::BlueprintExecutor::new(project_path.to_path_buf(), runtime);
     executor
         .execute(&bp)
         .map_err(|e| miette::miette!("{}", e))?;
@@ -218,7 +233,8 @@ fn describe_step(step: &blueprint::types::Step) -> String {
 
 async fn gen(session: AppzSession, args: BlueprintGenArgs) -> AppResult {
     let project_path = session.working_dir.clone();
-    validate_wordpress_project(&project_path)?;
+    let runtime = resolve_runtime(&project_path, args.playground)?;
+    validate_wordpress_project(&project_path, runtime.as_ref())?;
 
     let output_path = args
         .output
@@ -234,9 +250,9 @@ async fn gen(session: AppzSession, args: BlueprintGenArgs) -> AppResult {
         return Ok(None);
     }
 
-    println!("Generating blueprint from current WordPress setup...");
+    println!("Generating blueprint from current WordPress setup via {}...", runtime.name());
 
-    let generator = blueprint::BlueprintGenerator::new(project_path);
+    let generator = blueprint::BlueprintGenerator::new(project_path, runtime);
     let bp_value = generator
         .generate()
         .map_err(|e| miette::miette!("{}", e))?;
@@ -258,32 +274,41 @@ async fn gen(session: AppzSession, args: BlueprintGenArgs) -> AppResult {
 }
 
 // ---------------------------------------------------------------------------
-// validation
+// helpers
 // ---------------------------------------------------------------------------
 
-fn validate_wordpress_project(project_path: &Path) -> Result<(), miette::Report> {
-    if !is_ddev_available() {
+/// Resolve the WordPress runtime based on project state and flags.
+fn resolve_runtime(
+    project_path: &Path,
+    force_playground: bool,
+) -> Result<Arc<dyn blueprint::WordPressRuntime>, miette::Report> {
+    wp_runtime::resolve(project_path, force_playground)
+}
+
+/// Validate that the project is a WordPress project with a runtime configured.
+fn validate_wordpress_project(
+    project_path: &Path,
+    runtime: &dyn blueprint::WordPressRuntime,
+) -> Result<(), miette::Report> {
+    if !runtime.is_available() {
         return Err(miette::miette!(
-            "DDEV is required but was not found. Install it: https://docs.ddev.com/en/stable/users/install/ddev-installation/"
+            "{} is not available. {}",
+            runtime.name(),
+            if runtime.slug() == "ddev" {
+                "Install it: https://docs.ddev.com/en/stable/users/install/ddev-installation/"
+            } else {
+                "Install Node.js 20.18+: https://nodejs.org/"
+            }
         ));
     }
 
-    if !has_ddev_config(project_path) {
+    if !runtime.is_configured(project_path) {
         return Err(miette::miette!(
-            "No DDEV configuration found in {}. Run `appz dev` first to set up DDEV, or use `appz init wordpress --blueprint <file>` for new projects.",
-            project_path.display()
+            "No {} configuration found in {}. Run `appz dev` first to set up the project{}.",
+            runtime.name(),
+            project_path.display(),
+            if runtime.slug() == "playground" { " or use `appz init wordpress --playground`" } else { "" }
         ));
-    }
-
-    // Verify it's a WordPress project by checking .ddev/config.yaml type
-    let ddev_config = project_path.join(".ddev/config.yaml");
-    if ddev_config.exists() {
-        let content = std::fs::read_to_string(&ddev_config).unwrap_or_default();
-        if !content.contains("type: wordpress") && !content.contains("type: php") {
-            return Err(miette::miette!(
-                "This does not appear to be a WordPress project. DDEV project type must be 'wordpress'."
-            ));
-        }
     }
 
     // Also check for WordPress files

@@ -10,6 +10,7 @@ mod telemetry;
 mod context;
 mod ddev_helpers;
 mod host;
+pub mod wp_runtime;
 mod http;
 mod importer;
 mod log;

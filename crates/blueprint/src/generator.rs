@@ -1,12 +1,15 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::sync::Arc;
 
 use crate::error::BlueprintError;
+use crate::runtime::WordPressRuntime;
+use crate::runtimes::DdevRuntime;
 
-/// Introspects a running WordPress DDEV project and generates a blueprint.json.
+/// Introspects a running WordPress project and generates a blueprint.json.
 pub struct BlueprintGenerator {
     project_path: PathBuf,
+    runtime: Arc<dyn WordPressRuntime>,
 }
 
 /// Represents a plugin from `wp plugin list --format=json`.
@@ -32,7 +35,7 @@ struct WpConfigEntry {
     entry_type: String,
 }
 
-/// Constants that are managed by WordPress/DDEV — skip these during generation.
+/// Constants that are managed by WordPress/runtime — skip these during generation.
 const SKIP_CONSTANTS: &[&str] = &[
     "ABSPATH",
     "DB_NAME",
@@ -61,17 +64,26 @@ const DEFAULT_PLUGINS: &[&str] = &["akismet", "hello"];
 const DEFAULT_THEME_PREFIXES: &[&str] = &["twentytwenty", "twentynineteen", "twentyseventeen"];
 
 impl BlueprintGenerator {
-    pub fn new(project_path: PathBuf) -> Self {
-        Self { project_path }
+    /// Create a new generator with a specific runtime.
+    pub fn new(project_path: PathBuf, runtime: Arc<dyn WordPressRuntime>) -> Self {
+        Self {
+            project_path,
+            runtime,
+        }
+    }
+
+    /// Create a generator using the DDEV runtime (convenience for backward compatibility).
+    pub fn with_ddev(project_path: PathBuf) -> Self {
+        Self::new(project_path, Arc::new(DdevRuntime::new()))
     }
 
     /// Generate a blueprint JSON value by introspecting the current WordPress installation.
     pub fn generate(&self) -> Result<serde_json::Value, BlueprintError> {
         println!("  Detecting PHP version...");
-        let php_version = self.get_php_version();
+        let php_version = self.runtime.php_version(&self.project_path);
 
         println!("  Detecting WordPress version...");
-        let wp_version = self.run_wp_cli_output(&["core", "version"]);
+        let wp_version = self.runtime.wp_cli_output(&self.project_path, &["core", "version"]);
 
         println!("  Listing plugins...");
         let plugins = self.get_plugins()?;
@@ -86,7 +98,7 @@ impl BlueprintGenerator {
         let constants = self.get_custom_constants()?;
 
         println!("  Detecting site language...");
-        let language = self.run_wp_cli_output(&["option", "get", "WPLANG"]);
+        let language = self.runtime.wp_cli_output(&self.project_path, &["option", "get", "WPLANG"]);
 
         // Build the blueprint
         let mut bp = serde_json::Map::new();
@@ -258,33 +270,15 @@ impl BlueprintGenerator {
     }
 
     // -----------------------------------------------------------------------
-    // WP-CLI introspection helpers
+    // WP-CLI introspection helpers (now runtime-agnostic)
     // -----------------------------------------------------------------------
 
-    fn get_php_version(&self) -> Option<String> {
-        // Read from .ddev/config.yaml
-        let config_path = self.project_path.join(".ddev/config.yaml");
-        if let Ok(content) = std::fs::read_to_string(&config_path) {
-            for line in content.lines() {
-                let line = line.trim();
-                if let Some(rest) = line.strip_prefix("php_version:") {
-                    let ver = rest.trim().trim_matches('"').trim_matches('\'');
-                    if !ver.is_empty() {
-                        return Some(ver.to_string());
-                    }
-                }
-            }
-        }
-        None
-    }
-
     fn get_plugins(&self) -> Result<Vec<WpPlugin>, BlueprintError> {
-        let output = self.run_wp_cli_output(&["plugin", "list", "--format=json"]);
+        let output = self.runtime.wp_cli_output(&self.project_path, &["plugin", "list", "--format=json"]);
         match output {
             Some(json_str) => {
                 let plugins: Vec<WpPlugin> = serde_json::from_str(&json_str)
                     .map_err(|e| BlueprintError::Parse(format!("Failed to parse plugin list: {}", e)))?;
-                // Filter to installed plugins only (not must-use, dropin)
                 Ok(plugins
                     .into_iter()
                     .filter(|p| {
@@ -299,7 +293,7 @@ impl BlueprintGenerator {
     }
 
     fn get_themes(&self) -> Result<Vec<WpTheme>, BlueprintError> {
-        let output = self.run_wp_cli_output(&["theme", "list", "--format=json"]);
+        let output = self.runtime.wp_cli_output(&self.project_path, &["theme", "list", "--format=json"]);
         match output {
             Some(json_str) => {
                 let themes: Vec<WpTheme> = serde_json::from_str(&json_str)
@@ -329,7 +323,7 @@ impl BlueprintGenerator {
             "WPLANG",
         ];
         for key in &keys {
-            if let Some(value) = self.run_wp_cli_output(&["option", "get", key]) {
+            if let Some(value) = self.runtime.wp_cli_output(&self.project_path, &["option", "get", key]) {
                 let value = value.trim().to_string();
                 if !value.is_empty() {
                     options.insert(key.to_string(), serde_json::Value::String(value));
@@ -340,7 +334,7 @@ impl BlueprintGenerator {
     }
 
     fn get_custom_constants(&self) -> Result<HashMap<String, String>, BlueprintError> {
-        let output = self.run_wp_cli_output(&["config", "list", "--format=json"]);
+        let output = self.runtime.wp_cli_output(&self.project_path, &["config", "list", "--format=json"]);
         match output {
             Some(json_str) => {
                 let entries: Vec<WpConfigEntry> = serde_json::from_str(&json_str)
@@ -353,7 +347,6 @@ impl BlueprintGenerator {
                     if SKIP_CONSTANTS.contains(&entry.name.as_str()) {
                         continue;
                     }
-                    // Skip constants with empty values
                     if entry.value.is_empty() {
                         continue;
                     }
@@ -362,31 +355,6 @@ impl BlueprintGenerator {
                 Ok(constants)
             }
             None => Ok(HashMap::new()),
-        }
-    }
-
-    /// Run a WP-CLI command via DDEV and capture stdout.
-    fn run_wp_cli_output(&self, args: &[&str]) -> Option<String> {
-        let mut ddev_args = vec!["exec", "wp"];
-        ddev_args.extend_from_slice(args);
-
-        let output = Command::new("ddev")
-            .args(&ddev_args)
-            .current_dir(&self.project_path)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .output()
-            .ok()?;
-
-        if output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-            if stdout.trim().is_empty() {
-                None
-            } else {
-                Some(stdout.trim().to_string())
-            }
-        } else {
-            None
         }
     }
 }

@@ -1,18 +1,31 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
+use std::sync::Arc;
 
 use crate::error::BlueprintError;
+use crate::runtime::WordPressRuntime;
+use crate::runtimes::DdevRuntime;
 use crate::types::*;
 
-/// Executes a parsed Blueprint against a DDEV WordPress project.
+/// Executes a parsed Blueprint against a WordPress project using a runtime backend.
 pub struct BlueprintExecutor {
     project_path: PathBuf,
+    runtime: Arc<dyn WordPressRuntime>,
 }
 
 impl BlueprintExecutor {
-    pub fn new(project_path: PathBuf) -> Self {
-        Self { project_path }
+    /// Create a new executor with a specific runtime.
+    pub fn new(project_path: PathBuf, runtime: Arc<dyn WordPressRuntime>) -> Self {
+        Self {
+            project_path,
+            runtime,
+        }
+    }
+
+    /// Create an executor using the DDEV runtime (convenience for backward compatibility).
+    pub fn with_ddev(project_path: PathBuf) -> Self {
+        Self::new(project_path, Arc::new(DdevRuntime::new()))
     }
 
     /// Execute all steps in the blueprint sequentially.
@@ -35,7 +48,7 @@ impl BlueprintExecutor {
                 StepEntry::String(s) => {
                     // String shorthand — treat as plugin slug install
                     println!("  [{}/{}] installPlugin ({})...", i + 1, total, s);
-                    self.run_wp_cli(&["plugin", "install", s, "--activate"])?;
+                    self.runtime.wp_cli(&self.project_path, &["plugin", "install", s, "--activate"])?;
                 }
                 StepEntry::Bool(false) | StepEntry::Null => {
                     // Skip disabled/null entries
@@ -56,21 +69,16 @@ impl BlueprintExecutor {
     fn apply_preferred_versions(&self, bp: &Blueprint) -> Result<(), BlueprintError> {
         if let Some(ref versions) = bp.preferred_versions {
             if let Some(ref php) = versions.php {
-                // Normalize to major.minor (DDEV expects "8.2" not "8.2.1")
                 let php_version = normalize_php_version(php);
                 if php_version != "latest" {
                     println!("  Configuring PHP {}...", php_version);
-                    self.run_ddev(&[
-                        "config",
-                        &format!("--php-version={}", php_version),
-                    ])?;
+                    self.runtime.set_php_version(&self.project_path, &php_version)?;
                 }
             }
             // wp version: handled during init (download specific version).
-            // For `blueprint apply`, the WP version is already installed.
             if let Some(ref wp) = versions.wp {
                 if wp != "latest" && !wp.starts_with("http") {
-                    tracing::info!("Blueprint requests WordPress {}, but version is managed by DDEV/init", wp);
+                    tracing::info!("Blueprint requests WordPress {}, but version is managed by the runtime/init", wp);
                 }
             }
         }
@@ -85,7 +93,7 @@ impl BlueprintExecutor {
                 if value.is_boolean() || value.is_number() {
                     args.push("--raw");
                 }
-                self.run_wp_cli(&args)?;
+                self.runtime.wp_cli(&self.project_path, &args)?;
             }
         }
         Ok(())
@@ -96,7 +104,7 @@ impl BlueprintExecutor {
             match plugin {
                 PluginShorthand::Slug(slug) => {
                     println!("  Installing plugin: {}...", slug);
-                    self.run_wp_cli(&["plugin", "install", slug, "--activate"])?;
+                    self.runtime.wp_cli(&self.project_path, &["plugin", "install", slug, "--activate"])?;
                 }
                 PluginShorthand::Resource(resource) => {
                     self.install_plugin_from_resource(resource, true)?;
@@ -117,15 +125,14 @@ impl BlueprintExecutor {
         if let Some(ref login) = bp.login {
             match login {
                 LoginShorthand::Bool(true) => {
-                    // Auto-login as admin — ensure admin user exists (already done by wp core install)
-                    tracing::info!("Blueprint requests auto-login (handled by DDEV)");
+                    tracing::info!("Blueprint requests auto-login (handled by runtime)");
                 }
                 LoginShorthand::Bool(false) => {}
                 LoginShorthand::Credentials { username, password } => {
                     let user = username.as_deref().unwrap_or("admin");
                     if let Some(pass) = password {
                         let pass_flag = format!("--user_pass={}", pass);
-                        self.run_wp_cli(&["user", "update", user, &pass_flag])?;
+                        self.runtime.wp_cli(&self.project_path, &["user", "update", user, &pass_flag])?;
                     }
                 }
             }
@@ -181,18 +188,19 @@ impl BlueprintExecutor {
     // -----------------------------------------------------------------------
 
     fn step_activate_plugin(&self, s: &ActivatePluginStep) -> Result<(), BlueprintError> {
-        // pluginPath is e.g. "wp-content/plugins/gutenberg/gutenberg.php" or just "gutenberg"
-        // Extract plugin directory name for wp plugin activate
         let plugin_name = extract_plugin_slug(&s.plugin_path);
-        self.run_wp_cli(&["plugin", "activate", &plugin_name])
+        self.runtime.wp_cli(&self.project_path, &["plugin", "activate", &plugin_name])?;
+        Ok(())
     }
 
     fn step_activate_theme(&self, s: &ActivateThemeStep) -> Result<(), BlueprintError> {
-        self.run_wp_cli(&["theme", "activate", &s.theme_folder_name])
+        self.runtime.wp_cli(&self.project_path, &["theme", "activate", &s.theme_folder_name])?;
+        Ok(())
     }
 
     fn step_cp(&self, s: &CpStep) -> Result<(), BlueprintError> {
-        self.run_ddev(&["exec", "cp", "-r", "--", &s.from_path, &s.to_path])
+        self.runtime.exec_args(&self.project_path, &["exec", "cp", "-r", "--", &s.from_path, &s.to_path])?;
+        Ok(())
     }
 
     fn step_define_wp_config_consts(&self, s: &DefineWpConfigConstsStep) -> Result<(), BlueprintError> {
@@ -202,42 +210,42 @@ impl BlueprintExecutor {
             if value.is_boolean() || value.is_number() {
                 args.push("--raw");
             }
-            self.run_wp_cli(&args)?;
+            self.runtime.wp_cli(&self.project_path, &args)?;
         }
         Ok(())
     }
 
     fn step_define_site_url(&self, s: &DefineSiteUrlStep) -> Result<(), BlueprintError> {
-        self.run_wp_cli(&["option", "update", "siteurl", &s.site_url])?;
-        self.run_wp_cli(&["option", "update", "home", &s.site_url])
+        self.runtime.wp_cli(&self.project_path, &["option", "update", "siteurl", &s.site_url])?;
+        self.runtime.wp_cli(&self.project_path, &["option", "update", "home", &s.site_url])?;
+        Ok(())
     }
 
     fn step_enable_multisite(&self, _s: &EnableMultisiteStep) -> Result<(), BlueprintError> {
-        self.run_wp_cli(&["core", "multisite-convert"])
+        self.runtime.wp_cli(&self.project_path, &["core", "multisite-convert"])?;
+        Ok(())
     }
 
     fn step_import_theme_starter_content(&self, s: &ImportThemeStarterContentStep) -> Result<(), BlueprintError> {
         if let Some(ref slug) = s.theme_slug {
-            // Activate the theme — WordPress auto-imports starter content on activation
-            self.run_wp_cli(&["theme", "activate", slug])?;
+            self.runtime.wp_cli(&self.project_path, &["theme", "activate", slug])?;
         }
-        // Trigger starter content import via PHP
-        self.run_ddev_shell(
-            "wp eval 'do_action(\"after_switch_theme\");'"
-        )
+        self.runtime.wp_eval(
+            &self.project_path,
+            "do_action(\"after_switch_theme\");",
+        )?;
+        Ok(())
     }
 
     fn step_import_wordpress_files(&self, s: &ImportWordPressFilesStep) -> Result<(), BlueprintError> {
-        // This step imports WordPress core files from a zip.
-        // In DDEV context, WordPress is already installed, so this is mainly for overwriting.
         let resource: Result<FileResource, _> = serde_json::from_value(s.wordpress_files_zip.clone());
         match resource {
             Ok(FileResource::Url { url, .. }) => {
-                // Download and extract
-                self.run_ddev_shell(&format!(
-                    "curl -sL '{}' -o /tmp/wp-files.zip && unzip -o /tmp/wp-files.zip -d /var/www/html/ && rm /tmp/wp-files.zip",
-                    shell_escape(&url),
-                ))?;
+                self.runtime.download_and_unzip(
+                    &self.project_path,
+                    &url,
+                    "/var/www/html/",
+                )?;
             }
             _ => {
                 tracing::warn!("importWordPressFiles: unsupported resource type, skipping");
@@ -247,40 +255,36 @@ impl BlueprintExecutor {
     }
 
     fn step_import_wxr(&self, s: &ImportWxrStep) -> Result<(), BlueprintError> {
-        // Ensure wordpress-importer plugin is available
-        let _ = self.run_wp_cli(&["plugin", "install", "wordpress-importer", "--activate"]);
+        let _ = self.runtime.wp_cli(&self.project_path, &["plugin", "install", "wordpress-importer", "--activate"]);
 
         let resource: Result<FileResource, _> = serde_json::from_value(s.file.clone());
         match resource {
             Ok(FileResource::Url { url, .. }) => {
-                self.run_ddev_shell(&format!(
-                    "curl -sL '{}' -o /tmp/import.wxr && wp import /tmp/import.wxr --authors=create && rm /tmp/import.wxr",
-                    shell_escape(&url),
-                ))
+                self.runtime.download_url(&self.project_path, &url, "/tmp/import.wxr")?;
+                self.runtime.wp_cli(&self.project_path, &["import", "/tmp/import.wxr", "--authors=create"])?;
             }
             Ok(FileResource::Literal { contents, .. }) => {
                 if let Some(content_str) = contents.as_str() {
-                    // Write WXR to a temp file on host, DDEV will see it
                     let wxr_path = self.project_path.join(".blueprint-import.wxr");
                     std::fs::write(&wxr_path, content_str).map_err(|e| BlueprintError::Io {
                         path: wxr_path.clone(),
                         source: e,
                     })?;
-                    let result = self.run_ddev_shell(
-                        "wp import /var/www/html/.blueprint-import.wxr --authors=create",
+                    let result = self.runtime.wp_cli(
+                        &self.project_path,
+                        &["import", "/var/www/html/.blueprint-import.wxr", "--authors=create"],
                     );
                     let _ = std::fs::remove_file(&wxr_path);
-                    result
+                    result?;
                 } else {
                     tracing::warn!("importWxr: literal contents is not a string, skipping");
-                    Ok(())
                 }
             }
             _ => {
                 tracing::warn!("importWxr: unsupported resource type, skipping");
-                Ok(())
             }
         }
+        Ok(())
     }
 
     fn step_install_plugin(&self, s: &InstallPluginStep) -> Result<(), BlueprintError> {
@@ -289,22 +293,16 @@ impl BlueprintExecutor {
             .as_ref()
             .and_then(|o| o.activate)
             .unwrap_or(true);
-        let overwrite = s.if_already_installed.as_deref() == Some("overwrite");
 
-        // Try pluginData first, fall back to deprecated pluginZipFile
         if let Some(resource_data) = &s.plugin_data {
             match resource_data {
                 ResourceData::File(resource) => {
                     self.install_plugin_from_resource(resource, activate)?;
-                    if overwrite {
-                        // --force flag would have been added
-                    }
                 }
                 ResourceData::Directory(_dir) => {
-                    tracing::warn!("installPlugin: directory resources are not yet supported in DDEV mode, skipping");
+                    tracing::warn!("installPlugin: directory resources are not yet supported, skipping");
                 }
                 ResourceData::Raw(v) => {
-                    // Try parsing as FileResource
                     if let Ok(resource) = serde_json::from_value::<FileResource>(v.clone()) {
                         self.install_plugin_from_resource(&resource, activate)?;
                     } else {
@@ -313,7 +311,6 @@ impl BlueprintExecutor {
                 }
             }
         } else if let Some(ref zip_val) = s.plugin_zip_file {
-            // Deprecated pluginZipFile
             if let Ok(resource) = serde_json::from_value::<FileResource>(zip_val.clone()) {
                 self.install_plugin_from_resource(&resource, activate)?;
             } else {
@@ -341,7 +338,7 @@ impl BlueprintExecutor {
                     self.install_theme_from_resource(resource, activate)?;
                 }
                 ResourceData::Directory(_) => {
-                    tracing::warn!("installTheme: directory resources are not yet supported in DDEV mode, skipping");
+                    tracing::warn!("installTheme: directory resources are not yet supported, skipping");
                 }
                 ResourceData::Raw(v) => {
                     if let Ok(resource) = serde_json::from_value::<FileResource>(v.clone()) {
@@ -358,7 +355,7 @@ impl BlueprintExecutor {
         }
 
         if import_starter {
-            self.run_ddev_shell("wp eval 'do_action(\"after_switch_theme\");'")?;
+            self.runtime.wp_eval(&self.project_path, "do_action(\"after_switch_theme\");")?;
         }
 
         Ok(())
@@ -368,30 +365,25 @@ impl BlueprintExecutor {
         let user = s.username.as_deref().unwrap_or("admin");
         if let Some(ref pass) = s.password {
             let pass_flag = format!("--user_pass={}", pass);
-            self.run_wp_cli(&["user", "update", user, &pass_flag])?;
+            self.runtime.wp_cli(&self.project_path, &["user", "update", user, &pass_flag])?;
         }
-        // In DDEV context, login is handled by the browser session, not the CLI.
-        // Setting the password is the meaningful action.
         Ok(())
     }
 
     fn step_mkdir(&self, s: &MkdirStep) -> Result<(), BlueprintError> {
-        self.run_ddev(&["exec", "mkdir", "-p", &s.path])
+        self.runtime.exec_args(&self.project_path, &["exec", "mkdir", "-p", &s.path])?;
+        Ok(())
     }
 
     fn step_mv(&self, s: &MvStep) -> Result<(), BlueprintError> {
-        self.run_ddev(&["exec", "mv", "--", &s.from_path, &s.to_path])
+        self.runtime.exec_args(&self.project_path, &["exec", "mv", "--", &s.from_path, &s.to_path])?;
+        Ok(())
     }
 
     fn step_request(&self, s: &RequestStep) -> Result<(), BlueprintError> {
-        // Best-effort: extract URL from the request object and curl it
         if let Some(url) = s.request.get("url").and_then(|v| v.as_str()) {
             let method = s.request.get("method").and_then(|v| v.as_str()).unwrap_or("GET");
-            self.run_ddev_shell(&format!(
-                "curl -sS -X {} '{}'",
-                shell_escape(method),
-                shell_escape(url),
-            ))?;
+            self.runtime.http_request(&self.project_path, method, url)?;
         } else {
             tracing::warn!("request step: no URL found in request object, skipping");
         }
@@ -400,15 +392,18 @@ impl BlueprintExecutor {
 
     fn step_reset_data(&self, _s: &ResetDataStep) -> Result<(), BlueprintError> {
         tracing::warn!("resetData: this will DROP ALL database tables and is destructive");
-        self.run_wp_cli(&["db", "reset", "--yes"])
+        self.runtime.wp_cli(&self.project_path, &["db", "reset", "--yes"])?;
+        Ok(())
     }
 
     fn step_rm(&self, s: &RmStep) -> Result<(), BlueprintError> {
-        self.run_ddev(&["exec", "rm", "-f", "--", &s.path])
+        self.runtime.exec_args(&self.project_path, &["exec", "rm", "-f", "--", &s.path])?;
+        Ok(())
     }
 
     fn step_rmdir(&self, s: &RmdirStep) -> Result<(), BlueprintError> {
-        self.run_ddev(&["exec", "rm", "-rf", "--", &s.path])
+        self.runtime.exec_args(&self.project_path, &["exec", "rm", "-rf", "--", &s.path])?;
+        Ok(())
     }
 
     fn step_run_php(&self, s: &RunPhpStep) -> Result<(), BlueprintError> {
@@ -416,21 +411,19 @@ impl BlueprintExecutor {
             PhpCode::String(code) => code.clone(),
             PhpCode::File { content, .. } => content.clone(),
         };
-        // Strip leading <?php if present — wp eval doesn't need it
         let code = code.strip_prefix("<?php").unwrap_or(&code).trim().to_string();
-        // Use arg list to avoid shell injection — wp eval receives code as a direct argument
-        self.run_wp_cli(&["eval", &code])
+        self.runtime.wp_cli(&self.project_path, &["eval", &code])?;
+        Ok(())
     }
 
     fn step_run_php_with_options(&self, s: &RunPhpWithOptionsStep) -> Result<(), BlueprintError> {
-        // Extract code from options object
         if let Some(code) = s.options.get("code").and_then(|v| v.as_str()) {
             let code = code.strip_prefix("<?php").unwrap_or(code).trim().to_string();
-            self.run_wp_cli(&["eval", &code])
+            self.runtime.wp_cli(&self.project_path, &["eval", &code])?;
         } else {
             tracing::warn!("runPHPWithOptions: no code field found, skipping");
-            Ok(())
         }
+        Ok(())
     }
 
     fn step_run_wp_installation_wizard(&self, s: &RunWpInstallationWizardStep) -> Result<(), BlueprintError> {
@@ -442,57 +435,41 @@ impl BlueprintExecutor {
             .and_then(|o| o.admin_password.as_deref())
             .unwrap_or("admin");
 
-        // Get DDEV project URL
-        let project_name = self
-            .project_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("wordpress");
-        let url_flag = format!("--url=https://{}.ddev.site", project_name);
-        let user_flag = format!("--admin_user={}", user);
-        let pass_flag = format!("--admin_password={}", pass);
-
-        self.run_wp_cli(&[
-            "core", "install",
-            &url_flag, "--title=WordPress",
-            &user_flag, &pass_flag,
-            "--admin_email=admin@example.com", "--skip-email",
-        ])
+        let url = self.runtime.site_url(&self.project_path);
+        self.runtime.wp_install(&self.project_path, &url, user, pass)?;
+        Ok(())
     }
 
     fn step_run_sql(&self, s: &RunSqlStep) -> Result<(), BlueprintError> {
-        // sql can be a FileResource (URL) or inline literal
         let resource: Result<FileResource, _> = serde_json::from_value(s.sql.clone());
         match resource {
             Ok(FileResource::Url { url, .. }) => {
-                self.run_ddev_shell(&format!(
-                    "curl -sL '{}' | wp db query",
-                    shell_escape(&url),
-                ))
+                // Download SQL file, then execute it
+                self.runtime.download_url(&self.project_path, &url, "/tmp/_bp_sql.sql")?;
+                self.runtime.wp_cli(&self.project_path, &["db", "import", "/tmp/_bp_sql.sql"])?;
             }
             Ok(FileResource::Literal { contents, .. }) => {
                 if let Some(sql) = contents.as_str() {
-                    self.run_ddev_sql(sql)
+                    self.runtime.exec_sql(&self.project_path, sql)?;
                 } else {
                     tracing::warn!("runSql: literal contents is not a string, skipping");
-                    Ok(())
                 }
             }
             _ => {
-                // Try as raw string
                 if let Some(sql) = s.sql.as_str() {
-                    self.run_ddev_sql(sql)
+                    self.runtime.exec_sql(&self.project_path, sql)?;
                 } else {
                     tracing::warn!("runSql: unsupported SQL resource type, skipping");
-                    Ok(())
                 }
             }
         }
+        Ok(())
     }
 
     fn step_set_site_language(&self, s: &SetSiteLanguageStep) -> Result<(), BlueprintError> {
-        self.run_wp_cli(&["language", "core", "install", &s.language])?;
-        self.run_wp_cli(&["site", "switch-language", &s.language])
+        self.runtime.wp_cli(&self.project_path, &["language", "core", "install", &s.language])?;
+        self.runtime.wp_cli(&self.project_path, &["site", "switch-language", &s.language])?;
+        Ok(())
     }
 
     fn step_set_site_options(&self, s: &SetSiteOptionsStep) -> Result<(), BlueprintError> {
@@ -503,24 +480,24 @@ impl BlueprintExecutor {
         let resource: Result<FileResource, _> = serde_json::from_value(s.zip_file.clone());
         match resource {
             Ok(FileResource::Url { url, .. }) => {
-                self.run_ddev_shell(&format!(
-                    "curl -sL '{}' -o /tmp/blueprint-unzip.zip && unzip -o /tmp/blueprint-unzip.zip -d '{}' && rm /tmp/blueprint-unzip.zip",
-                    shell_escape(&url),
-                    shell_escape(&s.extract_to_path),
-                ))
+                self.runtime.download_and_unzip(
+                    &self.project_path,
+                    &url,
+                    &s.extract_to_path,
+                )?;
             }
             _ => {
-                tracing::warn!("unzip: only URL resources are supported in DDEV mode, skipping");
-                Ok(())
+                tracing::warn!("unzip: only URL resources are supported currently, skipping");
             }
         }
+        Ok(())
     }
 
     fn step_update_user_meta(&self, s: &UpdateUserMetaStep) -> Result<(), BlueprintError> {
         let user_id_str = s.user_id.to_string();
         for (key, value) in &s.meta {
             let val_str = json_value_to_string(value);
-            self.run_wp_cli(&["user", "meta", "update", &user_id_str, key, &val_str])?;
+            self.runtime.wp_cli(&self.project_path, &["user", "meta", "update", &user_id_str, key, &val_str])?;
         }
         Ok(())
     }
@@ -532,14 +509,13 @@ impl BlueprintExecutor {
                 contents.as_str().unwrap_or("").to_string()
             }
             WriteFileData::Resource(FileResource::Url { url, .. }) => {
-                // Download content
                 let output = Command::new("curl")
                     .args(["-sL", url])
                     .output()
-                    .map_err(|e| BlueprintError::DdevFailed {
+                    .map_err(|e| BlueprintError::Runtime(crate::runtime::RuntimeError::CommandFailed {
                         command: format!("curl -sL {}", url),
                         message: e.to_string(),
-                    })?;
+                    }))?;
                 String::from_utf8_lossy(&output.stdout).to_string()
             }
             _ => {
@@ -548,13 +524,11 @@ impl BlueprintExecutor {
             }
         };
 
-        // Paths in blueprints are relative to /wordpress/ — map to project root
         let relative_path = s.path.strip_prefix("/wordpress/")
             .or_else(|| s.path.strip_prefix("/var/www/html/"))
             .unwrap_or(&s.path);
         let target = self.project_path.join(relative_path);
 
-        // Path traversal check: ensure target is within project root
         ensure_path_within(&self.project_path, &target)?;
 
         if let Some(parent) = target.parent() {
@@ -579,7 +553,6 @@ impl BlueprintExecutor {
                 self.write_files_tree(base_path, files)?;
             }
             FilesTreeData::Raw(v) => {
-                // Try to interpret as a file tree object { "path": "content", ... }
                 if let Some(obj) = v.as_object() {
                     let value = serde_json::Value::Object(obj.clone());
                     self.write_files_tree(base_path, &value)?;
@@ -597,18 +570,18 @@ impl BlueprintExecutor {
     fn step_wp_cli(&self, s: &WpCliStep) -> Result<(), BlueprintError> {
         match &s.command {
             WpCliCommand::String(cmd) => {
-                // Split command string into args to avoid shell injection
                 let parts: Vec<&str> = cmd.split_whitespace().collect();
                 if parts.is_empty() {
                     return Ok(());
                 }
-                self.run_wp_cli(&parts)
+                self.runtime.wp_cli(&self.project_path, &parts)?;
             }
             WpCliCommand::Args(args) => {
                 let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-                self.run_wp_cli(&args_refs)
+                self.runtime.wp_cli(&self.project_path, &args_refs)?;
             }
         }
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -640,7 +613,8 @@ impl BlueprintExecutor {
         if activate {
             args.push("--activate");
         }
-        self.run_wp_cli(&args)
+        self.runtime.wp_cli(&self.project_path, &args)?;
+        Ok(())
     }
 
     fn install_theme_from_resource(
@@ -668,13 +642,14 @@ impl BlueprintExecutor {
         if activate {
             args.push("--activate");
         }
-        self.run_wp_cli(&args)
+        self.runtime.wp_cli(&self.project_path, &args)?;
+        Ok(())
     }
 
     fn set_site_options(&self, options: &HashMap<String, serde_json::Value>) -> Result<(), BlueprintError> {
         for (key, value) in options {
             let val_str = json_value_to_string(value);
-            self.run_wp_cli(&["option", "update", key, &val_str])?;
+            self.runtime.wp_cli(&self.project_path, &["option", "update", key, &val_str])?;
         }
         Ok(())
     }
@@ -684,12 +659,9 @@ impl BlueprintExecutor {
             for (name, content) in obj {
                 let path = format!("{}/{}", base, name);
                 if content.is_object() {
-                    // Nested directory
                     self.write_files_tree(&path, content)?;
                 } else if let Some(text) = content.as_str() {
-                    // File content
                     let target = self.project_path.join(&path);
-                    // Path traversal check
                     ensure_path_within(&self.project_path, &target)?;
                     if let Some(parent) = target.parent() {
                         std::fs::create_dir_all(parent).map_err(|e| BlueprintError::Io {
@@ -706,80 +678,6 @@ impl BlueprintExecutor {
         }
         Ok(())
     }
-
-    // -----------------------------------------------------------------------
-    // DDEV command execution
-    // -----------------------------------------------------------------------
-
-    /// Run `ddev <args>` with arguments passed safely (no shell interpolation).
-    fn run_ddev(&self, args: &[&str]) -> Result<(), BlueprintError> {
-        let status = Command::new("ddev")
-            .args(args)
-            .current_dir(&self.project_path)
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .status()
-            .map_err(|e| BlueprintError::DdevFailed {
-                command: format!("ddev {}", args.join(" ")),
-                message: e.to_string(),
-            })?;
-
-        if !status.success() {
-            return Err(BlueprintError::DdevFailed {
-                command: format!("ddev {}", args.join(" ")),
-                message: format!("exit code: {}", status.code().unwrap_or(-1)),
-            });
-        }
-        Ok(())
-    }
-
-    /// Run `ddev exec <shell_command>` — for commands that need shell features (pipes, etc).
-    fn run_ddev_shell(&self, cmd: &str) -> Result<(), BlueprintError> {
-        self.run_ddev(&["exec", "bash", "-c", cmd])
-    }
-
-    /// Run `ddev exec wp <args>` with safe argument passing.
-    fn run_wp_cli(&self, args: &[&str]) -> Result<(), BlueprintError> {
-        let mut ddev_args = vec!["exec", "wp"];
-        ddev_args.extend_from_slice(args);
-        self.run_ddev(&ddev_args)
-    }
-
-    /// Pipe SQL to `ddev mysql` via stdin.
-    fn run_ddev_sql(&self, sql: &str) -> Result<(), BlueprintError> {
-        let mut child = Command::new("ddev")
-            .args(["mysql"])
-            .current_dir(&self.project_path)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .map_err(|e| BlueprintError::DdevFailed {
-                command: "ddev mysql".to_string(),
-                message: e.to_string(),
-            })?;
-
-        if let Some(mut stdin) = child.stdin.take() {
-            use std::io::Write;
-            stdin.write_all(sql.as_bytes()).map_err(|e| BlueprintError::DdevFailed {
-                command: "ddev mysql (stdin write)".to_string(),
-                message: e.to_string(),
-            })?;
-        }
-
-        let status = child.wait().map_err(|e| BlueprintError::DdevFailed {
-            command: "ddev mysql".to_string(),
-            message: e.to_string(),
-        })?;
-
-        if !status.success() {
-            return Err(BlueprintError::DdevFailed {
-                command: "ddev mysql".to_string(),
-                message: format!("exit code: {}", status.code().unwrap_or(-1)),
-            });
-        }
-        Ok(())
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -791,7 +689,6 @@ fn normalize_php_version(version: &str) -> String {
     if version == "latest" {
         return "latest".to_string();
     }
-    // Handle URL-style versions (Playground allows URLs for wp versions)
     if version.starts_with("http") {
         return "latest".to_string();
     }
@@ -810,7 +707,6 @@ fn extract_plugin_slug(path: &str) -> String {
         .or_else(|| path.strip_prefix("/var/www/html/"))
         .unwrap_or(path);
     let path = path.strip_prefix("wp-content/plugins/").unwrap_or(path);
-    // Get the first path component (the plugin directory name)
     path.split('/').next().unwrap_or(path).to_string()
 }
 
@@ -835,14 +731,13 @@ fn json_value_to_wp_config_string(value: &serde_json::Value) -> String {
     }
 }
 
-/// Escape single quotes for shell strings (replace ' with '\'' ).
+/// Escape single quotes for shell strings.
 fn shell_escape(s: &str) -> String {
     s.replace('\'', "'\\''")
 }
 
 /// Ensure a target path is contained within the project root (no path traversal).
 fn ensure_path_within(base: &Path, target: &Path) -> Result<(), BlueprintError> {
-    // Normalize by resolving .. components without requiring the path to exist
     let normalized = normalize_path(target);
     let base_normalized = normalize_path(base);
     if !normalized.starts_with(&base_normalized) {

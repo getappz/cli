@@ -7,6 +7,7 @@ use crate::ddev_helpers::{
     ddev_config_command, ddev_project_type_for_framework, has_ddev_config,
     is_ddev_available, is_ddev_supported_framework,
 };
+use crate::wp_runtime;
 use crate::session::AppzSession;
 use crate::shell::{run_local_with, RunOptions};
 use crate::templates::{get_builtin_template, BUILTIN_TEMPLATES};
@@ -26,6 +27,7 @@ pub async fn init(
     force: bool,
     output: Option<PathBuf>,
     blueprint: Option<PathBuf>,
+    playground: bool,
 ) -> AppResult {
     let (template_source, project_name) = resolve_template_and_name(
         template_or_name,
@@ -53,9 +55,27 @@ pub async fn init(
     .await
     .map_err(|e| miette!("{}", e))?;
 
-    // Auto-add DDEV configuration for DDEV-supported PHP/CMS frameworks when DDEV is available
+    // Auto-configure runtime for supported PHP/CMS frameworks
     let project_path = output_dir.join(&project_name);
-    if is_ddev_supported_framework(&template_source)
+    let use_playground = playground
+        || (wp_runtime::is_wordpress_framework(&template_source) && !is_ddev_available());
+
+    if wp_runtime::is_wordpress_framework(&template_source) && use_playground {
+        // Configure Playground for WordPress
+        match wp_runtime::resolve(&project_path, true) {
+            Ok(runtime) => {
+                println!("⚙️  Configuring WordPress Playground...");
+                if let Err(e) = runtime.configure(&project_path, "wordpress", None) {
+                    eprintln!("Warning: Failed to configure Playground: {}", e);
+                } else {
+                    println!("✓ WordPress Playground configured.");
+                }
+            }
+            Err(e) => {
+                eprintln!("Warning: {}", e);
+            }
+        }
+    } else if is_ddev_supported_framework(&template_source)
         && is_ddev_available()
         && !has_ddev_config(&project_path)
     {
@@ -70,7 +90,7 @@ pub async fn init(
             let mut ctx = Context::new();
             ctx.set_working_path(project_path.clone());
             let opts = RunOptions {
-                cwd: Some(project_path),
+                cwd: Some(project_path.clone()),
                 env: None,
                 show_output: true,
                 package_manager: None,
@@ -82,15 +102,14 @@ pub async fn init(
         }
     } else if is_ddev_supported_framework(&template_source) && !is_ddev_available() {
         println!("Tip: Install DDEV for local PHP development: https://docs.ddev.com/en/stable/users/install/ddev-installation/");
+        println!("     Or use --playground for Docker-free WordPress development.");
     }
 
     // Apply blueprint if --blueprint was provided (WordPress projects only)
     if let Some(blueprint_file) = blueprint {
-        let project_path = output_dir.join(&project_name);
         let resolved = if blueprint_file.is_absolute() {
             blueprint_file
         } else {
-            // Resolve relative to CWD, not project path
             std::env::current_dir()
                 .unwrap_or_else(|_| output_dir.clone())
                 .join(blueprint_file)
@@ -103,8 +122,11 @@ pub async fn init(
             ));
         }
 
-        // DDEV must be started for blueprint steps to work
-        if has_ddev_config(&project_path) && is_ddev_available() {
+        // Resolve runtime for blueprint execution
+        let runtime = wp_runtime::resolve(&project_path, use_playground)?;
+
+        if runtime.slug() == "ddev" {
+            // Start DDEV for blueprint steps
             println!("🚀 Starting DDEV for blueprint...");
             let mut ctx = Context::new();
             ctx.set_working_path(project_path.clone());
@@ -118,45 +140,19 @@ pub async fn init(
             let _ = run_local_with(&ctx, "ddev start", start_opts).await;
 
             // Run wp core install if not already installed
-            let wp_opts = RunOptions {
-                cwd: Some(project_path.clone()),
-                env: None,
-                show_output: false,
-                package_manager: None,
-                tool_info: None,
-            };
-            let is_installed = run_local_with(
-                &ctx,
-                "ddev exec wp core is-installed",
-                wp_opts,
-            )
-            .await
-            .is_ok();
-
-            if !is_installed {
-                let url = format!(
-                    "https://{}.ddev.site",
-                    project_name
-                );
-                let wp_install_cmd = format!(
-                    "ddev exec wp core install --url={} --title=WordPress \
-                     --admin_user=admin --admin_password=admin \
-                     --admin_email=admin@example.com --skip-email",
-                    url
-                );
-                let install_opts = RunOptions {
-                    cwd: Some(project_path.clone()),
-                    env: None,
-                    show_output: true,
-                    package_manager: None,
-                    tool_info: None,
-                };
-                run_local_with(&ctx, &wp_install_cmd, install_opts).await?;
+            if !runtime.wp_is_installed(&project_path) {
+                let url = runtime.site_url(&project_path);
+                runtime.wp_install(&project_path, &url, "admin", "admin")
+                    .map_err(|e| miette!("{}", e))?;
                 println!("✓ WordPress installed (admin / admin)");
             }
         }
 
-        crate::commands::blueprint::apply_blueprint(&project_path, &resolved)?;
+        crate::commands::blueprint::apply_blueprint_with_runtime(
+            &project_path,
+            &resolved,
+            runtime,
+        )?;
     }
 
     Ok(None)

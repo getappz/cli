@@ -19,6 +19,9 @@ pub struct DevArgs {
     /// Port for the dev server (default: 3000)
     #[arg(short, long)]
     pub port: Option<u16>,
+    /// Use WordPress Playground instead of DDEV for WordPress projects
+    #[arg(long)]
+    pub playground: bool,
 }
 
 #[cfg(feature = "dev-server")]
@@ -110,6 +113,9 @@ pub struct InitArgs {
     /// Apply a WordPress Playground blueprint after initialization
     #[arg(long, value_hint = ValueHint::FilePath)]
     pub blueprint: Option<PathBuf>,
+    /// Use WordPress Playground instead of DDEV for WordPress projects
+    #[arg(long)]
+    pub playground: bool,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -120,6 +126,9 @@ pub struct BlueprintApplyArgs {
     /// Show what would be executed without running any steps
     #[arg(long)]
     pub dry_run: bool,
+    /// Use WordPress Playground instead of DDEV
+    #[arg(long)]
+    pub playground: bool,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -130,6 +139,9 @@ pub struct BlueprintGenArgs {
     /// Overwrite existing blueprint.json
     #[arg(long)]
     pub force: bool,
+    /// Use WordPress Playground instead of DDEV
+    #[arg(long)]
+    pub playground: bool,
 }
 
 #[cfg(feature = "appz-cloud")]
@@ -204,6 +216,16 @@ pub struct RemoveArgs {
     /// When removing a project: skip if it has deployments with active preview/production URL
     #[arg(long, short = 's')]
     pub safe: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct WpExportArgs {
+    /// Output directory for the static export (default: ./static-export)
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
+    /// Use WordPress Playground instead of DDEV
+    #[arg(long)]
+    pub playground: bool,
 }
 
 #[cfg(feature = "deploy")]

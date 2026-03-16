@@ -242,16 +242,8 @@ pub async fn dev(session: AppzSession, args: crate::args::DevArgs) -> AppResult 
                         }
 
                         println!("🚀 Starting DDEV...");
-                        let mut ctx_start = Context::new();
-                        ctx_start.set_working_path(project_path.clone());
-                        let start_opts = RunOptions {
-                            cwd: Some(project_path.clone()),
-                            env: None,
-                            show_output: false,
-                            package_manager: None,
-                            tool_info: None,
-                        };
-                        let _ = run_local_with(&ctx_start, "ddev start", start_opts).await;
+                        runtime.start(&project_path)
+                            .map_err(|e| miette::miette!("{}", e))?;
                         println!("✓ DDEV ready");
 
                         // Verify container can reach internet (common WSL2/Docker DNS issue)

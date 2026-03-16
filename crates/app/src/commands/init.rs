@@ -126,18 +126,10 @@ pub async fn init(
         let runtime = wp_runtime::resolve(&project_path, use_playground)?;
 
         if runtime.slug() == "ddev" {
-            // Start DDEV for blueprint steps
+            // Start DDEV for blueprint steps (skips if already running)
             println!("🚀 Starting DDEV for blueprint...");
-            let mut ctx = Context::new();
-            ctx.set_working_path(project_path.clone());
-            let start_opts = RunOptions {
-                cwd: Some(project_path.clone()),
-                env: None,
-                show_output: false,
-                package_manager: None,
-                tool_info: None,
-            };
-            let _ = run_local_with(&ctx, "ddev start", start_opts).await;
+            runtime.start(&project_path)
+                .map_err(|e| miette!("{}", e))?;
 
             // Run wp core install if not already installed
             if !runtime.wp_is_installed(&project_path) {

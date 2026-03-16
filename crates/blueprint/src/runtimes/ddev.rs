@@ -63,6 +63,10 @@ impl WordPressRuntime for DdevRuntime {
     }
 
     fn start(&self, project_path: &Path) -> Result<(), RuntimeError> {
+        // Skip if DDEV containers are already running
+        if self.is_running(project_path) {
+            return Ok(());
+        }
         self.run_ddev(project_path, &["start"])
     }
 
@@ -227,6 +231,33 @@ impl WordPressRuntime for DdevRuntime {
 }
 
 impl DdevRuntime {
+    /// Check if DDEV containers are already running for this project.
+    fn is_running(&self, project_path: &Path) -> bool {
+        let output = Command::new("ddev")
+            .args(["describe", "-j"])
+            .current_dir(project_path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output();
+
+        match output {
+            Ok(out) if out.status.success() => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                // ddev describe -j returns JSON with "status": "running"
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&stdout) {
+                    val.get("raw")
+                        .and_then(|r| r.get("status"))
+                        .and_then(|s| s.as_str())
+                        .map(|s| s == "running")
+                        .unwrap_or(false)
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
+    }
+
     /// Run `ddev <args>` with safe argument passing (no shell interpolation).
     fn run_ddev(&self, project_path: &Path, args: &[&str]) -> Result<(), RuntimeError> {
         let status = Command::new("ddev")

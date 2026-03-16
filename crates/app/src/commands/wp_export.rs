@@ -33,16 +33,17 @@ pub async fn wp_export(session: AppzSession, args: WpExportArgs) -> AppResult {
         .map_err(|e| miette::miette!("{}", e))?;
 
     let output_dir = args.output;
-    let exporter = blueprint::StaticExporter::new(project_path, runtime);
+    let exporter = blueprint::StaticExporter::new(project_path.clone(), runtime);
 
     let export_path = exporter
         .export(output_dir.as_deref())
         .map_err(|e| miette::miette!("Static export failed: {}", e))?;
 
-    println!("\n✓ Static files exported to: {}", export_path.display());
+    let display_path = export_path.strip_prefix(&project_path).unwrap_or(&export_path);
+    println!("\n✓ Static files exported to: {}", display_path.display());
     println!("\nYou can now deploy with:");
-    println!("  appz deploy {} --provider vercel", export_path.display());
-    println!("  appz deploy {} --provider netlify", export_path.display());
+    println!("  appz deploy {} --provider vercel", display_path.display());
+    println!("  appz deploy {} --provider netlify", display_path.display());
 
     Ok(None)
 }

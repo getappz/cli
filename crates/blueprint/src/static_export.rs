@@ -55,7 +55,8 @@ impl StaticExporter {
         println!("Installing Simply Static plugin...");
         self.install_simply_static()?;
 
-        println!("Configuring export to {}...", output.display());
+        let display_path = output.strip_prefix(&self.project_path).unwrap_or(&output);
+        println!("Configuring export to {}...", display_path.display());
         self.configure_simply_static(&output)?;
 
         println!("Triggering static export...");
@@ -64,7 +65,7 @@ impl StaticExporter {
         println!("Waiting for export to complete...");
         self.wait_for_export()?;
 
-        println!("Static export complete: {}", output.display());
+        println!("Static export complete: {}", display_path.display());
         Ok(output)
     }
 

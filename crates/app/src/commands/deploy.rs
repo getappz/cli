@@ -409,9 +409,15 @@ pub async fn deploy(
     // 6. Check prerequisites via sandbox
     let provider = handle_prerequisites(provider, sandbox.clone(), is_ci).await?;
 
-    // 7. Build before deploy (unless --no-build)
-    if !no_build && !dry_run {
+    // 7. Build before deploy (unless --no-build or static export exists)
+    let has_static_export = project_dir.join(".appz/output/static").is_dir()
+        && std::fs::read_dir(project_dir.join(".appz/output/static"))
+            .map(|mut d| d.next().is_some())
+            .unwrap_or(false);
+    if !no_build && !dry_run && !has_static_export {
         run_build_step(session.clone(), project_dir.clone(), json_output).await?;
+    } else if has_static_export && !json_output {
+        println!("✓ Using static export from .appz/output/static");
     }
 
     // 8. Run before_deploy hook via sandbox

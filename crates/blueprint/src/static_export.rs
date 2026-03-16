@@ -69,9 +69,9 @@ impl StaticExporter {
         self.configure_simply_static(&container_output)?;
 
         // Create the output dir inside the container so Simply Static can write to it
-        self.runtime.wp_cli(
+        self.runtime.exec_shell(
             &self.project_path,
-            &["eval", &format!("wp_mkdir_p('{}');", container_output.replace('\'', "\\'"))],
+            &format!("mkdir -p {}", container_output),
         )?;
 
         println!("Triggering static export...");

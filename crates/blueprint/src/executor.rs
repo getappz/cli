@@ -48,7 +48,7 @@ impl BlueprintExecutor {
                 StepEntry::String(s) => {
                     // String shorthand — treat as plugin slug install
                     println!("  [{}/{}] installPlugin ({})...", i + 1, total, s);
-                    self.runtime.wp_cli(&self.project_path, &["plugin", "install", s, "--activate"])?;
+                    self.runtime.wp_cli(&self.project_path, &["plugin", "install", s, "--force", "--activate"])?;
                 }
                 StepEntry::Bool(false) | StepEntry::Null => {
                     // Skip disabled/null entries
@@ -104,7 +104,7 @@ impl BlueprintExecutor {
             match plugin {
                 PluginShorthand::Slug(slug) => {
                     println!("  Installing plugin: {}...", slug);
-                    self.runtime.wp_cli(&self.project_path, &["plugin", "install", slug, "--activate"])?;
+                    self.runtime.wp_cli(&self.project_path, &["plugin", "install", slug, "--force", "--activate"])?;
                 }
                 PluginShorthand::Resource(resource) => {
                     self.install_plugin_from_resource(resource, true)?;
@@ -610,6 +610,7 @@ impl BlueprintExecutor {
         }
 
         args.push(&source);
+        args.push("--force");
         if activate {
             args.push("--activate");
         }
@@ -639,6 +640,7 @@ impl BlueprintExecutor {
         }
 
         args.push(&source);
+        args.push("--force");
         if activate {
             args.push("--activate");
         }

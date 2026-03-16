@@ -274,7 +274,7 @@ impl DeployProvider for VercelProvider {
         let token_flag = get_env_var("VERCEL_TOKEN")
             .map(|t| format!(" --token {}", t))
             .unwrap_or_default();
-        let cmd = format!("vercel ls --json{}", token_flag);
+        let cmd = format!("vercel ls -F json{}", token_flag);
 
         let result = ctx.exec(&cmd).await?;
 

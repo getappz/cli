@@ -159,6 +159,11 @@ pub enum Commands {
     Whoami(WhoamiArgs),
     /// Initialize a new project from a template
     Init(InitArgs),
+    /// Apply a WordPress Playground blueprint
+    Blueprint {
+        #[command(subcommand)]
+        command: crate::commands::blueprint::BlueprintCommands,
+    },
     /// Switch the active team context
     #[cfg(feature = "appz-cloud")]
     Switch(SwitchArgs),

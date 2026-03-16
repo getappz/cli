@@ -59,6 +59,7 @@ sandbox = { path = "../sandbox" }
 appz-build = { path = "../appz-build" }
 plugin-manager = { path = "../plugin-manager" }
 init = { path = "../init" }
+blueprint = { path = "../blueprint" }
 uuid = { workspace = true }
 git2 = { workspace = true }
 

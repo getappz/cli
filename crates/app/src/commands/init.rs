@@ -25,6 +25,7 @@ pub async fn init(
     skip_install: bool,
     force: bool,
     output: Option<PathBuf>,
+    blueprint: Option<PathBuf>,
 ) -> AppResult {
     let (template_source, project_name) = resolve_template_and_name(
         template_or_name,
@@ -81,6 +82,81 @@ pub async fn init(
         }
     } else if is_ddev_supported_framework(&template_source) && !is_ddev_available() {
         println!("Tip: Install DDEV for local PHP development: https://docs.ddev.com/en/stable/users/install/ddev-installation/");
+    }
+
+    // Apply blueprint if --blueprint was provided (WordPress projects only)
+    if let Some(blueprint_file) = blueprint {
+        let project_path = output_dir.join(&project_name);
+        let resolved = if blueprint_file.is_absolute() {
+            blueprint_file
+        } else {
+            // Resolve relative to CWD, not project path
+            std::env::current_dir()
+                .unwrap_or_else(|_| output_dir.clone())
+                .join(blueprint_file)
+        };
+
+        if !resolved.exists() {
+            return Err(miette!(
+                "Blueprint file not found: {}",
+                resolved.display()
+            ));
+        }
+
+        // DDEV must be started for blueprint steps to work
+        if has_ddev_config(&project_path) && is_ddev_available() {
+            println!("🚀 Starting DDEV for blueprint...");
+            let mut ctx = Context::new();
+            ctx.set_working_path(project_path.clone());
+            let start_opts = RunOptions {
+                cwd: Some(project_path.clone()),
+                env: None,
+                show_output: false,
+                package_manager: None,
+                tool_info: None,
+            };
+            let _ = run_local_with(&ctx, "ddev start", start_opts).await;
+
+            // Run wp core install if not already installed
+            let wp_opts = RunOptions {
+                cwd: Some(project_path.clone()),
+                env: None,
+                show_output: false,
+                package_manager: None,
+                tool_info: None,
+            };
+            let is_installed = run_local_with(
+                &ctx,
+                "ddev exec wp core is-installed",
+                wp_opts,
+            )
+            .await
+            .is_ok();
+
+            if !is_installed {
+                let url = format!(
+                    "https://{}.ddev.site",
+                    project_name
+                );
+                let wp_install_cmd = format!(
+                    "ddev exec wp core install --url={} --title=WordPress \
+                     --admin_user=admin --admin_password=admin \
+                     --admin_email=admin@example.com --skip-email",
+                    url
+                );
+                let install_opts = RunOptions {
+                    cwd: Some(project_path.clone()),
+                    env: None,
+                    show_output: true,
+                    package_manager: None,
+                    tool_info: None,
+                };
+                run_local_with(&ctx, &wp_install_cmd, install_opts).await?;
+                println!("✓ WordPress installed (admin / admin)");
+            }
+        }
+
+        crate::commands::blueprint::apply_blueprint(&project_path, &resolved)?;
     }
 
     Ok(None)

@@ -1,0 +1,205 @@
+{
+  "$schema": "https://playground.wordpress.net/blueprint-schema.json",
+  "meta": {
+    "title": "Test Blueprint",
+    "description": "Exercises all step types",
+    "author": "Test",
+    "categories": ["test"]
+  },
+  "landingPage": "/wp-admin/",
+  "preferredVersions": {
+    "php": "8.3",
+    "wp": "latest"
+  },
+  "features": {
+    "networking": true
+  },
+  "extraLibraries": ["wp-cli"],
+  "constants": {
+    "WP_DEBUG": true,
+    "WP_DEBUG_LOG": true
+  },
+  "plugins": ["hello-dolly"],
+  "siteOptions": {
+    "blogname": "Test Site"
+  },
+  "login": true,
+  "steps": [
+    {
+      "step": "installPlugin",
+      "pluginData": {
+        "resource": "wordpress.org/plugins",
+        "slug": "gutenberg"
+      },
+      "options": { "activate": true }
+    },
+    {
+      "step": "installPlugin",
+      "pluginData": {
+        "resource": "url",
+        "url": "https://example.com/plugin.zip"
+      }
+    },
+    {
+      "step": "installTheme",
+      "themeData": {
+        "resource": "wordpress.org/themes",
+        "slug": "twentytwentyfour"
+      },
+      "options": { "activate": true }
+    },
+    {
+      "step": "activatePlugin",
+      "pluginPath": "wp-content/plugins/gutenberg/gutenberg.php"
+    },
+    {
+      "step": "activateTheme",
+      "themeFolderName": "twentytwentyfour"
+    },
+    {
+      "step": "setSiteOptions",
+      "options": {
+        "blogname": "My Blueprint Site",
+        "blogdescription": "A test site"
+      }
+    },
+    {
+      "step": "defineWpConfigConsts",
+      "consts": {
+        "WP_DEBUG": true,
+        "WP_MEMORY_LIMIT": "256M"
+      }
+    },
+    {
+      "step": "defineSiteUrl",
+      "siteUrl": "https://mysite.ddev.site"
+    },
+    {
+      "step": "setSiteLanguage",
+      "language": "en_US"
+    },
+    {
+      "step": "login",
+      "username": "admin",
+      "password": "password"
+    },
+    {
+      "step": "runPHP",
+      "code": "<?php require_once '/wordpress/wp-load.php'; wp_insert_post(array('post_title' => 'Hello', 'post_status' => 'publish'));"
+    },
+    {
+      "step": "runPHPWithOptions",
+      "options": {
+        "code": "<?php echo 'hello';"
+      }
+    },
+    {
+      "step": "wp-cli",
+      "command": "post list --format=table"
+    },
+    {
+      "step": "wp-cli",
+      "command": ["option", "get", "blogname"]
+    },
+    {
+      "step": "mkdir",
+      "path": "/var/www/html/wp-content/custom"
+    },
+    {
+      "step": "writeFile",
+      "path": "/wordpress/wp-content/mu-plugins/custom.php",
+      "data": "<?php // Custom mu-plugin"
+    },
+    {
+      "step": "writeFiles",
+      "writeToPath": "/wordpress/wp-content/custom",
+      "filesTree": {
+        "resource": "literal:directory",
+        "files": {
+          "readme.txt": "Hello world",
+          "config": {
+            "settings.json": "{\"key\": \"value\"}"
+          }
+        }
+      }
+    },
+    {
+      "step": "cp",
+      "fromPath": "/var/www/html/wp-config-sample.php",
+      "toPath": "/var/www/html/wp-config-backup.php"
+    },
+    {
+      "step": "mv",
+      "fromPath": "/var/www/html/wp-config-backup.php",
+      "toPath": "/var/www/html/wp-config-backup2.php"
+    },
+    {
+      "step": "rm",
+      "path": "/var/www/html/wp-config-backup2.php"
+    },
+    {
+      "step": "rmdir",
+      "path": "/var/www/html/wp-content/custom"
+    },
+    {
+      "step": "resetData"
+    },
+    {
+      "step": "enableMultisite"
+    },
+    {
+      "step": "updateUserMeta",
+      "userId": 1,
+      "meta": {
+        "nickname": "blueprint_user"
+      }
+    },
+    {
+      "step": "runSql",
+      "sql": {
+        "resource": "literal",
+        "contents": "SELECT 1;"
+      }
+    },
+    {
+      "step": "importWxr",
+      "file": {
+        "resource": "url",
+        "url": "https://example.com/content.wxr"
+      }
+    },
+    {
+      "step": "importThemeStarterContent",
+      "themeSlug": "twentytwentyfour"
+    },
+    {
+      "step": "unzip",
+      "zipFile": {
+        "resource": "url",
+        "url": "https://example.com/files.zip"
+      },
+      "extractToPath": "/var/www/html/wp-content/uploads"
+    },
+    {
+      "step": "request",
+      "request": {
+        "url": "https://example.com/api",
+        "method": "GET"
+      }
+    },
+    {
+      "step": "runWpInstallationWizard",
+      "options": {
+        "adminUsername": "admin",
+        "adminPassword": "secure123"
+      }
+    },
+    {
+      "step": "importWordPressFiles",
+      "wordPressFilesZip": {
+        "resource": "url",
+        "url": "https://example.com/wordpress.zip"
+      }
+    }
+  ]
+}

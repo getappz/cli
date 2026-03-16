@@ -1,6 +1,6 @@
 //! Args structs for Commands (Moon-style tuple variants).
 
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, ValueHint};
 use std::path::PathBuf;
 
 #[derive(Subcommand, Debug, Clone)]
@@ -107,6 +107,29 @@ pub struct InitArgs {
     /// Output directory (defaults to current directory)
     #[arg(short, long)]
     pub output: Option<PathBuf>,
+    /// Apply a WordPress Playground blueprint after initialization
+    #[arg(long, value_hint = ValueHint::FilePath)]
+    pub blueprint: Option<PathBuf>,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct BlueprintApplyArgs {
+    /// Path to blueprint.json (defaults to ./blueprint.json)
+    #[arg(short = 'f', long = "file", value_hint = ValueHint::FilePath)]
+    pub file: Option<PathBuf>,
+    /// Show what would be executed without running any steps
+    #[arg(long)]
+    pub dry_run: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct BlueprintGenArgs {
+    /// Output path (defaults to ./blueprint.json)
+    #[arg(short = 'o', long = "output", value_hint = ValueHint::FilePath)]
+    pub output: Option<PathBuf>,
+    /// Overwrite existing blueprint.json
+    #[arg(long)]
+    pub force: bool,
 }
 
 #[cfg(feature = "appz-cloud")]

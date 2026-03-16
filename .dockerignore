@@ -1,0 +1,12 @@
+target/
+!target/release/appz
+node_modules/
+.git/
+dist/
+.turbo/
+.astro/
+.pnpm-store/
+web/dist/
+web/node_modules/
+*.snap
+megalinter-reports/

@@ -10,10 +10,10 @@ run_test() {
     shift
     if "$@" >/dev/null 2>&1; then
         printf "  \033[32m✓\033[0m %s\n" "$name"
-        ((PASS++))
+        PASS=$((PASS + 1))
     else
         printf "  \033[31m✗\033[0m %s\n" "$name"
-        ((FAIL++))
+        FAIL=$((FAIL + 1))
         ERRORS="${ERRORS}\n  - ${name}"
     fi
 }
@@ -23,11 +23,11 @@ run_test_fails() {
     shift
     if "$@" >/dev/null 2>&1; then
         printf "  \033[31m✗\033[0m %s (expected failure but succeeded)\n" "$name"
-        ((FAIL++))
+        FAIL=$((FAIL + 1))
         ERRORS="${ERRORS}\n  - ${name}"
     else
         printf "  \033[32m✓\033[0m %s\n" "$name"
-        ((PASS++))
+        PASS=$((PASS + 1))
     fi
 }
 
@@ -36,13 +36,13 @@ run_test_output() {
     local expected="$2"
     shift 2
     local output
-    output=$("$@" 2>&1) || true
+    output=$(timeout 10 "$@" 2>&1) || true
     if echo "$output" | grep -qi "$expected"; then
         printf "  \033[32m✓\033[0m %s\n" "$name"
-        ((PASS++))
+        PASS=$((PASS + 1))
     else
         printf "  \033[31m✗\033[0m %s (expected '%s' in output)\n" "$name" "$expected"
-        ((FAIL++))
+        FAIL=$((FAIL + 1))
         ERRORS="${ERRORS}\n  - ${name}"
     fi
 }
@@ -52,10 +52,10 @@ run_test_exists() {
     local path="$2"
     if [ -e "$path" ]; then
         printf "  \033[32m✓\033[0m %s\n" "$name"
-        ((PASS++))
+        PASS=$((PASS + 1))
     else
         printf "  \033[31m✗\033[0m %s (%s not found)\n" "$name" "$path"
-        ((FAIL++))
+        FAIL=$((FAIL + 1))
         ERRORS="${ERRORS}\n  - ${name}"
     fi
 }
@@ -116,10 +116,35 @@ mkdir -p /tmp/test-vite && echo '{"devDependencies":{"vite":"5.0.0"}}' > /tmp/te
 run_test_output "detects Vite" "vite" appz dev --cwd /tmp/test-vite
 
 # -----------------------------------------------
-# 6. Full flow: init → build (Vite)
+# 6. Toolchain bootstrap (mise + node)
 # -----------------------------------------------
 echo ""
-echo "6. Full flow: init → build (Vite)"
+echo "6. Toolchain bootstrap"
+
+echo "   Installing mise..."
+if curl -fsSL https://mise.run | sh 2>&1 | tail -3; then
+    # Add mise to PATH for this session
+    export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
+    run_test "mise installed" command -v mise
+else
+    run_test "mise installed" false
+fi
+
+echo "   Installing node via mise..."
+if mise use -g node 2>&1 | tail -3; then
+    eval "$(mise activate bash 2>/dev/null)" || true
+    run_test "node available" command -v node
+    run_test "npm available" command -v npm
+else
+    run_test "node available" false
+    run_test "npm available" false
+fi
+
+# -----------------------------------------------
+# 7. Full flow: init → build (Vite)
+# -----------------------------------------------
+echo ""
+echo "7. Full flow: init → build (Vite)"
 
 PROJ_DIR="/tmp/test-flow-vite"
 rm -rf "$PROJ_DIR"
@@ -146,10 +171,10 @@ run_test_exists "build output exists" "$PROJ_DIR/dist"
 run_test_exists "index.html in dist" "$PROJ_DIR/dist/index.html"
 
 # -----------------------------------------------
-# 7. Full flow: init → build (Astro)
+# 8. Full flow: init → build (Astro)
 # -----------------------------------------------
 echo ""
-echo "7. Full flow: init → build (Astro)"
+echo "8. Full flow: init → build (Astro)"
 
 PROJ_DIR="/tmp/test-flow-astro"
 rm -rf "$PROJ_DIR"
@@ -174,10 +199,10 @@ fi
 run_test_exists "build output exists" "$PROJ_DIR/dist"
 
 # -----------------------------------------------
-# 8. Error handling
+# 9. Error handling
 # -----------------------------------------------
 echo ""
-echo "8. Error handling"
+echo "9. Error handling"
 mkdir -p /tmp/test-empty
 run_test_fails "build fails in empty dir" appz build --cwd /tmp/test-empty
 

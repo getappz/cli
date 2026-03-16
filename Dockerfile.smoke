@@ -1,0 +1,12 @@
+FROM debian:trixie-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates git curl libatomic1 && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY target/release/appz /usr/local/bin/appz
+COPY tests/smoke.sh /tests/smoke.sh
+RUN chmod +x /usr/local/bin/appz /tests/smoke.sh
+
+WORKDIR /workspace
+ENTRYPOINT ["/tests/smoke.sh"]

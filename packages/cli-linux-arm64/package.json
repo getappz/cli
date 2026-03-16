@@ -1,0 +1,19 @@
+{
+	"name": "@getappz/cli-linux-arm64",
+	"version": "0.0.0",
+	"description": "Appz CLI binary for linux-arm64",
+	"license": "MIT",
+	"os": [
+		"linux"
+	],
+	"cpu": [
+		"arm64"
+	],
+	"libc": [
+		"glibc"
+	],
+	"files": [
+		"bin/"
+	],
+	"preferUnplugged": true
+}

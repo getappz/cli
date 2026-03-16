@@ -1,0 +1,25 @@
+{
+	"name": "@getappz/cli",
+	"version": "0.0.0",
+	"description": "Appz CLI — web development toolkit",
+	"license": "MIT",
+	"bin": {
+		"appz": "bin/cli.js"
+	},
+	"files": [
+		"bin/"
+	],
+	"engines": {
+		"node": ">=20"
+	},
+	"optionalDependencies": {
+		"@getappz/cli-darwin-arm64": "0.0.0",
+		"@getappz/cli-darwin-x64": "0.0.0",
+		"@getappz/cli-linux-arm64": "0.0.0",
+		"@getappz/cli-linux-arm64-musl": "0.0.0",
+		"@getappz/cli-linux-x64": "0.0.0",
+		"@getappz/cli-linux-x64-musl": "0.0.0",
+		"@getappz/cli-win32-x64": "0.0.0"
+	},
+	"preferUnplugged": true
+}

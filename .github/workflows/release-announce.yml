@@ -1,0 +1,43 @@
+name: Release Announcements
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  announce-discord:
+    name: Announce on Discord
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post release to Discord
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_CHANGELOG_WEBHOOK }}
+          VERSION: ${{ github.event.release.tag_name }}
+          BODY: ${{ github.event.release.body }}
+          REPO: ${{ github.repository }}
+        run: |
+
+          UTM="?utm_source=discord&utm_medium=community&utm_campaign=product"
+          CHANGELOG_URL="https://github.com/${REPO}/releases/tag/${VERSION}${UTM}"
+
+          # Build the message content, then truncate to fit under Discord's 2000 char limit.
+          # We reserve ~200 chars for the header, install command, and changelog link.
+          HEADER="## :rocket: Appz ${VERSION} is out!"
+          INSTALL="**Install / upgrade:**\`\`\`\nnpx @getappz/cli@latest\n\`\`\`"
+          FOOTER=":link: [Full changelog & release notes](${CHANGELOG_URL})"
+
+          # Truncate body if necessary (reserve 300 chars for surrounding content)
+          MAX_BODY=1700
+          if [ ${#BODY} -gt $MAX_BODY ]; then
+            BODY="${BODY:0:$MAX_BODY}…\n*(truncated — see full notes in changelog)*"
+          fi
+
+          MESSAGE="${HEADER}\n\n${BODY}\n\n${INSTALL}\n\n${FOOTER}"
+
+          # Use jq to safely encode the payload as JSON
+          PAYLOAD=$(jq -n --arg content "$MESSAGE" '{"content": $content}')
+
+          curl -fsSL \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$DISCORD_WEBHOOK"

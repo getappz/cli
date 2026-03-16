@@ -1,0 +1,19 @@
+{
+	"name": "@getappz/cli-linux-x64",
+	"version": "0.0.0",
+	"description": "Appz CLI binary for linux-x64",
+	"license": "MIT",
+	"os": [
+		"linux"
+	],
+	"cpu": [
+		"x64"
+	],
+	"libc": [
+		"glibc"
+	],
+	"files": [
+		"bin/"
+	],
+	"preferUnplugged": true
+}

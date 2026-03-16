@@ -1,0 +1,424 @@
+name: Release CLI
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag (e.g., v0.1.0)"
+        required: true
+      build_macos:
+        description: "Build macOS targets"
+        type: boolean
+        default: false
+
+concurrency:
+  group: release-cli
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: Prepare build matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Compute matrix
+        id: set-matrix
+        run: |
+          BASE='[
+            {"target":"x86_64-unknown-linux-gnu","runner":"ubuntu-latest","npm-pkg":"cli-linux-x64","binary":"appz","use-cross":true},
+            {"target":"aarch64-unknown-linux-gnu","runner":"ubuntu-latest","npm-pkg":"cli-linux-arm64","binary":"appz","use-cross":true},
+            {"target":"x86_64-unknown-linux-musl","runner":"ubuntu-latest","npm-pkg":"cli-linux-x64-musl","binary":"appz","use-cross":true},
+            {"target":"aarch64-unknown-linux-musl","runner":"ubuntu-latest","npm-pkg":"cli-linux-arm64-musl","binary":"appz","use-cross":true},
+            {"target":"x86_64-pc-windows-gnu","runner":"ubuntu-latest","npm-pkg":"cli-win32-x64","binary":"appz.exe","use-cross":true}
+          ]'
+
+          MACOS='[
+            {"target":"x86_64-apple-darwin","runner":"macos-latest","npm-pkg":"cli-darwin-x64","binary":"appz","use-cross":false},
+            {"target":"aarch64-apple-darwin","runner":"macos-latest","npm-pkg":"cli-darwin-arm64","binary":"appz","use-cross":false}
+          ]'
+
+          if [ "${{ inputs.build_macos }}" = "true" ]; then
+            MATRIX=$(echo "$BASE$MACOS" | jq -sc 'add')
+          else
+            MATRIX="$BASE"
+          fi
+
+          echo "matrix={\"include\":$(echo "$MATRIX" | jq -c)}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build - ${{ matrix.target }}
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust build cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.use-cross
+        run: |
+          curl -fsSL https://github.com/cross-rs/cross/releases/latest/download/cross-x86_64-unknown-linux-gnu.tar.gz \
+            | tar xz -C "$HOME/.cargo/bin"
+
+      - name: Build release binary
+        run: |
+          if [ "${{ matrix.use-cross }}" = "true" ]; then
+            cross build --release -p cli --target ${{ matrix.target }}
+          else
+            cargo build --release -p cli --target ${{ matrix.target }}
+          fi
+        shell: bash
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.npm-pkg }}
+          path: target/${{ matrix.target }}/release/${{ matrix.binary }}
+
+  publish:
+    name: Publish npm packages
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Download CLI artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cli-*
+          path: artifacts
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          fi
+          echo "VERSION=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Copy binaries and publish platform packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        shell: bash
+        run: |
+          set -o pipefail
+          VERSION="${{ steps.version.outputs.VERSION }}"
+
+          PLATFORM_PKGS=(
+            "cli-linux-x64"
+            "cli-linux-arm64"
+            "cli-linux-x64-musl"
+            "cli-linux-arm64-musl"
+            "cli-darwin-x64"
+            "cli-darwin-arm64"
+            "cli-win32-x64"
+          )
+
+          for pkg in "${PLATFORM_PKGS[@]}"; do
+            # Skip if artifact was not built (e.g., macOS disabled)
+            if [ ! -d "artifacts/$pkg" ]; then
+              echo "--- Skipping @getappz/$pkg (not built) ---"
+              continue
+            fi
+
+            echo "--- Publishing @getappz/$pkg@$VERSION ---"
+
+            # Copy binary into package
+            mkdir -p "packages/$pkg/bin"
+            cp "artifacts/$pkg/"* "packages/$pkg/bin/"
+            chmod +x "packages/$pkg/bin/"*
+
+            # Set version
+            node -e "
+              const fs = require('fs');
+              const v = process.argv[1];
+              const p = JSON.parse(fs.readFileSync('packages/$pkg/package.json', 'utf8'));
+              p.version = v;
+              fs.writeFileSync('packages/$pkg/package.json', JSON.stringify(p, null, 2) + '\n');
+            " "$VERSION"
+
+            # Publish — tolerate 409 (already published) but fail on other errors
+            cd "packages/$pkg"
+            if ! npm publish --access public 2>&1 | tee /tmp/npm-publish.log; then
+              if grep -q "EPUBLISHCONFLICT\|cannot publish over the previously published" /tmp/npm-publish.log; then
+                echo "Already published, skipping."
+              else
+                echo "Publish failed!" && exit 1
+              fi
+            fi
+            cd ../..
+          done
+
+      - name: Publish main @getappz/cli package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        shell: bash
+        run: |
+          set -o pipefail
+          VERSION="${{ steps.version.outputs.VERSION }}"
+
+          # Update version and optionalDependencies
+          node -e "
+            const fs = require('fs');
+            const v = process.argv[1];
+            const p = JSON.parse(fs.readFileSync('packages/cli/package.json', 'utf8'));
+            p.version = v;
+            for (const key of Object.keys(p.optionalDependencies || {})) {
+              p.optionalDependencies[key] = v;
+            }
+            fs.writeFileSync('packages/cli/package.json', JSON.stringify(p, null, 2) + '\n');
+          " "$VERSION"
+
+          cd packages/cli
+          if ! npm publish --access public 2>&1 | tee /tmp/npm-publish.log; then
+            if grep -q "EPUBLISHCONFLICT\|cannot publish over the previously published" /tmp/npm-publish.log; then
+              echo "Already published, skipping."
+            else
+              echo "Publish failed!" && exit 1
+            fi
+          fi
+
+  upload-r2:
+    name: Upload binaries and scripts to R2
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts
+
+      - name: Download CLI artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cli-*
+          path: artifacts
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          fi
+          echo "VERSION=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Upload binaries and install scripts to R2
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          BUCKET="${{ secrets.R2_BUCKET_NAME }}"
+
+          # Mapping: CI artifact name -> R2 binary name
+          declare -A BINARY_MAP=(
+            ["cli-linux-x64"]="appz-linux-x64"
+            ["cli-linux-arm64"]="appz-linux-arm64"
+            ["cli-linux-x64-musl"]="appz-linux-x64-musl"
+            ["cli-linux-arm64-musl"]="appz-linux-arm64-musl"
+            ["cli-darwin-x64"]="appz-darwin-x64"
+            ["cli-darwin-arm64"]="appz-darwin-arm64"
+            ["cli-win32-x64"]="appz-win32-x64.exe"
+          )
+
+          for artifact in "${!BINARY_MAP[@]}"; do
+            # Skip if artifact was not built (e.g., macOS disabled)
+            if [ ! -d "artifacts/$artifact" ]; then
+              echo "--- Skipping ${BINARY_MAP[$artifact]} (not built) ---"
+              continue
+            fi
+
+            r2_name="${BINARY_MAP[$artifact]}"
+            echo "--- Uploading $r2_name ---"
+
+            # Determine binary filename from R2 name
+            if echo "$r2_name" | grep -q '\.exe$'; then
+              src="artifacts/$artifact/appz.exe"
+            else
+              src="artifacts/$artifact/appz"
+            fi
+
+            npx wrangler r2 object put --remote "${BUCKET}/appz/v${VERSION}/${r2_name}" \
+              --file "$src" \
+              --content-type "application/octet-stream" \
+              --cache-control "public, max-age=31536000, immutable"
+          done
+
+          # Update latest version pointer
+          echo -n "$VERSION" > /tmp/latest
+          npx wrangler r2 object put --remote "${BUCKET}/appz/latest" \
+            --file /tmp/latest \
+            --content-type "text/plain" \
+            --cache-control "no-cache"
+
+          # Upload install scripts
+          npx wrangler r2 object put --remote "${BUCKET}/appz/install.sh" \
+            --file scripts/install.sh \
+            --content-type "text/plain" \
+            --cache-control "no-cache"
+
+          npx wrangler r2 object put --remote "${BUCKET}/appz/install.ps1" \
+            --file scripts/install.ps1 \
+            --content-type "text/plain" \
+            --cache-control "no-cache"
+
+          echo "Uploaded all binaries, install scripts, and updated latest to $VERSION"
+
+  publish-docker:
+    name: Publish Docker image
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download musl artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cli-linux-*-musl
+          path: artifacts
+
+      - name: Prepare Docker build context
+        run: |
+          mkdir -p bin
+          cp artifacts/cli-linux-x64-musl/* bin/appz-linux-x64-musl
+          cp artifacts/cli-linux-arm64-musl/* bin/appz-linux-arm64-musl
+          chmod +x bin/*
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          fi
+          echo "VERSION=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push multi-platform image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          tags: |
+            appzdev/cli:latest
+            appzdev/cli:${{ steps.version.outputs.VERSION }}
+
+  update-homebrew:
+    name: Update Homebrew formula
+    needs: upload-r2
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download CLI artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cli-*
+          path: artifacts
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          fi
+          echo "VERSION=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Check if darwin artifacts exist
+        id: check-darwin
+        run: |
+          if [ -d "artifacts/cli-darwin-x64" ] && [ -d "artifacts/cli-darwin-arm64" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping Homebrew update — macOS binaries not built"
+          fi
+
+      - name: Compute checksums and render formula
+        if: steps.check-darwin.outputs.available == 'true'
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+
+          # Compute SHA256 for each binary
+          SHA_DARWIN_X64=$(sha256sum artifacts/cli-darwin-x64/appz | awk '{print $1}')
+          SHA_DARWIN_ARM64=$(sha256sum artifacts/cli-darwin-arm64/appz | awk '{print $1}')
+          SHA_LINUX_X64=$(sha256sum artifacts/cli-linux-x64/appz | awk '{print $1}')
+          SHA_LINUX_ARM64=$(sha256sum artifacts/cli-linux-arm64/appz | awk '{print $1}')
+
+          # Render template
+          sed \
+            -e "s/{{VERSION}}/$VERSION/g" \
+            -e "s/{{SHA256_DARWIN_X64}}/$SHA_DARWIN_X64/g" \
+            -e "s/{{SHA256_DARWIN_ARM64}}/$SHA_DARWIN_ARM64/g" \
+            -e "s/{{SHA256_LINUX_X64}}/$SHA_LINUX_X64/g" \
+            -e "s/{{SHA256_LINUX_ARM64}}/$SHA_LINUX_ARM64/g" \
+            scripts/homebrew-formula.rb.tmpl > /tmp/appz.rb
+
+          echo "--- Rendered formula ---"
+          cat /tmp/appz.rb
+
+      - name: Push formula to tap repo
+        if: steps.check-darwin.outputs.available == 'true'
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/${{ vars.HOMEBREW_TAP_REPO }}.git" /tmp/homebrew-tap
+          mkdir -p /tmp/homebrew-tap/Formula
+          cp /tmp/appz.rb /tmp/homebrew-tap/Formula/appz.rb
+
+          cd /tmp/homebrew-tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/appz.rb
+          git commit -m "Update appz to ${VERSION}"
+          git push

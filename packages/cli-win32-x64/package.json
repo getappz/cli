@@ -1,0 +1,16 @@
+{
+	"name": "@getappz/cli-win32-x64",
+	"version": "0.0.0",
+	"description": "Appz CLI binary for win32-x64",
+	"license": "MIT",
+	"os": [
+		"win32"
+	],
+	"cpu": [
+		"x64"
+	],
+	"files": [
+		"bin/"
+	],
+	"preferUnplugged": true
+}

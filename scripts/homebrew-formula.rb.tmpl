@@ -1,0 +1,37 @@
+class Appz < Formula
+  desc "Web development toolkit CLI"
+  homepage "https://appz.dev"
+  version "{{VERSION}}"
+  license "MIT"
+
+  on_macos do
+    on_intel do
+      url "https://get.appz.dev/appz/v{{VERSION}}/appz-darwin-x64"
+      sha256 "{{SHA256_DARWIN_X64}}"
+    end
+    on_arm do
+      url "https://get.appz.dev/appz/v{{VERSION}}/appz-darwin-arm64"
+      sha256 "{{SHA256_DARWIN_ARM64}}"
+    end
+  end
+
+  on_linux do
+    on_intel do
+      url "https://get.appz.dev/appz/v{{VERSION}}/appz-linux-x64"
+      sha256 "{{SHA256_LINUX_X64}}"
+    end
+    on_arm do
+      url "https://get.appz.dev/appz/v{{VERSION}}/appz-linux-arm64"
+      sha256 "{{SHA256_LINUX_ARM64}}"
+    end
+  end
+
+  def install
+    binary = Dir.glob("appz*").first
+    bin.install binary => "appz"
+  end
+
+  test do
+    assert_match version.to_s, shell_output("#{bin}/appz --version 2>&1", 0)
+  end
+end

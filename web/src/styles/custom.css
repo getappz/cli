@@ -1,0 +1,101 @@
+/* ============================================================
+   appz — Starlight Custom Overrides
+   ============================================================
+   Light theme only — dark mode is disabled.
+   ============================================================ */
+
+@import "./tokens.css";
+
+/* ===== Force Light Theme ===== */
+
+:root {
+	color-scheme: light;
+}
+
+/* Hide the theme toggle button */
+starlight-theme-select {
+	display: none !important;
+}
+
+/* ===== Heading Font ===== */
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+	font-family: var(--az-font-heading);
+}
+
+/* ===== Header ===== */
+
+header.header {
+	background: var(--az-bg-card);
+	border-bottom: 1px solid var(--az-border);
+}
+
+/* ===== Sidebar Scrollbar ===== */
+
+nav.sidebar {
+	scrollbar-width: thin;
+	scrollbar-color: color-mix(in srgb, var(--az-accent) 30%, transparent)
+		transparent;
+}
+
+nav.sidebar::-webkit-scrollbar {
+	width: 2px;
+}
+
+nav.sidebar::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+nav.sidebar::-webkit-scrollbar-thumb {
+	background: color-mix(in srgb, var(--az-accent) 30%, transparent);
+	border-radius: 4px;
+}
+
+nav.sidebar::-webkit-scrollbar-thumb:hover {
+	background: color-mix(in srgb, var(--az-accent) 50%, transparent);
+}
+
+/* ===== Sidebar Active State ===== */
+
+nav.sidebar a[aria-current="page"] {
+	background: color-mix(in srgb, var(--az-accent) 10%, transparent);
+	border-left: 2px solid var(--az-accent);
+	border-radius: 0 4px 4px 0;
+	padding-left: 0.75rem;
+	font-weight: 600;
+	color: var(--az-accent);
+}
+
+/* ===== Sidebar Group Labels ===== */
+
+nav.sidebar .top-level > li > details > summary,
+nav.sidebar .top-level > li > a {
+	text-transform: uppercase;
+	font-size: 0.75rem;
+	font-weight: 700;
+	letter-spacing: 0.05em;
+	color: var(--az-accent);
+}
+
+/* ===== Code Blocks ===== */
+
+pre {
+	border: 1px solid var(--sl-color-hairline-light);
+}
+
+/* ===== Callout / Aside accent ===== */
+
+.starlight-aside--tip {
+	border-color: var(--az-accent);
+}
+
+/* ===== Content area breathing room ===== */
+
+.content-panel {
+	padding-top: 2rem;
+}

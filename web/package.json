@@ -1,0 +1,26 @@
+{
+	"name": "@getappz/web",
+	"version": "1.0.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "astro dev",
+		"build": "astro build",
+		"preview": "wrangler pages dev ./dist",
+		"typecheck": "astro check",
+		"deploy": "pnpm build && wrangler pages deploy ./dist"
+	},
+	"dependencies": {
+		"@astrojs/react": "^5.0.0",
+		"@astrojs/starlight": "^0.38.1",
+		"astro": "^6.0.4",
+		"react": "^19.2.4",
+		"react-dom": "^19.2.4",
+		"wrangler": "^4.73.0"
+	},
+	"devDependencies": {
+		"@astrojs/check": "^0.9.7",
+		"starlight-llms-txt": "^0.8.0",
+		"typescript": "^5.9.3"
+	}
+}

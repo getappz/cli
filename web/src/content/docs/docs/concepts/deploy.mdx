@@ -1,0 +1,21 @@
+---
+title: Deploy
+description: How deployment works in Appz.
+---
+
+`appz deploy` handles deployment to various platforms.
+
+## Supported Platforms
+
+- Cloudflare Pages
+- Vercel
+- Self-hosted (via SSH/rsync)
+
+## Usage
+
+```bash
+appz build
+appz deploy
+```
+
+Appz detects the deployment target from project configuration and deploys the build output.

@@ -1,0 +1,27 @@
+---
+title: Configuration
+description: Configure Appz for your project.
+---
+
+Appz uses zero-config defaults with framework detection. Most projects work out of the box.
+
+## Framework Detection
+
+Appz automatically detects your framework by scanning for known files:
+
+| Framework | Detection Files |
+|-----------|----------------|
+| WordPress | `wp-config.php`, `wp-content/`, `wp-includes/` |
+| Astro | `astro.config.*` |
+| Next.js | `next.config.*` |
+| Hugo | `hugo.toml`, `config.toml` |
+| And more... | See `appz init --help` for all templates |
+
+## Environment Variables
+
+Appz respects standard environment variables:
+
+| Variable | Description |
+|----------|-------------|
+| `PORT` | Dev server port |
+| `CI` | Enables CI mode (non-interactive) |

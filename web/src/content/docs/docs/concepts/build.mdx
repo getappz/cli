@@ -1,0 +1,17 @@
+---
+title: Build
+description: How production builds work in Appz.
+---
+
+`appz build` creates optimized production builds.
+
+## Framework Detection
+
+Appz detects the framework and runs the appropriate build command:
+
+- **JS frameworks**: Runs the framework's build command (e.g., `astro build`)
+- **WordPress**: Uses Simply Static for static export via DDEV
+
+## Output
+
+Build output is placed in the framework's default output directory (e.g., `dist/`, `build/`, `.next/`).

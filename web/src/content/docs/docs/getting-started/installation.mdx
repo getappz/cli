@@ -1,0 +1,48 @@
+---
+title: Installation
+description: Install Appz on macOS, Linux, or Windows.
+---
+
+## Shell Script (Recommended)
+
+```bash
+curl -fsSL https://get.appz.dev/appz/install.sh | sh
+```
+
+This installs the latest version to `~/.local/bin/appz`.
+
+## npm
+
+```bash
+npx @getappz/cli@latest
+```
+
+Or install globally:
+
+```bash
+npm install -g @getappz/cli
+```
+
+## Homebrew (macOS / Linux)
+
+```bash
+brew install appz-dev/tap/appz
+```
+
+## Windows
+
+```powershell
+irm https://get.appz.dev/appz/install.ps1 | iex
+```
+
+## Docker
+
+```bash
+docker run --rm -v $(pwd):/site appzdev/cli build
+```
+
+## Verify Installation
+
+```bash
+appz --version
+```

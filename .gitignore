@@ -41,6 +41,14 @@ testResults.xml
 node_modules/
 package-lock.json
 yarn.lock
+.pnpm-store/
+pnpm-lock.yaml
+
+# JS/TS build artifacts
+.astro/
+.turbo/
+*.tsbuildinfo
+packages/cli-*/bin/
 
 # Project specific
 .worktrees/

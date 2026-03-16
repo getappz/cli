@@ -1,0 +1,25 @@
+---
+title: Init
+description: How project initialization works in Appz.
+---
+
+`appz init` scaffolds new projects from multiple source types:
+
+## Source Types
+
+1. **Built-in templates** — `appz init wordpress`, `appz init astro`
+2. **GitHub repos** — `appz init user/repo`
+3. **npm packages** — `appz init npm:create-foo`
+4. **Local paths** — `appz init ./my-template`
+5. **Remote archives** — `appz init https://example.com/template.tar.gz`
+
+## Provider System
+
+Each source type is handled by a dedicated provider:
+
+- **WordPressProvider** — downloads from `wordpress.org/latest.tar.gz`
+- **FrameworkProvider** — runs `npm create` / `npx create-*` commands
+- **GitProvider** — clones from Git repositories
+- **RemoteArchiveProvider** — downloads and extracts archives
+- **NpmProvider** — installs from npm registry
+- **LocalProvider** — copies from local filesystem

@@ -1,0 +1,21 @@
+{
+	"name": "appz-cli",
+	"version": "1.0.0",
+	"private": true,
+	"description": "Appz CLI monorepo",
+	"packageManager": "pnpm@10.27.0",
+	"scripts": {
+		"dev:web": "pnpm --filter @getappz/web dev",
+		"build:web": "pnpm --filter @getappz/web build",
+		"lint": "biome check --write .",
+		"lint:check": "biome check .",
+		"prepare": "husky"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.4.7",
+		"husky": "^9.1.7"
+	},
+	"engines": {
+		"node": ">=20"
+	}
+}

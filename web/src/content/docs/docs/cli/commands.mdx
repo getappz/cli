@@ -1,0 +1,55 @@
+---
+title: Commands
+description: Complete reference for all Appz CLI commands.
+---
+
+## `appz init`
+
+Scaffold a new project from a template.
+
+```bash
+appz init <template> [name] [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--name, -n` | Project name (defaults to template name) |
+| `--template, -T` | Explicit template source |
+| `--output, -o` | Output directory |
+| `--skip-install` | Skip dependency installation |
+| `--force` | Overwrite existing directory |
+
+### Examples
+
+```bash
+appz init wordpress
+appz init wordpress --name my-blog
+appz init astro my-site
+appz init https://github.com/user/repo
+```
+
+## `appz dev`
+
+Start a development server for the current project.
+
+```bash
+appz dev [options]
+```
+
+Automatically detects the framework and starts the appropriate dev server. For DDEV-supported frameworks (WordPress, Drupal, Laravel, etc.), configures and starts DDEV containers.
+
+## `appz build`
+
+Build the project for production.
+
+```bash
+appz build [options]
+```
+
+## `appz deploy`
+
+Deploy the built project.
+
+```bash
+appz deploy [options]
+```

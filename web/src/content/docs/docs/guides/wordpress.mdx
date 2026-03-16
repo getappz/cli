@@ -1,0 +1,30 @@
+---
+title: WordPress
+description: Develop WordPress sites with Appz and DDEV.
+---
+
+## Quick Start
+
+```bash
+appz init wordpress
+cd wordpress
+appz dev
+```
+
+Appz downloads the latest WordPress, configures DDEV, starts containers, and installs WordPress with default credentials:
+
+- **URL**: `https://wordpress.ddev.site`
+- **Admin**: `admin` / `admin`
+
+## How It Works
+
+1. **`appz init wordpress`** downloads WordPress from `wordpress.org/latest.tar.gz` and scaffolds the project
+2. **`appz dev`** detects WordPress, configures DDEV (`ddev config --project-type=wordpress`), starts containers, and runs `wp core install`
+
+## Stopping
+
+```bash
+appz dev stop
+```
+
+This runs `ddev stop` to shut down the containers.

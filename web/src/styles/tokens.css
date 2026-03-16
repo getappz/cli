@@ -1,0 +1,162 @@
+/* ============================================================
+   appz Design Tokens
+   ============================================================
+   Single source of truth for colors, typography, and spacing.
+   Consumed by both the Starlight docs (custom.css) and the
+   marketing landing page (index.astro).
+
+   Light theme only.
+
+   Naming: --az-<category>-<name>
+   ============================================================ */
+
+/* ===== Font Faces ===== */
+
+@font-face {
+	font-family: "Plus Jakarta Sans";
+	font-style: normal;
+	font-weight: 400;
+	font-display: swap;
+	src: url("/fonts/plus-jakarta-sans-400.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: "Plus Jakarta Sans";
+	font-style: normal;
+	font-weight: 600;
+	font-display: swap;
+	src: url("/fonts/plus-jakarta-sans-600.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: "Plus Jakarta Sans";
+	font-style: normal;
+	font-weight: 700;
+	font-display: swap;
+	src: url("/fonts/plus-jakarta-sans-700.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: "DM Sans";
+	font-style: normal;
+	font-weight: 400;
+	font-display: swap;
+	src: url("/fonts/dm-sans-400.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: "DM Sans";
+	font-style: normal;
+	font-weight: 500;
+	font-display: swap;
+	src: url("/fonts/dm-sans-500.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: "JetBrains Mono";
+	font-style: normal;
+	font-weight: 400;
+	font-display: swap;
+	src: url("/fonts/jetbrains-mono-400.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: "JetBrains Mono";
+	font-style: normal;
+	font-weight: 500;
+	font-display: swap;
+	src: url("/fonts/jetbrains-mono-500.woff2") format("woff2");
+}
+
+/* ===== Typography ===== */
+
+:root {
+	--az-font-heading: "Plus Jakarta Sans", system-ui, sans-serif;
+	--az-font-body: "DM Sans", system-ui, sans-serif;
+	--az-font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+/* ===== Brand Palette ===== */
+
+:root {
+	--az-blue: #3b82f6;
+	--az-blue-rgb: 59, 130, 246;
+	--az-green: hsl(142, 76%, 46%);
+}
+
+/* ===== Light Theme ===== */
+
+:root {
+	/* Backgrounds */
+	--az-bg: hsl(240, 10%, 98%);
+	--az-bg-card: hsl(0, 0%, 100%);
+	--az-bg-surface: hsl(240, 12%, 96%);
+	--az-bg-elevated: hsl(240, 10%, 93%);
+
+	/* Borders */
+	--az-border: hsl(230, 14%, 88%);
+	--az-border-hover: hsl(230, 12%, 80%);
+	--az-border-active: hsl(230, 10%, 70%);
+
+	/* Text */
+	--az-text: hsl(230, 15%, 15%);
+	--az-text-muted: hsl(230, 10%, 44%);
+	--az-text-faint: hsl(230, 8%, 62%);
+
+	/* Accent */
+	--az-accent: hsl(217, 90%, 50%);
+	--az-accent-hover: hsl(217, 90%, 45%);
+	--az-accent-glow: rgba(var(--az-blue-rgb), 0.08);
+	--az-accent-fg: hsl(0, 0%, 100%);
+	--az-accent-low: hsl(217, 80%, 93%);
+	--az-accent-high: hsl(217, 70%, 22%);
+
+	/* Surfaces */
+	--az-card-gradient: linear-gradient(
+		180deg,
+		hsl(0, 0%, 100%),
+		var(--az-bg-surface)
+	);
+	--az-nav-bg: rgba(255, 255, 255, 0.85);
+
+	/* Shadows */
+	--az-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
+	--az-shadow-md:
+		0 0 0 1px var(--az-border), 0 2px 4px rgba(0, 0, 0, 0.05),
+		0 8px 16px rgba(0, 0, 0, 0.06);
+	--az-shadow-lg:
+		0 0 0 1px var(--az-border-hover), 0 4px 8px rgba(0, 0, 0, 0.08),
+		0 16px 32px rgba(0, 0, 0, 0.08);
+
+	/* Code blocks */
+	--az-code-bg: hsl(230, 14%, 96%);
+	--az-code-comment: hsl(230, 10%, 55%);
+	--az-code-string: hsl(217, 80%, 40%);
+	--az-code-keyword: hsl(217, 90%, 42%);
+	--az-code-cmd: var(--az-text);
+	--az-code-success: hsl(142, 60%, 35%);
+	--az-code-header: var(--az-text-muted);
+
+	/* Success */
+	--az-green-fg: hsl(142, 60%, 35%);
+}
+
+/* ===== Starlight Integration ===== */
+
+:root {
+	--sl-font: var(--az-font-body);
+	--sl-font-mono: var(--az-font-mono);
+	--sl-font-heading: var(--az-font-heading);
+
+	--sl-color-accent-low: var(--az-accent-low);
+	--sl-color-accent: var(--az-accent);
+	--sl-color-accent-high: var(--az-accent-high);
+
+	--sl-color-text-accent: var(--az-accent);
+
+	--sl-color-bg-nav: var(--az-bg-card);
+	--sl-color-bg-sidebar: hsl(240, 10%, 97%);
+	--sl-color-hairline-light: var(--az-border);
+
+	--sl-color-text: hsl(230, 15%, 25%);
+}

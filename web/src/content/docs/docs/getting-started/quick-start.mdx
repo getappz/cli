@@ -1,0 +1,40 @@
+---
+title: Quick Start
+description: Create your first project with Appz in under a minute.
+---
+
+## Install
+
+```bash
+# macOS / Linux
+curl -fsSL https://get.appz.dev/appz/install.sh | sh
+
+# npm
+npx @getappz/cli@latest
+
+# Homebrew
+brew install appz-dev/tap/appz
+```
+
+## Create a Project
+
+```bash
+# WordPress
+appz init wordpress
+cd wordpress
+appz dev
+
+# Astro
+appz init astro my-site
+cd my-site
+appz dev
+```
+
+## What Happens
+
+1. **`appz init`** downloads the template and scaffolds the project
+2. **`appz dev`** detects the framework and starts the appropriate dev server
+   - For WordPress: configures DDEV, starts containers, installs WP with admin/admin
+   - For JS frameworks: runs the framework's dev command with hot reload
+
+That's it. Open your browser and start developing.

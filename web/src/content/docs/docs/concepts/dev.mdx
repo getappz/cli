@@ -1,0 +1,25 @@
+---
+title: Dev
+description: How the development server works in Appz.
+---
+
+`appz dev` provides framework-aware development servers.
+
+## Detection
+
+Appz scans the project directory for framework-specific files and selects the appropriate dev strategy.
+
+## JavaScript Frameworks
+
+For JS frameworks, Appz runs the framework's native dev command (e.g., `astro dev`, `next dev`) with hot module replacement.
+
+## DDEV Frameworks
+
+For PHP/CMS frameworks (WordPress, Drupal, Laravel, etc.), Appz uses DDEV:
+
+1. Configures DDEV if not already configured
+2. Starts Docker containers
+3. Verifies container internet connectivity
+4. Runs framework-specific install (e.g., `wp core install` for WordPress)
+5. Opens the site in your browser
+6. Streams container logs

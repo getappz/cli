@@ -1,0 +1,25 @@
+---
+title: Static Sites
+description: Build static sites with Appz.
+---
+
+Appz supports popular static site generators out of the box.
+
+## Supported Generators
+
+| Generator | Init Command |
+|-----------|-------------|
+| Astro | `appz init astro` |
+| Hugo | `appz init hugo` |
+| Next.js | `appz init nextjs` |
+| Vite | `appz init vite` |
+
+## Workflow
+
+```bash
+appz init astro my-site
+cd my-site
+appz dev      # Start dev server
+appz build    # Production build
+appz deploy   # Deploy
+```

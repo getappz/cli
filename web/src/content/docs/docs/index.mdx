@@ -1,0 +1,32 @@
+---
+title: Appz Documentation
+description: The web development toolkit — init, dev, build, deploy.
+template: splash
+hero:
+  tagline: Initialize, develop, build, and deploy web projects from a single CLI.
+  actions:
+    - text: Quick Start
+      link: /docs/getting-started/quick-start/
+      icon: right-arrow
+      variant: primary
+    - text: Installation
+      link: /docs/getting-started/installation/
+      variant: minimal
+---
+
+import { Card, CardGrid } from "@astrojs/starlight/components";
+
+<CardGrid stagger>
+  <Card title="Init" icon="rocket">
+    Scaffold projects from templates — WordPress, Astro, Next.js, and more. One command, ready to develop.
+  </Card>
+  <Card title="Dev" icon="laptop">
+    Framework-aware dev server with DDEV integration for PHP/CMS projects and hot reload for everything else.
+  </Card>
+  <Card title="Build" icon="setting">
+    Optimized production builds with framework detection and static export support.
+  </Card>
+  <Card title="Deploy" icon="external">
+    Deploy to Cloudflare Pages, Vercel, or any hosting platform with zero configuration.
+  </Card>
+</CardGrid>

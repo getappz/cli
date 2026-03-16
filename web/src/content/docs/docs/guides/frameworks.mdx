@@ -1,0 +1,28 @@
+---
+title: Frameworks
+description: Supported frameworks and how Appz works with them.
+---
+
+Appz auto-detects frameworks and adapts its behavior accordingly.
+
+## JavaScript Frameworks
+
+| Framework | Dev Command | Build Command |
+|-----------|------------|---------------|
+| Astro | `astro dev` | `astro build` |
+| Next.js | `next dev` | `next build` |
+| Vite | `vite` | `vite build` |
+| SvelteKit | `vite dev` | `vite build` |
+| Nuxt | `nuxt dev` | `nuxt build` |
+
+## PHP / CMS Frameworks (via DDEV)
+
+| Framework | DDEV Project Type |
+|-----------|------------------|
+| WordPress | `wordpress` |
+| Drupal | `drupal10` |
+| Laravel | `laravel` |
+| TYPO3 | `typo3` |
+| Symfony | `symfony` |
+
+PHP frameworks use DDEV for local development, providing a full Docker-based environment with database, web server, and PHP runtime.

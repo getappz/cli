@@ -273,12 +273,12 @@ pub async fn run_cli(args: Vec<OsString>) -> MainResult {
                     #[cfg(feature = "deploy")]
                     Commands::Deploy(args) => {
                         if args.init {
-                            app::commands::deploy_init(session, args.provider).await
+                            app::commands::deploy_init(session, args.platform).await
                         } else {
                             app::commands::deploy(
                                 session,
                                 args.project_path,
-                                args.provider,
+                                args.platform,
                                 args.prod,
                                 args.preview,
                                 args.target,

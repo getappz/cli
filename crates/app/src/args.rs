@@ -237,9 +237,10 @@ pub struct DeployArgs {
     #[arg()]
     pub project_path: Option<PathBuf>,
 
-    /// Target provider (vercel, netlify, cloudflare-pages, github-pages, etc.)
+    /// Target platform (vercel, netlify, cloudflare-pages, github-pages, etc.)
     /// Auto-detected if not specified.
-    pub provider: Option<String>,
+    #[arg(long)]
+    pub platform: Option<String>,
 
     /// Create a production deployment (shorthand for --target=production)
     #[arg(long)]

@@ -271,10 +271,19 @@ impl DeployProvider for VercelProvider {
     }
 
     async fn list_deployments(&self, ctx: DeployContext) -> DeployResult<Vec<DeploymentInfo>> {
+        // Check if project is linked — vercel ls requires a linked project
+        let linked = ctx.project_dir.join(".vercel/project.json").exists();
+        if !linked {
+            return Err(DeployError::DeployFailed {
+                provider: "Vercel".into(),
+                reason: "Project not linked to Vercel. Run `appz deploy --init` or `vercel link` first.".into(),
+            });
+        }
+
         let token_flag = get_env_var("VERCEL_TOKEN")
             .map(|t| format!(" --token {}", t))
             .unwrap_or_default();
-        let cmd = format!("vercel ls -F json{}", token_flag);
+        let cmd = format!("vercel ls -F json --yes{}", token_flag);
 
         let result = ctx.exec(&cmd).await?;
 

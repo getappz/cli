@@ -135,10 +135,6 @@ pub async fn run_cli(args: Vec<OsString>) -> MainResult {
 
                     match command {
                     Commands::Dev(args) => app::commands::dev(session, args).await,
-                    #[cfg(feature = "dev-server")]
-                    Commands::DevServer(args) => {
-                        app::commands::dev_server(session, args).await
-                    }
                     Commands::Build => app::commands::build(session).await,
                     #[cfg(feature = "dev-server")]
                     Commands::Preview(args) => {

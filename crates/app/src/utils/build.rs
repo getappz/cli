@@ -29,6 +29,12 @@ pub async fn detect_build_output_dir(
     project_path: &Path,
     explicit_dir: Option<PathBuf>,
 ) -> Result<PathBuf> {
+    // Check .appz/output/static first (WordPress static export, custom builds)
+    let appz_static = project_path.join(".appz/output/static");
+    if explicit_dir.is_none() && appz_static.is_dir() {
+        return Ok(appz_static);
+    }
+
     // If explicit directory provided, use it
     if let Some(ref d) = explicit_dir {
         let output_dir = if d.is_absolute() {

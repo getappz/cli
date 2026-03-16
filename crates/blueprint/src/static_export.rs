@@ -10,7 +10,8 @@ use std::sync::Arc;
 use crate::runtime::{RuntimeError, WordPressRuntime};
 
 /// Default output directory name for static exports.
-const DEFAULT_OUTPUT_DIR: &str = "static-export";
+/// Matches the `.appz/output/static` convention used by `appz preview`.
+const DEFAULT_OUTPUT_DIR: &str = ".appz/output/static";
 
 /// Maximum time to wait for export completion (seconds).
 const EXPORT_TIMEOUT_SECS: u64 = 300;

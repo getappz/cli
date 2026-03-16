@@ -69,8 +69,6 @@ pub use check::check;
 #[cfg(feature = "deploy")]
 pub use deploy::{deploy, deploy_init, deploy_list};
 pub use dev::dev;
-#[cfg(feature = "dev-server")]
-pub use dev_server::dev_server;
 #[cfg(feature = "appz-cloud")]
 pub use domains::*;
 #[cfg(feature = "appz-cloud")]

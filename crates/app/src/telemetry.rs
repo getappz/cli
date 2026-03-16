@@ -196,8 +196,6 @@ pub fn command_name_for_telemetry(command: crate::app::Commands) -> String {
     use crate::app::Commands;
     let name = match command {
         Commands::Dev(_) => "dev",
-        #[cfg(feature = "dev-server")]
-        Commands::DevServer(_) => "dev-server",
         Commands::Build => "build",
         #[cfg(feature = "dev-server")]
         Commands::Preview(_) => "preview",

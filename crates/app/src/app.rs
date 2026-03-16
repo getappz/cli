@@ -128,9 +128,6 @@ impl LogLevel {
 pub enum Commands {
     /// Detect and print the framework used in the project
     Dev(DevArgs),
-    /// Start a local development server with hot reloading
-    #[cfg(feature = "dev-server")]
-    DevServer(DevServerArgs),
     /// Build the project (install dependencies and build)
     Build,
     /// Preview the built project by serving static files from output directory

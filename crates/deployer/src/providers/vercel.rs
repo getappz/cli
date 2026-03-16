@@ -197,7 +197,15 @@ impl DeployProvider for VercelProvider {
         let token_flag = get_env_var("VERCEL_TOKEN")
             .map(|t| format!(" --token {}", t))
             .unwrap_or_default();
-        let cmd = format!("vercel deploy --prod --yes{}", token_flag);
+
+        // Use --prebuilt when output dir already has files (e.g. static export)
+        let prebuilt_flag = if has_prebuilt_output(&ctx.project_dir, &ctx.output_dir) {
+            " --prebuilt"
+        } else {
+            ""
+        };
+
+        let cmd = format!("vercel deploy --prod --yes{}{}", prebuilt_flag, token_flag);
 
         let status = ctx.exec_interactive(&cmd).await?;
 
@@ -246,7 +254,14 @@ impl DeployProvider for VercelProvider {
         let token_flag = get_env_var("VERCEL_TOKEN")
             .map(|t| format!(" --token {}", t))
             .unwrap_or_default();
-        let cmd = format!("vercel deploy --yes{}", token_flag);
+
+        let prebuilt_flag = if has_prebuilt_output(&ctx.project_dir, &ctx.output_dir) {
+            " --prebuilt"
+        } else {
+            ""
+        };
+
+        let cmd = format!("vercel deploy --yes{}{}", prebuilt_flag, token_flag);
 
         let status = ctx.exec_interactive(&cmd).await?;
 
@@ -342,6 +357,15 @@ impl DeployProvider for VercelProvider {
 }
 
 /// Read the project URL from .vercel/project.json after a deployment.
+/// Check if the output directory already contains built files.
+fn has_prebuilt_output(project_dir: &std::path::Path, output_dir: &str) -> bool {
+    let output_path = project_dir.join(output_dir);
+    output_path.is_dir()
+        && std::fs::read_dir(&output_path)
+            .map(|mut d| d.next().is_some())
+            .unwrap_or(false)
+}
+
 /// Ensure vercel.json exists with the correct outputDirectory.
 ///
 /// If vercel.json doesn't exist, creates it. If it exists, updates

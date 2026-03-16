@@ -1001,6 +1001,12 @@ pub fn resolve_output_dir(project_dir: &std::path::Path) -> String {
         return ".appz/output".to_string();
     }
 
+    // Check for static export output (from appz wp-export)
+    let static_output = project_dir.join(".appz/output/static");
+    if static_output.is_dir() && std::fs::read_dir(&static_output).map(|mut d| d.next().is_some()).unwrap_or(false) {
+        return ".appz/output/static".to_string();
+    }
+
     // Try to read outputDirectory from appz.json
     if let Ok(root) =
         starbase_utils::json::read_file::<serde_json::Value>(project_dir.join("appz.json"))

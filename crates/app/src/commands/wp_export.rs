@@ -35,22 +35,47 @@ pub async fn wp_export(session: AppzSession, args: WpExportArgs) -> AppResult {
     runtime.start(&project_path)
         .map_err(|e| miette::miette!("{}", e))?;
 
-    let output_dir = args.output;
+    let host_output = args.output
+        .unwrap_or_else(|| project_path.join(".appz/output/static"));
+
+    // Ensure the output dir exists on the host BEFORE export.
+    // For DDEV bind-mounted projects, this also creates it inside the container.
+    std::fs::create_dir_all(&host_output)
+        .map_err(|e| miette::miette!("Failed to create output dir: {}", e))?;
+
     let exporter = blueprint::StaticExporter::new(project_path.clone(), runtime.clone());
 
-    let export_path = exporter
-        .export(output_dir.as_deref())
+    exporter
+        .export(Some(host_output.as_path()))
         .map_err(|e| miette::miette!("Static export failed: {}", e))?;
 
-    // For DDEV: files are written inside the container, sync them to the host
+    // For DDEV: if bind-mounted, files are already on host. If mutagen, need docker cp.
     if runtime.slug() == "ddev" {
-        let host_output = output_dir
-            .clone()
-            .unwrap_or_else(|| project_path.join(".appz/output/static"));
-        sync_from_ddev(&project_path, &host_output).await?;
+        let has_files = std::fs::read_dir(&host_output)
+            .map(|mut d| d.next().is_some())
+            .unwrap_or(false);
+
+        if !has_files {
+            // Files not on host — likely mutagen mode, need docker cp
+            sync_from_ddev(&project_path, &host_output).await?;
+        }
     }
 
-    let display_path = export_path.strip_prefix(&project_path).unwrap_or(&export_path);
+    // Final check
+    let has_files = std::fs::read_dir(&host_output)
+        .map(|mut d| d.next().is_some())
+        .unwrap_or(false);
+
+    if !has_files {
+        return Err(miette::miette!(
+            "Export completed but no files found in {}\n\
+             Check Simply Static settings in WP admin or run:\n  \
+             ddev exec ls -la /var/www/html/.appz/output/static/",
+            host_output.display()
+        ));
+    }
+
+    let display_path = host_output.strip_prefix(&project_path).unwrap_or(&host_output);
     println!("\n✓ Static files exported to: {}", display_path.display());
     println!("\nYou can now deploy with:");
     println!("  appz deploy --platform vercel");
@@ -60,6 +85,7 @@ pub async fn wp_export(session: AppzSession, args: WpExportArgs) -> AppResult {
 }
 
 /// Sync the static export output from the DDEV container to the host filesystem.
+/// Only needed for mutagen-mode DDEV projects where the filesystem isn't bind-mounted.
 async fn sync_from_ddev(
     project_path: &std::path::Path,
     host_output: &std::path::Path,
@@ -72,13 +98,9 @@ async fn sync_from_ddev(
         let _ = std::fs::create_dir_all(parent);
     }
 
-    // Remove stale host output so docker cp creates a fresh copy
-    if host_output.exists() {
-        let _ = std::fs::remove_dir_all(host_output);
-    }
-
+    // For docker cp, we need to copy the contents, not replace the dir
     let copy_cmd = format!(
-        "docker cp {}:/var/www/html/.appz/output/static {}",
+        "docker cp {}:/var/www/html/.appz/output/static/. {}",
         container,
         host_output.display()
     );
@@ -95,20 +117,6 @@ async fn sync_from_ddev(
         tool_info: None,
     };
     run_local_with(&ctx, &copy_cmd, opts).await?;
-
-    // Verify files were actually copied
-    let has_files = std::fs::read_dir(host_output)
-        .map(|mut d| d.next().is_some())
-        .unwrap_or(false);
-
-    if !has_files {
-        return Err(miette::miette!(
-            "Static export sync failed: no files in {}\n\
-             The export may have written to a different path inside the container.\n\
-             Check with: ddev exec ls -la /var/www/html/.appz/output/static/",
-            host_output.display()
-        ));
-    }
 
     println!("✓ Synced static files from DDEV container");
     Ok(())

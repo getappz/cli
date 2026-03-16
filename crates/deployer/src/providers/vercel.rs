@@ -191,21 +191,15 @@ impl DeployProvider for VercelProvider {
             });
         }
 
-        // Ensure vercel.json has outputDirectory set
-        ensure_vercel_json(&ctx.project_dir, &ctx.output_dir)?;
+        // Ensure vercel.json has outputDirectory (and skip build if output already exists)
+        let skip_build = has_prebuilt_output(&ctx.project_dir, &ctx.output_dir);
+        ensure_vercel_json(&ctx.project_dir, &ctx.output_dir, skip_build)?;
 
         let token_flag = get_env_var("VERCEL_TOKEN")
             .map(|t| format!(" --token {}", t))
             .unwrap_or_default();
 
-        // Use --prebuilt when output dir already has files (e.g. static export)
-        let prebuilt_flag = if has_prebuilt_output(&ctx.project_dir, &ctx.output_dir) {
-            " --prebuilt"
-        } else {
-            ""
-        };
-
-        let cmd = format!("vercel deploy --prod --yes{}{}", prebuilt_flag, token_flag);
+        let cmd = format!("vercel deploy --prod --yes{}", token_flag);
 
         let status = ctx.exec_interactive(&cmd).await?;
 
@@ -249,19 +243,14 @@ impl DeployProvider for VercelProvider {
             });
         }
 
-        ensure_vercel_json(&ctx.project_dir, &ctx.output_dir)?;
+        let skip_build = has_prebuilt_output(&ctx.project_dir, &ctx.output_dir);
+        ensure_vercel_json(&ctx.project_dir, &ctx.output_dir, skip_build)?;
 
         let token_flag = get_env_var("VERCEL_TOKEN")
             .map(|t| format!(" --token {}", t))
             .unwrap_or_default();
 
-        let prebuilt_flag = if has_prebuilt_output(&ctx.project_dir, &ctx.output_dir) {
-            " --prebuilt"
-        } else {
-            ""
-        };
-
-        let cmd = format!("vercel deploy --yes{}{}", prebuilt_flag, token_flag);
+        let cmd = format!("vercel deploy --yes{}", token_flag);
 
         let status = ctx.exec_interactive(&cmd).await?;
 
@@ -369,10 +358,13 @@ fn has_prebuilt_output(project_dir: &std::path::Path, output_dir: &str) -> bool 
 /// Ensure vercel.json exists with the correct outputDirectory.
 ///
 /// If vercel.json doesn't exist, creates it. If it exists, updates
-/// outputDirectory without overwriting other settings.
+/// outputDirectory without overwriting other settings. When `skip_build`
+/// is true, also sets buildCommand to empty so Vercel doesn't try to
+/// build (the output is pre-built, e.g. from appz wp-export).
 fn ensure_vercel_json(
     project_dir: &std::path::Path,
     output_dir: &str,
+    skip_build: bool,
 ) -> DeployResult<()> {
     let vercel_json_path = project_dir.join("vercel.json");
 
@@ -388,12 +380,18 @@ fn ensure_vercel_json(
         serde_json::json!({})
     };
 
-    // Set outputDirectory
     if let Some(obj) = config.as_object_mut() {
         obj.insert(
             "outputDirectory".to_string(),
             serde_json::Value::String(output_dir.to_string()),
         );
+        if skip_build {
+            // Empty buildCommand tells Vercel to skip building
+            obj.insert(
+                "buildCommand".to_string(),
+                serde_json::Value::String(String::new()),
+            );
+        }
     }
 
     let json_str = serde_json::to_string_pretty(&config).map_err(|e| {

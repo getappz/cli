@@ -85,13 +85,21 @@ pub async fn run(
         ui::blank_line(&ctx.options);
         ui::info(&ctx.options, "Next steps:");
         ui::info(&ctx.options, &format!("  cd {}", project_name));
-        if output.installed {
-            ui::info(&ctx.options, "  # Dependencies are already installed");
+        let is_ddev_framework = matches!(
+            output.framework.as_deref(),
+            Some("WordPress" | "Drupal" | "Laravel" | "TYPO3" | "Backdrop" | "CakePHP" | "Magento" | "Symfony" | "CodeIgniter")
+        );
+        if is_ddev_framework {
+            ui::info(&ctx.options, "  appz dev");
         } else {
-            ui::info(&ctx.options, "  # Install dependencies: npm install (or pnpm/yarn/bun)");
-        }
-        if output.framework.is_some() {
-            ui::info(&ctx.options, "  # Start development server: appz dev");
+            if output.installed {
+                ui::info(&ctx.options, "  # Dependencies are already installed");
+            } else {
+                ui::info(&ctx.options, "  # Install dependencies: npm install (or pnpm/yarn/bun)");
+            }
+            if output.framework.is_some() {
+                ui::info(&ctx.options, "  # Start development server: appz dev");
+            }
         }
     }
 

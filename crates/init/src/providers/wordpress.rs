@@ -1,7 +1,7 @@
 //! WordPress provider: download full WordPress from wordpress.org and set up.
 //!
-//! Downloads latest.tar.gz, extracts, removes default plugins, and renames
-//! wp-config-sample.php to wp-config.php.
+//! Downloads latest.tar.gz, extracts, and removes default plugins.
+//! Leaves wp-config-sample.php as-is so DDEV can manage wp-config.php.
 
 use async_trait::async_trait;
 use tracing::instrument;
@@ -61,11 +61,6 @@ impl InitProvider for WordPressProvider {
         )
         .map_err(|e| InitError::FsError(format!("Write plugins index: {}", e)))?;
 
-        // Rename wp-config-sample.php to wp-config.php
-        if fs.exists("wp-config-sample.php") {
-            fs.rename("wp-config-sample.php", "wp-config.php")
-                .map_err(|e| InitError::FsError(format!("Rename wp-config: {}", e)))?;
-        }
 
         Ok(InitOutput {
             project_path,

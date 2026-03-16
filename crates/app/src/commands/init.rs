@@ -76,7 +76,7 @@ pub async fn init(
                 tool_info: None,
             };
             if run_local_with(&ctx, &config_cmd, opts).await.is_ok() {
-                println!("✓ DDEV configured. Run `ddev start` then `ddev launch` to start developing.");
+                println!("✓ DDEV configured.");
             }
         }
     } else if is_ddev_supported_framework(&template_source) && !is_ddev_available() {
@@ -110,9 +110,7 @@ fn resolve_template_and_name(
             || init::has_create_command(&pos_arg);
 
         if is_source {
-            let proj_name = name.ok_or_else(|| {
-                miette!("Project name required. Use --name when using a template source.")
-            })?;
+            let proj_name = name.unwrap_or_else(|| pos_arg.clone());
             return Ok((pos_arg, proj_name));
         }
 

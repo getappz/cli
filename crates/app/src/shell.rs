@@ -36,7 +36,7 @@ fn extract_mise_tools_from_command(
     pm_name: Option<&str>,
     pm_version: Option<&str>,
 ) -> Vec<(String, Option<String>)> {
-    eprintln!("[DEBUG] extract_mise_tools_from_command: cmd={:?}, pm_name={:?}, pm_version={:?}", cmd, pm_name, pm_version);
+    tracing::debug!("extract_mise_tools_from_command: cmd={:?}, pm_name={:?}, pm_version={:?}", cmd, pm_name, pm_version);
     let mut tools = Vec::new();
     let mut seen_tools = std::collections::HashSet::new();
 
@@ -46,42 +46,42 @@ fn extract_mise_tools_from_command(
         .flat_map(|s| s.split(" || "))
         .map(|s| s.trim())
         .collect();
-    eprintln!("[DEBUG] extract_mise_tools_from_command: split into {} parts: {:?}", parts.len(), parts);
+    tracing::debug!("extract_mise_tools_from_command: split into {} parts: {:?}", parts.len(), parts);
 
     for part in parts {
         // Parse the first token from each command part
         if let Ok(parts) = shell_words::split(part) {
             if let Some(first) = parts.first() {
-                eprintln!("[DEBUG] extract_mise_tools_from_command: checking first token: {:?}", first);
+                tracing::debug!("extract_mise_tools_from_command: checking first token: {:?}", first);
                 if is_mise_tool(first) {
                     let tool_name = first.to_string();
-                    eprintln!("[DEBUG] extract_mise_tools_from_command: found mise tool: {}", tool_name);
+                    tracing::debug!("extract_mise_tools_from_command: found mise tool: {}", tool_name);
                     
                     // Skip if we've already seen this tool
                     if seen_tools.contains(&tool_name) {
-                        eprintln!("[DEBUG] extract_mise_tools_from_command: skipping duplicate tool: {}", tool_name);
+                        tracing::debug!("extract_mise_tools_from_command: skipping duplicate tool: {}", tool_name);
                         continue;
                     }
                     seen_tools.insert(tool_name.clone());
 
                     // Determine version for this tool
                     let version = if tool_name == pm_name.unwrap_or("") {
-                        eprintln!("[DEBUG] extract_mise_tools_from_command: tool {} matches pm_name, using version {:?}", tool_name, pm_version);
+                        tracing::debug!("extract_mise_tools_from_command: tool {} matches pm_name, using version {:?}", tool_name, pm_version);
                         pm_version.map(|v| v.to_string())
                     } else {
-                        eprintln!("[DEBUG] extract_mise_tools_from_command: tool {} doesn't match pm_name, no version", tool_name);
+                        tracing::debug!("extract_mise_tools_from_command: tool {} doesn't match pm_name, no version", tool_name);
                         None
                     };
 
                     tools.push((tool_name, version));
                 } else {
-                    eprintln!("[DEBUG] extract_mise_tools_from_command: '{}' is not a mise tool", first);
+                    tracing::debug!("extract_mise_tools_from_command: '{}' is not a mise tool", first);
                 }
             }
         }
     }
 
-    eprintln!("[DEBUG] extract_mise_tools_from_command: extracted {} tools: {:?}", tools.len(), tools);
+    tracing::debug!("extract_mise_tools_from_command: extracted {} tools: {:?}", tools.len(), tools);
     tools
 }
 
@@ -591,8 +591,8 @@ pub async fn run_local_with(ctx: &Context, cmd: &str, opts: RunOptions) -> Resul
 
     // Clone final_cmd early to avoid borrow issues
     let final_cmd_clone = final_cmd.clone();
-    eprintln!("[DEBUG] run_local_with: original cmd={:?}", cmd);
-    eprintln!("[DEBUG] run_local_with: final_cmd={:?}", final_cmd);
+    tracing::debug!("run_local_with: original cmd={:?}", cmd);
+    tracing::debug!("run_local_with: final_cmd={:?}", final_cmd);
 
     // Add node_modules/.bin to PATH (session-only, non-persistent)
     // Only add if not using Bun (Bun handles its own binary resolution)
@@ -601,7 +601,7 @@ pub async fn run_local_with(ctx: &Context, cmd: &str, opts: RunOptions) -> Resul
         .as_ref()
         .map(|pm| pm.manager == "bun")
         .unwrap_or(false);
-    eprintln!("[DEBUG] run_local_with: is_bun={}", is_bun);
+    tracing::debug!("run_local_with: is_bun={}", is_bun);
 
     // For WSL scripts, we need to modify the command to export PATH
     // Collect node_modules paths first to determine if we need to wrap the command
@@ -614,12 +614,12 @@ pub async fn run_local_with(ctx: &Context, cmd: &str, opts: RunOptions) -> Resul
     } else {
         Vec::new()
     };
-    eprintln!("[DEBUG] run_local_with: node_modules_bin_paths={:?}", node_modules_bin_paths);
+    tracing::debug!("run_local_with: node_modules_bin_paths={:?}", node_modules_bin_paths);
 
     // Vercel's approach: Set PATH as an environment variable, don't modify the command string
     // This matches Vercel's runPackageJsonScript behavior where they prepend node_modules/.bin
     // to PATH as an env var, which gets merged with the command's environment (including mise's PATH)
-    eprintln!("[DEBUG] run_local_with: final_cmd={:?}", final_cmd_clone);
+    tracing::debug!("run_local_with: final_cmd={:?}", final_cmd_clone);
 
     // Let Command crate handle shell wrapping automatically
     // It will detect the shell and wrap the command appropriately
@@ -627,13 +627,13 @@ pub async fn run_local_with(ctx: &Context, cmd: &str, opts: RunOptions) -> Resul
     
     // Debug: Show current PATH
     if let Ok(current_path) = std::env::var("PATH") {
-        eprintln!("[DEBUG] run_local_with: current PATH={}", current_path);
+        tracing::debug!("run_local_with: current PATH={}", current_path);
     }
 
     // Add mise shims path first (highest priority)
     if let Some(shims_path) = get_mise_shims_path() {
         if let Ok(shims_pathbuf) = PathBuf::from(&shims_path).canonicalize() {
-            eprintln!("[DEBUG] run_local_with: prepending mise shims to PATH: {:?}", shims_pathbuf);
+            tracing::debug!("run_local_with: prepending mise shims to PATH: {:?}", shims_pathbuf);
             command.prepend_paths([shims_pathbuf]);
         }
     }
@@ -642,10 +642,10 @@ pub async fn run_local_with(ctx: &Context, cmd: &str, opts: RunOptions) -> Resul
     // This works because mise shims are now in PATH, so binaries are available automatically
     // This matches Vercel's runPackageJsonScript which sets PATH as an env var
     if !is_bun && !node_modules_bin_paths.is_empty() {
-        eprintln!("[DEBUG] run_local_with: prepending node_modules/.bin to PATH via command.prepend_paths() (Vercel-style)");
+        tracing::debug!("run_local_with: prepending node_modules/.bin to PATH");
         command.prepend_paths(node_modules_bin_paths);
     } else {
-        eprintln!("[DEBUG] run_local_with: skipping prepend_paths (is_bun={}, has_paths={})", is_bun, !node_modules_bin_paths.is_empty());
+        tracing::debug!("run_local_with: skipping prepend_paths (is_bun={}, has_paths={})", is_bun, !node_modules_bin_paths.is_empty());
     }
 
     // Set working directory

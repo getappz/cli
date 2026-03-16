@@ -439,15 +439,9 @@ fn ensure_vercel_json(
     Ok(())
 }
 
+/// Best-effort project URL from directory name.
+/// The actual deployment URL is printed by the Vercel CLI interactively.
 fn read_vercel_project_url(project_dir: &std::path::Path) -> Option<String> {
-    let path = project_dir.join(".vercel/project.json");
-    let content = std::fs::read_to_string(path).ok()?;
-    let state: serde_json::Value = serde_json::from_str(&content).ok()?;
-    // Try projectId to construct URL, or look for known fields
-    let project_id = state.get("projectId")?.as_str()?;
-    let org_id = state.get("orgId").and_then(|v| v.as_str());
-    // The actual deployment URL is printed by the CLI to stdout.
-    // As a fallback, construct a project URL from the ID.
-    let _ = org_id;
-    Some(format!("https://{}.vercel.app", project_id))
+    let name = project_dir.file_name()?.to_str()?;
+    Some(format!("https://{}.vercel.app", name))
 }

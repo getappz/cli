@@ -433,7 +433,10 @@ pub async fn deploy(
         }
     }
 
-    // 9. Build deploy context with sandbox
+    // 9. Re-resolve output directory after build (static export may have been created)
+    let output_dir = resolve_output_dir(&project_dir);
+
+    // 10. Build deploy context with sandbox
     let mut env_vars = deploy_config.env_for(if is_preview { "preview" } else { "production" });
     for kv in &env {
         if let Some((k, v)) = kv.split_once('=') {

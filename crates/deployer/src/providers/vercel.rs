@@ -191,6 +191,9 @@ impl DeployProvider for VercelProvider {
             });
         }
 
+        // Ensure vercel.json has outputDirectory set
+        ensure_vercel_json(&ctx.project_dir, &ctx.output_dir)?;
+
         let token_flag = get_env_var("VERCEL_TOKEN")
             .map(|t| format!(" --token {}", t))
             .unwrap_or_default();
@@ -207,7 +210,6 @@ impl DeployProvider for VercelProvider {
 
         let duration = start.elapsed().as_millis() as u64;
 
-        // Read project URL from .vercel/project.json after deploy
         let url = read_vercel_project_url(&ctx.project_dir)
             .unwrap_or_else(|| "https://vercel.app".into());
 
@@ -238,6 +240,8 @@ impl DeployProvider for VercelProvider {
                 duration_ms: Some(0),
             });
         }
+
+        ensure_vercel_json(&ctx.project_dir, &ctx.output_dir)?;
 
         let token_flag = get_env_var("VERCEL_TOKEN")
             .map(|t| format!(" --token {}", t))
@@ -338,6 +342,53 @@ impl DeployProvider for VercelProvider {
 }
 
 /// Read the project URL from .vercel/project.json after a deployment.
+/// Ensure vercel.json exists with the correct outputDirectory.
+///
+/// If vercel.json doesn't exist, creates it. If it exists, updates
+/// outputDirectory without overwriting other settings.
+fn ensure_vercel_json(
+    project_dir: &std::path::Path,
+    output_dir: &str,
+) -> DeployResult<()> {
+    let vercel_json_path = project_dir.join("vercel.json");
+
+    let mut config: serde_json::Value = if vercel_json_path.exists() {
+        let content = std::fs::read_to_string(&vercel_json_path).map_err(|e| {
+            DeployError::CommandFailed {
+                command: "read vercel.json".into(),
+                reason: e.to_string(),
+            }
+        })?;
+        serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    // Set outputDirectory
+    if let Some(obj) = config.as_object_mut() {
+        obj.insert(
+            "outputDirectory".to_string(),
+            serde_json::Value::String(output_dir.to_string()),
+        );
+    }
+
+    let json_str = serde_json::to_string_pretty(&config).map_err(|e| {
+        DeployError::CommandFailed {
+            command: "serialize vercel.json".into(),
+            reason: e.to_string(),
+        }
+    })?;
+
+    std::fs::write(&vercel_json_path, json_str).map_err(|e| {
+        DeployError::CommandFailed {
+            command: "write vercel.json".into(),
+            reason: e.to_string(),
+        }
+    })?;
+
+    Ok(())
+}
+
 fn read_vercel_project_url(project_dir: &std::path::Path) -> Option<String> {
     let path = project_dir.join(".vercel/project.json");
     let content = std::fs::read_to_string(path).ok()?;

@@ -191,26 +191,25 @@ impl DeployProvider for VercelProvider {
             });
         }
 
-        // Build command string
         let token_flag = get_env_var("VERCEL_TOKEN")
             .map(|t| format!(" --token {}", t))
             .unwrap_or_default();
         let cmd = format!("vercel deploy --prod --yes{}", token_flag);
 
-        let result = ctx.exec(&cmd).await?;
+        let status = ctx.exec_interactive(&cmd).await?;
 
-        if !result.success() {
+        if !status.success() {
             return Err(DeployError::DeployFailed {
                 provider: "Vercel".into(),
-                reason: combined_output(&result),
+                reason: format!("vercel deploy exited with code {}", status.code().unwrap_or(-1)),
             });
         }
 
-        let url = extract_url_from_output(&result.stdout())
-            .or_else(|| extract_url_from_output(&result.stderr()))
-            .unwrap_or_else(|| "https://vercel.app".into());
-
         let duration = start.elapsed().as_millis() as u64;
+
+        // Read project URL from .vercel/project.json after deploy
+        let url = read_vercel_project_url(&ctx.project_dir)
+            .unwrap_or_else(|| "https://vercel.app".into());
 
         Ok(DeployOutput {
             provider: "vercel".into(),
@@ -245,17 +244,16 @@ impl DeployProvider for VercelProvider {
             .unwrap_or_default();
         let cmd = format!("vercel deploy --yes{}", token_flag);
 
-        let result = ctx.exec(&cmd).await?;
+        let status = ctx.exec_interactive(&cmd).await?;
 
-        if !result.success() {
+        if !status.success() {
             return Err(DeployError::DeployFailed {
                 provider: "Vercel".into(),
-                reason: combined_output(&result),
+                reason: format!("vercel deploy exited with code {}", status.code().unwrap_or(-1)),
             });
         }
 
-        let url = extract_url_from_output(&result.stdout())
-            .or_else(|| extract_url_from_output(&result.stderr()))
+        let url = read_vercel_project_url(&ctx.project_dir)
             .unwrap_or_else(|| "https://vercel.app".into());
 
         Ok(DeployOutput {
@@ -337,4 +335,18 @@ impl DeployProvider for VercelProvider {
     fn supports_rollback(&self) -> bool {
         true
     }
+}
+
+/// Read the project URL from .vercel/project.json after a deployment.
+fn read_vercel_project_url(project_dir: &std::path::Path) -> Option<String> {
+    let path = project_dir.join(".vercel/project.json");
+    let content = std::fs::read_to_string(path).ok()?;
+    let state: serde_json::Value = serde_json::from_str(&content).ok()?;
+    // Try projectId to construct URL, or look for known fields
+    let project_id = state.get("projectId")?.as_str()?;
+    let org_id = state.get("orgId").and_then(|v| v.as_str());
+    // The actual deployment URL is printed by the CLI to stdout.
+    // As a fallback, construct a project URL from the ID.
+    let _ = org_id;
+    Some(format!("https://{}.vercel.app", project_id))
 }

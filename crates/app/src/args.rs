@@ -208,7 +208,7 @@ pub struct RollbackArgs {
 #[cfg(feature = "appz-cloud")]
 #[derive(Args, Debug, Clone)]
 pub struct RemoveArgs {
-    /// Deployment URL(s)/ID(s) or project name (Vercel-aligned: deployments by URL, project by name removes entire project)
+    /// Deployment URL(s)/ID(s) or project name
     pub resources: Vec<String>,
     /// Skip confirmation prompt
     #[arg(long, short = 'y')]

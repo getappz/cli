@@ -133,7 +133,7 @@ pub enum Commands {
     /// Preview the built project by serving static files from output directory
     #[cfg(feature = "dev-server")]
     Preview(PreviewArgs),
-    /// List all deployments (Vercel parity: appz list [project] [--policy KEY=value])
+    /// List all deployments
     #[cfg(feature = "appz-cloud")]
     Ls(LsArgs),
     /// Open the linked project in the Appz Dashboard
@@ -170,12 +170,12 @@ pub enum Commands {
         #[command(subcommand)]
         command: crate::commands::teams::TeamsCommands,
     },
-    /// Enable or disable telemetry collection (Vercel-aligned)
+    /// Enable or disable telemetry collection
     Telemetry {
         #[command(subcommand)]
         command: crate::commands::telemetry::TelemetryCommands,
     },
-    /// Manage projects (Vercel-aligned: project ls | add | inspect | rm)
+    /// Manage projects
     #[cfg(feature = "appz-cloud")]
     #[command(name = "project", alias = "projects")]
     Projects {
@@ -183,7 +183,7 @@ pub enum Commands {
         #[command(subcommand)]
         command: Option<crate::commands::projects::ProjectsCommands>,
     },
-    /// Transfer projects between teams (Vercel-aligned: transfer <project> | transfer accept <code>)
+    /// Transfer projects between teams
     #[cfg(feature = "appz-cloud")]
     #[command(subcommand_required = false)]
     Transfer {
@@ -196,14 +196,14 @@ pub enum Commands {
         #[arg(long)]
         to_team: Option<String>,
     },
-    /// Manage aliases (Vercel parity: alias set | ls | rm)
+    /// Manage aliases
     #[cfg(feature = "appz-cloud")]
     #[command(name = "alias", alias = "aliases")]
     Aliases {
         #[command(subcommand)]
         command: crate::commands::aliases::AliasesCommands,
     },
-    /// Manage domains (Vercel parity: domains ls | add | rm)
+    /// Manage domains
     #[cfg(feature = "appz-cloud")]
     #[command(name = "domains", alias = "domain")]
     Domains {
@@ -219,7 +219,7 @@ pub enum Commands {
     /// Inspect deployment details
     #[cfg(feature = "appz-cloud")]
     Inspect(InspectArgs),
-    /// Manage environment variables (Vercel-aligned: env ls | add | rm | pull)
+    /// Manage environment variables
     #[cfg(feature = "appz-cloud")]
     #[command(name = "env")]
     Env {
@@ -238,8 +238,7 @@ pub enum Commands {
     Remove(RemoveArgs),
     /// Export a WordPress site as static HTML for deployment to Vercel/Netlify
     WpExport(WpExportArgs),
-    /// Deploy to a hosting provider (Vercel, Netlify, Cloudflare Pages, Appz, etc.)
-    /// Vercel-parity: project-path, --prod, --prebuilt, -e, -b, -f, --logs, --target, etc.
+    /// Deploy to a hosting provider (Vercel, Netlify, Cloudflare Pages, etc.)
     #[cfg(feature = "deploy")]
     Deploy(DeployArgs),
     /// List recent deployments

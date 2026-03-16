@@ -199,7 +199,6 @@ pub fn command_name_for_telemetry(command: crate::app::Commands) -> String {
         Commands::Build => "build",
         #[cfg(feature = "dev-server")]
         Commands::Preview(_) => "preview",
-        #[cfg(feature = "appz-cloud")]
         Commands::Ls(_) => "ls",
         #[cfg(feature = "appz-cloud")]
         Commands::Open => "open",
@@ -243,8 +242,6 @@ pub fn command_name_for_telemetry(command: crate::app::Commands) -> String {
         Commands::Remove(_) => "remove",
         #[cfg(feature = "deploy")]
         Commands::Deploy(_) => "deploy",
-        #[cfg(feature = "deploy")]
-        Commands::DeployList(_) => "deploy-list",
         #[cfg(feature = "self_update")]
         Commands::SelfUpdate(_) => "self-update",
         Commands::Blueprint { .. } => "blueprint",

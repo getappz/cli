@@ -32,7 +32,6 @@ pub mod login;
 pub mod open;
 #[cfg(feature = "appz-cloud")]
 pub mod logout;
-#[cfg(feature = "appz-cloud")]
 pub mod ls;
 pub mod migrate;
 pub mod plan;
@@ -67,7 +66,7 @@ pub use build::build;
 #[cfg(feature = "check")]
 pub use check::check;
 #[cfg(feature = "deploy")]
-pub use deploy::{deploy, deploy_init, deploy_list};
+pub use deploy::{deploy, deploy_init};
 pub use dev::dev;
 #[cfg(feature = "appz-cloud")]
 pub use domains::*;
@@ -89,7 +88,6 @@ pub use login::login;
 pub use open::open;
 #[cfg(feature = "appz-cloud")]
 pub use logout::logout;
-#[cfg(feature = "appz-cloud")]
 pub use ls::ls;
 // migrate is now a downloadable plugin; no public exports needed
 pub use plan::plan;

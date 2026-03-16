@@ -133,8 +133,7 @@ pub enum Commands {
     /// Preview the built project by serving static files from output directory
     #[cfg(feature = "dev-server")]
     Preview(PreviewArgs),
-    /// List all deployments
-    #[cfg(feature = "appz-cloud")]
+    /// List deployments (from Appz cloud or hosting provider)
     Ls(LsArgs),
     /// Open the linked project in the Appz Dashboard
     #[cfg(feature = "appz-cloud")]
@@ -241,9 +240,6 @@ pub enum Commands {
     /// Deploy to a hosting provider (Vercel, Netlify, Cloudflare Pages, etc.)
     #[cfg(feature = "deploy")]
     Deploy(DeployArgs),
-    /// List recent deployments
-    #[cfg(feature = "deploy")]
-    DeployList(DeployListArgs),
     // NOTE: The `check` command has been extracted to a downloadable plugin.
     // It is now handled by the External(Vec<String>) variant below.
     // NOTE: The `site` command has been extracted to a downloadable plugin (pro tier).

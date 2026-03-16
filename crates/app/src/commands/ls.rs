@@ -1,10 +1,7 @@
-use api::error::ApiError as ApiErrorType;
 use crate::args::LsArgs;
 use crate::session::AppzSession;
-use crate::ClientExt;
 use starbase::AppResult;
 use tracing::instrument;
-use ui::{format, pagination, table};
 
 /// Parse policy args like ["errored=6m", "preview=12m"] into vec of (k,v).
 fn parse_policy(policy: &[String]) -> Option<Vec<(String, String)>> {
@@ -26,20 +23,59 @@ fn parse_policy(policy: &[String]) -> Option<Vec<(String, String)>> {
     }
 }
 
-/// List deployments. Project context is ensured in session analyze (bootstrap).
+/// List deployments — from Appz cloud (if linked) or a hosting provider.
 #[instrument(skip_all)]
 pub async fn ls(session: AppzSession, args: LsArgs) -> AppResult {
+    // If an explicit provider is given, always use the provider path
+    if let Some(ref provider_slug) = args.provider {
+        return ls_from_provider(&session, provider_slug).await;
+    }
+
+    // Try Appz cloud first (if linked)
+    #[cfg(feature = "appz-cloud")]
+    {
+        if session.get_project_context().is_some() {
+            let project_context = session.get_project_context().unwrap();
+            return ls_from_cloud(&session, &args, project_context).await;
+        }
+    }
+
+    // Fall back to deploy provider (if configured)
+    #[cfg(feature = "deploy")]
+    {
+        let project_dir = session.working_dir.clone();
+        if let Ok(Some(config)) = deployer::read_deploy_config(&project_dir) {
+            if let Some(ref default) = config.default {
+                return ls_from_provider(&session, default).await;
+            }
+        }
+    }
+
+    Err(miette::miette!(
+        "No deployment source found.\n\n\
+         Options:\n  \
+         - Link to Appz cloud: appz link\n  \
+         - Specify a provider: appz ls <provider> (e.g. vercel, netlify)\n  \
+         - Set up deployment: appz deploy --init"
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// Appz cloud path
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "appz-cloud")]
+async fn ls_from_cloud(
+    session: &AppzSession,
+    args: &LsArgs,
+    project_context: &crate::project::ProjectContext,
+) -> AppResult {
+    use crate::ClientExt;
+    use api::error::ApiError as ApiErrorType;
+
     let client = session.get_api_client();
-
-    let project_context = session.get_project_context().ok_or_else(|| {
-        miette::miette!(
-            "No project linked. Run `appz link` to link this directory to an Appz project before listing deployments."
-        )
-    })?;
-
     let project_id = project_context.link.project_id.clone();
 
-    // Match Vercel: set team scope before fetch (use --scope if set, else project's team)
     if client.get_team_id().await.is_none() {
         client
             .set_team_id(Some(project_context.link.team_id.clone()))
@@ -78,13 +114,7 @@ pub async fn ls(session: AppzSession, args: LsArgs) -> AppResult {
         return Ok(None);
     }
 
-    // Match Vercel CLI format: Age | Deployment | Status | Environment | [Duration | Username] or Proposed Expiration
-    let mut headers = vec![
-        "Age",
-        "Deployment",
-        "Status",
-        "Environment",
-    ];
+    let mut headers = vec!["Age", "Deployment", "Status", "Environment"];
     if !show_policy {
         headers.push("Duration");
         headers.push("Username");
@@ -95,7 +125,7 @@ pub async fn ls(session: AppzSession, args: LsArgs) -> AppResult {
 
     for deployment in &deployments_response.deployments {
         let status = deployment.status.as_deref().unwrap_or("unknown");
-        let status_display = format!("● {}", format::status_badge(status));
+        let status_display = format!("● {}", ui::format::status_badge(status));
         let url = deployment
             .url
             .as_deref()
@@ -112,13 +142,13 @@ pub async fn ls(session: AppzSession, args: LsArgs) -> AppResult {
                 }
             })
             .unwrap_or("Preview");
-        let age = format::timestamp_age_short(deployment.createdAt);
+        let age = ui::format::timestamp_age_short(deployment.createdAt);
         let duration = if status.eq_ignore_ascii_case("ready")
             || status.eq_ignore_ascii_case("completed")
         {
             let dur_secs = (deployment.updatedAt - deployment.createdAt) / 1000;
             if dur_secs >= 0 {
-                format::duration(dur_secs as u64)
+                ui::format::duration(dur_secs as u64)
             } else {
                 "–".to_string()
             }
@@ -133,39 +163,82 @@ pub async fn ls(session: AppzSession, args: LsArgs) -> AppResult {
 
         let proposed_exp = deployment
             .proposedExpiration
-            .map(|ts| format::timestamp_auto(ts))
+            .map(|ts| ui::format::timestamp_auto(ts))
             .unwrap_or_else(|| "No expiration".to_string());
 
         if show_policy {
-            rows.push(vec![
-                age,
-                url,
-                status_display,
-                env.to_string(),
-                proposed_exp,
-            ]);
+            rows.push(vec![age, url, status_display, env.to_string(), proposed_exp]);
         } else {
-            rows.push(vec![
-                age,
-                url,
-                status_display,
-                env.to_string(),
-                duration,
-                username,
-            ]);
+            rows.push(vec![age, url, status_display, env.to_string(), duration, username]);
         }
     }
 
-    // Display table with professional formatting
-    table::display(&headers, &rows, Some("Deployments"))?;
+    ui::table::display(&headers, &rows, Some("Deployments"))?;
 
-    // Display pagination info if available
-    let pagination_info = pagination::PaginationInfo::new(
+    let pagination_info = ui::pagination::PaginationInfo::new(
         deployments_response.pagination.count,
         deployments_response.pagination.next,
         deployments_response.pagination.prev,
     );
-    pagination::display(&pagination_info)?;
+    ui::pagination::display(&pagination_info)?;
 
     Ok(None)
+}
+
+// ---------------------------------------------------------------------------
+// Deploy provider path
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "deploy")]
+async fn ls_from_provider(session: &AppzSession, provider_slug: &str) -> AppResult {
+    let project_dir = session.working_dir.clone();
+    let deploy_config = deployer::read_deploy_config(&project_dir)
+        .map_err(|e| miette::miette!("{}", e))?
+        .unwrap_or_default();
+
+    let output_dir = crate::commands::deploy::resolve_output_dir(&project_dir);
+    let provider = deployer::get_provider(provider_slug).map_err(|e| miette::miette!("{}", e))?;
+    let sandbox = crate::commands::deploy::create_deploy_sandbox(project_dir).await?;
+
+    let ctx = deployer::DeployContext::new(sandbox, output_dir)
+        .with_config(deploy_config);
+
+    let deployments = provider
+        .list_deployments(ctx)
+        .await
+        .map_err(|e| miette::miette!("{}", e))?;
+
+    if deployments.is_empty() {
+        let _ = ui::status::info("No deployments found.");
+        return Ok(None);
+    }
+
+    let headers = vec!["Age", "Deployment", "Status", ""];
+    let mut rows = Vec::new();
+
+    for dep in &deployments {
+        let age = dep
+            .created_at
+            .map(|dt| {
+                let secs = (chrono::Utc::now() - dt).num_seconds().max(0) as u64;
+                ui::format::duration(secs)
+            })
+            .unwrap_or_else(|| "–".to_string());
+        let status_str = format!("{}", dep.status);
+        let current = if dep.is_current { "(current)" } else { "" };
+        rows.push(vec![age, dep.url.clone(), status_str, current.to_string()]);
+    }
+
+    ui::table::display(&headers, &rows, Some(&format!("{} Deployments", provider.name())))?;
+
+    Ok(None)
+}
+
+/// Fallback when deploy feature is not enabled.
+#[cfg(not(feature = "deploy"))]
+async fn ls_from_provider(_session: &AppzSession, provider_slug: &str) -> AppResult {
+    Err(miette::miette!(
+        "Provider '{}' requires the deploy feature. Rebuild with --features deploy.",
+        provider_slug
+    ))
 }

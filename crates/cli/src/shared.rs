@@ -140,7 +140,6 @@ pub async fn run_cli(args: Vec<OsString>) -> MainResult {
                     Commands::Preview(args) => {
                         app::commands::preview(session, args).await
                     }
-                    #[cfg(feature = "appz-cloud")]
                     Commands::Ls(args) => app::commands::ls(session, args).await,
                     #[cfg(feature = "appz-cloud")]
                     Commands::Open => app::commands::open(session).await,
@@ -302,10 +301,6 @@ pub async fn run_cli(args: Vec<OsString>) -> MainResult {
                             )
                             .await
                         }
-                    }
-                    #[cfg(feature = "deploy")]
-                    Commands::DeployList(args) => {
-                        app::commands::deploy_list(session, args.provider).await
                     }
                     #[cfg(feature = "self_update")]
                     Commands::SelfUpdate(args) => {

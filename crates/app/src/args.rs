@@ -61,13 +61,15 @@ pub struct PreviewArgs {
     pub spa_fallback: bool,
 }
 
-#[cfg(feature = "appz-cloud")]
 #[derive(Args, Debug, Clone)]
 pub struct LsArgs {
+    /// Hosting provider to list deployments from (e.g. vercel, netlify)
+    /// If omitted, uses Appz cloud (if linked) or the default deploy provider
+    pub provider: Option<String>,
     /// See deployments with deployment retention policies (e.g. -p errored=6m -p preview=12m)
     #[arg(long, short = 'p', value_name = "KEY=VALUE")]
     pub policy: Vec<String>,
-    /// Skip confirmation prompts (e.g. when linking project in non-interactive mode)
+    /// Skip confirmation prompts
     #[arg(long, short = 'y')]
     pub yes: bool,
 }
@@ -320,12 +322,6 @@ pub struct DeployArgs {
     pub init: bool,
 }
 
-#[cfg(feature = "deploy")]
-#[derive(Args, Debug, Clone)]
-pub struct DeployListArgs {
-    /// Provider to list deployments from
-    pub provider: Option<String>,
-}
 
 #[cfg(feature = "self_update")]
 #[derive(Args, Debug, Clone)]

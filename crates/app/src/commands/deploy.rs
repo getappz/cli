@@ -281,7 +281,7 @@ async fn deploy_to_appz(
 /// The sandbox provides command execution (via mise), scoped filesystem
 /// access, and tool management. All provider operations go through it
 /// instead of raw `tokio::process::Command`.
-async fn create_deploy_sandbox(
+pub async fn create_deploy_sandbox(
     project_dir: std::path::PathBuf,
 ) -> Result<Arc<dyn sandbox::SandboxProvider>> {
     let config = sandbox::SandboxConfig::new(&project_dir)
@@ -994,7 +994,7 @@ fn write_ci_output(output: &DeployOutput) {
 ///
 /// Prefers `.appz/output` (Build Output v3) when `config.json` exists,
 /// else uses `appz.json` outputDirectory or common fallbacks.
-fn resolve_output_dir(project_dir: &std::path::Path) -> String {
+pub fn resolve_output_dir(project_dir: &std::path::Path) -> String {
     // Prefer standardized build output when present
     let appz_output = project_dir.join(".appz/output");
     if appz_output.join("config.json").exists() {

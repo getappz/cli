@@ -10,7 +10,7 @@ use tracing::instrument;
 
 #[instrument(skip_all)]
 pub async fn preview(session: AppzSession, args: crate::args::PreviewArgs) -> AppResult {
-    let port = args.port;
+    let preferred_port = args.port;
     let dir = args.dir.clone();
     let share = args.share;
     let spa_fallback = args.spa_fallback;
@@ -38,6 +38,9 @@ pub async fn preview(session: AppzSession, args: crate::args::PreviewArgs) -> Ap
 
     println!("✓ Serving files from: {}", output_dir.display());
 
+    // Find an available port starting from the preferred one
+    let port = find_available_port(preferred_port);
+
     // Create server configuration
     let config = ServerConfig {
         address: "127.0.0.1".to_string(),
@@ -51,6 +54,9 @@ pub async fn preview(session: AppzSession, args: crate::args::PreviewArgs) -> Ap
         spa_fallback,
     };
 
+    if port != preferred_port {
+        println!("Port {} in use, using port {} instead", preferred_port, port);
+    }
     println!("Starting preview server on http://127.0.0.1:{}", port);
 
     // If sharing, start tunnel first
@@ -102,4 +108,15 @@ pub async fn preview(session: AppzSession, args: crate::args::PreviewArgs) -> Ap
             .map_err(|e| miette::miette!("Server error: {}", e))?;
         Ok(None)
     }
+}
+
+/// Find an available port starting from `preferred`, trying up to 20 ports.
+fn find_available_port(preferred: u16) -> u16 {
+    for offset in 0..20 {
+        let port = preferred + offset;
+        if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
+            return port;
+        }
+    }
+    preferred // give up, let the server error with a clear message
 }

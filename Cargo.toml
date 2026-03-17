@@ -119,6 +119,7 @@ strip = "debuginfo" # Strip debug symbols
 [workspace.dependencies]
 # Private registry
 frameworks = { version = "0.3", registry = "appz" }
+unpic = { version = "0.1", registry = "appz" }
 
 # Core dependencies
 serde = { version = "1.0", features = ["derive"] }

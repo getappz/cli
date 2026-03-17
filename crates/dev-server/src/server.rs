@@ -118,7 +118,7 @@ async fn handle_request(
 
     // Handle CDN image optimization URLs (passthrough — serve original image)
     if method == Method::GET {
-        if let Some(image_path) = extract_cdn_image_path(path, request.uri().query()) {
+        if let Some(image_path) = extract_cdn_image_path(request.uri()) {
             let response = handle_static_file(
                 &config.root_dir,
                 &image_path,
@@ -187,44 +187,12 @@ use hyper::header::CONTENT_TYPE;
 
 /// Extract the source image path from CDN image optimization URLs.
 ///
-/// Supports:
-/// - `/_vercel/image?url=/path/to/image.jpg&w=640&q=75`
-/// - `/.netlify/images?url=/path/to/image.jpg&w=640`
-/// - `/cdn-cgi/image/width=640,quality=75/path/to/image.jpg`
+/// Uses the unpic library to detect and extract source URLs from any
+/// supported image CDN provider (Vercel, Netlify, Cloudflare, Imgix,
+/// Cloudinary, Shopify, and 20+ more).
 ///
 /// Returns the original image path for passthrough serving.
-fn extract_cdn_image_path(path: &str, query: Option<&str>) -> Option<String> {
-    // Vercel: /_vercel/image?url=<path>&w=...&q=...
-    if path == "/_vercel/image" {
-        return extract_url_param(query?);
-    }
-
-    // Netlify: /.netlify/images?url=<path>&w=...
-    if path == "/.netlify/images" || path == "/.netlify/image" {
-        return extract_url_param(query?);
-    }
-
-    // Cloudflare: /cdn-cgi/image/<options>/<path>
-    if let Some(rest) = path.strip_prefix("/cdn-cgi/image/") {
-        // Format: /cdn-cgi/image/width=640,quality=75/path/to/image.jpg
-        // Find the first segment that looks like options (contains =), skip it
-        if let Some(pos) = rest.find('/') {
-            let image_path = &rest[pos..]; // includes leading /
-            return Some(image_path.to_string());
-        }
-    }
-
-    None
-}
-
-/// Extract the `url` query parameter value.
-fn extract_url_param(query: &str) -> Option<String> {
-    for pair in query.split('&') {
-        if let Some(value) = pair.strip_prefix("url=") {
-            // URL-decode the value
-            let decoded = urlencoding::decode(value).ok()?;
-            return Some(decoded.into_owned());
-        }
-    }
-    None
+fn extract_cdn_image_path(uri: &hyper::Uri) -> Option<String> {
+    let url_str = format!("https://localhost{}", uri);
+    unpic::extract_source_url(&url_str).ok().flatten()
 }

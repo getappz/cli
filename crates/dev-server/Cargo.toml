@@ -16,6 +16,7 @@ mime_guess = { workspace = true }
 multer = { workspace = true }
 tokio-tungstenite = { workspace = true }
 urlencoding = { workspace = true }
+unpic = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

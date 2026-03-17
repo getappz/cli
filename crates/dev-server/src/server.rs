@@ -116,6 +116,24 @@ async fn handle_request(
         return handle_form_data(request, upload_dir).await;
     }
 
+    // Handle CDN image optimization URLs (passthrough — serve original image)
+    if method == Method::GET {
+        if let Some(image_path) = extract_cdn_image_path(path, request.uri().query()) {
+            let response = handle_static_file(
+                &config.root_dir,
+                &image_path,
+                false,
+                false,
+            )
+            .await?;
+
+            if config.cors {
+                return Ok(add_cors_headers(response));
+            }
+            return Ok(response);
+        }
+    }
+
     // Handle static file serving
     if method == Method::GET || method == Method::HEAD {
         let response = handle_static_file(
@@ -166,3 +184,47 @@ fn add_cors_headers(mut response: Response<Full<Bytes>>) -> Response<Full<Bytes>
 }
 
 use hyper::header::CONTENT_TYPE;
+
+/// Extract the source image path from CDN image optimization URLs.
+///
+/// Supports:
+/// - `/_vercel/image?url=/path/to/image.jpg&w=640&q=75`
+/// - `/.netlify/images?url=/path/to/image.jpg&w=640`
+/// - `/cdn-cgi/image/width=640,quality=75/path/to/image.jpg`
+///
+/// Returns the original image path for passthrough serving.
+fn extract_cdn_image_path(path: &str, query: Option<&str>) -> Option<String> {
+    // Vercel: /_vercel/image?url=<path>&w=...&q=...
+    if path == "/_vercel/image" {
+        return extract_url_param(query?);
+    }
+
+    // Netlify: /.netlify/images?url=<path>&w=...
+    if path == "/.netlify/images" || path == "/.netlify/image" {
+        return extract_url_param(query?);
+    }
+
+    // Cloudflare: /cdn-cgi/image/<options>/<path>
+    if let Some(rest) = path.strip_prefix("/cdn-cgi/image/") {
+        // Format: /cdn-cgi/image/width=640,quality=75/path/to/image.jpg
+        // Find the first segment that looks like options (contains =), skip it
+        if let Some(pos) = rest.find('/') {
+            let image_path = &rest[pos..]; // includes leading /
+            return Some(image_path.to_string());
+        }
+    }
+
+    None
+}
+
+/// Extract the `url` query parameter value.
+fn extract_url_param(query: &str) -> Option<String> {
+    for pair in query.split('&') {
+        if let Some(value) = pair.strip_prefix("url=") {
+            // URL-decode the value
+            let decoded = urlencoding::decode(value).ok()?;
+            return Some(decoded.into_owned());
+        }
+    }
+    None
+}

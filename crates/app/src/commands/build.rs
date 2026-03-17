@@ -199,10 +199,51 @@ pub async fn build(session: AppzSession) -> AppResult {
         .await?;
     }
 
-    // Execute build step: check for appz:build recipe task first
+    // Execute build step
+    let is_wordpress = detected.slug.as_deref() == Some("wordpress");
     let using_appz_build = registry.get("appz:build").is_some();
 
-    if using_appz_build {
+    if is_wordpress {
+        // WordPress: use StaticExporter to export to dist/
+        println!("\n🔨 Running static export...");
+        let runtime = crate::wp_runtime::resolve(&project_path, false)?;
+        let host_output = project_path.join("dist");
+        std::fs::create_dir_all(&host_output)
+            .map_err(|e| miette::miette!("Failed to create dist/: {}", e))?;
+
+        let exporter = blueprint::StaticExporter::new(project_path.clone(), runtime.clone());
+        exporter
+            .export(Some(host_output.as_path()))
+            .map_err(|e| miette::miette!("Static export failed: {}", e))?;
+
+        // For DDEV bind-mount: files should already be on host.
+        // For mutagen: need docker cp.
+        if runtime.slug() == "ddev" {
+            let has_files = std::fs::read_dir(&host_output)
+                .map(|mut d| d.next().is_some())
+                .unwrap_or(false);
+            if !has_files {
+                if let Some(container) = ddev_web_container_name(&project_path) {
+                    let copy_cmd = format!(
+                        "docker cp {}:/var/www/html/dist/. {}",
+                        container,
+                        host_output.display()
+                    );
+                    let mut ctx_cp = Context::new();
+                    ctx_cp.set_working_path(project_path.clone());
+                    let copy_opts = RunOptions {
+                        cwd: Some(project_path.clone()),
+                        env: None,
+                        show_output: false,
+                        package_manager: None,
+                        tool_info: None,
+                    };
+                    run_local_with(&ctx_cp, &copy_cmd, copy_opts).await?;
+                    println!("✓ Synced dist/ from DDEV container");
+                }
+            }
+        }
+    } else if using_appz_build {
         println!("✓ Found appz:build recipe task, using recipe build...");
         println!("\n🔨 Running build command...");
         run_recipe_task(
@@ -214,16 +255,7 @@ pub async fn build(session: AppzSession) -> AppResult {
         .await?;
     } else {
         // Execute framework build command via sandbox (with fallback)
-        if detected.slug.as_deref() == Some("wordpress")
-            && has_ddev_config(&project_path)
-            && detected.build_command.contains("simply-static")
-        {
-            println!("✓ Using Simply Static Pro for static export");
-            println!("  Configure Local Directory in Simply Static: Settings → Deployment → Local Directory");
-            println!("  Set target to: simply-static-output (or match output_directory in .appz config)");
-        }
         println!("\n🔨 Running build command...");
-        // DDEV commands must run on host (not in sandbox)
         let use_local_for_ddev = detected.build_command.starts_with("ddev ");
         let build_result = if use_local_for_ddev {
             run_local_with(&ctx, &detected.build_command, opts.clone()).await
@@ -250,51 +282,21 @@ pub async fn build(session: AppzSession) -> AppResult {
 
     println!("\n✓ Build completed successfully!");
 
-    // Produce standardized output (.appz/output) for deployment
-    let build_output_path =
-        resolve_build_output_dir(&project_path, &detected.output_directory);
-    if let Err(e) = validate_output_dir(&build_output_path) {
-        tracing::debug!(
-            "Skipping .appz/output: build output validation failed: {}",
-            e
-        );
-    } else if let Err(e) =
-        produce_standardized_output(&project_path, &build_output_path)
-    {
-        tracing::debug!("Skipping .appz/output: {}", e);
-    } else {
-        println!("✓ Produced standardized output at .appz/output/");
-    }
-
-    // WordPress DDEV: copy .appz/output/static from container to host (handles bind-mount edge cases)
-    let is_wordpress_ddev = detected.slug.as_deref() == Some("wordpress")
-        && has_ddev_config(&project_path);
-    if is_wordpress_ddev {
-        if let Some(container) = ddev_web_container_name(&project_path) {
-            let output_dir = project_path.join(".appz").join("output");
-            let _ = std::fs::create_dir_all(&output_dir);
-            let copy_cmd = format!(
-                "docker cp {}:/var/www/html/.appz/output/static {}",
-                container,
-                output_dir.display()
+    // Produce standardized output (.appz/output) for non-WordPress frameworks
+    if !is_wordpress {
+        let build_output_path =
+            resolve_build_output_dir(&project_path, &detected.output_directory);
+        if let Err(e) = validate_output_dir(&build_output_path) {
+            tracing::debug!(
+                "Skipping .appz/output: build output validation failed: {}",
+                e
             );
-            let mut ctx_cp = Context::new();
-            ctx_cp.set_working_path(project_path.clone());
-            let copy_opts = RunOptions {
-                cwd: Some(project_path.clone()),
-                env: None,
-                show_output: false,
-                package_manager: None,
-                tool_info: None,
-            };
-            if run_local_with(&ctx_cp, &copy_cmd, copy_opts)
-                .await
-                .is_ok()
-            {
-                println!("✓ Synced .appz/output/static from DDEV container");
-            } else {
-                tracing::debug!("DDEV container copy skipped (path may not exist in container)");
-            }
+        } else if let Err(e) =
+            produce_standardized_output(&project_path, &build_output_path)
+        {
+            tracing::debug!("Skipping .appz/output: {}", e);
+        } else {
+            println!("✓ Produced standardized output at .appz/output/");
         }
     }
 

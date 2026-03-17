@@ -23,7 +23,7 @@ walkdir = "2"
 task = { path = "../task" }
 command = { path = "../command" }
 detectors = { path = "../detectors" }
-frameworks = { path = "../frameworks" }
+frameworks = { workspace = true }
 env_var = { path = "../env_var" }
 async-trait = "0.1"
 tokio = { workspace = true, features = ["process"] }

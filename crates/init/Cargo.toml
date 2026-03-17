@@ -12,7 +12,7 @@ command = { path = "../command" }
 common = { path = "../common" }
 ui = { path = "../ui" }
 env_var = { path = "../env_var" }
-frameworks = { path = "../frameworks" }
+frameworks = { workspace = true }
 async-trait = "0.1"
 miette = { workspace = true }
 thiserror = { workspace = true }

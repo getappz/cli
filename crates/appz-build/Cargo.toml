@@ -8,7 +8,7 @@ description = "Framework detection and build pipeline for Appz platform (Vercel-
 
 [dependencies]
 detectors = { path = "../detectors" }
-frameworks = { path = "../frameworks" }
+frameworks = { workspace = true }
 miette = { workspace = true }
 sandbox = { path = "../sandbox" }
 serde = { workspace = true }

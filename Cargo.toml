@@ -11,7 +11,6 @@ members = [
     "crates/common",
     "crates/dev-server",
     "crates/env_var",
-    "crates/frameworks",
     "crates/task",
     "crates/tui",
     "crates/ui",
@@ -118,6 +117,9 @@ panic = "abort"     # Smaller binary, no panic unwinding
 strip = "debuginfo" # Strip debug symbols
 
 [workspace.dependencies]
+# Private registry
+frameworks = { version = "0.3", registry = "appz" }
+
 # Core dependencies
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

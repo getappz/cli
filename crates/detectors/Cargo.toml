@@ -7,7 +7,7 @@ description = "Project detection: frameworks, package manager, languages, tools,
 
 [dependencies]
 async-trait = "0.1"
-frameworks = { path = "../frameworks" }
+frameworks = { workspace = true }
 futures = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }

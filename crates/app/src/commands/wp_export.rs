@@ -36,7 +36,7 @@ pub async fn wp_export(session: AppzSession, args: WpExportArgs) -> AppResult {
         .map_err(|e| miette::miette!("{}", e))?;
 
     let host_output = args.output
-        .unwrap_or_else(|| project_path.join(".appz/output/static"));
+        .unwrap_or_else(|| project_path.join("dist"));
 
     // Ensure the output dir exists on the host BEFORE export.
     // For DDEV bind-mounted projects, this also creates it inside the container.
@@ -70,7 +70,7 @@ pub async fn wp_export(session: AppzSession, args: WpExportArgs) -> AppResult {
         return Err(miette::miette!(
             "Export completed but no files found in {}\n\
              Check Simply Static settings in WP admin or run:\n  \
-             ddev exec ls -la /var/www/html/.appz/output/static/",
+             ddev exec ls -la /var/www/html/dist/",
             host_output.display()
         ));
     }
@@ -98,10 +98,14 @@ async fn sync_from_ddev(
         let _ = std::fs::create_dir_all(parent);
     }
 
-    // For docker cp, we need to copy the contents, not replace the dir
+    // Derive the container path from the host output path relative to project root
+    let relative = host_output.strip_prefix(project_path).unwrap_or(host_output);
+    let container_path = format!("/var/www/html/{}", relative.display());
+
     let copy_cmd = format!(
-        "docker cp {}:/var/www/html/.appz/output/static/. {}",
+        "docker cp {}:{}/. {}",
         container,
+        container_path,
         host_output.display()
     );
 

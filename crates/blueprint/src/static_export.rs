@@ -10,8 +10,7 @@ use std::sync::Arc;
 use crate::runtime::{RuntimeError, WordPressRuntime};
 
 /// Default output directory name for static exports (relative to project root).
-/// Matches the `.appz/output/static` convention used by `appz preview`.
-const DEFAULT_OUTPUT_DIR: &str = ".appz/output/static";
+const DEFAULT_OUTPUT_DIR: &str = "dist";
 
 /// DDEV container web root where the project is mounted.
 const DDEV_WEB_ROOT: &str = "/var/www/html";

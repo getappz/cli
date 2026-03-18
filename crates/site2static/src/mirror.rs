@@ -189,10 +189,15 @@ pub fn run(config: MirrorConfig) -> Result<MirrorResult, MirrorError> {
     }
 
     // ------------------------------------------------------------------
+    // Phase 2b — Copy supplemental directories (JS-dynamically-loaded assets)
+    // ------------------------------------------------------------------
+    let extra_assets = copy_supplemental_dirs(&config);
+
+    // ------------------------------------------------------------------
     // Phase 3 — Finalize
     // ------------------------------------------------------------------
     let pages = state.pages_crawled.load(Ordering::Relaxed);
-    let assets = state.assets_copied.load(Ordering::Relaxed);
+    let assets = state.assets_copied.load(Ordering::Relaxed) + extra_assets;
 
     // Save metadata cache (only for incremental mode).
     if !config.force {
@@ -524,6 +529,82 @@ fn resolve_link(base: &Url, link: &str) -> Option<Url> {
         Ok(u) => Some(u),
         Err(_) => base.join(&normalized).ok(),
     }
+}
+
+/// Recursively copy directories from webroot to output for JS-dynamically-loaded
+/// assets that can't be discovered by HTML parsing (e.g. Elementor webpack chunks,
+/// lazy-loaded CSS/JS). Returns the number of files copied.
+fn copy_supplemental_dirs(config: &MirrorConfig) -> u64 {
+    if config.copy_dirs.is_empty() {
+        return 0;
+    }
+
+    let webroot = match &config.webroot {
+        crate::WebRoot::Direct(p) => p.clone(),
+        crate::WebRoot::Search(paths) => match paths.first() {
+            Some(p) => p.clone(),
+            None => return 0,
+        },
+    };
+
+    let mut copied = 0u64;
+    for dir in &config.copy_dirs {
+        let src_dir = webroot.join(dir);
+        let dst_dir = config.output.join(dir);
+        if !src_dir.is_dir() {
+            tracing::debug!("Supplemental dir not found: {}", src_dir.display());
+            continue;
+        }
+        match copy_dir_recursive(&src_dir, &dst_dir, config.force) {
+            Ok(n) => {
+                if n > 0 {
+                    tracing::info!("Copied {} files from {}", n, dir);
+                }
+                copied += n;
+            }
+            Err(e) => tracing::warn!("Failed to copy {}: {}", dir, e),
+        }
+    }
+    copied
+}
+
+/// Recursively copy a directory, skipping files that haven't changed (size+mtime).
+fn copy_dir_recursive(
+    src: &std::path::Path,
+    dst: &std::path::Path,
+    force: bool,
+) -> Result<u64, std::io::Error> {
+    let mut count = 0;
+    std::fs::create_dir_all(dst)?;
+
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+
+        if file_type.is_dir() {
+            count += copy_dir_recursive(&src_path, &dst_path, force)?;
+        } else if file_type.is_file() {
+            // Skip unchanged files unless force mode
+            if !force {
+                match disk::files_differ_fast(&src_path, &dst_path) {
+                    Ok(Some(false)) => continue, // unchanged
+                    _ => {}                       // changed, missing, or uncertain → copy
+                }
+            }
+            std::fs::copy(&src_path, &dst_path)?;
+            // Preserve mtime for incremental checks
+            if let Ok(meta) = std::fs::metadata(&src_path) {
+                if let Ok(mtime) = meta.modified() {
+                    let ft = filetime::FileTime::from_system_time(mtime);
+                    let _ = filetime::set_file_times(&dst_path, ft, ft);
+                }
+            }
+            count += 1;
+        }
+    }
+    Ok(count)
 }
 
 /// Fetch `/robots.txt` from the origin. Returns empty string on failure.

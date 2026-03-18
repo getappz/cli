@@ -53,6 +53,7 @@ impl StaticExporter {
             message: format!("invalid origin URL: {e}"),
         })?;
 
+        let copy_dirs = Self::default_copy_dirs(&webroot);
         let config = site2static::MirrorConfig {
             origin: origin_url,
             webroot: site2static::WebRoot::Direct(webroot),
@@ -62,6 +63,7 @@ impl StaticExporter {
             force: false,
             exclude_patterns: vec![],
             include_patterns: vec![],
+            copy_dirs,
             on_progress,
         };
 
@@ -81,5 +83,22 @@ impl StaticExporter {
 
     fn resolve_webroot(&self) -> Result<PathBuf, RuntimeError> {
         Ok(self.project_path.clone())
+    }
+
+    /// Detect directories that need full copying (JS-dynamically-loaded assets).
+    fn default_copy_dirs(webroot: &Path) -> Vec<String> {
+        let mut dirs = Vec::new();
+
+        // Elementor: webpack chunks, conditional CSS, dialog/lightbox libs
+        if webroot.join("wp-content/plugins/elementor/assets").is_dir() {
+            dirs.push("wp-content/plugins/elementor/assets".into());
+        }
+
+        // WordPress core: emoji, mediaelement, etc.
+        if webroot.join("wp-includes/js").is_dir() {
+            dirs.push("wp-includes/js".into());
+        }
+
+        dirs
     }
 }

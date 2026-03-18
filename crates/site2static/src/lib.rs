@@ -58,6 +58,10 @@ pub struct MirrorConfig {
     pub exclude_patterns: Vec<String>,
     /// URL include patterns (regex).
     pub include_patterns: Vec<String>,
+    /// Directories to copy entirely from webroot to output. Catches assets that
+    /// are dynamically loaded by JavaScript (webpack chunks, lazy CSS/JS) and
+    /// can't be discovered via HTML parsing. Paths are relative to the webroot.
+    pub copy_dirs: Vec<String>,
     /// Optional progress callback. Called from worker threads.
     pub on_progress: Option<Arc<dyn Fn(ProgressEvent) + Send + Sync>>,
 }

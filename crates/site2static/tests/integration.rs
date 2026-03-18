@@ -95,6 +95,7 @@ fn test_basic_mirror() {
         force: true,
         exclude_patterns: vec![],
         include_patterns: vec![],
+        copy_dirs: vec![],
         on_progress: None,
     };
 

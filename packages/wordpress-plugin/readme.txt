@@ -1,7 +1,7 @@
 === Appz Static Site Generator ===
 Contributors: appzdev
 Tags: static site, wp-cli, simply static, static export, cli
-Requires at least: 6.0
+Requires at least: 6.5
 Tested up to: 6.7
 Requires PHP: 7.4
 Stable tag: 1.0.0

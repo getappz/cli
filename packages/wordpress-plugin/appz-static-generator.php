@@ -4,12 +4,13 @@
  * Plugin URI:        https://github.com/getappz/wp-static-generator
  * Description:       WP-CLI commands for Simply Static — run static site generation from the command line.
  * Version:           1.0.0
- * Requires at least: 6.0
+ * Requires at least: 6.5
  * Requires PHP:      7.4
  * Author:            Appz
  * Author URI:        https://appz.dev
  * License:           GPL-2.0-or-later
  * License URI:       https://www.gnu.org/licenses/gpl-2.0.html
+ * Requires Plugins:  simply-static
  * Text Domain:       appz-static-generator
  */
 

@@ -1,0 +1,27 @@
+[package]
+name = "site2static"
+version = "0.1.0"
+edition = "2021"
+description = "Static site exporter — crawl a local dev server and mirror it as static HTML"
+publish = false
+
+[dependencies]
+crawl-core = { path = "../crawl-core", default-features = false }
+crossbeam = "0.8"
+dashmap = "6.1.0"
+encoding_rs = "0.8"
+filetime = "0.2"
+flate2 = "1.0"
+lol_html = "2"
+pathdiff = "0.2"
+regex = { workspace = true }
+reqwest = { workspace = true, features = ["blocking", "cookies"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = "0.1"
+url = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+tiny_http = "0.12"

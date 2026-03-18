@@ -30,6 +30,7 @@ members = [
     "crates/appz-client",
     "crates/appz-build",
     "crates/blueprint",
+    "crates/site2static",
 ]
 resolver = "2"
 

@@ -86,17 +86,18 @@ impl StaticExporter {
     }
 
     /// Detect directories that need full copying (JS-dynamically-loaded assets).
+    /// Only targets specific subdirectories to avoid copying admin/editor bloat.
     fn default_copy_dirs(webroot: &Path) -> Vec<String> {
         let mut dirs = Vec::new();
+        let elementor = "wp-content/plugins/elementor/assets";
 
-        // Elementor: webpack chunks, conditional CSS, dialog/lightbox libs
-        if webroot.join("wp-content/plugins/elementor/assets").is_dir() {
-            dirs.push("wp-content/plugins/elementor/assets".into());
-        }
-
-        // WordPress core: emoji, mediaelement, etc.
-        if webroot.join("wp-includes/js").is_dir() {
-            dirs.push("wp-includes/js".into());
+        if webroot.join(elementor).is_dir() {
+            // Webpack chunks (hash-named .bundle.min.js files)
+            dirs.push(format!("{}/js", elementor));
+            // Conditional/lazy-loaded CSS (dialog, lightbox)
+            dirs.push(format!("{}/css/conditionals", elementor));
+            // Third-party libs loaded by JS (dialog, share-link)
+            dirs.push(format!("{}/lib", elementor));
         }
 
         dirs

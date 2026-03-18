@@ -216,12 +216,20 @@ pub async fn build(session: AppzSession) -> AppResult {
         // Run in spawn_blocking because site2static uses reqwest::blocking
         // which creates its own tokio runtime — cannot be used inside an
         // existing async runtime without spawn_blocking.
-        tokio::task::spawn_blocking(move || {
+        let export_result = tokio::task::spawn_blocking(move || {
             exporter.export(Some(output_path.as_path()))
         })
         .await
         .map_err(|e| miette::miette!("Static export task panicked: {}", e))?
         .map_err(|e| miette::miette!("Static export failed: {}", e))?;
+
+        println!(
+            "\n  Pages exported: {}\n  Assets copied:  {}\n  Duration:       {:.1}s\n  Output:         {}",
+            export_result.pages_crawled,
+            export_result.assets_copied,
+            export_result.duration.as_secs_f64(),
+            export_result.output_dir.display(),
+        );
 
         // For DDEV bind-mount: files should already be on host.
         // For mutagen: need docker cp.

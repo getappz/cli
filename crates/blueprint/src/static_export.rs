@@ -11,6 +11,14 @@ use crate::runtime::{RuntimeError, WordPressRuntime};
 /// Default output directory name for static exports.
 const DEFAULT_OUTPUT_DIR: &str = "dist";
 
+/// Result of a static site export.
+pub struct ExportResult {
+    pub output_dir: PathBuf,
+    pub pages_crawled: u64,
+    pub assets_copied: u64,
+    pub duration: std::time::Duration,
+}
+
 /// Exports a CMS site as static HTML using site2static.
 pub struct StaticExporter {
     project_path: PathBuf,
@@ -27,8 +35,8 @@ impl StaticExporter {
     /// 1. Resolve the site URL and webroot from the runtime
     /// 2. Run site2static to crawl and mirror the site
     ///
-    /// Returns the host-side path to the output directory.
-    pub fn export(&self, output_dir: Option<&Path>) -> Result<PathBuf, RuntimeError> {
+    /// Returns the output path and export stats.
+    pub fn export(&self, output_dir: Option<&Path>) -> Result<ExportResult, RuntimeError> {
         let host_output = output_dir
             .map(PathBuf::from)
             .unwrap_or_else(|| self.project_path.join(DEFAULT_OUTPUT_DIR));
@@ -58,14 +66,12 @@ impl StaticExporter {
             message: e.to_string(),
         })?;
 
-        tracing::info!(
-            "Exported {} pages, {} assets in {:.1}s",
-            result.pages_crawled,
-            result.assets_copied,
-            result.duration.as_secs_f64()
-        );
-
-        Ok(host_output)
+        Ok(ExportResult {
+            output_dir: host_output,
+            pages_crawled: result.pages_crawled,
+            assets_copied: result.assets_copied,
+            duration: result.duration,
+        })
     }
 
     fn resolve_webroot(&self) -> Result<PathBuf, RuntimeError> {

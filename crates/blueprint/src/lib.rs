@@ -11,7 +11,8 @@ pub use executor::BlueprintExecutor;
 pub use generator::BlueprintGenerator;
 pub use runtime::{RuntimeError, WordPressRuntime};
 pub use runtimes::{DdevRuntime, PlaygroundRuntime};
-pub use static_export::StaticExporter;
+pub use static_export::{ExportResult, StaticExporter};
+pub use site2static::ProgressEvent;
 pub use types::Blueprint;
 
 use std::path::Path;

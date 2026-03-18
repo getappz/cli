@@ -4,6 +4,7 @@
 //! filesystem, and rewrites URLs for offline navigation.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 use url::Url;
 
@@ -17,6 +18,19 @@ mod mirror;
 mod response;
 mod sitemap;
 mod url_utils;
+
+/// Progress events emitted during the mirror operation.
+#[derive(Debug, Clone)]
+pub enum ProgressEvent {
+    /// Discovering sitemap URLs.
+    DiscoveringSitemap,
+    /// Sitemap discovery complete.
+    SitemapDone { urls_found: usize },
+    /// Crawling pages and copying assets.
+    Crawling { pages: u64, assets: u64 },
+    /// Export complete.
+    Done { pages: u64, assets: u64, duration: Duration },
+}
 
 /// Local filesystem root for asset copy.
 pub enum WebRoot {
@@ -44,6 +58,8 @@ pub struct MirrorConfig {
     pub exclude_patterns: Vec<String>,
     /// URL include patterns (regex).
     pub include_patterns: Vec<String>,
+    /// Optional progress callback. Called from worker threads.
+    pub on_progress: Option<Arc<dyn Fn(ProgressEvent) + Send + Sync>>,
 }
 
 /// Result of a completed mirror operation.

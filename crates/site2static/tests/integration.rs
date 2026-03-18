@@ -95,6 +95,7 @@ fn test_basic_mirror() {
         force: true,
         exclude_patterns: vec![],
         include_patterns: vec![],
+        on_progress: None,
     };
 
     let mirror = SiteMirror::new(config);

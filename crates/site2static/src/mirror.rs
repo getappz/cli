@@ -16,7 +16,9 @@ use crate::metadata::{self, FileMetadata, MetadataCache};
 use crate::response::ResponseData;
 use crate::sitemap;
 use crate::url_utils;
-use crate::{MirrorConfig, MirrorError, MirrorResult};
+use crate::{MirrorConfig, MirrorError, MirrorResult, ProgressEvent};
+
+// url_utils is kept for is_same_domain(); other URL functions use ufo_rs directly.
 
 /// Maximum number of consecutive empty recv() before a worker exits.
 const MAX_EMPTY_RECEIVES: usize = 5;
@@ -92,6 +94,14 @@ struct CrawlState<'a> {
     robots_txt: String,
 }
 
+impl<'a> CrawlState<'a> {
+    fn emit_progress(&self, event: ProgressEvent) {
+        if let Some(cb) = &self.config.on_progress {
+            cb(event);
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Main entry point
 // ---------------------------------------------------------------------------
@@ -115,8 +125,15 @@ pub fn run(config: MirrorConfig) -> Result<MirrorResult, MirrorError> {
     // ------------------------------------------------------------------
     // Phase 1 — Sitemap + robots.txt discovery
     // ------------------------------------------------------------------
+    if let Some(cb) = &config.on_progress {
+        cb(ProgressEvent::DiscoveringSitemap);
+    }
     let robots_txt = fetch_robots_txt(&config.origin, &downloader);
     let sitemap_urls = sitemap::discover_urls(&config.origin, &downloader);
+
+    if let Some(cb) = &config.on_progress {
+        cb(ProgressEvent::SitemapDone { urls_found: sitemap_urls.len() });
+    }
 
     tracing::info!(
         "Phase 1 complete: {} sitemap URLs, robots.txt {} bytes",
@@ -187,12 +204,10 @@ pub fn run(config: MirrorConfig) -> Result<MirrorResult, MirrorError> {
     }
 
     let duration = start.elapsed();
-    tracing::info!(
-        "Mirror complete: {} pages, {} assets in {:.2}s",
-        pages,
-        assets,
-        duration.as_secs_f64()
-    );
+
+    if let Some(cb) = &config.on_progress {
+        cb(ProgressEvent::Done { pages, assets, duration });
+    }
 
     Ok(MirrorResult {
         pages_crawled: pages,
@@ -335,7 +350,9 @@ fn handle_html_url(state: &CrawlState, tx: &Sender<(Url, i32)>, url: &Url, depth
 
     // Save metadata for incremental crawling.
     update_metadata(state, url, response.etag.as_deref(), response.last_modified.as_deref());
-    state.pages_crawled.fetch_add(1, Ordering::Relaxed);
+    let pages = state.pages_crawled.fetch_add(1, Ordering::Relaxed) + 1;
+    let assets = state.assets_copied.load(Ordering::Relaxed);
+    state.emit_progress(ProgressEvent::Crawling { pages, assets });
 
     tracing::debug!("Crawled HTML: {}", url);
 }
@@ -349,13 +366,15 @@ fn handle_asset_url(state: &CrawlState, tx: &Sender<(Url, i32)>, url: &Url) {
 
     // Incremental skip: check if file differs from source.
     if !state.config.force {
-        let rel = url_utils::without_leading_slash(url.path());
-        if let Some(source_path) = local_file::resolve_local_path(&state.config.webroot, rel) {
+        let rel = ufo_rs::without_leading_slash(url.path());
+        if let Some(source_path) = local_file::resolve_local_path(&state.config.webroot, &rel) {
             let dest = state.config.output.join(&file_path);
             match disk::files_differ_fast(&source_path, &dest) {
                 Ok(Some(false)) => {
                     tracing::debug!("Skipping unchanged asset: {}", url);
-                    state.assets_copied.fetch_add(1, Ordering::Relaxed);
+                    let assets = state.assets_copied.fetch_add(1, Ordering::Relaxed) + 1;
+                    let pages = state.pages_crawled.load(Ordering::Relaxed);
+                    state.emit_progress(ProgressEvent::Crawling { pages, assets });
                     return;
                 }
                 _ => {} // Differ or uncertain → proceed.
@@ -395,8 +414,8 @@ fn handle_asset_url(state: &CrawlState, tx: &Sender<(Url, i32)>, url: &Url) {
     };
 
     // Preserve source mtime when copying from local.
-    let rel = url_utils::without_leading_slash(url.path());
-    let source_path = local_file::resolve_local_path(&state.config.webroot, rel);
+    let rel = ufo_rs::without_leading_slash(url.path());
+    let source_path = local_file::resolve_local_path(&state.config.webroot, &rel);
 
     disk::save_file(
         &file_path,
@@ -405,7 +424,9 @@ fn handle_asset_url(state: &CrawlState, tx: &Sender<(Url, i32)>, url: &Url) {
         source_path.as_deref(),
     );
 
-    state.assets_copied.fetch_add(1, Ordering::Relaxed);
+    let assets = state.assets_copied.fetch_add(1, Ordering::Relaxed) + 1;
+    let pages = state.pages_crawled.load(Ordering::Relaxed);
+    state.emit_progress(ProgressEvent::Crawling { pages, assets });
     tracing::debug!("Copied asset: {}", url);
 }
 
@@ -498,7 +519,7 @@ fn enqueue_asset_links(
 
 /// Resolve a possibly-relative link against a base URL.
 fn resolve_link(base: &Url, link: &str) -> Option<Url> {
-    let normalized = url_utils::normalize_url(link);
+    let normalized = ufo_rs::normalize_url(link);
     match Url::parse(&normalized) {
         Ok(u) => Some(u),
         Err(_) => base.join(&normalized).ok(),

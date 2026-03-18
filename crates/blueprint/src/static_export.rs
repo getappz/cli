@@ -36,7 +36,11 @@ impl StaticExporter {
     /// 2. Run site2static to crawl and mirror the site
     ///
     /// Returns the output path and export stats.
-    pub fn export(&self, output_dir: Option<&Path>) -> Result<ExportResult, RuntimeError> {
+    pub fn export(
+        &self,
+        output_dir: Option<&Path>,
+        on_progress: Option<Arc<dyn Fn(site2static::ProgressEvent) + Send + Sync>>,
+    ) -> Result<ExportResult, RuntimeError> {
         let host_output = output_dir
             .map(PathBuf::from)
             .unwrap_or_else(|| self.project_path.join(DEFAULT_OUTPUT_DIR));
@@ -58,6 +62,7 @@ impl StaticExporter {
             force: false,
             exclude_patterns: vec![],
             include_patterns: vec![],
+            on_progress,
         };
 
         let mirror = site2static::SiteMirror::new(config);

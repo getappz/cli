@@ -2,7 +2,7 @@
 Contributors: appzdev
 Tags: static site, wp-cli, simply static, static export, cli
 Requires at least: 6.5
-Tested up to: 6.7
+Tested up to: 6.9
 Requires PHP: 7.4
 Stable tag: 1.0.0
 License: GPLv2 or later
@@ -40,7 +40,7 @@ The plugin runs Simply Static's export tasks sequentially in a single process, b
 == Installation ==
 
 1. Install and activate [Simply Static](https://wordpress.org/plugins/simply-static/)
-2. Upload the `appz-static-generator` folder to `/wp-content/plugins/`
+2. Upload the `appz-static-site-generator` folder to `/wp-content/plugins/`
 3. Activate the plugin through the 'Plugins' menu in WordPress
 4. Run `wp appz build` from your terminal
 

@@ -11,7 +11,7 @@
  * License:           GPL-2.0-or-later
  * License URI:       https://www.gnu.org/licenses/gpl-2.0.html
  * Requires Plugins:  simply-static
- * Text Domain:       appz-static-generator
+ * Text Domain:       appz-static-site-generator
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -27,10 +27,10 @@ define( 'APPZ_SB_PATH', plugin_dir_path( __FILE__ ) );
 
 add_action( 'admin_menu', function () {
 	add_management_page(
-		__( 'Appz Static Site Generator', 'appz-static-generator' ),
-		__( 'Appz Static Generator', 'appz-static-generator' ),
+		__( 'Appz Static Site Generator', 'appz-static-site-generator' ),
+		__( 'Appz Static Generator', 'appz-static-site-generator' ),
 		'manage_options',
-		'appz-static-generator',
+		'appz-static-site-generator',
 		'appz_sb_render_admin_page'
 	);
 } );
@@ -114,7 +114,8 @@ class Appz_SB_CLI_Command {
 					WP_CLI::error( "Could not create output directory: {$output_dir}" );
 				}
 			}
-			if ( ! is_writable( $output_dir ) ) {
+			$wp_filesystem = \Simply_Static\Util::get_file_system();
+			if ( ! $wp_filesystem->is_writable( $output_dir ) ) {
 				WP_CLI::error( "Output directory is not writable: {$output_dir}" );
 			}
 			$original_dir    = $options->get( 'local_dir' );
@@ -137,6 +138,7 @@ class Appz_SB_CLI_Command {
 			->set( 'generate_type', 'export' )
 			->save();
 
+		// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- Simply Static's own hook.
 		do_action( 'ss_before_static_export' );
 
 		// ── Run tasks synchronously ──
@@ -203,6 +205,7 @@ class Appz_SB_CLI_Command {
 
 		$this->restore_options( $options, $original_dir, $original_method );
 
+		// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- Simply Static's own hook.
 		do_action( 'ss_completed', 'success' );
 
 		$this->save_build_status( 'success' );

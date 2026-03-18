@@ -53,7 +53,7 @@ impl StaticExporter {
             message: format!("invalid origin URL: {e}"),
         })?;
 
-        let copy_dirs = Self::default_copy_dirs(&webroot);
+        let copy_globs = Self::default_copy_globs(&webroot);
         let config = site2static::MirrorConfig {
             origin: origin_url,
             webroot: site2static::WebRoot::Direct(webroot),
@@ -63,7 +63,7 @@ impl StaticExporter {
             force: false,
             exclude_patterns: vec![],
             include_patterns: vec![],
-            copy_dirs,
+            copy_globs,
             on_progress,
         };
 
@@ -85,21 +85,22 @@ impl StaticExporter {
         Ok(self.project_path.clone())
     }
 
-    /// Detect directories that need full copying (JS-dynamically-loaded assets).
-    /// Only targets specific subdirectories to avoid copying admin/editor bloat.
-    fn default_copy_dirs(webroot: &Path) -> Vec<String> {
-        let mut dirs = Vec::new();
+    /// Glob patterns for JS-dynamically-loaded assets that can't be discovered
+    /// via HTML parsing. Only copies the specific files needed, not entire dirs.
+    fn default_copy_globs(webroot: &Path) -> Vec<String> {
+        let mut globs = Vec::new();
         let elementor = "wp-content/plugins/elementor/assets";
 
         if webroot.join(elementor).is_dir() {
-            // Webpack chunks (hash-named .bundle.min.js files)
-            dirs.push(format!("{}/js", elementor));
+            // Webpack chunks (hash-named bundle files loaded by webpack.runtime)
+            globs.push(format!("{}/js/*.bundle.min.js", elementor));
             // Conditional/lazy-loaded CSS (dialog, lightbox)
-            dirs.push(format!("{}/css/conditionals", elementor));
-            // Third-party libs loaded by JS (dialog, share-link)
-            dirs.push(format!("{}/lib", elementor));
+            globs.push(format!("{}/css/conditionals/*.css", elementor));
+            // Third-party libs loaded by frontend.min.js (dialog, share-link, swiper)
+            globs.push(format!("{}/lib/**/*.min.js", elementor));
+            globs.push(format!("{}/lib/**/*.min.css", elementor));
         }
 
-        dirs
+        globs
     }
 }

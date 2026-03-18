@@ -191,7 +191,7 @@ pub fn run(config: MirrorConfig) -> Result<MirrorResult, MirrorError> {
     // ------------------------------------------------------------------
     // Phase 2b — Copy supplemental directories (JS-dynamically-loaded assets)
     // ------------------------------------------------------------------
-    let extra_assets = copy_supplemental_dirs(&config);
+    let extra_assets = copy_supplemental_globs(&config);
 
     // ------------------------------------------------------------------
     // Phase 3 — Finalize
@@ -531,11 +531,11 @@ fn resolve_link(base: &Url, link: &str) -> Option<Url> {
     }
 }
 
-/// Recursively copy directories from webroot to output for JS-dynamically-loaded
-/// assets that can't be discovered by HTML parsing (e.g. Elementor webpack chunks,
-/// lazy-loaded CSS/JS). Returns the number of files copied.
-fn copy_supplemental_dirs(config: &MirrorConfig) -> u64 {
-    if config.copy_dirs.is_empty() {
+/// Copy files matching glob patterns from webroot to output. Catches assets
+/// dynamically loaded by JavaScript that can't be discovered via HTML parsing.
+/// Returns the number of files copied.
+fn copy_supplemental_globs(config: &MirrorConfig) -> u64 {
+    if config.copy_globs.is_empty() {
         return 0;
     }
 
@@ -548,63 +548,58 @@ fn copy_supplemental_dirs(config: &MirrorConfig) -> u64 {
     };
 
     let mut copied = 0u64;
-    for dir in &config.copy_dirs {
-        let src_dir = webroot.join(dir);
-        let dst_dir = config.output.join(dir);
-        if !src_dir.is_dir() {
-            tracing::debug!("Supplemental dir not found: {}", src_dir.display());
-            continue;
-        }
-        match copy_dir_recursive(&src_dir, &dst_dir, config.force) {
-            Ok(n) => {
-                if n > 0 {
-                    tracing::info!("Copied {} files from {}", n, dir);
-                }
-                copied += n;
+    for pattern in &config.copy_globs {
+        let full_pattern = webroot.join(pattern).display().to_string();
+        let matches = match glob::glob(&full_pattern) {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!("Invalid glob pattern '{}': {}", pattern, e);
+                continue;
             }
-            Err(e) => tracing::warn!("Failed to copy {}: {}", dir, e),
-        }
-    }
-    copied
-}
+        };
 
-/// Recursively copy a directory, skipping files that haven't changed (size+mtime).
-fn copy_dir_recursive(
-    src: &std::path::Path,
-    dst: &std::path::Path,
-    force: bool,
-) -> Result<u64, std::io::Error> {
-    let mut count = 0;
-    std::fs::create_dir_all(dst)?;
+        for entry in matches.flatten() {
+            if !entry.is_file() {
+                continue;
+            }
+            // Compute relative path from webroot
+            let rel = match entry.strip_prefix(&webroot) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            let dst = config.output.join(rel);
 
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let file_type = entry.file_type()?;
-        let src_path = entry.path();
-        let dst_path = dst.join(entry.file_name());
-
-        if file_type.is_dir() {
-            count += copy_dir_recursive(&src_path, &dst_path, force)?;
-        } else if file_type.is_file() {
             // Skip unchanged files unless force mode
-            if !force {
-                match disk::files_differ_fast(&src_path, &dst_path) {
-                    Ok(Some(false)) => continue, // unchanged
-                    _ => {}                       // changed, missing, or uncertain → copy
+            if !config.force {
+                match disk::files_differ_fast(&entry, &dst) {
+                    Ok(Some(false)) => continue,
+                    _ => {}
                 }
             }
-            std::fs::copy(&src_path, &dst_path)?;
-            // Preserve mtime for incremental checks
-            if let Ok(meta) = std::fs::metadata(&src_path) {
+
+            // Ensure parent dir exists
+            if let Some(parent) = dst.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Err(e) = std::fs::copy(&entry, &dst) {
+                tracing::warn!("Failed to copy {}: {}", rel.display(), e);
+                continue;
+            }
+            // Preserve mtime
+            if let Ok(meta) = std::fs::metadata(&entry) {
                 if let Ok(mtime) = meta.modified() {
                     let ft = filetime::FileTime::from_system_time(mtime);
-                    let _ = filetime::set_file_times(&dst_path, ft, ft);
+                    let _ = filetime::set_file_times(&dst, ft, ft);
                 }
             }
-            count += 1;
+            copied += 1;
         }
     }
-    Ok(count)
+
+    if copied > 0 {
+        tracing::info!("Copied {} supplemental asset files", copied);
+    }
+    copied
 }
 
 /// Fetch `/robots.txt` from the origin. Returns empty string on failure.

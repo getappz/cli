@@ -212,9 +212,16 @@ pub async fn build(session: AppzSession) -> AppResult {
             .map_err(|e| miette::miette!("Failed to create dist/: {}", e))?;
 
         let exporter = blueprint::StaticExporter::new(project_path.clone(), runtime.clone());
-        exporter
-            .export(Some(host_output.as_path()))
-            .map_err(|e| miette::miette!("Static export failed: {}", e))?;
+        let output_path = host_output.clone();
+        // Run in spawn_blocking because site2static uses reqwest::blocking
+        // which creates its own tokio runtime — cannot be used inside an
+        // existing async runtime without spawn_blocking.
+        tokio::task::spawn_blocking(move || {
+            exporter.export(Some(output_path.as_path()))
+        })
+        .await
+        .map_err(|e| miette::miette!("Static export task panicked: {}", e))?
+        .map_err(|e| miette::miette!("Static export failed: {}", e))?;
 
         // For DDEV bind-mount: files should already be on host.
         // For mutagen: need docker cp.

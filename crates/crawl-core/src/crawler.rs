@@ -35,6 +35,66 @@ pub struct FilterLinksCall {
   pub allow_subdomains: bool,
 }
 
+/// Pre-compiled filter state for repeated `filter_links` calls with the same
+/// configuration. Avoids re-compiling regexes and re-parsing robots.txt on
+/// every page.
+pub struct FilterContext {
+  pub base_url: Url,
+  pub initial_url: Url,
+  pub max_depth: u32,
+  pub regex_on_full_url: bool,
+  pub allow_backward_crawling: bool,
+  pub allow_external_content_links: bool,
+  pub allow_subdomains: bool,
+  excludes_regex: Vec<Regex>,
+  includes_regex: Vec<Regex>,
+  robot: Option<Robot>,
+}
+
+impl FilterContext {
+  /// Build a reusable filter context from static crawl configuration.
+  pub fn new(
+    base_url: &str,
+    initial_url: &str,
+    max_depth: u32,
+    regex_on_full_url: bool,
+    excludes: &[String],
+    includes: &[String],
+    allow_backward_crawling: bool,
+    ignore_robots_txt: bool,
+    robots_txt: &str,
+    allow_external_content_links: bool,
+    allow_subdomains: bool,
+  ) -> Result<Self, String> {
+    let base_url = Url::parse(base_url).map_err(|e| format!("Base URL parse error: {e}"))?;
+    let initial_url = Url::parse(initial_url).map_err(|e| format!("Initial URL parse error: {e}"))?;
+
+    let excludes_regex: Vec<Regex> = excludes.iter().filter_map(|e| Regex::new(e).ok()).collect();
+    let includes_regex: Vec<Regex> = includes.iter().filter_map(|i| Regex::new(i).ok()).collect();
+
+    let robot = if !ignore_robots_txt && !robots_txt.is_empty() {
+      Robot::new("FireCrawlAgent", robots_txt.as_bytes())
+        .ok()
+        .or_else(|| Robot::new("FirecrawlAgent", robots_txt.as_bytes()).ok())
+    } else {
+      None
+    };
+
+    Ok(Self {
+      base_url,
+      initial_url,
+      max_depth,
+      regex_on_full_url,
+      allow_backward_crawling,
+      allow_external_content_links,
+      allow_subdomains,
+      excludes_regex,
+      includes_regex,
+      robot,
+    })
+  }
+}
+
 #[derive(Serialize)]
 pub struct FilterLinksResult {
   pub links: Vec<String>,
@@ -216,7 +276,28 @@ fn is_external_main_page(url_str: &str) -> bool {
 }
 
 fn _filter_links(data: FilterLinksCall) -> std::result::Result<FilterLinksResult, String> {
-  let limit = data.limit.map_or(usize::MAX, |x| x.max(0) as usize);
+  let ctx = FilterContext::new(
+    &data.base_url,
+    &data.initial_url,
+    data.max_depth,
+    data.regex_on_full_url,
+    &data.excludes,
+    &data.includes,
+    data.allow_backward_crawling,
+    data.ignore_robots_txt,
+    &data.robots_txt,
+    data.allow_external_content_links,
+    data.allow_subdomains,
+  )?;
+  _filter_links_with_ctx(&ctx, data.links, data.limit)
+}
+
+fn _filter_links_with_ctx(
+  ctx: &FilterContext,
+  links: Vec<String>,
+  limit: Option<i64>,
+) -> std::result::Result<FilterLinksResult, String> {
+  let limit = limit.map_or(usize::MAX, |x| x.max(0) as usize);
   if limit == 0 {
     return Ok(FilterLinksResult {
       links: Vec::new(),
@@ -224,39 +305,17 @@ fn _filter_links(data: FilterLinksCall) -> std::result::Result<FilterLinksResult
     });
   }
 
-  let base_url = Url::parse(&data.base_url).map_err(|e| format!("Base URL parse error: {e}"))?;
-  let initial_url =
-    Url::parse(&data.initial_url).map_err(|e| format!("Initial URL parse error: {e}"))?;
-  let initial_path = initial_url.path();
-
-  let excludes_regex: Vec<Regex> = data
-    .excludes
-    .iter()
-    .filter_map(|e| Regex::new(e).ok())
-    .collect();
-  let includes_regex: Vec<Regex> = data
-    .includes
-    .iter()
-    .filter_map(|i| Regex::new(i).ok())
-    .collect();
-
-  let robot = if !data.ignore_robots_txt && !data.robots_txt.is_empty() {
-    Robot::new("FireCrawlAgent", data.robots_txt.as_bytes())
-      .ok()
-      .or_else(|| Robot::new("FirecrawlAgent", data.robots_txt.as_bytes()).ok())
-  } else {
-    None
-  };
+  let initial_path = ctx.initial_url.path();
 
   let mut result_links = Vec::new();
   let mut denial_reasons = HashMap::new();
 
-  for link in data.links {
+  for link in links {
     if result_links.len() >= limit {
       break;
     }
 
-    let url = match base_url.join(&link) {
+    let url = match ctx.base_url.join(&link) {
       Ok(url) => url,
       Err(_) => {
         denial_reasons.insert(link, URL_PARSE_ERROR.to_string());
@@ -272,7 +331,7 @@ fn _filter_links(data: FilterLinksCall) -> std::result::Result<FilterLinksResult
       continue;
     }
 
-    if get_url_depth(path) > data.max_depth {
+    if get_url_depth(path) > ctx.max_depth {
       denial_reasons.insert(link, DEPTH_LIMIT.to_string());
       continue;
     }
@@ -282,35 +341,35 @@ fn _filter_links(data: FilterLinksCall) -> std::result::Result<FilterLinksResult
       continue;
     }
 
-    if is_internal_link(&url, &base_url) {
+    if is_internal_link(&url, &ctx.base_url) {
       // INTERNAL LINKS
       if !no_sections(url_str) {
         denial_reasons.insert(link, SECTION_LINK.to_string());
         continue;
       }
 
-      if !data.allow_backward_crawling && !path.starts_with(initial_path) {
+      if !ctx.allow_backward_crawling && !path.starts_with(initial_path) {
         denial_reasons.insert(link, BACKWARD_CRAWLING.to_string());
         continue;
       }
 
-      let match_target = if data.regex_on_full_url {
+      let match_target = if ctx.regex_on_full_url {
         url_str
       } else {
         path
       };
 
-      if !excludes_regex.is_empty() && excludes_regex.iter().any(|r| r.is_match(match_target)) {
+      if !ctx.excludes_regex.is_empty() && ctx.excludes_regex.iter().any(|r| r.is_match(match_target)) {
         denial_reasons.insert(link, EXCLUDE_PATTERN.to_string());
         continue;
       }
 
-      if !includes_regex.is_empty() && !includes_regex.iter().any(|r| r.is_match(match_target)) {
+      if !ctx.includes_regex.is_empty() && !ctx.includes_regex.iter().any(|r| r.is_match(match_target)) {
         denial_reasons.insert(link, INCLUDE_PATTERN.to_string());
         continue;
       }
 
-      if let Some(ref robot) = robot {
+      if let Some(ref robot) = ctx.robot {
         if !robot.allowed(url_str) {
           denial_reasons.insert(link, ROBOTS_TXT.to_string());
           continue;
@@ -325,30 +384,30 @@ fn _filter_links(data: FilterLinksCall) -> std::result::Result<FilterLinksResult
         continue;
       }
 
-      if !excludes_regex.is_empty() && excludes_regex.iter().any(|r| r.is_match(url_str)) {
+      if !ctx.excludes_regex.is_empty() && ctx.excludes_regex.iter().any(|r| r.is_match(url_str)) {
         denial_reasons.insert(link, EXCLUDE_PATTERN.to_string());
         continue;
       }
 
-      if is_internal_link(&initial_url, &base_url)
-        && data.allow_external_content_links
+      if is_internal_link(&ctx.initial_url, &ctx.base_url)
+        && ctx.allow_external_content_links
         && !is_external_main_page(url_str)
       {
         result_links.push(link);
         continue;
       }
 
-      if data.allow_subdomains
+      if ctx.allow_subdomains
         && !is_social_media_or_email(url_str)
-        && is_subdomain(&url, &base_url)
+        && is_subdomain(&url, &ctx.base_url)
       {
         // When allowing subdomains, still honor include patterns
-        let match_target = if data.regex_on_full_url {
+        let match_target = if ctx.regex_on_full_url {
           url_str
         } else {
           path
         };
-        if !includes_regex.is_empty() && !includes_regex.iter().any(|r| r.is_match(match_target)) {
+        if !ctx.includes_regex.is_empty() && !ctx.includes_regex.iter().any(|r| r.is_match(match_target)) {
           denial_reasons.insert(link, INCLUDE_PATTERN.to_string());
           continue;
         }
@@ -380,6 +439,16 @@ pub async fn filter_links(data: FilterLinksCall) -> Result<FilterLinksResult, St
 #[cfg(not(feature = "native"))]
 pub fn filter_links(data: FilterLinksCall) -> Result<FilterLinksResult, String> {
   _filter_links(data).map_err(|e| format!("Filter links error: {e}"))
+}
+
+/// Filter links using a pre-compiled [`FilterContext`] — avoids re-compiling
+/// regexes and re-parsing robots.txt on every call.
+pub fn filter_links_with_context(
+  ctx: &FilterContext,
+  links: Vec<String>,
+  limit: Option<i64>,
+) -> Result<FilterLinksResult, String> {
+  _filter_links_with_ctx(ctx, links, limit).map_err(|e| format!("Filter links error: {e}"))
 }
 
 fn _filter_url(data: FilterUrlCall) -> std::result::Result<FilterUrlResult, String> {

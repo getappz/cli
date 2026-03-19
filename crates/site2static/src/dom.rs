@@ -1,10 +1,8 @@
-use dashmap::DashSet;
 use lol_html::{element, html_content::ContentType, rewrite_str, text, RewriteStrSettings};
 use regex::Regex;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
-use std::sync::Arc;
 use std::sync::LazyLock;
 use std::sync::Mutex;
 use url::Url;
@@ -103,7 +101,7 @@ impl Dom {
 
     /// Returns all URLs in the DOM tree and updates same-domain ones to relative paths.
     pub fn find_urls_as_strings(&mut self, base_url: &Url) -> Vec<String> {
-        let captured_urls: Arc<DashSet<String>> = Arc::new(DashSet::new());
+        let captured_urls: Rc<RefCell<HashSet<String>>> = Rc::new(RefCell::new(HashSet::new()));
         let captured_for_closure = captured_urls.clone();
         let captured_for_styles = captured_urls.clone();
         let captured_for_inline_styles = captured_urls.clone();
@@ -139,7 +137,7 @@ impl Dom {
                             }
 
                             if !local_url.is_empty() {
-                                captured_for_closure.insert(local_url.clone());
+                                captured_for_closure.borrow_mut().insert(local_url.clone());
                             }
 
                             // Use Url for URL parsing and domain comparison
@@ -163,7 +161,7 @@ impl Dom {
                                     let mut url_str = caps[2].to_string();
                                     let quote_end = &caps[3];
 
-                                    captured_for_styles.insert(url_str.clone());
+                                    captured_for_styles.borrow_mut().insert(url_str.clone());
 
                                     // Use Url for URL parsing and domain comparison
                                     if let Ok(url) = Url::parse(&url_str) {
@@ -189,7 +187,7 @@ impl Dom {
                                     let quote_start = &caps[1];
                                     let url_str = caps[2].trim().to_string();
                                     let quote_end = &caps[3];
-                                    captured_for_inline_styles.insert(url_str.clone());
+                                    captured_for_inline_styles.borrow_mut().insert(url_str.clone());
                                     format!("url({}{}{})", quote_start, url_str, quote_end)
                                 })
                                 .to_string();
@@ -210,7 +208,8 @@ impl Dom {
             eprintln!("Warning: Failed to rewrite hostname references: {}", e);
         }
 
-        captured_urls.iter().map(|s| s.clone()).collect()
+        let result = captured_urls.borrow().iter().cloned().collect();
+        result
     }
 }
 

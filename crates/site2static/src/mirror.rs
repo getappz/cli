@@ -13,7 +13,6 @@ use crate::dom::Dom;
 use crate::downloader::Downloader;
 use crate::local_file;
 use crate::metadata::{self, FileMetadata, MetadataCache};
-use crate::response::ResponseData;
 use crate::sitemap;
 use crate::url_utils;
 use crate::{MirrorConfig, MirrorError, MirrorResult, ProgressEvent};
@@ -63,9 +62,11 @@ fn is_css_url(url: &Url) -> bool {
 
 /// Detect charset from `<meta>` tag (safe: uses `from_utf8_lossy`).
 fn find_charset(data: &[u8], http_charset: Option<String>) -> String {
+    static CHARSET_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r#"<meta[^>]*charset\s*=\s*["']?([^"'\s;>]+)"#).unwrap()
+    });
     let lossy = String::from_utf8_lossy(data);
-    let re = regex::Regex::new(r#"<meta[^>]*charset\s*=\s*["']?([^"'\s;>]+)"#).unwrap();
-    if let Some(caps) = re.captures(&lossy) {
+    if let Some(caps) = CHARSET_RE.captures(&lossy) {
         if let Some(m) = caps.get(1) {
             return m.as_str().to_lowercase();
         }
@@ -91,7 +92,9 @@ struct CrawlState<'a> {
     metadata_cache: Arc<Mutex<MetadataCache>>,
     pages_crawled: AtomicU64,
     assets_copied: AtomicU64,
-    robots_txt: String,
+    /// Pre-compiled filter context for page link filtering (avoids per-page
+    /// regex compilation and robots.txt parsing).
+    filter_ctx: crawl_core::FilterContext,
 }
 
 impl<'a> CrawlState<'a> {
@@ -146,6 +149,22 @@ pub fn run(config: MirrorConfig) -> Result<MirrorResult, MirrorError> {
     // ------------------------------------------------------------------
     let (tx, rx) = crossbeam::channel::unbounded::<(Url, i32)>();
 
+    let max_depth = config.depth.unwrap_or(u32::MAX);
+    let filter_ctx = crawl_core::FilterContext::new(
+        config.origin.as_str(),
+        config.origin.as_str(),
+        max_depth,
+        true, // regex_on_full_url
+        &config.exclude_patterns,
+        &config.include_patterns,
+        true, // allow_backward_crawling
+        robots_txt.is_empty(),
+        &robots_txt,
+        false, // allow_external_content_links
+        false, // allow_subdomains
+    )
+    .map_err(|e| MirrorError::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))?;
+
     let state = CrawlState {
         config: &config,
         downloader,
@@ -153,7 +172,7 @@ pub fn run(config: MirrorConfig) -> Result<MirrorResult, MirrorError> {
         metadata_cache: metadata_cache.clone(),
         pages_crawled: AtomicU64::new(0),
         assets_copied: AtomicU64::new(0),
-        robots_txt,
+        filter_ctx,
     };
 
     // Seed the queue with the origin URL.
@@ -301,11 +320,7 @@ fn handle_html_url(state: &CrawlState, tx: &Sender<(Url, i32)>, url: &Url, depth
         }
     }
 
-    let raw_data = match &response.data {
-        ResponseData::Html(d) => d.clone(),
-        ResponseData::Css(d) => d.clone(),
-        ResponseData::Other(d) => d.clone(),
-    };
+    let raw_data = response.data.into_bytes();
 
     // Charset detection and conversion to UTF-8.
     let charset_label = find_charset(&raw_data, response.charset.clone());
@@ -315,7 +330,7 @@ fn handle_html_url(state: &CrawlState, tx: &Sender<(Url, i32)>, url: &Url, depth
     let utf8_data = if needs_conversion {
         charset_convert(&raw_data, charset_enc, encoding_rs::UTF_8)
     } else {
-        raw_data.clone()
+        raw_data
     };
 
     let html_str = String::from_utf8_lossy(&utf8_data);
@@ -368,13 +383,14 @@ fn handle_html_url(state: &CrawlState, tx: &Sender<(Url, i32)>, url: &Url, depth
 
 fn handle_asset_url(state: &CrawlState, tx: &Sender<(Url, i32)>, url: &Url) {
     let file_path = local_file::url_to_path(url);
+    let rel = ufo_rs::without_leading_slash(url.path());
+    let source_path = local_file::resolve_local_path(&state.config.webroot, &rel);
 
     // Incremental skip: check if file differs from source.
     if !state.config.force {
-        let rel = ufo_rs::without_leading_slash(url.path());
-        if let Some(source_path) = local_file::resolve_local_path(&state.config.webroot, &rel) {
+        if let Some(ref sp) = source_path {
             let dest = state.config.output.join(&file_path);
-            match disk::files_differ_fast(&source_path, &dest) {
+            match disk::files_differ_fast(sp, &dest) {
                 Ok(Some(false)) => {
                     tracing::debug!("Skipping unchanged asset: {}", url);
                     let assets = state.assets_copied.fetch_add(1, Ordering::Relaxed) + 1;
@@ -393,9 +409,7 @@ fn handle_asset_url(state: &CrawlState, tx: &Sender<(Url, i32)>, url: &Url) {
         Err(_) => {
             // Fall back to HTTP download.
             match state.downloader.get(url) {
-                Ok(resp) => match resp.data {
-                    ResponseData::Html(d) | ResponseData::Css(d) | ResponseData::Other(d) => d,
-                },
+                Ok(resp) => resp.data.into_bytes(),
                 Err(e) => {
                     tracing::warn!("Could not fetch asset {}: {}", url, e);
                     return;
@@ -419,9 +433,6 @@ fn handle_asset_url(state: &CrawlState, tx: &Sender<(Url, i32)>, url: &Url) {
     };
 
     // Preserve source mtime when copying from local.
-    let rel = ufo_rs::without_leading_slash(url.path());
-    let source_path = local_file::resolve_local_path(&state.config.webroot, &rel);
-
     disk::save_file(
         &file_path,
         &output_data,
@@ -451,8 +462,6 @@ fn enqueue_page_links(
         return;
     }
 
-    let max_depth = state.config.depth.unwrap_or(u32::MAX);
-
     // Resolve all relative links to absolute before filtering.
     let resolved: Vec<String> = links
         .iter()
@@ -463,23 +472,7 @@ fn enqueue_page_links(
         return;
     }
 
-    let call = crawl_core::FilterLinksCall {
-        links: resolved,
-        limit: None,
-        max_depth,
-        base_url: state.config.origin.to_string(),
-        initial_url: state.config.origin.to_string(),
-        regex_on_full_url: true,
-        excludes: state.config.exclude_patterns.clone(),
-        includes: state.config.include_patterns.clone(),
-        allow_backward_crawling: true,
-        ignore_robots_txt: state.robots_txt.is_empty(),
-        robots_txt: state.robots_txt.clone(),
-        allow_external_content_links: false,
-        allow_subdomains: false,
-    };
-
-    match crawl_core::filter_links(call) {
+    match crawl_core::filter_links_with_context(&state.filter_ctx, resolved, None) {
         Ok(result) => {
             for link_str in &result.links {
                 if let Ok(link_url) = Url::parse(link_str) {
@@ -610,10 +603,7 @@ fn fetch_robots_txt(origin: &Url, downloader: &Downloader) -> String {
     };
     match downloader.get(&robots_url) {
         Ok(resp) => {
-            let bytes = match resp.data {
-                ResponseData::Html(b) | ResponseData::Css(b) | ResponseData::Other(b) => b,
-            };
-            String::from_utf8(bytes).unwrap_or_default()
+            String::from_utf8(resp.data.into_bytes()).unwrap_or_default()
         }
         Err(_) => String::new(),
     }

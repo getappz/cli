@@ -139,6 +139,12 @@ pub struct DeployContext {
 
     /// Whether to produce JSON output.
     pub json_output: bool,
+
+    /// Whether to use prebuilt output (passed through to provider CLI, e.g. `vercel deploy --prebuilt`).
+    pub prebuilt: bool,
+
+    /// Framework slug (e.g. "wordpress", "nextjs") from appz.json or project settings.
+    pub framework: Option<String>,
 }
 
 impl std::fmt::Debug for DeployContext {
@@ -150,6 +156,8 @@ impl std::fmt::Debug for DeployContext {
             .field("is_ci", &self.is_ci)
             .field("dry_run", &self.dry_run)
             .field("json_output", &self.json_output)
+            .field("prebuilt", &self.prebuilt)
+            .field("framework", &self.framework)
             .finish()
     }
 }
@@ -168,6 +176,8 @@ impl DeployContext {
             is_ci: is_ci_environment(),
             dry_run: false,
             json_output: false,
+            prebuilt: false,
+            framework: None,
         }
     }
 
@@ -198,6 +208,18 @@ impl DeployContext {
     /// Set JSON output mode.
     pub fn with_json_output(mut self, json: bool) -> Self {
         self.json_output = json;
+        self
+    }
+
+    /// Set prebuilt mode (pass `--prebuilt` to provider CLI).
+    pub fn with_prebuilt(mut self, prebuilt: bool) -> Self {
+        self.prebuilt = prebuilt;
+        self
+    }
+
+    /// Set the framework slug.
+    pub fn with_framework(mut self, framework: Option<String>) -> Self {
+        self.framework = framework;
         self
     }
 
@@ -370,32 +392,7 @@ pub async fn write_deploy_config_async(
 
 /// Detect whether we're running in a CI/CD environment.
 pub fn is_ci_environment() -> bool {
-    let bag = env_var::GlobalEnvBag::instance();
-
-    // Standard CI env var
-    if bag.has("CI") {
-        return true;
-    }
-
-    // Appz-specific non-interactive flags
-    if bag.has("APPZ_NO_INPUT") || bag.has("APPZ_YES") {
-        return true;
-    }
-
-    // Common CI platform env vars
-    let ci_vars = [
-        "GITHUB_ACTIONS",
-        "GITLAB_CI",
-        "CIRCLECI",
-        "TRAVIS",
-        "JENKINS_URL",
-        "BUILDKITE",
-        "CODEBUILD_BUILD_ID",
-        "TF_BUILD",
-        "BITBUCKET_PIPELINE",
-    ];
-
-    ci_vars.iter().any(|var| bag.has(var))
+    common::env::is_ci()
 }
 
 /// Detect which CI platform we're running on, if any.

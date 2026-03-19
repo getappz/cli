@@ -41,6 +41,50 @@ pub struct FirebaseConfig {
 /// Firebase Hosting deploy provider.
 pub struct FirebaseProvider;
 
+impl FirebaseProvider {
+    async fn deploy_internal(&self, ctx: DeployContext, is_preview: bool) -> DeployResult<DeployOutput> {
+        let start = std::time::Instant::now();
+
+        if ctx.dry_run {
+            return Ok(DeployOutput::dry_run("firebase", is_preview));
+        }
+
+        let token_flag = get_env_var("FIREBASE_TOKEN")
+            .map(|t| format!(" --token {}", t))
+            .unwrap_or_default();
+
+        let cmd = if is_preview {
+            format!("firebase hosting:channel:deploy preview{}", token_flag)
+        } else {
+            format!("firebase deploy --only hosting{}", token_flag)
+        };
+
+        let result = ctx.exec(&cmd).await?;
+
+        if !result.success() {
+            return Err(DeployError::DeployFailed {
+                provider: "Firebase Hosting".into(),
+                reason: combined_output(&result),
+            });
+        }
+
+        let url = extract_url_from_output(&result.stdout())
+            .or_else(|| extract_url_from_output(&result.stderr()))
+            .unwrap_or_else(|| "https://web.app".into());
+
+        Ok(DeployOutput {
+            provider: "firebase".into(),
+            url,
+            additional_urls: vec![],
+            deployment_id: None,
+            is_preview,
+            status: DeployStatus::Ready,
+            created_at: Some(chrono::Utc::now()),
+            duration_ms: Some(start.elapsed().as_millis() as u64),
+        })
+    }
+}
+
 #[async_trait]
 impl DeployProvider for FirebaseProvider {
     fn name(&self) -> &str {
@@ -157,95 +201,11 @@ impl DeployProvider for FirebaseProvider {
     }
 
     async fn deploy(&self, ctx: DeployContext) -> DeployResult<DeployOutput> {
-        let start = std::time::Instant::now();
-
-        if ctx.dry_run {
-            return Ok(DeployOutput {
-                provider: "firebase".into(),
-                url: "https://dry-run.web.app".into(),
-                additional_urls: vec![],
-                deployment_id: None,
-                is_preview: false,
-                status: DeployStatus::Ready,
-                created_at: Some(chrono::Utc::now()),
-                duration_ms: Some(0),
-            });
-        }
-
-        let token_flag = get_env_var("FIREBASE_TOKEN")
-            .map(|t| format!(" --token {}", t))
-            .unwrap_or_default();
-        let cmd = format!("firebase deploy --only hosting{}", token_flag);
-
-        let result = ctx.exec(&cmd).await?;
-
-        if !result.success() {
-            return Err(DeployError::DeployFailed {
-                provider: "Firebase Hosting".into(),
-                reason: combined_output(&result),
-            });
-        }
-
-        let url = extract_url_from_output(&result.stdout())
-            .or_else(|| extract_url_from_output(&result.stderr()))
-            .unwrap_or_else(|| "https://web.app".into());
-
-        Ok(DeployOutput {
-            provider: "firebase".into(),
-            url,
-            additional_urls: vec![],
-            deployment_id: None,
-            is_preview: false,
-            status: DeployStatus::Ready,
-            created_at: Some(chrono::Utc::now()),
-            duration_ms: Some(start.elapsed().as_millis() as u64),
-        })
+        self.deploy_internal(ctx, false).await
     }
 
     async fn deploy_preview(&self, ctx: DeployContext) -> DeployResult<DeployOutput> {
-        let start = std::time::Instant::now();
-
-        if ctx.dry_run {
-            return Ok(DeployOutput {
-                provider: "firebase".into(),
-                url: "https://dry-run-preview.web.app".into(),
-                additional_urls: vec![],
-                deployment_id: None,
-                is_preview: true,
-                status: DeployStatus::Ready,
-                created_at: Some(chrono::Utc::now()),
-                duration_ms: Some(0),
-            });
-        }
-
-        let token_flag = get_env_var("FIREBASE_TOKEN")
-            .map(|t| format!(" --token {}", t))
-            .unwrap_or_default();
-        let cmd = format!("firebase hosting:channel:deploy preview{}", token_flag);
-
-        let result = ctx.exec(&cmd).await?;
-
-        if !result.success() {
-            return Err(DeployError::DeployFailed {
-                provider: "Firebase Hosting".into(),
-                reason: combined_output(&result),
-            });
-        }
-
-        let url = extract_url_from_output(&result.stdout())
-            .or_else(|| extract_url_from_output(&result.stderr()))
-            .unwrap_or_else(|| "https://web.app".into());
-
-        Ok(DeployOutput {
-            provider: "firebase".into(),
-            url,
-            additional_urls: vec![],
-            deployment_id: None,
-            is_preview: true,
-            status: DeployStatus::Ready,
-            created_at: Some(chrono::Utc::now()),
-            duration_ms: Some(start.elapsed().as_millis() as u64),
-        })
+        self.deploy_internal(ctx, true).await
     }
 
     fn supports_env_vars(&self) -> bool {

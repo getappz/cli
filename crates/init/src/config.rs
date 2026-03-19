@@ -82,26 +82,5 @@ impl InitContext {
 
 /// Detect whether we're running in a CI/CD environment.
 pub fn is_ci_environment() -> bool {
-    let bag = env_var::GlobalEnvBag::instance();
-
-    if bag.has("CI") {
-        return true;
-    }
-    if bag.has("APPZ_NO_INPUT") || bag.has("APPZ_YES") {
-        return true;
-    }
-
-    let ci_vars = [
-        "GITHUB_ACTIONS",
-        "GITLAB_CI",
-        "CIRCLECI",
-        "TRAVIS",
-        "JENKINS_URL",
-        "BUILDKITE",
-        "CODEBUILD_BUILD_ID",
-        "TF_BUILD",
-        "BITBUCKET_PIPELINE",
-    ];
-
-    ci_vars.iter().any(|var| bag.has(var))
+    common::env::is_ci()
 }

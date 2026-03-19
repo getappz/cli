@@ -1,16 +1,15 @@
 use std::fs;
 use std::path::PathBuf;
 use url::Url;
-use crate::url_utils;
 use crate::WebRoot;
 
 /// Convert a URL to a relative filesystem path for the output directory.
 pub fn url_to_path(url: &Url) -> String {
-    let url_path = url_utils::without_leading_slash(url.path());
+    let url_path = ufo_rs::without_leading_slash(url.path());
     if url_path.is_empty() {
         return "index.html".into();
     }
-    let trimmed = url_utils::without_trailing_slash(url_path);
+    let trimmed = ufo_rs::without_trailing_slash(&url_path);
     if trimmed.is_empty() {
         return "index.html".into();
     }
@@ -46,8 +45,8 @@ pub fn resolve_local_path(webroot: &WebRoot, relative_path: &str) -> Option<Path
 
 /// Read a file from the local filesystem based on URL and WebRoot.
 pub fn read_local_file(webroot: &WebRoot, url: &Url) -> Result<Vec<u8>, std::io::Error> {
-    let relative = url_utils::without_leading_slash(url.path());
-    match resolve_local_path(webroot, relative) {
+    let relative = ufo_rs::without_leading_slash(url.path());
+    match resolve_local_path(webroot, &relative) {
         Some(path) => fs::read(&path),
         None => Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,

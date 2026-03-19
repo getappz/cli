@@ -275,31 +275,7 @@ pub async fn run_cli(args: Vec<OsString>) -> MainResult {
                         if args.init {
                             app::commands::deploy_init(session, args.platform).await
                         } else {
-                            app::commands::deploy(
-                                session,
-                                args.project_path,
-                                args.platform,
-                                args.prod,
-                                args.preview,
-                                args.target,
-                                args.prebuilt,
-                                args.no_build,
-                                args.build_env,
-                                args.env,
-                                args.force,
-                                args.guidance,
-                                args.logs,
-                                args.meta,
-                                args.no_wait,
-                                args.public,
-                                args.skip_domain,
-                                args.with_cache,
-                                args.dry_run,
-                                args.json,
-                                args.all,
-                                args.yes,
-                            )
-                            .await
+                            app::commands::deploy(session, args).await
                         }
                     }
                     #[cfg(feature = "self_update")]

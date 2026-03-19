@@ -24,9 +24,6 @@ pub fn save_file(file_name: &str, content: &[u8], output_dir: &Path, source_path
             }
         }
     }
-    if path.exists() {
-        let _ = fs::remove_file(&path);
-    }
     let mut file = match fs::File::create(&path) {
         Ok(f) => f,
         Err(e) => {

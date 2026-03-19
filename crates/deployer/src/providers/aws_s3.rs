@@ -120,16 +120,7 @@ impl DeployProvider for AwsS3Provider {
         let start = std::time::Instant::now();
 
         if ctx.dry_run {
-            return Ok(DeployOutput {
-                provider: "aws-s3".into(),
-                url: "https://dry-run.s3.amazonaws.com".into(),
-                additional_urls: vec![],
-                deployment_id: None,
-                is_preview: false,
-                status: DeployStatus::Ready,
-                created_at: Some(chrono::Utc::now()),
-                duration_ms: Some(0),
-            });
+            return Ok(DeployOutput::dry_run("aws-s3", false));
         }
 
         let s3_config = ctx.deploy_config

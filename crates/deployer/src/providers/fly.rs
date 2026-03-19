@@ -155,16 +155,7 @@ impl DeployProvider for FlyProvider {
         let start = std::time::Instant::now();
 
         if ctx.dry_run {
-            return Ok(DeployOutput {
-                provider: "fly".into(),
-                url: "https://dry-run.fly.dev".into(),
-                additional_urls: vec![],
-                deployment_id: None,
-                is_preview: false,
-                status: DeployStatus::Ready,
-                created_at: Some(chrono::Utc::now()),
-                duration_ms: Some(0),
-            });
+            return Ok(DeployOutput::dry_run("fly", false));
         }
 
         let cmd_name = resolve_fly_cmd(&*ctx.sandbox).await;

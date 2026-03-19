@@ -35,6 +35,23 @@ pub struct DeployOutput {
     pub duration_ms: Option<u64>,
 }
 
+impl DeployOutput {
+    /// Create a stub output for dry-run mode.
+    pub fn dry_run(provider: &str, is_preview: bool) -> Self {
+        let suffix = if is_preview { "-preview" } else { "" };
+        Self {
+            provider: provider.into(),
+            url: format!("https://dry-run{}.example.com", suffix),
+            additional_urls: vec![],
+            deployment_id: None,
+            is_preview,
+            status: DeployStatus::Ready,
+            created_at: Some(chrono::Utc::now()),
+            duration_ms: Some(0),
+        }
+    }
+}
+
 /// Deployment status.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]

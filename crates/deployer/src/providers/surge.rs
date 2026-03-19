@@ -125,16 +125,7 @@ impl DeployProvider for SurgeProvider {
         let start = std::time::Instant::now();
 
         if ctx.dry_run {
-            return Ok(DeployOutput {
-                provider: "surge".into(),
-                url: "https://dry-run.surge.sh".into(),
-                additional_urls: vec![],
-                deployment_id: None,
-                is_preview: false,
-                status: DeployStatus::Ready,
-                created_at: Some(chrono::Utc::now()),
-                duration_ms: Some(0),
-            });
+            return Ok(DeployOutput::dry_run("surge", false));
         }
 
         let surge_config = ctx.deploy_config

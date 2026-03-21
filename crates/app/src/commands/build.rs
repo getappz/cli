@@ -238,6 +238,12 @@ pub async fn build(session: AppzSession) -> AppResult {
                             pages, assets, duration.as_secs_f64()
                         ));
                     }
+                    blueprint::ProgressEvent::IndexingSearch => {
+                        spinner_for_cb.set_message("Building search index...");
+                    }
+                    blueprint::ProgressEvent::SearchDone { pages } => {
+                        spinner_for_cb.set_message(&format!("Search index built ({} pages)", pages));
+                    }
                 }
             });
 

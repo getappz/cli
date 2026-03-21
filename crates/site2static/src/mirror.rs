@@ -238,6 +238,9 @@ pub fn run(config: MirrorConfig) -> Result<MirrorResult, MirrorError> {
             }
             Err(e) => {
                 tracing::error!("Search indexing failed: {e}");
+                if let Some(cb) = &config.on_progress {
+                    cb(ProgressEvent::SearchFailed { message: e.to_string() });
+                }
                 // Don't fail the whole export — site is already mirrored
             }
         }

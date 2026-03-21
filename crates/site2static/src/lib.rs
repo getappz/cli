@@ -38,6 +38,8 @@ pub enum ProgressEvent {
     IndexingSearch,
     /// Search indexing complete.
     SearchDone { pages: usize },
+    /// Search indexing failed (non-fatal).
+    SearchFailed { message: String },
 }
 
 /// Search configuration for the static export.

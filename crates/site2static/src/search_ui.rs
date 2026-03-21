@@ -121,7 +121,6 @@ const SEARCH_MODAL_HTML: &str = r##"
     #s2s-search-dialog .pagefind-ui__result-link{color:#1a0dab;text-decoration:none}
     #s2s-search-dialog .pagefind-ui__result-link:hover{text-decoration:underline}
     @media(prefers-color-scheme:dark){#s2s-search-dialog{background:#1e1e1e;border-color:#444;color:#e0e0e0}#s2s-search-dialog .pagefind-ui__search-input{border-bottom-color:#444;color:#e0e0e0}}
-    #s2s-search-kbd{position:absolute;right:16px;top:50%;transform:translateY(-50%);font-size:12px;color:#999;pointer-events:none}
   </style>
   <div id="s2s-search-dialog" role="dialog" aria-label="Site search">
     <div id="s2s-search-mount"></div>

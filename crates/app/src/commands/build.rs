@@ -244,6 +244,9 @@ pub async fn build(session: AppzSession) -> AppResult {
                     blueprint::ProgressEvent::SearchDone { pages } => {
                         spinner_for_cb.set_message(&format!("Search index built ({} pages)", pages));
                     }
+                    blueprint::ProgressEvent::SearchFailed { message } => {
+                        spinner_for_cb.set_message(&format!("Search indexing failed: {}", message));
+                    }
                 }
             });
 

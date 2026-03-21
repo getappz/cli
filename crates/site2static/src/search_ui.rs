@@ -147,3 +147,133 @@ const SEARCH_MODAL_HTML: &str = r##"
 })();
 </script>
 "##;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn full_config() -> SearchUiConfig {
+        SearchUiConfig {
+            replace_existing: true,
+            keyboard_shortcut: true,
+        }
+    }
+
+    #[test]
+    fn injects_pagefind_assets_into_head() {
+        let html = "<html><head><title>Test</title></head><body>Hello</body></html>";
+        let result = inject_search_ui(html, &full_config()).unwrap();
+        assert!(result.contains("pagefind-ui.css"), "should inject CSS link");
+        assert!(result.contains("pagefind-ui.js"), "should inject JS script");
+    }
+
+    #[test]
+    fn injects_floating_modal() {
+        let html = "<html><head></head><body><p>Content</p></body></html>";
+        let result = inject_search_ui(html, &full_config()).unwrap();
+        assert!(result.contains("s2s-search-overlay"), "should inject modal overlay");
+        assert!(result.contains("s2s-search-mount"), "should inject modal mount point");
+        assert!(result.contains("metaKey||e.ctrlKey"), "should have Cmd+K handler");
+    }
+
+    #[test]
+    fn replaces_wp_search_form() {
+        let html = r#"<html><head></head><body><form class="search-form"><input type="search"><button>Search</button></form></body></html>"#;
+        let result = inject_search_ui(html, &full_config()).unwrap();
+        assert!(result.contains("pagefind-replace-0"), "should replace WP search form");
+        assert!(result.contains("PagefindUI"), "should initialize Pagefind UI");
+    }
+
+    #[test]
+    fn replaces_wp_block_search() {
+        let html = r#"<html><head></head><body><div class="wp-block-search"><input type="search"></div></body></html>"#;
+        let result = inject_search_ui(html, &full_config()).unwrap();
+        assert!(result.contains("pagefind-replace-0"), "should replace WP block search");
+    }
+
+    #[test]
+    fn replaces_form_role_search() {
+        let html = r#"<html><head></head><body><form role="search"><input name="s"></form></body></html>"#;
+        let result = inject_search_ui(html, &full_config()).unwrap();
+        assert!(result.contains("pagefind-replace-0"), "should replace role=search form");
+    }
+
+    #[test]
+    fn handles_multiple_search_forms() {
+        let html = r#"<html><head></head><body><form class="search-form">A</form><form role="search">B</form></body></html>"#;
+        let result = inject_search_ui(html, &full_config()).unwrap();
+        assert!(result.contains("pagefind-replace-0"), "should have first replacement");
+        assert!(result.contains("pagefind-replace-1"), "should have second replacement");
+    }
+
+    #[test]
+    fn no_modal_when_disabled() {
+        let config = SearchUiConfig {
+            replace_existing: true,
+            keyboard_shortcut: false,
+        };
+        let html = "<html><head></head><body><p>Content</p></body></html>";
+        let result = inject_search_ui(html, &config).unwrap();
+        assert!(!result.contains("s2s-search-overlay"), "should NOT inject modal");
+        assert!(result.contains("pagefind-ui.js"), "should still inject JS");
+    }
+
+    #[test]
+    fn no_form_replacement_when_disabled() {
+        let config = SearchUiConfig {
+            replace_existing: false,
+            keyboard_shortcut: true,
+        };
+        let html = r#"<html><head></head><body><form class="search-form"><input></form></body></html>"#;
+        let result = inject_search_ui(html, &config).unwrap();
+        assert!(!result.contains("pagefind-replace"), "should NOT replace search form");
+        assert!(result.contains("s2s-search-overlay"), "should still inject modal");
+    }
+
+    #[test]
+    fn marks_main_content_with_pagefind_body() {
+        let html = "<html><head></head><body><main><p>Content</p></main></body></html>";
+        let result = inject_search_ui(html, &full_config()).unwrap();
+        assert!(result.contains("data-pagefind-body"), "should mark main with data-pagefind-body");
+    }
+
+    #[test]
+    fn marks_only_first_content_element() {
+        let html = "<html><head></head><body><main>Main</main><article>Art</article></body></html>";
+        let result = inject_search_ui(html, &full_config()).unwrap();
+        let count = result.matches("data-pagefind-body").count();
+        assert_eq!(count, 1, "should mark only one element with data-pagefind-body");
+    }
+
+    #[test]
+    fn search_elements_have_pagefind_ignore() {
+        let html = "<html><head></head><body><p>Content</p></body></html>";
+        let result = inject_search_ui(html, &full_config()).unwrap();
+        assert!(result.contains("data-pagefind-ignore"), "search UI should be marked pagefind-ignore");
+    }
+
+    #[test]
+    fn no_double_replacement_for_multi_selector_form() {
+        let html = r#"<html><head></head><body><form class="search-form" role="search"><input name="s"></form></body></html>"#;
+        let result = inject_search_ui(html, &full_config()).unwrap();
+        // Each replacement produces "pagefind-replace-0" twice (once in the id attribute,
+        // once in the JS selector). A second replacement would produce "pagefind-replace-1".
+        assert!(result.contains("pagefind-replace-0"), "should have exactly one replacement at index 0");
+        assert!(!result.contains("pagefind-replace-1"), "form matching multiple selectors should be replaced exactly once");
+    }
+
+    #[test]
+    fn handles_non_utf8_charset_meta() {
+        let html = r#"<html><head><meta charset="windows-1252"><title>Test</title></head><body><main>Content</main></body></html>"#;
+        let result = inject_search_ui(html, &full_config()).unwrap();
+        assert!(result.contains("pagefind-ui.js"), "should inject JS even with non-UTF-8 charset meta");
+        assert!(result.contains("data-pagefind-body"), "should mark main content");
+    }
+
+    #[test]
+    fn passthrough_when_no_head_or_body() {
+        let html = "<p>Just a fragment</p>";
+        let result = inject_search_ui(html, &full_config()).unwrap();
+        assert!(result.contains("Just a fragment"));
+    }
+}

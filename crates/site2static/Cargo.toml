@@ -26,6 +26,7 @@ ufo-rs = { path = "../../../pageflare/rust/crates/ufo-rs" }
 # TODO: Switch to registry once published: css-refs = { version = "0.2", registry = "appz" }
 css-refs = { path = "../../../pageflare/rust/crates/css-refs" }
 url = { workspace = true }
+which = "7"
 
 [dev-dependencies]
 tempfile = "3"

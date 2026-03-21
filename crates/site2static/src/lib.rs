@@ -128,6 +128,12 @@ pub enum MirrorError {
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("search binary '{binary}' not found: {hint}")]
+    SearchBinaryNotFound { binary: String, hint: String },
+
+    #[error("search indexing failed: {message}")]
+    SearchIndexingFailed { message: String },
 }
 
 /// Static site exporter. Crawls a running site and produces a static copy.

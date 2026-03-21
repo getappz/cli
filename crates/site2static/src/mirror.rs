@@ -16,6 +16,8 @@ use crate::metadata::{self, FileMetadata, MetadataCache};
 use crate::sitemap;
 use crate::url_utils;
 use crate::{MirrorConfig, MirrorError, MirrorResult, ProgressEvent};
+use crate::search_ui;
+use crate::SearchMode;
 
 // url_utils is kept for is_same_domain(); other URL functions use ufo_rs directly.
 
@@ -144,6 +146,15 @@ pub fn run(config: MirrorConfig) -> Result<MirrorResult, MirrorError> {
         robots_txt.len(),
     );
 
+    // Pre-check: verify pagefind binary is available if search is enabled.
+    let search_enabled = matches!(
+        config.search,
+        Some(SearchMode::IndexOnly) | Some(SearchMode::Full(_))
+    );
+    if search_enabled {
+        crate::search::check_pagefind()?;
+    }
+
     // ------------------------------------------------------------------
     // Phase 2 — Parallel crawl
     // ------------------------------------------------------------------
@@ -211,6 +222,26 @@ pub fn run(config: MirrorConfig) -> Result<MirrorResult, MirrorError> {
     // Phase 2b — Copy supplemental directories (JS-dynamically-loaded assets)
     // ------------------------------------------------------------------
     let extra_assets = copy_supplemental_globs(&config);
+
+    // ------------------------------------------------------------------
+    // Phase 2c — Build search index (Pagefind)
+    // ------------------------------------------------------------------
+    if search_enabled {
+        if let Some(cb) = &config.on_progress {
+            cb(ProgressEvent::IndexingSearch);
+        }
+        match crate::search::run_pagefind(&config.output) {
+            Ok(indexed_pages) => {
+                if let Some(cb) = &config.on_progress {
+                    cb(ProgressEvent::SearchDone { pages: indexed_pages });
+                }
+            }
+            Err(e) => {
+                tracing::error!("Search indexing failed: {e}");
+                // Don't fail the whole export — site is already mirrored
+            }
+        }
+    }
 
     // ------------------------------------------------------------------
     // Phase 3 — Finalize
@@ -358,6 +389,18 @@ fn handle_html_url(state: &CrawlState, tx: &Sender<(Url, i32)>, url: &Url, depth
 
     // Serialize the rewritten HTML.
     let rewritten = dom.serialize();
+
+    // Search UI injection — separate lol_html pass on UTF-8 HTML.
+    let rewritten = if let Some(SearchMode::Full(ref ui_config)) = state.config.search {
+        search_ui::inject_search_ui(&rewritten, ui_config)
+            .unwrap_or_else(|e| {
+                tracing::warn!("Search UI injection failed for {}: {}", url, e);
+                rewritten
+            })
+    } else {
+        rewritten
+    };
+
     let output_bytes = if needs_conversion {
         charset_convert(rewritten.as_bytes(), encoding_rs::UTF_8, charset_enc)
     } else {

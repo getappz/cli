@@ -64,6 +64,7 @@ impl StaticExporter {
             exclude_patterns: vec![],
             include_patterns: vec![],
             copy_globs,
+            search: None, // Search disabled by default; callers opt in
             on_progress,
         };
 

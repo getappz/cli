@@ -81,7 +81,8 @@ pub fn inject_search_ui(html: &str, config: &SearchUiConfig) -> Result<String, l
                     let id = *counter;
                     *counter += 1;
                     let replacement = format!(
-                        r#"<div id="pagefind-replace-{id}" data-pagefind-ignore></div><script>new PagefindUI({{ element: "#pagefind-replace-{id}", showSubResults: true }});</script>"#,
+                        "<div id=\"pagefind-replace-{id}\" data-pagefind-ignore></div>\
+                         <script>new PagefindUI({{ element: \"#pagefind-replace-{id}\", showSubResults: true }});</script>",
                     );
                     el.set_inner_content(&replacement, lol_html::html_content::ContentType::Html);
                     Ok(())
@@ -104,10 +105,11 @@ pub fn inject_search_ui(html: &str, config: &SearchUiConfig) -> Result<String, l
         );
     }
 
-    rewrite_str(html, RewriteStrSettings {
+    let result = rewrite_str(html, RewriteStrSettings {
         element_content_handlers: element_handlers,
         ..RewriteStrSettings::default()
-    })
+    });
+    result
 }
 
 /// Self-contained HTML/CSS/JS for the floating search modal.

@@ -112,12 +112,9 @@ pub struct InitArgs {
     /// Output directory (defaults to current directory)
     #[arg(short, long)]
     pub output: Option<PathBuf>,
-    /// Apply a WordPress Playground blueprint after initialization
-    #[arg(long, value_hint = ValueHint::FilePath)]
-    pub blueprint: Option<PathBuf>,
-    /// Use WordPress Playground instead of DDEV for WordPress projects
+    /// Blueprint name (from registry), local file path, or URL
     #[arg(long)]
-    pub playground: bool,
+    pub blueprint: Option<String>,
 }
 
 #[derive(Args, Debug, Clone)]

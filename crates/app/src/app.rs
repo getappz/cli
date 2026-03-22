@@ -46,8 +46,7 @@ pub struct Cli {
     pub scope: Option<String>,
     #[command(subcommand)]
     pub command: Commands,
-    /// Load a WASM plugin
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub plugin: Option<String>,
 }
 

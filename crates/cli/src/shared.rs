@@ -289,6 +289,9 @@ pub async fn run_cli(args: Vec<OsString>) -> MainResult {
                             .map_err(|e| miette::miette!("{}", e))?;
                         Ok(None)
                     }
+                    Commands::Run { task, force } => {
+                        app::commands::run(session, task, force, false).await
+                    }
                     Commands::External(args) => {
                         app::commands::external::run(session, args).await
                     }

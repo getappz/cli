@@ -4,7 +4,8 @@ use crate::auth;
 use crate::context::AppContext;
 use crate::importer;
 use crate::project::ProjectContext;
-use crate::recipe;
+use crate::builtin_tasks;
+use crate::tools;
 use crate::telemetry::TelemetryEventStore;
 use crate::wasm;
 use api::{error::ApiError as ApiErrorType, Client};
@@ -329,16 +330,14 @@ impl AppSession for AppzSession {
         // Build task registry
         let mut reg = TaskRegistry::new();
 
-        // Register common recipes
-        recipe::register_common(&mut reg);
+        // Register built-in tasks (deploy pipeline, laravel artisan)
+        builtin_tasks::register_common(&mut reg);
+        builtin_tasks::laravel::register_laravel(&mut reg);
 
-        // Register tools
-        recipe::tools::mise::register_mise_tools(&mut reg);
-        recipe::tools::ddev::register_ddev_tools(&mut reg);
-        recipe::tools::docker::register_docker_tools(&mut reg);
-
-        // Register Laravel built-in tasks
-        recipe::laravel::register_laravel(&mut reg);
+        // Register tool installers (mise, ddev, docker)
+        tools::mise::register_mise_tools(&mut reg);
+        tools::ddev::register_ddev_tools(&mut reg);
+        tools::docker::register_docker_tools(&mut reg);
 
         // Import blueprint file: prefer APPZ_IMPORT, otherwise auto-detect .appz/blueprint.{yaml,json,jsonc} then legacy recipe.yaml/recipe.json
         if let Ok(path) = std::env::var("APPZ_IMPORT") {

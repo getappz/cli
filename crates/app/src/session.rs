@@ -341,20 +341,36 @@ impl AppSession for AppzSession {
         recipe::laravel::register_laravel(&mut reg);
         recipe::vercel::register_vercel(&mut reg);
 
-        // Import recipe file: prefer APPZ_IMPORT, otherwise auto-detect ./recipe.yaml or ./recipe.json
+        // Import blueprint file: prefer APPZ_IMPORT, otherwise auto-detect .appz/blueprint.{yaml,json,jsonc} then legacy recipe.yaml/recipe.json
         if let Ok(path) = std::env::var("APPZ_IMPORT") {
             if let Err(e) = importer::import_file(path, &mut reg) {
-                eprintln!("Warning: Failed to import recipe: {}", e);
+                eprintln!("Warning: Failed to import blueprint: {}", e);
             }
         } else {
-            let yml = self.working_dir.join("recipe.yaml");
-            let json = self.working_dir.join("recipe.json");
-            if yml.exists() {
-                if let Err(e) = importer::import_file(yml, &mut reg) {
+            let appz_yaml = self.working_dir.join(".appz").join("blueprint.yaml");
+            let appz_json = self.working_dir.join(".appz").join("blueprint.json");
+            let appz_jsonc = self.working_dir.join(".appz").join("blueprint.jsonc");
+            let recipe_yml = self.working_dir.join("recipe.yaml");
+            let recipe_json = self.working_dir.join("recipe.json");
+
+            if appz_yaml.exists() {
+                if let Err(e) = importer::import_file(appz_yaml, &mut reg) {
+                    eprintln!("Warning: Failed to import .appz/blueprint.yaml: {}", e);
+                }
+            } else if appz_json.exists() {
+                if let Err(e) = importer::import_file(appz_json, &mut reg) {
+                    eprintln!("Warning: Failed to import .appz/blueprint.json: {}", e);
+                }
+            } else if appz_jsonc.exists() {
+                if let Err(e) = importer::import_file(appz_jsonc, &mut reg) {
+                    eprintln!("Warning: Failed to import .appz/blueprint.jsonc: {}", e);
+                }
+            } else if recipe_yml.exists() {
+                if let Err(e) = importer::import_file(recipe_yml, &mut reg) {
                     eprintln!("Warning: Failed to import recipe.yaml: {}", e);
                 }
-            } else if json.exists() {
-                if let Err(e) = importer::import_file(json, &mut reg) {
+            } else if recipe_json.exists() {
+                if let Err(e) = importer::import_file(recipe_json, &mut reg) {
                     eprintln!("Warning: Failed to import recipe.json: {}", e);
                 }
             }

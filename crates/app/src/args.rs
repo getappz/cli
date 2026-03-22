@@ -224,8 +224,8 @@ pub struct RemoveArgs {
 }
 
 #[derive(Args, Debug, Clone)]
-pub struct WpExportArgs {
-    /// Output directory for the static export (default: ./static-export)
+pub struct Site2StaticArgs {
+    /// Output directory for the static export (default: ./dist)
     #[arg(short, long)]
     pub output: Option<PathBuf>,
     /// Use WordPress Playground instead of DDEV

@@ -343,7 +343,7 @@ fn has_prebuilt_output(project_dir: &std::path::Path, output_dir: &str) -> bool 
 /// If vercel.json doesn't exist, creates it. If it exists, updates
 /// outputDirectory without overwriting other settings. When `skip_build`
 /// is true, also sets buildCommand to empty so Vercel doesn't try to
-/// build (the output is pre-built, e.g. from appz wp-export).
+/// build (the output is pre-built, e.g. from appz site2static).
 fn ensure_vercel_json(
     project_dir: &std::path::Path,
     output_dir: &str,

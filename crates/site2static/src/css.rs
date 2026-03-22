@@ -1,17 +1,4 @@
-use std::sync::LazyLock;
-
-use regex::Regex;
 use url::Url;
-
-static CSS_URL_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
-    vec![
-        Regex::new(r#"url\s*\(\s*['"]?([^'"]*?)['"]?\s*\)"#).unwrap(),
-        Regex::new(r#"@import\s+url\s*\(\s*['"]?([^'"]*?)['"]?\s*\)"#).unwrap(),
-        Regex::new(r#"@import\s+'([^']+)'"#).unwrap(),
-        Regex::new(r#"@import\s+"([^"]+)""#).unwrap(),
-        Regex::new(r#"@import\s+([^'"\s;][^\s;]*)"#).unwrap(),
-    ]
-});
 
 pub struct Css {
     pub css: String,
@@ -29,46 +16,68 @@ impl Css {
     }
 
     /// Extract URLs from CSS and rewrite same-domain ones to absolute paths.
+    /// Uses `css_refs` for URL extraction, then rewrites in place.
     pub fn find_urls_as_strings(&mut self, base_url: &Url) -> Vec<String> {
-        let mut urls = Vec::new();
         let base_domain = base_url.domain().unwrap_or_default().to_string();
 
-        for regex in CSS_URL_PATTERNS.iter() {
-            // Collect URLs first
-            for cap in regex.captures_iter(&self.css) {
-                if let Some(m) = cap.get(1) {
-                    let url = m.as_str().trim();
-                    if !url.is_empty() && !url.starts_with("data:") {
-                        urls.push(url.to_string());
+        // Extract all URLs using css-refs (zero-copy extraction)
+        let mut urls: Vec<String> = css_refs::extract_urls(&self.css)
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        // Also extract @import URLs (css_refs separates these)
+        for import_url in css_refs::extract_imports(&self.css) {
+            let s = import_url.to_string();
+            if !urls.contains(&s) {
+                urls.push(s);
+            }
+        }
+
+        // Rewrite same-domain absolute URLs to root-relative paths.
+        // Uses the raw regex from css-refs for in-place replacement.
+        let re = css_refs::url_regex();
+        self.css = re
+            .replace_all(&self.css, |caps: &regex::Captures| {
+                rewrite_if_same_domain(caps, base_url, &base_domain)
+            })
+            .to_string();
+
+        let re_import = css_refs::import_regex();
+        self.css = re_import
+            .replace_all(&self.css, |caps: &regex::Captures| {
+                rewrite_if_same_domain(caps, base_url, &base_domain)
+            })
+            .to_string();
+
+        urls
+    }
+}
+
+/// Rewrite a captured URL to a root-relative path if it's on the same domain.
+fn rewrite_if_same_domain(
+    caps: &regex::Captures,
+    base_url: &Url,
+    base_domain: &str,
+) -> String {
+    // Try capture group 1 first, then 2 (import patterns have two groups)
+    let m = caps.get(1).or_else(|| caps.get(2));
+    if let Some(m) = m {
+        let original = m.as_str().trim();
+        if !original.is_empty() && !original.starts_with("data:") {
+            let resolved = Url::parse(original).or_else(|_| base_url.join(original));
+            if let Ok(resolved) = resolved {
+                if resolved.domain() == Some(base_domain) {
+                    if let Some(path) = resolved.path().strip_prefix('/') {
+                        let rel = format!("/{path}");
+                        let full = caps.get(0).unwrap().as_str();
+                        return full.replace(original, &rel);
                     }
                 }
             }
-
-            // Rewrite same-domain URLs
-            self.css = regex
-                .replace_all(&self.css, |caps: &regex::Captures| {
-                    if let Some(m) = caps.get(1) {
-                        let original = m.as_str().trim();
-                        if !original.is_empty() && !original.starts_with("data:") {
-                            let resolved = Url::parse(original)
-                                .or_else(|_| base_url.join(original));
-                            if let Ok(resolved) = resolved {
-                                if resolved.domain() == Some(&*base_domain) {
-                                    if let Some(path) = resolved.path().strip_prefix('/') {
-                                        let rel = format!("/{}", path);
-                                        let full = caps.get(0).unwrap().as_str();
-                                        return full.replace(original, &rel);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    caps.get(0).unwrap().as_str().to_string()
-                })
-                .to_string();
         }
-        urls
     }
+    caps.get(0).unwrap().as_str().to_string()
 }
 
 #[cfg(test)]

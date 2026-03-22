@@ -5,6 +5,15 @@ pub enum ResponseData {
     Other(Vec<u8>),
 }
 
+impl ResponseData {
+    /// Consume the wrapper and return the inner bytes.
+    pub fn into_bytes(self) -> Vec<u8> {
+        match self {
+            Self::Html(b) | Self::Css(b) | Self::Other(b) => b,
+        }
+    }
+}
+
 /// HTTP response wrapper with metadata for incremental crawling.
 pub struct Response {
     pub data: ResponseData,

@@ -18,9 +18,29 @@ pub fn has_env(key: &str) -> bool {
     env::var(key).is_ok()
 }
 
-/// Check if running in CI environment
+/// Check if running in CI environment.
+///
+/// Checks the standard `CI` variable, Appz-specific non-interactive flags,
+/// and common CI platform environment variables.
 pub fn is_ci() -> bool {
-    has_env("CI") || has_env("CONTINUOUS_INTEGRATION")
+    if has_env("CI") || has_env("CONTINUOUS_INTEGRATION") {
+        return true;
+    }
+    if has_env("APPZ_NO_INPUT") || has_env("APPZ_YES") {
+        return true;
+    }
+    const CI_PLATFORM_VARS: &[&str] = &[
+        "GITHUB_ACTIONS",
+        "GITLAB_CI",
+        "CIRCLECI",
+        "TRAVIS",
+        "JENKINS_URL",
+        "BUILDKITE",
+        "CODEBUILD_BUILD_ID",
+        "TF_BUILD",
+        "BITBUCKET_PIPELINE",
+    ];
+    CI_PLATFORM_VARS.iter().any(|var| has_env(var))
 }
 
 /// Check if running in a test environment

@@ -18,11 +18,17 @@ miette = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+json_comments = "0.2"
+blueprint = { path = "../blueprint" }
+regex = { workspace = true }
 tokio = { workspace = true }
 reqwest = { workspace = true, features = ["json", "gzip", "zstd", "blocking", "stream"] }
 starbase_archive = { workspace = true }
 starbase_utils = { workspace = true }
 tempfile = { workspace = true }
+bytes = "1"
+dirs = "5"
 tracing = "0.1"
 
 [dev-dependencies]

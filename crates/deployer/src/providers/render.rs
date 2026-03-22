@@ -111,16 +111,7 @@ impl DeployProvider for RenderProvider {
 
     async fn deploy(&self, ctx: DeployContext) -> DeployResult<DeployOutput> {
         if ctx.dry_run {
-            return Ok(DeployOutput {
-                provider: "render".into(),
-                url: "https://dry-run.onrender.com".into(),
-                additional_urls: vec![],
-                deployment_id: None,
-                is_preview: false,
-                status: DeployStatus::Ready,
-                created_at: Some(chrono::Utc::now()),
-                duration_ms: Some(0),
-            });
+            return Ok(DeployOutput::dry_run("render", false));
         }
 
         // Render typically deploys via git push; trigger via sandbox exec

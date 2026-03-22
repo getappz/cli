@@ -205,16 +205,65 @@ pub async fn build(session: AppzSession) -> AppResult {
 
     if is_wordpress {
         // WordPress: use StaticExporter to export to dist/
-        println!("\n🔨 Running static export...");
         let runtime = crate::wp_runtime::resolve(&project_path, false)?;
         let host_output = project_path.join("dist");
         std::fs::create_dir_all(&host_output)
             .map_err(|e| miette::miette!("Failed to create dist/: {}", e))?;
 
+        let spinner = ui::progress::spinner("Discovering sitemap...");
+        let spinner_ref = std::sync::Arc::new(spinner);
+        let spinner_for_cb = spinner_ref.clone();
+
+        let on_progress: std::sync::Arc<dyn Fn(blueprint::ProgressEvent) + Send + Sync> =
+            std::sync::Arc::new(move |event| {
+                match event {
+                    blueprint::ProgressEvent::DiscoveringSitemap => {
+                        spinner_for_cb.set_message("Discovering sitemap...");
+                    }
+                    blueprint::ProgressEvent::SitemapDone { urls_found } => {
+                        if urls_found > 0 {
+                            spinner_for_cb.set_message(&format!("Found {} URLs in sitemap, crawling...", urls_found));
+                        } else {
+                            spinner_for_cb.set_message("Crawling site...");
+                        }
+                    }
+                    blueprint::ProgressEvent::Crawling { pages, assets } => {
+                        spinner_for_cb.set_message(&format!(
+                            "Exported {} pages, {} assets", pages, assets
+                        ));
+                    }
+                    blueprint::ProgressEvent::Done { pages, assets, duration } => {
+                        spinner_for_cb.finish_with_message(&format!(
+                            "Exported {} pages, {} assets in {:.1}s",
+                            pages, assets, duration.as_secs_f64()
+                        ));
+                    }
+                    blueprint::ProgressEvent::IndexingSearch => {
+                        spinner_for_cb.set_message("Building search index...");
+                    }
+                    blueprint::ProgressEvent::SearchDone { pages } => {
+                        spinner_for_cb.set_message(&format!("Search index built ({} pages)", pages));
+                    }
+                    blueprint::ProgressEvent::SearchFailed { message } => {
+                        spinner_for_cb.set_message(&format!("Search indexing failed: {}", message));
+                    }
+                }
+            });
+
         let exporter = blueprint::StaticExporter::new(project_path.clone(), runtime.clone());
-        exporter
-            .export(Some(host_output.as_path()))
-            .map_err(|e| miette::miette!("Static export failed: {}", e))?;
+        let output_path = host_output.clone();
+        // Run in spawn_blocking because site2static uses reqwest::blocking
+        // which creates its own tokio runtime — cannot be used inside an
+        // existing async runtime without spawn_blocking.
+        let export_result = tokio::task::spawn_blocking(move || {
+            exporter.export(Some(output_path.as_path()), Some(on_progress))
+        })
+        .await
+        .map_err(|e| miette::miette!("Static export task panicked: {}", e))?
+        .map_err(|e| miette::miette!("Static export failed: {}", e))?;
+
+        // Ensure spinner is finished (in case no Done event was emitted).
+        drop(spinner_ref);
 
         // For DDEV bind-mount: files should already be on host.
         // For mutagen: need docker cp.

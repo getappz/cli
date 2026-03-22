@@ -28,6 +28,10 @@ pub struct AppzSession {
     api_client: OnceLock<Arc<Client>>,
     project_context: OnceLock<Option<ProjectContext>>,
 
+    /// Detected framework slug (e.g. "wordpress", "nextjs").
+    /// Resolved from appz.json or auto-detected during analyze().
+    pub framework: Option<String>,
+
     // Performance debugging (APPZ_DEBUG_TIMING=1); Arc for Clone, RwLock for Sync
     timing: Option<std::sync::Arc<std::sync::RwLock<common::timing::TimingDebug>>>,
 }
@@ -36,12 +40,13 @@ impl AppzSession {
     pub fn new(cli: Cli, telemetry_store: Arc<TelemetryEventStore>) -> Self {
         debug!("Creating new application session");
 
-        let timing = if common::timing::TimingDebug::new().enabled() {
-            Some(std::sync::Arc::new(std::sync::RwLock::new(
-                common::timing::TimingDebug::new(),
-            )))
-        } else {
-            None
+        let timing = {
+            let t = common::timing::TimingDebug::new();
+            if t.enabled() {
+                Some(std::sync::Arc::new(std::sync::RwLock::new(t)))
+            } else {
+                None
+            }
         };
 
         Self {
@@ -50,6 +55,7 @@ impl AppzSession {
             task_registry: OnceLock::new(),
             api_client: OnceLock::new(),
             project_context: OnceLock::new(),
+            framework: None,
             cli,
             timing,
         }
@@ -80,6 +86,51 @@ impl AppzSession {
     /// Get project context if available (must be called after analyze)
     pub fn get_project_context(&self) -> Option<&ProjectContext> {
         self.project_context.get().and_then(|ctx| ctx.as_ref())
+    }
+
+    /// Resolve the framework slug from appz.json or auto-detection.
+    ///
+    /// If appz.json exists and contains a `framework` field, returns it.
+    /// Otherwise, runs framework detection and persists the result to
+    /// appz.json (creating or updating the file) so future runs skip detection.
+    async fn resolve_framework(working_dir: &std::path::Path) -> Option<String> {
+        // 1. Try reading from appz.json
+        if let Ok(Some(settings)) = crate::project::read_config_async(working_dir).await {
+            if settings.framework.is_some() {
+                return settings.framework;
+            }
+        }
+
+        // 2. Auto-detect
+        let detected = appz_build::detect_framework(working_dir)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|d| d.slug)?;
+
+        // 3. Persist to appz.json
+        let config_path = working_dir.join("appz.json");
+        let mut root: serde_json::Value = if config_path.exists() {
+            std::fs::read_to_string(&config_path)
+                .ok()
+                .and_then(|c| serde_json::from_str(&c).ok())
+                .unwrap_or_else(|| serde_json::json!({}))
+        } else {
+            serde_json::json!({})
+        };
+
+        if let Some(obj) = root.as_object_mut() {
+            obj.insert(
+                "framework".to_string(),
+                serde_json::Value::String(detected.clone()),
+            );
+        }
+
+        if let Ok(json_str) = serde_json::to_string_pretty(&root) {
+            let _ = std::fs::write(&config_path, json_str);
+        }
+
+        Some(detected)
     }
 }
 
@@ -290,20 +341,36 @@ impl AppSession for AppzSession {
         recipe::laravel::register_laravel(&mut reg);
         recipe::vercel::register_vercel(&mut reg);
 
-        // Import recipe file: prefer APPZ_IMPORT, otherwise auto-detect ./recipe.yaml or ./recipe.json
+        // Import blueprint file: prefer APPZ_IMPORT, otherwise auto-detect .appz/blueprint.{yaml,json,jsonc} then legacy recipe.yaml/recipe.json
         if let Ok(path) = std::env::var("APPZ_IMPORT") {
             if let Err(e) = importer::import_file(path, &mut reg) {
-                eprintln!("Warning: Failed to import recipe: {}", e);
+                eprintln!("Warning: Failed to import blueprint: {}", e);
             }
         } else {
-            let yml = self.working_dir.join("recipe.yaml");
-            let json = self.working_dir.join("recipe.json");
-            if yml.exists() {
-                if let Err(e) = importer::import_file(yml, &mut reg) {
+            let appz_yaml = self.working_dir.join(".appz").join("blueprint.yaml");
+            let appz_json = self.working_dir.join(".appz").join("blueprint.json");
+            let appz_jsonc = self.working_dir.join(".appz").join("blueprint.jsonc");
+            let recipe_yml = self.working_dir.join("recipe.yaml");
+            let recipe_json = self.working_dir.join("recipe.json");
+
+            if appz_yaml.exists() {
+                if let Err(e) = importer::import_file(appz_yaml, &mut reg) {
+                    eprintln!("Warning: Failed to import .appz/blueprint.yaml: {}", e);
+                }
+            } else if appz_json.exists() {
+                if let Err(e) = importer::import_file(appz_json, &mut reg) {
+                    eprintln!("Warning: Failed to import .appz/blueprint.json: {}", e);
+                }
+            } else if appz_jsonc.exists() {
+                if let Err(e) = importer::import_file(appz_jsonc, &mut reg) {
+                    eprintln!("Warning: Failed to import .appz/blueprint.jsonc: {}", e);
+                }
+            } else if recipe_yml.exists() {
+                if let Err(e) = importer::import_file(recipe_yml, &mut reg) {
                     eprintln!("Warning: Failed to import recipe.yaml: {}", e);
                 }
-            } else if json.exists() {
-                if let Err(e) = importer::import_file(json, &mut reg) {
+            } else if recipe_json.exists() {
+                if let Err(e) = importer::import_file(recipe_json, &mut reg) {
                     eprintln!("Warning: Failed to import recipe.json: {}", e);
                 }
             }
@@ -332,6 +399,13 @@ impl AppSession for AppzSession {
 
         if let Some(ref t) = self.timing {
             t.write().unwrap().checkpoint("analyze: task_registry + recipes");
+        }
+
+        // Resolve framework: read from appz.json, or auto-detect and persist
+        self.framework = Self::resolve_framework(&self.working_dir).await;
+
+        if let Some(ref t) = self.timing {
+            t.write().unwrap().checkpoint("analyze: framework");
         }
 
         // Load project context if command requires it (bootstrap phase).
@@ -372,14 +446,13 @@ impl AppSession for AppzSession {
             t.write().unwrap().checkpoint("execute: (pre)");
         }
 
-        // Check for new version (non-blocking, won't fail command execution)
-        if let Err(e) = crate::systems::version_check::check_for_new_version().await {
-            debug!("Failed to check for new version: {}", e);
-        }
-
-        if let Some(ref t) = self.timing {
-            t.write().unwrap().checkpoint("execute: version_check");
-        }
+        // Spawn version check as a background task — never blocks command execution.
+        // The check only prints a notification to stderr; we don't need the result.
+        tokio::spawn(async {
+            if let Err(e) = crate::systems::version_check::check_for_new_version().await {
+                tracing::debug!("Failed to check for new version: {}", e);
+            }
+        });
 
         Ok(None)
     }
@@ -389,7 +462,6 @@ impl AppSession for AppzSession {
             t.write().unwrap().checkpoint("shutdown");
             t.read().unwrap().print();
         }
-        // Cleanup resources if needed
         Ok(None)
     }
 }

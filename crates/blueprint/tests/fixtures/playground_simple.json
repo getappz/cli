@@ -1,0 +1,15 @@
+{
+    "$schema": "https://playground.wordpress.net/blueprint-schema.json",
+    "preferredVersions": { "php": "8.2", "wp": "6.4" },
+    "plugins": ["woocommerce", "jetpack"],
+    "siteOptions": {
+        "blogname": "My Store"
+    },
+    "steps": [
+        { "step": "installTheme", "themeData": { "resource": "wordpress.org/themes", "slug": "astra" } },
+        { "step": "setSiteLanguage", "language": "de_DE" },
+        { "step": "writeFile", "path": "/wordpress/test.txt", "data": "hello" },
+        { "step": "mkdir", "path": "/wordpress/custom" },
+        { "step": "wp-cli", "command": "cache flush" }
+    ]
+}

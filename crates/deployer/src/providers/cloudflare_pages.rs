@@ -42,6 +42,63 @@ pub struct CloudflarePagesConfig {
 /// Cloudflare Pages deploy provider.
 pub struct CloudflarePagesProvider;
 
+impl CloudflarePagesProvider {
+    async fn deploy_internal(&self, ctx: DeployContext, is_preview: bool) -> DeployResult<DeployOutput> {
+        let start = std::time::Instant::now();
+
+        if ctx.dry_run {
+            return Ok(DeployOutput::dry_run("cloudflare-pages", is_preview));
+        }
+
+        let cf_config = ctx.deploy_config
+            .get_target_config::<CloudflarePagesConfig>("cloudflare-pages")?
+            .unwrap_or_default();
+
+        let project_flag = cf_config.project_name
+            .as_deref()
+            .map(|n| format!(" --project-name {}", n))
+            .unwrap_or_default();
+
+        let branch_flag = if is_preview {
+            " --branch preview".to_string()
+        } else {
+            cf_config.production_branch
+                .as_deref()
+                .map(|b| format!(" --branch {}", b))
+                .unwrap_or_default()
+        };
+
+        let cmd = format!(
+            "wrangler pages deploy {}{}{}",
+            ctx.output_dir, project_flag, branch_flag
+        );
+
+        let result = ctx.exec(&cmd).await?;
+
+        if !result.success() {
+            return Err(DeployError::DeployFailed {
+                provider: "Cloudflare Pages".into(),
+                reason: combined_output(&result),
+            });
+        }
+
+        let url = extract_url_from_output(&result.stdout())
+            .or_else(|| extract_url_from_output(&result.stderr()))
+            .unwrap_or_else(|| "https://pages.dev".into());
+
+        Ok(DeployOutput {
+            provider: "cloudflare-pages".into(),
+            url,
+            additional_urls: vec![],
+            deployment_id: None,
+            is_preview,
+            status: DeployStatus::Ready,
+            created_at: Some(chrono::Utc::now()),
+            duration_ms: Some(start.elapsed().as_millis() as u64),
+        })
+    }
+}
+
 #[async_trait]
 impl DeployProvider for CloudflarePagesProvider {
     fn name(&self) -> &str {
@@ -133,117 +190,11 @@ impl DeployProvider for CloudflarePagesProvider {
     }
 
     async fn deploy(&self, ctx: DeployContext) -> DeployResult<DeployOutput> {
-        let start = std::time::Instant::now();
-
-        if ctx.dry_run {
-            return Ok(DeployOutput {
-                provider: "cloudflare-pages".into(),
-                url: "https://dry-run.pages.dev".into(),
-                additional_urls: vec![],
-                deployment_id: None,
-                is_preview: false,
-                status: DeployStatus::Ready,
-                created_at: Some(chrono::Utc::now()),
-                duration_ms: Some(0),
-            });
-        }
-
-        let cf_config = ctx.deploy_config
-            .get_target_config::<CloudflarePagesConfig>("cloudflare-pages")?
-            .unwrap_or_default();
-
-        let project_flag = cf_config.project_name
-            .as_deref()
-            .map(|n| format!(" --project-name {}", n))
-            .unwrap_or_default();
-        let branch_flag = cf_config.production_branch
-            .as_deref()
-            .map(|b| format!(" --branch {}", b))
-            .unwrap_or_default();
-
-        let cmd = format!(
-            "wrangler pages deploy {}{}{}",
-            ctx.output_dir, project_flag, branch_flag
-        );
-
-        let result = ctx.exec(&cmd).await?;
-
-        if !result.success() {
-            return Err(DeployError::DeployFailed {
-                provider: "Cloudflare Pages".into(),
-                reason: combined_output(&result),
-            });
-        }
-
-        let url = extract_url_from_output(&result.stdout())
-            .or_else(|| extract_url_from_output(&result.stderr()))
-            .unwrap_or_else(|| "https://pages.dev".into());
-
-        Ok(DeployOutput {
-            provider: "cloudflare-pages".into(),
-            url,
-            additional_urls: vec![],
-            deployment_id: None,
-            is_preview: false,
-            status: DeployStatus::Ready,
-            created_at: Some(chrono::Utc::now()),
-            duration_ms: Some(start.elapsed().as_millis() as u64),
-        })
+        self.deploy_internal(ctx, false).await
     }
 
     async fn deploy_preview(&self, ctx: DeployContext) -> DeployResult<DeployOutput> {
-        let start = std::time::Instant::now();
-
-        if ctx.dry_run {
-            return Ok(DeployOutput {
-                provider: "cloudflare-pages".into(),
-                url: "https://dry-run-preview.pages.dev".into(),
-                additional_urls: vec![],
-                deployment_id: None,
-                is_preview: true,
-                status: DeployStatus::Ready,
-                created_at: Some(chrono::Utc::now()),
-                duration_ms: Some(0),
-            });
-        }
-
-        let cf_config = ctx.deploy_config
-            .get_target_config::<CloudflarePagesConfig>("cloudflare-pages")?
-            .unwrap_or_default();
-
-        let project_flag = cf_config.project_name
-            .as_deref()
-            .map(|n| format!(" --project-name {}", n))
-            .unwrap_or_default();
-
-        let cmd = format!(
-            "wrangler pages deploy {} --branch preview{}",
-            ctx.output_dir, project_flag
-        );
-
-        let result = ctx.exec(&cmd).await?;
-
-        if !result.success() {
-            return Err(DeployError::DeployFailed {
-                provider: "Cloudflare Pages".into(),
-                reason: combined_output(&result),
-            });
-        }
-
-        let url = extract_url_from_output(&result.stdout())
-            .or_else(|| extract_url_from_output(&result.stderr()))
-            .unwrap_or_else(|| "https://pages.dev".into());
-
-        Ok(DeployOutput {
-            provider: "cloudflare-pages".into(),
-            url,
-            additional_urls: vec![],
-            deployment_id: None,
-            is_preview: true,
-            status: DeployStatus::Ready,
-            created_at: Some(chrono::Utc::now()),
-            duration_ms: Some(start.elapsed().as_millis() as u64),
-        })
+        self.deploy_internal(ctx, true).await
     }
 
     fn supports_env_vars(&self) -> bool {

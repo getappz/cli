@@ -43,6 +43,50 @@ pub struct AzureStaticConfig {
 /// Azure Static Web Apps deploy provider.
 pub struct AzureStaticProvider;
 
+impl AzureStaticProvider {
+    async fn deploy_internal(&self, ctx: DeployContext, is_preview: bool) -> DeployResult<DeployOutput> {
+        let start = std::time::Instant::now();
+
+        if ctx.dry_run {
+            return Ok(DeployOutput::dry_run("azure-static", is_preview));
+        }
+
+        let token_flag = get_env_var("SWA_CLI_DEPLOYMENT_TOKEN")
+            .map(|t| format!(" --deployment-token {}", t))
+            .unwrap_or_default();
+
+        let cmd = if is_preview {
+            format!("swa deploy --app-location {} --env preview{}", ctx.output_dir, token_flag)
+        } else {
+            format!("swa deploy --app-location {}{}", ctx.output_dir, token_flag)
+        };
+
+        let result = ctx.exec(&cmd).await?;
+
+        if !result.success() {
+            return Err(DeployError::DeployFailed {
+                provider: "Azure Static Web Apps".into(),
+                reason: combined_output(&result),
+            });
+        }
+
+        let url = extract_url_from_output(&result.stdout())
+            .or_else(|| extract_url_from_output(&result.stderr()))
+            .unwrap_or_else(|| "https://azurestaticapps.net".into());
+
+        Ok(DeployOutput {
+            provider: "azure-static".into(),
+            url,
+            additional_urls: vec![],
+            deployment_id: None,
+            is_preview,
+            status: DeployStatus::Ready,
+            created_at: Some(chrono::Utc::now()),
+            duration_ms: Some(start.elapsed().as_millis() as u64),
+        })
+    }
+}
+
 #[async_trait]
 impl DeployProvider for AzureStaticProvider {
     fn name(&self) -> &str {
@@ -141,97 +185,11 @@ impl DeployProvider for AzureStaticProvider {
     }
 
     async fn deploy(&self, ctx: DeployContext) -> DeployResult<DeployOutput> {
-        let start = std::time::Instant::now();
-
-        if ctx.dry_run {
-            return Ok(DeployOutput {
-                provider: "azure-static".into(),
-                url: "https://dry-run.azurestaticapps.net".into(),
-                additional_urls: vec![],
-                deployment_id: None,
-                is_preview: false,
-                status: DeployStatus::Ready,
-                created_at: Some(chrono::Utc::now()),
-                duration_ms: Some(0),
-            });
-        }
-
-        let token_flag = get_env_var("SWA_CLI_DEPLOYMENT_TOKEN")
-            .map(|t| format!(" --deployment-token {}", t))
-            .unwrap_or_default();
-
-        let cmd = format!("swa deploy --app-location {}{}", ctx.output_dir, token_flag);
-
-        let result = ctx.exec(&cmd).await?;
-
-        if !result.success() {
-            return Err(DeployError::DeployFailed {
-                provider: "Azure Static Web Apps".into(),
-                reason: combined_output(&result),
-            });
-        }
-
-        let url = extract_url_from_output(&result.stdout())
-            .or_else(|| extract_url_from_output(&result.stderr()))
-            .unwrap_or_else(|| "https://azurestaticapps.net".into());
-
-        Ok(DeployOutput {
-            provider: "azure-static".into(),
-            url,
-            additional_urls: vec![],
-            deployment_id: None,
-            is_preview: false,
-            status: DeployStatus::Ready,
-            created_at: Some(chrono::Utc::now()),
-            duration_ms: Some(start.elapsed().as_millis() as u64),
-        })
+        self.deploy_internal(ctx, false).await
     }
 
     async fn deploy_preview(&self, ctx: DeployContext) -> DeployResult<DeployOutput> {
-        let start = std::time::Instant::now();
-
-        if ctx.dry_run {
-            return Ok(DeployOutput {
-                provider: "azure-static".into(),
-                url: "https://dry-run-preview.azurestaticapps.net".into(),
-                additional_urls: vec![],
-                deployment_id: None,
-                is_preview: true,
-                status: DeployStatus::Ready,
-                created_at: Some(chrono::Utc::now()),
-                duration_ms: Some(0),
-            });
-        }
-
-        let token_flag = get_env_var("SWA_CLI_DEPLOYMENT_TOKEN")
-            .map(|t| format!(" --deployment-token {}", t))
-            .unwrap_or_default();
-
-        let cmd = format!("swa deploy --app-location {} --env preview{}", ctx.output_dir, token_flag);
-
-        let result = ctx.exec(&cmd).await?;
-
-        if !result.success() {
-            return Err(DeployError::DeployFailed {
-                provider: "Azure Static Web Apps".into(),
-                reason: combined_output(&result),
-            });
-        }
-
-        let url = extract_url_from_output(&result.stdout())
-            .or_else(|| extract_url_from_output(&result.stderr()))
-            .unwrap_or_else(|| "https://azurestaticapps.net".into());
-
-        Ok(DeployOutput {
-            provider: "azure-static".into(),
-            url,
-            additional_urls: vec![],
-            deployment_id: None,
-            is_preview: true,
-            status: DeployStatus::Ready,
-            created_at: Some(chrono::Utc::now()),
-            duration_ms: Some(start.elapsed().as_millis() as u64),
-        })
+        self.deploy_internal(ctx, true).await
     }
 
     fn supports_custom_domains(&self) -> bool {

@@ -4,6 +4,7 @@
 //! filesystem, and rewrites URLs for offline navigation.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 use url::Url;
 
@@ -17,6 +18,58 @@ mod mirror;
 mod response;
 mod sitemap;
 mod url_utils;
+mod search;
+mod search_ui;
+
+pub use search::check_pagefind;
+
+/// Progress events emitted during the mirror operation.
+#[derive(Debug, Clone)]
+pub enum ProgressEvent {
+    /// Discovering sitemap URLs.
+    DiscoveringSitemap,
+    /// Sitemap discovery complete.
+    SitemapDone { urls_found: usize },
+    /// Crawling pages and copying assets.
+    Crawling { pages: u64, assets: u64 },
+    /// Export complete.
+    Done { pages: u64, assets: u64, duration: Duration },
+    /// Search indexing started.
+    IndexingSearch,
+    /// Search indexing complete.
+    SearchDone { pages: usize },
+    /// Search indexing failed (non-fatal).
+    SearchFailed { message: String },
+}
+
+/// Search configuration for the static export.
+#[derive(Debug, Clone)]
+pub enum SearchMode {
+    /// No search indexing or UI injection.
+    Disabled,
+    /// Run Pagefind to build search index, but don't inject UI.
+    IndexOnly,
+    /// Run Pagefind and inject search UI into pages.
+    Full(SearchUiConfig),
+}
+
+/// Configuration for search UI injection.
+#[derive(Debug, Clone)]
+pub struct SearchUiConfig {
+    /// Replace existing search forms (WordPress) with Pagefind widgets.
+    pub replace_existing: bool,
+    /// Inject a floating Cmd+K / Ctrl+K search modal on all pages.
+    pub keyboard_shortcut: bool,
+}
+
+impl Default for SearchUiConfig {
+    fn default() -> Self {
+        Self {
+            replace_existing: true,
+            keyboard_shortcut: true,
+        }
+    }
+}
 
 /// Local filesystem root for asset copy.
 pub enum WebRoot {
@@ -44,6 +97,15 @@ pub struct MirrorConfig {
     pub exclude_patterns: Vec<String>,
     /// URL include patterns (regex).
     pub include_patterns: Vec<String>,
+    /// Glob patterns for files to copy from webroot to output after crawling.
+    /// Catches assets dynamically loaded by JavaScript (webpack chunks, lazy
+    /// CSS/JS) that can't be discovered via HTML parsing.
+    /// Paths are relative to the webroot (e.g. `"wp-content/plugins/elementor/assets/js/*.bundle.min.js"`).
+    pub copy_globs: Vec<String>,
+    /// Search mode. `None` defaults to `SearchMode::Disabled`.
+    pub search: Option<SearchMode>,
+    /// Optional progress callback. Called from worker threads.
+    pub on_progress: Option<Arc<dyn Fn(ProgressEvent) + Send + Sync>>,
 }
 
 /// Result of a completed mirror operation.
@@ -68,6 +130,12 @@ pub enum MirrorError {
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("search binary '{binary}' not found: {hint}")]
+    SearchBinaryNotFound { binary: String, hint: String },
+
+    #[error("search indexing failed: {message}")]
+    SearchIndexingFailed { message: String },
 }
 
 /// Static site exporter. Crawls a running site and produces a static copy.

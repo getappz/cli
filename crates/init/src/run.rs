@@ -31,6 +31,8 @@ pub async fn run(
     force: bool,
     output: Option<PathBuf>,
     json_output: bool,
+    blueprint: Option<String>,
+    no_cache: bool,
 ) -> InitResult<Option<InitOutput>> {
     let (source, project_name) = if let (Some(src), Some(proj)) = (template_source, project_name) {
         (src, proj)
@@ -59,6 +61,8 @@ pub async fn run(
         force,
         json_output,
         is_ci,
+        blueprint,
+        no_cache,
     };
 
     let settings = SandboxSettings::default();
@@ -145,10 +149,11 @@ fn is_source(s: &str) -> bool {
     s.starts_with("https://")
         || s.starts_with("http://")
         || s.starts_with("npm:")
+        || s.starts_with("git:")
         || s.starts_with("./")
         || s.starts_with("../")
         || s.starts_with('/')
         || (s.len() > 1 && s.chars().nth(1) == Some(':') && !s.contains("github.com"))
         || s.contains('/')
-        || crate::providers::framework::has_create_command(s)
+        || crate::detect::is_known_framework(s)
 }

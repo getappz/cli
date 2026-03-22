@@ -1,0 +1,10 @@
+version: 1
+
+meta:
+  name: "Setup Only"
+  framework: "astro"
+
+setup:
+  - desc: "Install tailwind"
+    add_dependency: ["tailwindcss"]
+    dev: true

@@ -32,6 +32,8 @@
 //!     └── optional: install dependencies
 //! ```
 
+pub mod blueprint_schema;
+pub mod registry;
 pub mod config;
 pub mod detect;
 pub mod error;

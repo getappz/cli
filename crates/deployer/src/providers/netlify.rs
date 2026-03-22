@@ -41,6 +41,49 @@ pub struct NetlifyConfig {
 /// Netlify deploy provider.
 pub struct NetlifyProvider;
 
+impl NetlifyProvider {
+    async fn deploy_internal(&self, ctx: DeployContext, is_preview: bool) -> DeployResult<DeployOutput> {
+        let start = std::time::Instant::now();
+
+        if ctx.dry_run {
+            return Ok(DeployOutput::dry_run("netlify", is_preview));
+        }
+
+        let site_flag = ctx.deploy_config
+            .get_target_config::<NetlifyConfig>("netlify")?
+            .and_then(|c| c.site_id)
+            .map(|id| format!(" --site {}", id))
+            .unwrap_or_default();
+
+        let prod_flag = if is_preview { "" } else { " --prod" };
+        let cmd = format!("netlify deploy{} --dir {}{}", prod_flag, ctx.output_dir, site_flag);
+
+        let result = ctx.exec(&cmd).await?;
+
+        if !result.success() {
+            return Err(DeployError::DeployFailed {
+                provider: "Netlify".into(),
+                reason: combined_output(&result),
+            });
+        }
+
+        let url = extract_url_from_output(&result.stdout())
+            .or_else(|| extract_url_from_output(&result.stderr()))
+            .unwrap_or_else(|| "https://netlify.app".into());
+
+        Ok(DeployOutput {
+            provider: "netlify".into(),
+            url,
+            additional_urls: vec![],
+            deployment_id: None,
+            is_preview,
+            status: DeployStatus::Ready,
+            created_at: Some(chrono::Utc::now()),
+            duration_ms: Some(start.elapsed().as_millis() as u64),
+        })
+    }
+}
+
 #[async_trait]
 impl DeployProvider for NetlifyProvider {
     fn name(&self) -> &str {
@@ -175,101 +218,11 @@ impl DeployProvider for NetlifyProvider {
     }
 
     async fn deploy(&self, ctx: DeployContext) -> DeployResult<DeployOutput> {
-        let start = std::time::Instant::now();
-
-        if ctx.dry_run {
-            return Ok(DeployOutput {
-                provider: "netlify".into(),
-                url: "https://dry-run.netlify.app".into(),
-                additional_urls: vec![],
-                deployment_id: None,
-                is_preview: false,
-                status: DeployStatus::Ready,
-                created_at: Some(chrono::Utc::now()),
-                duration_ms: Some(0),
-            });
-        }
-
-        let site_flag = ctx.deploy_config
-            .get_target_config::<NetlifyConfig>("netlify")?
-            .and_then(|c| c.site_id)
-            .map(|id| format!(" --site {}", id))
-            .unwrap_or_default();
-
-        let cmd = format!("netlify deploy --prod --dir {}{}", ctx.output_dir, site_flag);
-
-        let result = ctx.exec(&cmd).await?;
-
-        if !result.success() {
-            return Err(DeployError::DeployFailed {
-                provider: "Netlify".into(),
-                reason: combined_output(&result),
-            });
-        }
-
-        let url = extract_url_from_output(&result.stdout())
-            .or_else(|| extract_url_from_output(&result.stderr()))
-            .unwrap_or_else(|| "https://netlify.app".into());
-
-        Ok(DeployOutput {
-            provider: "netlify".into(),
-            url,
-            additional_urls: vec![],
-            deployment_id: None,
-            is_preview: false,
-            status: DeployStatus::Ready,
-            created_at: Some(chrono::Utc::now()),
-            duration_ms: Some(start.elapsed().as_millis() as u64),
-        })
+        self.deploy_internal(ctx, false).await
     }
 
     async fn deploy_preview(&self, ctx: DeployContext) -> DeployResult<DeployOutput> {
-        let start = std::time::Instant::now();
-
-        if ctx.dry_run {
-            return Ok(DeployOutput {
-                provider: "netlify".into(),
-                url: "https://dry-run-preview.netlify.app".into(),
-                additional_urls: vec![],
-                deployment_id: None,
-                is_preview: true,
-                status: DeployStatus::Ready,
-                created_at: Some(chrono::Utc::now()),
-                duration_ms: Some(0),
-            });
-        }
-
-        let site_flag = ctx.deploy_config
-            .get_target_config::<NetlifyConfig>("netlify")?
-            .and_then(|c| c.site_id)
-            .map(|id| format!(" --site {}", id))
-            .unwrap_or_default();
-
-        let cmd = format!("netlify deploy --dir {}{}", ctx.output_dir, site_flag);
-
-        let result = ctx.exec(&cmd).await?;
-
-        if !result.success() {
-            return Err(DeployError::DeployFailed {
-                provider: "Netlify".into(),
-                reason: combined_output(&result),
-            });
-        }
-
-        let url = extract_url_from_output(&result.stdout())
-            .or_else(|| extract_url_from_output(&result.stderr()))
-            .unwrap_or_else(|| "https://netlify.app".into());
-
-        Ok(DeployOutput {
-            provider: "netlify".into(),
-            url,
-            additional_urls: vec![],
-            deployment_id: None,
-            is_preview: true,
-            status: DeployStatus::Ready,
-            created_at: Some(chrono::Utc::now()),
-            duration_ms: Some(start.elapsed().as_millis() as u64),
-        })
+        self.deploy_internal(ctx, true).await
     }
 
     fn supports_env_vars(&self) -> bool {

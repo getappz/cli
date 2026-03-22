@@ -58,11 +58,7 @@ fn process_recursive(downloader: &Downloader, xml: &str, urls: &mut Vec<Url>) {
 fn fetch_xml(downloader: &Downloader, url: &Url) -> Option<String> {
     match downloader.get(url) {
         Ok(resp) => {
-            let bytes = match resp.data {
-                crate::response::ResponseData::Html(b)
-                | crate::response::ResponseData::Css(b)
-                | crate::response::ResponseData::Other(b) => b,
-            };
+            let bytes = resp.data.into_bytes();
             // Handle gzip if Content-Encoding wasn't handled by reqwest
             if url.path().ends_with(".xml.gz") && bytes.starts_with(&[0x1f, 0x8b]) {
                 use flate2::read::GzDecoder;

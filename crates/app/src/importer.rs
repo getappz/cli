@@ -1,9 +1,11 @@
 use itertools::Itertools;
+use json_comments::StripComments;
 use miette::{miette, Result};
 use serde::Deserialize;
 use starbase_utils::fs;
 use std::{
     collections::HashMap,
+    io::Read as IoRead,
     path::{Path, PathBuf},
 };
 use walkdir::WalkDir;
@@ -88,6 +90,28 @@ struct DownloadDef {
 }
 
 #[derive(Deserialize, Debug, Default, Clone)]
+struct WriteFileDef {
+    path: String,
+    content: Option<String>,
+    template: Option<String>,
+}
+
+#[derive(Deserialize, Debug, Default, Clone)]
+struct PatchFileDef {
+    path: String,
+    after: Option<String>,
+    before: Option<String>,
+    replace: Option<String>,
+    content: String,
+}
+
+#[derive(Deserialize, Debug, Default, Clone)]
+struct CopyDef {
+    src: String,
+    dest: String,
+}
+
+#[derive(Deserialize, Debug, Default, Clone)]
 struct Step {
     #[serde(default)]
     cd: Option<String>,
@@ -107,6 +131,22 @@ struct Step {
     once: Option<bool>,
     #[serde(default)]
     hidden: Option<bool>,
+    #[serde(default)]
+    add_dependency: Option<Vec<String>>,
+    #[serde(default)]
+    dev: Option<bool>,
+    #[serde(default)]
+    write_file: Option<WriteFileDef>,
+    #[serde(default)]
+    patch_file: Option<PatchFileDef>,
+    #[serde(default)]
+    set_env: Option<HashMap<String, String>>,
+    #[serde(default)]
+    mkdir: Option<String>,
+    #[serde(default)]
+    cp: Option<CopyDef>,
+    #[serde(default)]
+    rm: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Default)]
@@ -125,6 +165,8 @@ struct FileSchema {
     after: HashMap<String, Vec<String>>, // target -> hooks
     #[serde(default)]
     includes: Option<Vec<PathBuf>>, // Top-level includes field
+    #[serde(default)]
+    setup: Vec<Step>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -182,20 +224,28 @@ fn task_includes_for_dir(dir: &Path, schema: &FileSchema) -> Vec<PathBuf> {
 fn parse_file_schema<P: AsRef<Path> + std::fmt::Debug>(path: P) -> Result<FileSchema> {
     let raw = fs::read_file(&path).map_err(|e| {
         miette!(
-            "Failed to read recipe file {}: {}",
+            "Failed to read blueprint file {}: {}",
             path.as_ref().display(),
             e
         )
     })?;
-    let schema: FileSchema = if path
+    let ext = path
         .as_ref()
         .extension()
         .and_then(|s| s.to_str())
-        .map(|s| s.eq_ignore_ascii_case("yaml") || s.eq_ignore_ascii_case("yml"))
-        .unwrap_or(false)
-    {
+        .unwrap_or("")
+        .to_lowercase();
+    let schema: FileSchema = if ext == "yaml" || ext == "yml" {
         serde_yaml::from_str(&raw)
             .map_err(|e| miette!("Invalid YAML in {}: {}", path.as_ref().display(), e))?
+    } else if ext == "jsonc" {
+        let stripped = StripComments::new(raw.as_bytes());
+        let mut json_str = String::new();
+        std::io::BufReader::new(stripped)
+            .read_to_string(&mut json_str)
+            .map_err(|e| miette!("Failed to strip comments in {}: {}", path.as_ref().display(), e))?;
+        serde_json::from_str(&json_str)
+            .map_err(|e| miette!("Invalid JSONC in {}: {}", path.as_ref().display(), e))?
     } else {
         serde_json::from_str(&raw)
             .map_err(|e| miette!("Invalid JSON in {}: {}", path.as_ref().display(), e))?
@@ -213,9 +263,9 @@ fn validate_file_schema(schema: &FileSchema) -> Result<Vec<String>> {
     if !(schema.tools.is_null() || schema.tools.is_object()) {
         return Err(miette!("tools must be a map/object"));
     }
-    // tasks must exist and be a non-empty map
-    if schema.tasks.is_empty() {
-        return Err(miette!("tasks section is missing or empty"));
+    // Blueprint must have either tasks or setup
+    if schema.tasks.is_empty() && schema.setup.is_empty() {
+        return Err(miette!("Blueprint must have either 'tasks' or 'setup' section"));
     }
     // validate tasks
     for (name, def) in &schema.tasks {
@@ -445,6 +495,90 @@ fn create_task_from_steps(
                 copy_path_recursive(Path::new(&src), Path::new(&dest))
                     .map_err(|e| miette!("Failed to copy path: {}", e))?;
             }
+            if let Some(deps) = &st.add_dependency {
+                let is_dev = st.dev.unwrap_or(false);
+                let dep_list: Vec<String> = deps.iter().map(|d| ctx.parse(d)).collect();
+                let dep_str = dep_list.join(" ");
+                let flag = if is_dev { " --save-dev" } else { "" };
+                let cmd = format!("npm install {}{}", dep_str, flag);
+                let opts = RunOptions {
+                    cwd: cwd_opt.clone(),
+                    env: None,
+                    show_output: true,
+                    package_manager: None,
+                    tool_info: None,
+                };
+                run_local_with(&ctx, &cmd, opts)
+                    .await
+                    .map_err(|e| miette!("Failed to add dependency: {}", e))?;
+            }
+            if let Some(wf) = &st.write_file {
+                let file_path = ctx.parse(&wf.path);
+                let content = if let Some(tmpl) = &wf.template {
+                    ctx.parse(tmpl)
+                } else if let Some(c) = &wf.content {
+                    ctx.parse(c)
+                } else {
+                    String::new()
+                };
+                if let Some(parent) = std::path::Path::new(&file_path).parent() {
+                    if !parent.as_os_str().is_empty() {
+                        std::fs::create_dir_all(parent)
+                            .map_err(|e| miette!("Failed to create directory for write_file: {}", e))?;
+                    }
+                }
+                std::fs::write(&file_path, &content)
+                    .map_err(|e| miette!("Failed to write file '{}': {}", file_path, e))?;
+            }
+            if let Some(env_map) = &st.set_env {
+                // Find or create .env file in cwd
+                let env_path = cwd_opt
+                    .as_deref()
+                    .map(|p| p.join(".env"))
+                    .unwrap_or_else(|| std::path::PathBuf::from(".env"));
+                let existing = std::fs::read_to_string(&env_path).unwrap_or_default();
+                let mut lines: Vec<String> = existing
+                    .lines()
+                    .map(|l| l.to_string())
+                    .collect();
+                for (key, val) in env_map {
+                    let key_parsed = ctx.parse(key);
+                    let val_parsed = ctx.parse(val);
+                    let new_line = format!("{}={}", key_parsed, val_parsed);
+                    // Upsert: replace existing key or append
+                    let prefix = format!("{}=", key_parsed);
+                    let replaced = lines.iter().position(|l| l.starts_with(&prefix));
+                    if let Some(idx) = replaced {
+                        lines[idx] = new_line;
+                    } else {
+                        lines.push(new_line);
+                    }
+                }
+                std::fs::write(&env_path, lines.join("\n") + "\n")
+                    .map_err(|e| miette!("Failed to write .env: {}", e))?;
+            }
+            if let Some(dir) = &st.mkdir {
+                let dir_path = ctx.parse(dir);
+                std::fs::create_dir_all(&dir_path)
+                    .map_err(|e| miette!("Failed to create directory '{}': {}", dir_path, e))?;
+            }
+            if let Some(cp) = &st.cp {
+                let src = ctx.parse(&cp.src);
+                let dest = ctx.parse(&cp.dest);
+                copy_path_recursive(Path::new(&src), Path::new(&dest))
+                    .map_err(|e| miette!("Failed to copy '{}' to '{}': {}", src, dest, e))?;
+            }
+            if let Some(path_str) = &st.rm {
+                let target = ctx.parse(path_str);
+                let p = std::path::Path::new(&target);
+                if p.is_dir() {
+                    std::fs::remove_dir_all(p)
+                        .map_err(|e| miette!("Failed to remove directory '{}': {}", target, e))?;
+                } else if p.exists() {
+                    std::fs::remove_file(p)
+                        .map_err(|e| miette!("Failed to remove file '{}': {}", target, e))?;
+                }
+            }
         }
         Ok(())
     });
@@ -575,6 +709,13 @@ fn validate_steps(name: &str, steps: &[Step], warnings: &mut Vec<String>) -> Res
             && s.download.is_none()
             && s.cd.is_none()
             && s.desc.is_none()
+            && s.add_dependency.is_none()
+            && s.write_file.is_none()
+            && s.patch_file.is_none()
+            && s.set_env.is_none()
+            && s.mkdir.is_none()
+            && s.cp.is_none()
+            && s.rm.is_none()
             && !s.once.unwrap_or(false)
             && !s.hidden.unwrap_or(false)
         {
@@ -625,9 +766,9 @@ fn load_tasks_includes(
     registry: &mut TaskRegistry,
 ) -> Result<()> {
     if root.is_file() {
-        // Load single recipe file (YAML/JSON instead of TOML)
+        // Load single blueprint file (YAML/JSON/JSONC instead of TOML)
         if let Some(ext) = root.extension().and_then(|e| e.to_str()) {
-            if ext == "yaml" || ext == "yml" || ext == "json" {
+            if ext == "yaml" || ext == "yml" || ext == "json" || ext == "jsonc" {
                 import_file(root, registry)?;
             }
         }
@@ -653,7 +794,7 @@ fn load_tasks_includes(
             .filter(|p| {
                 p.extension()
                     .and_then(|e| e.to_str())
-                    .map(|ext| ext == "yaml" || ext == "yml" || ext == "json")
+                    .map(|ext| ext == "yaml" || ext == "yml" || ext == "json" || ext == "jsonc")
                     .unwrap_or(false)
             })
             .collect();
@@ -831,7 +972,7 @@ pub fn import_file<P: AsRef<Path> + std::fmt::Debug>(
                 }),
             )
             .hidden()
-            .desc("Install tools defined in recipe.yaml using mise"),
+            .desc("Install tools defined in blueprint using mise"),
         );
         // Ensure tools are installed before config:apply and all imported tasks
         for name in &all_task_names {
@@ -1040,7 +1181,7 @@ pub fn import_file<P: AsRef<Path> + std::fmt::Debug>(
         }
     }
 
-    // Load tasks from includes after loading main recipe
+    // Load tasks from includes after loading main blueprint
     for include_path in includes {
         load_tasks_includes(&include_path, recipe_dir, reg)?;
     }

@@ -295,33 +295,18 @@ pub async fn create_deploy_sandbox(
 }
 
 /// Main deploy command entry point (Vercel-parity options).
-#[allow(clippy::too_many_arguments)]
 pub async fn deploy(
     session: AppzSession,
-    project_path: Option<std::path::PathBuf>,
-    provider_arg: Option<String>,
-    prod: bool,
-    _preview: bool,
-    target: Option<String>,
-    prebuilt: bool,
-    no_build: bool,
-    build_env: Vec<String>,
-    env: Vec<String>,
-    force: bool,
-    guidance: bool,
-    logs: bool,
-    meta: Vec<String>,
-    no_wait: bool,
-    public: bool,
-    skip_domain: bool,
-    with_cache: bool,
-    dry_run: bool,
-    json_output: bool,
-    deploy_all: bool,
-    yes: bool,
+    args: crate::args::DeployArgs,
 ) -> AppResult {
+    let dry_run = args.dry_run;
+    let json_output = args.json;
+    let prebuilt = args.prebuilt;
+    let guidance = args.guidance;
+    let deploy_all = args.all;
+
     // Resolve project directory (Vercel: [project-path])
-    let project_dir = match project_path {
+    let project_dir = match args.project_path {
         Some(p) => session
             .working_dir
             .join(&p)
@@ -331,21 +316,22 @@ pub async fn deploy(
     };
 
     // Resolve target (Vercel-parity): --prod => production, --target production => production, else preview
-    let is_production_target = target
+    let is_production_target = args
+        .target
         .as_ref()
         .map(|t| t == "production" || t == "prod")
         .unwrap_or(false);
-    let is_preview = !prod && !is_production_target;
+    let is_preview = !args.prod && !is_production_target;
 
     // Skip build when --prebuilt or --no-build
-    let no_build = no_build || prebuilt;
+    let no_build = args.no_build || prebuilt;
 
-    let is_ci = is_ci_environment() || yes;
+    let is_ci = is_ci_environment() || args.yes;
 
     // Stub for options not yet wired to backend: logs, no_wait, public, with_cache, build_env
-    let _ = (logs, no_wait, public, with_cache, build_env);
+    let _ = (&args.logs, &args.no_wait, &args.public, &args.with_cache, &args.build_env);
 
-    // 1. Load existing deploy config
+    // 1. Load existing deploy config and framework from appz.json
     let deploy_config = read_deploy_config(&project_dir)
         .map_err(|e| miette!("{}", e))?
         .unwrap_or_default();
@@ -354,9 +340,9 @@ pub async fn deploy(
     let output_dir = resolve_output_dir(&project_dir);
 
     // 2b. If linked to Appz project and no explicit provider (or appz), use Appz platform
-    let use_appz = provider_arg.as_ref().map(|s| s == "appz").unwrap_or(true);
+    let use_appz = args.platform.as_ref().map(|s| s == "appz").unwrap_or(true);
     if crate::project::is_project_linked(&project_dir)
-        && (provider_arg.is_none() || use_appz)
+        && (args.platform.is_none() || use_appz)
         && !deploy_all
     {
         return deploy_to_appz(
@@ -367,9 +353,9 @@ pub async fn deploy(
             no_build,
             dry_run,
             json_output,
-            meta.clone(),
-            skip_domain,
-            force,
+            args.meta.clone(),
+            args.skip_domain,
+            args.force,
         )
             .await;
     }
@@ -394,7 +380,7 @@ pub async fn deploy(
 
     // 5. Resolve the provider
     let provider = resolve_provider(
-        provider_arg.clone(),
+        args.platform.clone(),
         project_dir.clone(),
         deploy_config.clone(),
         is_ci,
@@ -432,7 +418,7 @@ pub async fn deploy(
 
     // 10. Build deploy context with sandbox
     let mut env_vars = deploy_config.env_for(if is_preview { "preview" } else { "production" });
-    for kv in &env {
+    for kv in &args.env {
         if let Some((k, v)) = kv.split_once('=') {
             env_vars.insert(k.to_string(), v.to_string());
         }
@@ -442,7 +428,9 @@ pub async fn deploy(
         .with_config(deploy_config.clone())
         .with_env(env_vars)
         .with_dry_run(dry_run)
-        .with_json_output(json_output);
+        .with_json_output(json_output)
+        .with_prebuilt(prebuilt)
+        .with_framework(session.framework.clone());
 
     // 10. Validate output directory exists and is non-empty (unless dry run)
     if !dry_run {
@@ -1081,3 +1069,4 @@ async fn prompt_detected_selection(detected: Vec<DetectedPlatform>) -> Result<St
 
     Err(miette!("Invalid selection"))
 }
+

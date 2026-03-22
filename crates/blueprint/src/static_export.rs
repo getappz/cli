@@ -11,6 +11,14 @@ use crate::runtime::{RuntimeError, WordPressRuntime};
 /// Default output directory name for static exports.
 const DEFAULT_OUTPUT_DIR: &str = "dist";
 
+/// Result of a static site export.
+pub struct ExportResult {
+    pub output_dir: PathBuf,
+    pub pages_crawled: u64,
+    pub assets_copied: u64,
+    pub duration: std::time::Duration,
+}
+
 /// Exports a CMS site as static HTML using site2static.
 pub struct StaticExporter {
     project_path: PathBuf,
@@ -27,8 +35,12 @@ impl StaticExporter {
     /// 1. Resolve the site URL and webroot from the runtime
     /// 2. Run site2static to crawl and mirror the site
     ///
-    /// Returns the host-side path to the output directory.
-    pub fn export(&self, output_dir: Option<&Path>) -> Result<PathBuf, RuntimeError> {
+    /// Returns the output path and export stats.
+    pub fn export(
+        &self,
+        output_dir: Option<&Path>,
+        on_progress: Option<Arc<dyn Fn(site2static::ProgressEvent) + Send + Sync>>,
+    ) -> Result<ExportResult, RuntimeError> {
         let host_output = output_dir
             .map(PathBuf::from)
             .unwrap_or_else(|| self.project_path.join(DEFAULT_OUTPUT_DIR));
@@ -41,6 +53,7 @@ impl StaticExporter {
             message: format!("invalid origin URL: {e}"),
         })?;
 
+        let copy_globs = Self::default_copy_globs(&webroot);
         let config = site2static::MirrorConfig {
             origin: origin_url,
             webroot: site2static::WebRoot::Direct(webroot),
@@ -50,6 +63,9 @@ impl StaticExporter {
             force: false,
             exclude_patterns: vec![],
             include_patterns: vec![],
+            copy_globs,
+            search: None, // Search disabled by default; callers opt in
+            on_progress,
         };
 
         let mirror = site2static::SiteMirror::new(config);
@@ -58,17 +74,34 @@ impl StaticExporter {
             message: e.to_string(),
         })?;
 
-        tracing::info!(
-            "Exported {} pages, {} assets in {:.1}s",
-            result.pages_crawled,
-            result.assets_copied,
-            result.duration.as_secs_f64()
-        );
-
-        Ok(host_output)
+        Ok(ExportResult {
+            output_dir: host_output,
+            pages_crawled: result.pages_crawled,
+            assets_copied: result.assets_copied,
+            duration: result.duration,
+        })
     }
 
     fn resolve_webroot(&self) -> Result<PathBuf, RuntimeError> {
         Ok(self.project_path.clone())
+    }
+
+    /// Glob patterns for JS-dynamically-loaded assets that can't be discovered
+    /// via HTML parsing. Only copies the specific files needed, not entire dirs.
+    fn default_copy_globs(webroot: &Path) -> Vec<String> {
+        let mut globs = Vec::new();
+        let elementor = "wp-content/plugins/elementor/assets";
+
+        if webroot.join(elementor).is_dir() {
+            // Webpack chunks (hash-named bundle files loaded by webpack.runtime)
+            globs.push(format!("{}/js/*.bundle.min.js", elementor));
+            // Conditional/lazy-loaded CSS (dialog, lightbox)
+            globs.push(format!("{}/css/conditionals/*.css", elementor));
+            // Third-party libs loaded by frontend.min.js (dialog, share-link, swiper)
+            globs.push(format!("{}/lib/**/*.min.js", elementor));
+            globs.push(format!("{}/lib/**/*.min.css", elementor));
+        }
+
+        globs
     }
 }

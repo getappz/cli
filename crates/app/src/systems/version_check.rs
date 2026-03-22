@@ -169,8 +169,10 @@ fn version_compare(v1: &str, v2: &str) -> i32 {
     let v1 = v1.strip_prefix('v').unwrap_or(v1);
     let v2 = v2.strip_prefix('v').unwrap_or(v2);
 
-    // Simple string comparison (can be enhanced with semver crate if needed)
-    match v1.cmp(v2) {
+    // Numeric comparison of each dotted segment (correct for semver).
+    let parts1: Vec<u64> = v1.split('.').filter_map(|s| s.parse().ok()).collect();
+    let parts2: Vec<u64> = v2.split('.').filter_map(|s| s.parse().ok()).collect();
+    match parts1.cmp(&parts2) {
         std::cmp::Ordering::Less => -1,
         std::cmp::Ordering::Equal => 0,
         std::cmp::Ordering::Greater => 1,

@@ -46,7 +46,7 @@ pub async fn wp_export(session: AppzSession, args: WpExportArgs) -> AppResult {
     let exporter = blueprint::StaticExporter::new(project_path.clone(), runtime.clone());
 
     exporter
-        .export(Some(host_output.as_path()))
+        .export(Some(host_output.as_path()), None)
         .map_err(|e| miette::miette!("Static export failed: {}", e))?;
 
     // For DDEV: if bind-mounted, files are already on host. If mutagen, need docker cp.

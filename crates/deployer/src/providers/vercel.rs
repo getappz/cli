@@ -26,7 +26,7 @@ use crate::output::{
     DeployOutput, DeployStatus, DeploymentInfo, DetectedConfig, PrerequisiteStatus,
 };
 use crate::provider::DeployProvider;
-use crate::providers::helpers::{combined_output, extract_url_from_output, get_env_var, has_env_var};
+use crate::providers::helpers::{combined_output, get_env_var, has_env_var};
 
 /// Vercel provider configuration stored in `appz.json` deploy targets.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -46,6 +46,60 @@ pub struct VercelConfig {
 
 /// Vercel deploy provider.
 pub struct VercelProvider;
+
+impl VercelProvider {
+    async fn deploy_internal(&self, ctx: DeployContext, is_preview: bool) -> DeployResult<DeployOutput> {
+        let start = std::time::Instant::now();
+
+        if ctx.dry_run {
+            return Ok(DeployOutput::dry_run("vercel", is_preview));
+        }
+
+        // Ensure vercel.json has outputDirectory (and skip build if output already exists)
+        let skip_build = has_prebuilt_output(&ctx.project_dir, &ctx.output_dir);
+        ensure_vercel_json(&ctx.project_dir, &ctx.output_dir, skip_build)?;
+        if skip_build {
+            ensure_vercelignore(&ctx.project_dir, &ctx.output_dir);
+        }
+
+        // Handle --prebuilt target mismatch before deploying
+        if ctx.prebuilt {
+            let requested_target = if is_preview { "preview" } else { "production" };
+            resolve_prebuilt_target_mismatch(&ctx, requested_target).await?;
+        }
+
+        let token_flag = get_env_var("VERCEL_TOKEN")
+            .map(|t| format!(" --token {}", t))
+            .unwrap_or_default();
+
+        let prod_flag = if is_preview { "" } else { " --prod" };
+        let prebuilt_flag = if ctx.prebuilt { " --prebuilt" } else { "" };
+        let cmd = format!("vercel deploy{}{} --yes{}", prebuilt_flag, prod_flag, token_flag);
+
+        let status = ctx.exec_interactive(&cmd).await?;
+
+        if !status.success() {
+            return Err(DeployError::DeployFailed {
+                provider: "Vercel".into(),
+                reason: format!("vercel deploy exited with code {}", status.code().unwrap_or(-1)),
+            });
+        }
+
+        let url = read_vercel_project_url(&ctx.project_dir)
+            .unwrap_or_else(|| "https://vercel.app".into());
+
+        Ok(DeployOutput {
+            provider: "vercel".into(),
+            url,
+            additional_urls: vec![],
+            deployment_id: None,
+            is_preview,
+            status: DeployStatus::Ready,
+            created_at: Some(chrono::Utc::now()),
+            duration_ms: Some(start.elapsed().as_millis() as u64),
+        })
+    }
+}
 
 #[async_trait]
 impl DeployProvider for VercelProvider {
@@ -176,110 +230,11 @@ impl DeployProvider for VercelProvider {
     }
 
     async fn deploy(&self, ctx: DeployContext) -> DeployResult<DeployOutput> {
-        let start = std::time::Instant::now();
-
-        if ctx.dry_run {
-            return Ok(DeployOutput {
-                provider: "vercel".into(),
-                url: "https://dry-run.vercel.app".into(),
-                additional_urls: vec![],
-                deployment_id: None,
-                is_preview: false,
-                status: DeployStatus::Ready,
-                created_at: Some(chrono::Utc::now()),
-                duration_ms: Some(0),
-            });
-        }
-
-        // Ensure vercel.json has outputDirectory (and skip build if output already exists)
-        let skip_build = has_prebuilt_output(&ctx.project_dir, &ctx.output_dir);
-        ensure_vercel_json(&ctx.project_dir, &ctx.output_dir, skip_build)?;
-        if skip_build {
-            ensure_vercelignore(&ctx.project_dir, &ctx.output_dir);
-        }
-
-        let token_flag = get_env_var("VERCEL_TOKEN")
-            .map(|t| format!(" --token {}", t))
-            .unwrap_or_default();
-
-        let cmd = format!("vercel deploy --prod --yes{}", token_flag);
-
-        let status = ctx.exec_interactive(&cmd).await?;
-
-        if !status.success() {
-            return Err(DeployError::DeployFailed {
-                provider: "Vercel".into(),
-                reason: format!("vercel deploy exited with code {}", status.code().unwrap_or(-1)),
-            });
-        }
-
-        let duration = start.elapsed().as_millis() as u64;
-
-        let url = read_vercel_project_url(&ctx.project_dir)
-            .unwrap_or_else(|| "https://vercel.app".into());
-
-        Ok(DeployOutput {
-            provider: "vercel".into(),
-            url,
-            additional_urls: vec![],
-            deployment_id: None,
-            is_preview: false,
-            status: DeployStatus::Ready,
-            created_at: Some(chrono::Utc::now()),
-            duration_ms: Some(duration),
-        })
+        self.deploy_internal(ctx, false).await
     }
 
     async fn deploy_preview(&self, ctx: DeployContext) -> DeployResult<DeployOutput> {
-        let start = std::time::Instant::now();
-
-        if ctx.dry_run {
-            return Ok(DeployOutput {
-                provider: "vercel".into(),
-                url: "https://dry-run-preview.vercel.app".into(),
-                additional_urls: vec![],
-                deployment_id: None,
-                is_preview: true,
-                status: DeployStatus::Ready,
-                created_at: Some(chrono::Utc::now()),
-                duration_ms: Some(0),
-            });
-        }
-
-        let skip_build = has_prebuilt_output(&ctx.project_dir, &ctx.output_dir);
-        ensure_vercel_json(&ctx.project_dir, &ctx.output_dir, skip_build)?;
-        if skip_build {
-            ensure_vercelignore(&ctx.project_dir, &ctx.output_dir);
-        }
-
-        let token_flag = get_env_var("VERCEL_TOKEN")
-            .map(|t| format!(" --token {}", t))
-            .unwrap_or_default();
-
-        let cmd = format!("vercel deploy --yes{}", token_flag);
-
-        let status = ctx.exec_interactive(&cmd).await?;
-
-        if !status.success() {
-            return Err(DeployError::DeployFailed {
-                provider: "Vercel".into(),
-                reason: format!("vercel deploy exited with code {}", status.code().unwrap_or(-1)),
-            });
-        }
-
-        let url = read_vercel_project_url(&ctx.project_dir)
-            .unwrap_or_else(|| "https://vercel.app".into());
-
-        Ok(DeployOutput {
-            provider: "vercel".into(),
-            url,
-            additional_urls: vec![],
-            deployment_id: None,
-            is_preview: true,
-            status: DeployStatus::Ready,
-            created_at: Some(chrono::Utc::now()),
-            duration_ms: Some(start.elapsed().as_millis() as u64),
-        })
+        self.deploy_internal(ctx, true).await
     }
 
     async fn list_deployments(&self, ctx: DeployContext) -> DeployResult<Vec<DeploymentInfo>> {
@@ -435,6 +390,140 @@ fn ensure_vercel_json(
             reason: e.to_string(),
         }
     })?;
+
+    Ok(())
+}
+
+/// Read the target from `.vercel/output/builds.json`.
+///
+/// Returns the `target` field (e.g. "preview" or "production"), or `None` if
+/// the file doesn't exist or the field is missing.
+fn read_prebuilt_target(project_dir: &std::path::Path) -> Option<String> {
+    let builds_path = project_dir.join(".vercel/output/builds.json");
+    let content = std::fs::read_to_string(&builds_path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&content).ok()?;
+    value.get("target")?.as_str().map(String::from)
+}
+
+/// Update the target in `.vercel/output/builds.json`.
+fn update_prebuilt_target(project_dir: &std::path::Path, target: &str) -> DeployResult<()> {
+    let builds_path = project_dir.join(".vercel/output/builds.json");
+    let content = std::fs::read_to_string(&builds_path).map_err(|e| DeployError::CommandFailed {
+        command: "read .vercel/output/builds.json".into(),
+        reason: e.to_string(),
+    })?;
+    let mut value: serde_json::Value =
+        serde_json::from_str(&content).map_err(|e| DeployError::JsonError {
+            reason: e.to_string(),
+        })?;
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            "target".to_string(),
+            serde_json::Value::String(target.to_string()),
+        );
+    }
+    let json_str =
+        serde_json::to_string_pretty(&value).map_err(|e| DeployError::JsonError {
+            reason: e.to_string(),
+        })?;
+    std::fs::write(&builds_path, json_str).map_err(|e| DeployError::CommandFailed {
+        command: "write .vercel/output/builds.json".into(),
+        reason: e.to_string(),
+    })?;
+    Ok(())
+}
+
+/// Detect and resolve a prebuilt target mismatch.
+///
+/// When `--prebuilt` is used, the `.vercel/output/builds.json` contains the
+/// target environment the output was built for. If it doesn't match the
+/// requested target:
+///
+/// - **WordPress projects**: the prebuilt output is framework-agnostic static
+///   HTML, so we can safely update the target in `builds.json` directly.
+/// - **Other projects**: prompt the user and rebuild with `vercel build` using
+///   the correct target.
+async fn resolve_prebuilt_target_mismatch(
+    ctx: &crate::config::DeployContext,
+    requested_target: &str,
+) -> DeployResult<()> {
+    let current_target = match read_prebuilt_target(&ctx.project_dir) {
+        Some(t) => t,
+        None => return Ok(()), // No builds.json or no target field — let Vercel handle it
+    };
+
+    if current_target == requested_target {
+        return Ok(());
+    }
+
+    let is_wordpress = ctx
+        .framework
+        .as_deref()
+        .is_some_and(|f| f == "wordpress");
+
+    if is_wordpress {
+        // WordPress static exports are target-agnostic — just update builds.json
+        let _ = ui::status::info(&format!(
+            "Prebuilt output target is \"{}\", updating to \"{}\" for WordPress project...",
+            current_target, requested_target
+        ));
+        update_prebuilt_target(&ctx.project_dir, requested_target)?;
+    } else {
+        // Non-WordPress: prompt user to rebuild with the correct target
+        let _ = ui::status::warning(&format!(
+            "Prebuilt output was built for \"{}\", but deploying to \"{}\".",
+            current_target, requested_target
+        ));
+
+        let rebuild = ui::prompt::confirm(
+            &format!(
+                "Rebuild with `vercel build --prod` for {} target?",
+                requested_target
+            ),
+            true,
+        )
+        .unwrap_or(false);
+
+        if !rebuild {
+            return Err(DeployError::DeployFailed {
+                provider: "Vercel".into(),
+                reason: format!(
+                    "Prebuilt output target \"{}\" does not match requested target \"{}\". \
+                     Rebuild with the correct target or deploy without --prebuilt.",
+                    current_target, requested_target
+                ),
+            });
+        }
+
+        // Rebuild with the correct target
+        let _ = ui::status::info(&format!(
+            "Rebuilding for {} target...",
+            requested_target
+        ));
+
+        let token_flag = get_env_var("VERCEL_TOKEN")
+            .map(|t| format!(" --token {}", t))
+            .unwrap_or_default();
+
+        let prod_flag = if requested_target == "production" {
+            " --prod"
+        } else {
+            ""
+        };
+
+        let build_cmd = format!("vercel build --yes{}{}", prod_flag, token_flag);
+        let status = ctx.exec_interactive(&build_cmd).await?;
+
+        if !status.success() {
+            return Err(DeployError::DeployFailed {
+                provider: "Vercel".into(),
+                reason: format!(
+                    "vercel build exited with code {}",
+                    status.code().unwrap_or(-1)
+                ),
+            });
+        }
+    }
 
     Ok(())
 }

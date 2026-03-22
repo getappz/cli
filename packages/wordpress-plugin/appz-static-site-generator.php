@@ -88,6 +88,7 @@ class Appz_SB_CLI_Command {
 	 */
 	public function build( $args, $assoc_args ) {
 		$this->require_simply_static();
+		$this->apply_cli_performance_tweaks();
 
 		$blog_id = (int) ( $assoc_args['blog-id'] ?? 0 );
 		$plugin  = \Simply_Static\Plugin::instance();
@@ -289,6 +290,48 @@ class Appz_SB_CLI_Command {
 			$options->set( 'delivery_method', $original_method );
 			$options->save();
 		}
+	}
+
+	/**
+	 * Apply performance tweaks for CLI execution.
+	 *
+	 * CLI runs don't have web server time/memory limits, so we can
+	 * process larger batches and allow more memory and execution time.
+	 */
+	private function apply_cli_performance_tweaks() {
+		// Suppress PHP warnings from third-party plugins (e.g. Simply Static's
+		// Elementor integration emits "Array to string conversion" notices).
+		// phpcs:ignore WordPress.PHP.IniSet.Risky, WordPress.PHP.DiscouragedPHPFunctions.runtime_configuration_error_reporting -- CLI only, warnings are noise from third-party code.
+		error_reporting( E_ERROR | E_PARSE );
+
+		// Remove PHP execution time limit — CLI exports can run as long as needed.
+		// phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- set_time_limit may be disabled.
+		@set_time_limit( 0 );
+
+		// Raise memory limit for large sites.
+		// phpcs:ignore WordPress.PHP.IniSet.memory_limit_Blacklisted -- CLI only, safe.
+		@ini_set( 'memory_limit', '512M' );
+
+		// Increase batch sizes — default is 50, CLI can handle much more.
+		// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- Simply Static filter.
+		add_filter( 'simply_static_fetch_urls_batch_size', function () {
+			return 500;
+		} );
+		// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- Simply Static filter.
+		add_filter( 'simply_static_transfer_files_locally_batch_size', function () {
+			return 500;
+		} );
+		// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- Simply Static filter.
+		add_filter( 'simply_static_discover_urls_batch_size', function () {
+			return 500;
+		} );
+
+		// Increase HTTP timeout for slow pages (default is 30s).
+		// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- Simply Static filter.
+		add_filter( 'ss_remote_get_args', function ( $args ) {
+			$args['timeout'] = 120;
+			return $args;
+		} );
 	}
 
 	/**

@@ -95,6 +95,9 @@ fn test_basic_mirror() {
         force: true,
         exclude_patterns: vec![],
         include_patterns: vec![],
+        copy_globs: vec![],
+        search: None,
+        on_progress: None,
     };
 
     let mirror = SiteMirror::new(config);
@@ -126,4 +129,115 @@ fn test_basic_mirror() {
         output_dir.path().join("logo.png").exists(),
         "logo.png should exist"
     );
+}
+
+#[test]
+fn test_mirror_with_search_ui_injection() {
+    let site_dir = TempDir::new().unwrap();
+    let output_dir = TempDir::new().unwrap();
+
+    // Create test site with a WordPress search form
+    fs::write(
+        site_dir.path().join("index.html"),
+        r#"<html><head><title>Test</title></head><body>
+<main>
+<h1>Welcome</h1>
+<form class="search-form"><input type="search" name="s"><button>Search</button></form>
+<a href="/about/">About</a>
+</main>
+</body></html>"#,
+    )
+    .unwrap();
+
+    fs::create_dir(site_dir.path().join("about")).unwrap();
+    fs::write(
+        site_dir.path().join("about/index.html"),
+        r#"<html><head><title>About</title></head><body><main><a href="/">Home</a></main></body></html>"#,
+    )
+    .unwrap();
+
+    let (addr, _handle) = serve_site(site_dir.path());
+
+    let config = MirrorConfig {
+        origin: Url::parse(&addr).unwrap(),
+        webroot: WebRoot::Direct(site_dir.path().to_path_buf()),
+        output: output_dir.path().to_path_buf(),
+        workers: 2,
+        depth: None,
+        force: true,
+        exclude_patterns: vec![],
+        include_patterns: vec![],
+        copy_globs: vec![],
+        search: Some(site2static::SearchMode::Full(site2static::SearchUiConfig::default())),
+        on_progress: None,
+    };
+
+    let mirror = SiteMirror::new(config);
+    let result = mirror.run();
+
+    // If pagefind is not installed, the pre-check fails early
+    match result {
+        Ok(r) => assert!(r.pages_crawled >= 2),
+        Err(site2static::MirrorError::SearchBinaryNotFound { .. }) => {
+            // Expected in CI without pagefind installed — but HTML was never written
+            // since pre-check happens before crawling. Skip assertions.
+            return;
+        }
+        Err(e) => panic!("Unexpected error: {e}"),
+    }
+
+    // Verify search UI was injected
+    let index_html = fs::read_to_string(output_dir.path().join("index.html")).unwrap();
+    assert!(index_html.contains("pagefind-ui.js"), "should inject Pagefind JS");
+    assert!(index_html.contains("pagefind-ui.css"), "should inject Pagefind CSS");
+    assert!(index_html.contains("pagefind-replace-0"), "should replace WP search form");
+    assert!(index_html.contains("s2s-search-overlay"), "should inject Cmd+K modal");
+    assert!(index_html.contains("data-pagefind-body"), "should mark main content");
+
+    // About page should also have search UI
+    let about_html = fs::read_to_string(output_dir.path().join("about/index.html")).unwrap();
+    assert!(about_html.contains("pagefind-ui.js"), "about page should have Pagefind JS");
+    assert!(about_html.contains("s2s-search-overlay"), "about page should have modal");
+}
+
+#[test]
+fn test_mirror_with_index_only_search() {
+    let site_dir = TempDir::new().unwrap();
+    let output_dir = TempDir::new().unwrap();
+
+    fs::write(
+        site_dir.path().join("index.html"),
+        r#"<html><head></head><body><form class="search-form"><input></form></body></html>"#,
+    )
+    .unwrap();
+
+    let (addr, _handle) = serve_site(site_dir.path());
+
+    let config = MirrorConfig {
+        origin: Url::parse(&addr).unwrap(),
+        webroot: WebRoot::Direct(site_dir.path().to_path_buf()),
+        output: output_dir.path().to_path_buf(),
+        workers: 2,
+        depth: None,
+        force: true,
+        exclude_patterns: vec![],
+        include_patterns: vec![],
+        copy_globs: vec![],
+        search: Some(site2static::SearchMode::IndexOnly),
+        on_progress: None,
+    };
+
+    let mirror = SiteMirror::new(config);
+    let result = mirror.run();
+
+    match result {
+        Ok(_) => {}
+        Err(site2static::MirrorError::SearchBinaryNotFound { .. }) => return,
+        Err(e) => panic!("Unexpected error: {e}"),
+    }
+
+    // IndexOnly: no UI injection
+    let index_html = fs::read_to_string(output_dir.path().join("index.html")).unwrap();
+    assert!(!index_html.contains("pagefind-ui.js"), "should NOT inject Pagefind JS in IndexOnly mode");
+    assert!(!index_html.contains("s2s-search-overlay"), "should NOT inject modal in IndexOnly mode");
 }

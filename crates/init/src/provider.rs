@@ -38,8 +38,7 @@ use crate::providers;
 /// Create a registry of all available init providers.
 pub fn create_provider_registry() -> Vec<Box<dyn InitProvider>> {
     vec![
-        Box::new(providers::wordpress::WordPressProvider),
-        Box::new(providers::framework::FrameworkProvider),
+        Box::new(providers::blueprint::BlueprintProvider),
         Box::new(providers::git::GitProvider),
         Box::new(providers::remote_archive::RemoteArchiveProvider),
         Box::new(providers::npm::NpmProvider),
@@ -60,5 +59,5 @@ pub fn get_provider(slug: &str) -> InitResult<Box<dyn InitProvider>> {
 
 /// List all available init source slugs.
 pub fn available_source_slugs() -> Vec<&'static str> {
-    vec!["wordpress", "framework", "git", "remote-archive", "npm", "local"]
+    vec!["blueprint", "git", "remote-archive", "npm", "local"]
 }

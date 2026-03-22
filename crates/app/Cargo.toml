@@ -19,6 +19,7 @@ starbase_utils = { workspace = true }
 chrono = { workspace = true }
 regex = { workspace = true }
 itertools = "0.14"
+json_comments = "0.2"
 walkdir = "2"
 task = { path = "../task" }
 command = { path = "../command" }

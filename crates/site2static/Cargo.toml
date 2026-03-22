@@ -12,6 +12,7 @@ dashmap = "6.1.0"
 encoding_rs = "0.8"
 filetime = "0.2"
 flate2 = "1.0"
+glob = "0.3"
 lol_html = "2"
 pathdiff = "0.2"
 regex = { workspace = true }
@@ -20,7 +21,12 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = "0.1"
+# TODO: Switch to registry once published: ufo-rs = { version = "0.2", registry = "appz" }
+ufo-rs = { path = "../../../pageflare/rust/crates/ufo-rs" }
+# TODO: Switch to registry once published: css-refs = { version = "0.2", registry = "appz" }
+css-refs = { path = "../../../pageflare/rust/crates/css-refs" }
 url = { workspace = true }
+which = "7"
 
 [dev-dependencies]
 tempfile = "3"

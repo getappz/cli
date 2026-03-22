@@ -27,7 +27,7 @@ use crate::output::{
     DeployOutput, DeployStatus, DetectedConfig, PrerequisiteStatus,
 };
 use crate::provider::DeployProvider;
-use crate::providers::helpers::{combined_output, extract_url_from_output, has_env_var};
+use crate::providers::helpers::{combined_output, has_env_var};
 
 /// GitHub Pages provider configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -150,16 +150,7 @@ impl DeployProvider for GitHubPagesProvider {
         let start = std::time::Instant::now();
 
         if ctx.dry_run {
-            return Ok(DeployOutput {
-                provider: "github-pages".into(),
-                url: "https://dry-run.github.io".into(),
-                additional_urls: vec![],
-                deployment_id: None,
-                is_preview: false,
-                status: DeployStatus::Ready,
-                created_at: Some(chrono::Utc::now()),
-                duration_ms: Some(0),
-            });
+            return Ok(DeployOutput::dry_run("github-pages", false));
         }
 
         // Use npx gh-pages to deploy via sandbox
@@ -204,9 +195,6 @@ async fn detect_github_pages_url(ctx: &DeployContext) -> Option<String> {
         return None;
     }
     let remote = result.stdout_trimmed();
-
-    let url = extract_url_from_output(&remote);
-    let _ = url; // unused, we parse owner/repo instead
 
     // Parse owner/repo from remote URL
     let (owner, repo) = if remote.contains("github.com") {

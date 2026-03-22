@@ -155,14 +155,11 @@ pub enum Commands {
     Whoami(WhoamiArgs),
     /// Initialize a new project from a template
     Init(InitArgs),
-    /// Browse blueprints available in the registry
+    /// Browse and manage blueprints
     #[command(name = "blueprints")]
     Blueprints {
-        /// Filter by framework slug (e.g. nextjs, wordpress)
-        framework: Option<String>,
-        /// Skip local cache and fetch fresh data from the registry
-        #[arg(long)]
-        no_cache: bool,
+        #[command(subcommand)]
+        command: crate::commands::blueprints::BlueprintsCommand,
     },
     /// Switch the active team context
     #[cfg(feature = "appz-cloud")]

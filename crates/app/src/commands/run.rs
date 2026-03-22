@@ -5,8 +5,45 @@ use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
 #[instrument(skip_all)]
-pub async fn run(session: AppzSession, task: String, force: bool, changed: bool) -> AppResult {
+pub async fn run(session: AppzSession, task: Option<String>, force: bool, changed: bool) -> AppResult {
     let registry = session.get_task_registry();
+
+    // No task specified — list available tasks
+    let task = match task {
+        Some(t) => t,
+        None => {
+            let mut visible: Vec<_> = registry.all()
+                .filter(|(_, t)| !t.hidden)
+                .collect();
+            visible.sort_by(|a: &(&String, _), b: &(&String, _)| a.0.cmp(b.0));
+
+            if visible.is_empty() {
+                println!("No tasks found. Create .appz/blueprint.yaml with a `tasks` section.");
+                return Ok(None);
+            }
+
+            println!("{}", ui::theme::style_accent_bold("Available tasks"));
+            println!();
+            for (name, t) in &visible {
+                let desc = t.description.as_deref().unwrap_or("");
+                if desc.is_empty() {
+                    println!("  {}", name);
+                } else {
+                    println!(
+                        "  {:<24} {}",
+                        name,
+                        ui::theme::style_muted_italic(desc),
+                    );
+                }
+            }
+            println!(
+                "\n{}",
+                ui::theme::style_muted_italic("Run: appz run <task>")
+            );
+            return Ok(None);
+        }
+    };
+
     let mut ctx = Context::new();
     ctx.set_working_path(session.working_dir.clone());
     let mut r = if session.cli.verbose {
@@ -15,10 +52,7 @@ pub async fn run(session: AppzSession, task: String, force: bool, changed: bool)
         Runner::new(&registry)
     };
 
-    // Create cancellation token for graceful shutdown on Ctrl+C
     let cancellation_token = CancellationToken::new();
-
-    // Spawn task to listen for Ctrl+C and cancel execution
     let cancellation_token_clone = cancellation_token.clone();
     let verbose = session.cli.verbose;
     tokio::spawn(async move {
@@ -42,13 +76,11 @@ pub async fn run(session: AppzSession, task: String, force: bool, changed: bool)
         )
         .await;
 
-    // If cancelled via Ctrl+C, exit cleanly with code 130
     if cancellation_token.is_cancelled() {
         eprintln!("Cancelled.");
         std::process::exit(130);
     }
 
-    // Otherwise propagate any error
     res.map_err(|e| miette::miette!("{}", e))?;
 
     Ok(None)

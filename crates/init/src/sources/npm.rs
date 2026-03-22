@@ -42,12 +42,15 @@ fn parse_npm_package(package: &str) -> InitResult<(String, String)> {
 async fn resolve_npm_latest(package: &str) -> InitResult<String> {
     let url = format!("https://registry.npmjs.org/{}", package);
 
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .map_err(|e| InitError::DownloadFailed(format!("HTTP client: {}", e)))?;
+    static HTTP: std::sync::LazyLock<reqwest::Client> = std::sync::LazyLock::new(|| {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .user_agent("appz-cli")
+            .build()
+            .expect("failed to build HTTP client")
+    });
 
-    let response = timeout(Duration::from_secs(30), client.get(&url).send())
+    let response = timeout(Duration::from_secs(30), HTTP.get(&url).send())
         .await
         .map_err(|_| InitError::DownloadFailed("Request timeout".to_string()))?
         .map_err(|e| InitError::DownloadFailed(format!("HTTP failed: {}", e)))?;

@@ -3,7 +3,11 @@
 use regex::Regex;
 use rustc_hash::FxHasher;
 use std::hash::Hasher;
+use std::sync::LazyLock;
 use thiserror::Error;
+
+static VALID_ID_CHARS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[a-zA-Z0-9_-]+$").unwrap());
+static MULTI_DASH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"-+").unwrap());
 
 /// Error types for ID operations
 #[derive(Error, Debug)]
@@ -50,8 +54,7 @@ pub fn validate_id(id: &str) -> Result<(), IdError> {
     }
 
     // Check for valid characters
-    let valid_chars = Regex::new(r"^[a-zA-Z0-9_-]+$").unwrap();
-    if !valid_chars.is_match(id) {
+    if !VALID_ID_CHARS.is_match(id) {
         return Err(IdError::InvalidCharacters(id.to_string()));
     }
 
@@ -110,8 +113,7 @@ pub fn sanitize_id<S: AsRef<str>>(value: S) -> String {
     }
 
     // Remove leading/trailing dashes and collapse multiple dashes
-    let re = Regex::new(r"-+").unwrap();
-    result = re.replace_all(&result, "-").to_string();
+    result = MULTI_DASH.replace_all(&result, "-").to_string();
     result.trim_matches('-').to_lowercase()
 }
 

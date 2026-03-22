@@ -198,7 +198,10 @@ pub fn run(config: MirrorConfig) -> Result<MirrorResult, MirrorError> {
     }
 
     // Spawn worker threads.
-    let worker_count = config.workers.max(1);
+    let max_workers = std::thread::available_parallelism()
+        .map(|p| p.get() * 2)
+        .unwrap_or(16);
+    let worker_count = config.workers.max(1).min(max_workers);
     let state_ref = &state;
     let result = crossbeam::thread::scope(|scope| {
         for _ in 0..worker_count {

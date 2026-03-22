@@ -148,13 +148,15 @@ fn archive_url(
 async fn detect_github_default_branch(user: &str, repo: &str) -> InitResult<String> {
     let api_url = format!("https://api.github.com/repos/{}/{}", user, repo);
 
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .user_agent("appz-cli")
-        .build()
-        .map_err(|e| InitError::DownloadFailed(format!("Failed to create HTTP client: {}", e)))?;
+    static HTTP: std::sync::LazyLock<reqwest::Client> = std::sync::LazyLock::new(|| {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .user_agent("appz-cli")
+            .build()
+            .expect("failed to build HTTP client")
+    });
 
-    let response = timeout(Duration::from_secs(10), client.get(&api_url).send())
+    let response = timeout(Duration::from_secs(10), HTTP.get(&api_url).send())
         .await
         .map_err(|_| {
             InitError::DownloadFailed("Request timeout while detecting default branch".to_string())

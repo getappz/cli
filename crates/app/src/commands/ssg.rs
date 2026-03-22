@@ -7,12 +7,12 @@ use crate::ddev_helpers::ddev_web_container_name;
 use crate::wp_runtime;
 use crate::session::AppzSession;
 use crate::shell::{run_local_with, RunOptions};
-use crate::args::Site2StaticArgs;
+use crate::args::SsgArgs;
 use starbase::AppResult;
 use std::path::PathBuf;
 use task::Context;
 
-pub async fn site2static(session: AppzSession, args: Site2StaticArgs) -> AppResult {
+pub async fn ssg(session: AppzSession, args: SsgArgs) -> AppResult {
     let project_path = session.working_dir.clone();
 
     // Resolve runtime
@@ -25,7 +25,7 @@ pub async fn site2static(session: AppzSession, args: Site2StaticArgs) -> AppResu
 
     if !has_wp_files {
         return Err(miette::miette!(
-            "No WordPress files found in {}. site2static requires a running site.",
+            "No WordPress files found in {}. ssg requires a running site.",
             project_path.display()
         ));
     }

@@ -235,22 +235,70 @@ fn parse_file_schema<P: AsRef<Path> + std::fmt::Debug>(path: P) -> Result<FileSc
         .and_then(|s| s.to_str())
         .unwrap_or("")
         .to_lowercase();
-    let schema: FileSchema = if ext == "yaml" || ext == "yml" {
-        serde_yaml::from_str(&raw)
-            .map_err(|e| miette!("Invalid YAML in {}: {}", path.as_ref().display(), e))?
+
+    // Try parsing as recipe FileSchema first
+    let recipe_result: std::result::Result<FileSchema, _> = if ext == "yaml" || ext == "yml" {
+        serde_yaml::from_str(&raw).map_err(|e| e.to_string())
     } else if ext == "jsonc" {
         let stripped = StripComments::new(raw.as_bytes());
         let mut json_str = String::new();
-        std::io::BufReader::new(stripped)
-            .read_to_string(&mut json_str)
-            .map_err(|e| miette!("Failed to strip comments in {}: {}", path.as_ref().display(), e))?;
-        serde_json::from_str(&json_str)
-            .map_err(|e| miette!("Invalid JSONC in {}: {}", path.as_ref().display(), e))?
+        if let Err(e) = std::io::BufReader::new(stripped).read_to_string(&mut json_str) {
+            return Err(miette!("Failed to strip comments: {}", e));
+        }
+        serde_json::from_str(&json_str).map_err(|e| e.to_string())
     } else {
-        serde_json::from_str(&raw)
-            .map_err(|e| miette!("Invalid JSON in {}: {}", path.as_ref().display(), e))?
+        serde_json::from_str(&raw).map_err(|e| e.to_string())
     };
-    Ok(schema)
+
+    if let Ok(schema) = recipe_result {
+        return Ok(schema);
+    }
+
+    // Recipe parse failed — try as BlueprintSchema and convert tasks
+    convert_blueprint_to_file_schema(&raw, &ext, path.as_ref())
+}
+
+/// Convert a BlueprintSchema file into the recipe-compatible FileSchema.
+///
+/// Blueprint tasks are simple `Vec<Step>` arrays, while FileSchema expects
+/// `TaskDefWithMetadata` wrappers. This converts between the two formats.
+fn convert_blueprint_to_file_schema(raw: &str, ext: &str, path: &Path) -> Result<FileSchema> {
+    // Parse as generic YAML/JSON Value first
+    let value: serde_json::Value = if ext == "yaml" || ext == "yml" {
+        serde_yaml::from_str(raw)
+            .map_err(|e| miette!("Invalid YAML in {}: {}", path.display(), e))?
+    } else {
+        serde_json::from_str(raw)
+            .map_err(|e| miette!("Invalid JSON in {}: {}", path.display(), e))?
+    };
+
+    // Build a FileSchema-compatible value by wrapping simple task arrays
+    // into the TaskDefWithMetadata format (which expects {steps: [...]} for arrays)
+    let mut schema_value = value.clone();
+    if let Some(tasks) = schema_value.get_mut("tasks") {
+        if let Some(tasks_obj) = tasks.as_object_mut() {
+            for (_name, task_val) in tasks_obj.iter_mut() {
+                // If the task is a simple array of steps, wrap it
+                if task_val.is_array() {
+                    // Vec<Step> is already a valid TaskDef::Steps variant —
+                    // the issue is TaskDefWithMetadata expects a struct with flatten.
+                    // Wrap the array as {"steps": [...]} so the WithDepends variant matches.
+                    let steps = task_val.take();
+                    *task_val = serde_json::json!({"steps": steps});
+                }
+            }
+        }
+    }
+
+    // Remove blueprint-only fields that FileSchema doesn't know
+    if let Some(obj) = schema_value.as_object_mut() {
+        obj.remove("version");
+        obj.remove("meta");
+    }
+
+    // Now parse the modified value as FileSchema
+    serde_json::from_value(schema_value)
+        .map_err(|e| miette!("Failed to convert blueprint to task format in {}: {}", path.display(), e))
 }
 
 fn validate_file_schema(schema: &FileSchema) -> Result<Vec<String>> {

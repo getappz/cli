@@ -31,6 +31,8 @@ pub async fn run(
     force: bool,
     output: Option<PathBuf>,
     json_output: bool,
+    blueprint: Option<String>,
+    no_cache: bool,
 ) -> InitResult<Option<InitOutput>> {
     let (source, project_name) = if let (Some(src), Some(proj)) = (template_source, project_name) {
         (src, proj)
@@ -59,6 +61,8 @@ pub async fn run(
         force,
         json_output,
         is_ci,
+        blueprint,
+        no_cache,
     };
 
     let settings = SandboxSettings::default();

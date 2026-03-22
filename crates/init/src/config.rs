@@ -27,6 +27,12 @@ pub struct InitOptions {
 
     /// CI mode (non-interactive).
     pub is_ci: bool,
+
+    /// Blueprint name, path, or URL (from --blueprint flag).
+    pub blueprint: Option<String>,
+
+    /// Skip registry cache (from --no-cache flag).
+    pub no_cache: bool,
 }
 
 impl InitOptions {

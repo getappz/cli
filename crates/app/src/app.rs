@@ -32,11 +32,7 @@ pub struct Cli {
     )]
     pub log_file: Option<PathBuf>,
     #[arg(
-        long,
-        short = 't',
-        global = true,
-        help = "Authentication token (overrides APPZ_TOKEN env var and auth.json)",
-        help_heading = "Global options"
+        long, short = 't', global = true, hide = true
     )]
     pub token: Option<String>,
     #[arg(

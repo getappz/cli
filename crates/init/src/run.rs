@@ -145,10 +145,11 @@ fn is_source(s: &str) -> bool {
     s.starts_with("https://")
         || s.starts_with("http://")
         || s.starts_with("npm:")
+        || s.starts_with("git:")
         || s.starts_with("./")
         || s.starts_with("../")
         || s.starts_with('/')
         || (s.len() > 1 && s.chars().nth(1) == Some(':') && !s.contains("github.com"))
         || s.contains('/')
-        || crate::providers::framework::has_create_command(s)
+        || crate::detect::is_known_framework(s)
 }

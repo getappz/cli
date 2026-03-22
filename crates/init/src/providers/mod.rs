@@ -1,5 +1,6 @@
 //! Init provider implementations.
 
+pub mod blueprint;
 pub mod framework;
 pub mod git;
 pub mod local;

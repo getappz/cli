@@ -13,88 +13,108 @@ pub struct ResolvedSource {
     pub source: String,
 }
 
+/// Check whether a slug is a known framework or CMS.
+///
+/// Returns true if the slug matches any of:
+/// - a framework with a create command (astro, nextjs, vite, etc.)
+/// - the string "wordpress" (case-insensitive)
+/// - a framework known to the frameworks registry
+pub fn is_known_framework(slug: &str) -> bool {
+    if slug.eq_ignore_ascii_case("wordpress") {
+        return true;
+    }
+    if has_create_command(slug) {
+        return true;
+    }
+    frameworks::find_by_slug(slug).is_some()
+}
+
+/// Split "framework/blueprint" into ("framework", "blueprint") when the first
+/// segment is a known framework slug.  Returns None for any other pattern.
+pub fn parse_framework_blueprint(source: &str) -> Option<(String, String)> {
+    let parts: Vec<&str> = source.splitn(2, '/').collect();
+    if parts.len() == 2 && !parts[0].is_empty() && !parts[1].is_empty() {
+        if is_known_framework(parts[0]) {
+            return Some((parts[0].to_string(), parts[1].to_string()));
+        }
+    }
+    None
+}
+
 /// Detect which provider to use based on the source string.
 ///
 /// Priority:
-/// 1. npm: prefix → NpmProvider
-/// 2. Framework slug (astro, nextjs, vite, etc.) → FrameworkProvider
-/// 3. http(s) URL ending in .zip/.tar.gz/.tar.xz/.tar.zstd/.tgz → RemoteArchiveProvider
-/// 4. http(s) URL or user/repo (github, gitlab, bitbucket) → GitProvider
-/// 5. Local path (./, ../, /, or path with :) → LocalProvider
+/// 1. `npm:` prefix → NpmProvider
+/// 2. `git:` prefix → GitProvider (escape hatch; prefix stripped)
+/// 3. Known framework slug + `/name`  (e.g. `nextjs/ecommerce`) → BlueprintProvider
+/// 4. Known framework slug alone      (e.g. `nextjs`, `wordpress`) → BlueprintProvider
+/// 5. Archive URL (http/https + .zip/.tar.gz/etc.) → RemoteArchiveProvider
+/// 6. Git URL or `user/repo` (first segment NOT a known framework) → GitProvider
+/// 7. Local path (`./`, `../`, `/`, Windows drive) → LocalProvider
 pub fn resolve_source(source: &str) -> InitResult<ResolvedSource> {
     let source = source.trim();
     if source.is_empty() {
         return Err(InitError::SourceNotFound("empty".to_string()));
     }
 
-    // WordPress slug (full CMS from wordpress.org)
-    if source.eq_ignore_ascii_case("wordpress") {
-        let provider = create_provider_registry()
-            .into_iter()
-            .find(|p| p.slug() == "wordpress")
-            .ok_or_else(|| InitError::SourceNotFound("wordpress".to_string()))?;
-        return Ok(ResolvedSource {
-            provider,
-            source: "wordpress".to_string(),
-        });
-    }
-
-    // npm: prefix
+    // 1. npm: prefix
     if source.starts_with("npm:") {
-        let provider = create_provider_registry()
-            .into_iter()
-            .find(|p| p.slug() == "npm")
-            .ok_or_else(|| InitError::SourceNotFound("npm".to_string()))?;
+        let provider = find_provider("npm")?;
         return Ok(ResolvedSource {
             provider,
             source: source.to_string(),
         });
     }
 
-    // Remote archive URL (must check before generic http)
-    if (source.starts_with("https://") || source.starts_with("http://"))
-        && is_archive_url(source)
+    // 2. git: escape hatch — strip prefix and treat remainder as a git source
+    if let Some(rest) = source.strip_prefix("git:") {
+        let provider = find_provider("git")?;
+        return Ok(ResolvedSource {
+            provider,
+            source: rest.to_string(),
+        });
+    }
+
+    // 3. Known framework slug + "/blueprint-name"
+    if let Some(_parts) = parse_framework_blueprint(source) {
+        let provider = find_provider("blueprint")?;
+        return Ok(ResolvedSource {
+            provider,
+            source: source.to_string(),
+        });
+    }
+
+    // 4. Known framework slug alone (no slashes)
+    if !source.contains('/') && is_known_framework(source) {
+        let provider = find_provider("blueprint")?;
+        return Ok(ResolvedSource {
+            provider,
+            source: source.to_string(),
+        });
+    }
+
+    // 5. Remote archive URL
+    if (source.starts_with("https://") || source.starts_with("http://")) && is_archive_url(source)
     {
-        let provider = create_provider_registry()
-            .into_iter()
-            .find(|p| p.slug() == "remote-archive")
-            .ok_or_else(|| InitError::SourceNotFound("remote-archive".to_string()))?;
+        let provider = find_provider("remote-archive")?;
         return Ok(ResolvedSource {
             provider,
             source: source.to_string(),
         });
     }
 
-    // Git URL or user/repo
+    // 6. Git URL or user/repo (first segment is NOT a known framework)
     if is_git_source(source) {
-        let provider = create_provider_registry()
-            .into_iter()
-            .find(|p| p.slug() == "git")
-            .ok_or_else(|| InitError::SourceNotFound("git".to_string()))?;
+        let provider = find_provider("git")?;
         return Ok(ResolvedSource {
             provider,
             source: source.to_string(),
         });
     }
 
-    // Local path
+    // 7. Local path
     if is_local_path(source) {
-        let provider = create_provider_registry()
-            .into_iter()
-            .find(|p| p.slug() == "local")
-            .ok_or_else(|| InitError::SourceNotFound("local".to_string()))?;
-        return Ok(ResolvedSource {
-            provider,
-            source: source.to_string(),
-        });
-    }
-
-    // Framework slug (no slashes, no dots, alphanumeric + maybe hyphens)
-    if is_framework_slug(source) {
-        let provider = create_provider_registry()
-            .into_iter()
-            .find(|p| p.slug() == "framework")
-            .ok_or_else(|| InitError::SourceNotFound("framework".to_string()))?;
+        let provider = find_provider("local")?;
         return Ok(ResolvedSource {
             provider,
             source: source.to_string(),
@@ -102,6 +122,17 @@ pub fn resolve_source(source: &str) -> InitResult<ResolvedSource> {
     }
 
     Err(InitError::SourceNotFound(source.to_string()))
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+fn find_provider(slug: &str) -> InitResult<Box<dyn InitProvider>> {
+    create_provider_registry()
+        .into_iter()
+        .find(|p| p.slug() == slug)
+        .ok_or_else(|| InitError::SourceNotFound(slug.to_string()))
 }
 
 fn is_archive_url(s: &str) -> bool {
@@ -120,31 +151,31 @@ fn is_git_source(s: &str) -> bool {
             || lower.contains("gitlab.com")
             || lower.contains("bitbucket.org");
     }
-    // user/repo format (at least one slash, no leading dot, no drive letter)
+    // user/repo format: at least one slash, no leading dot, no drive letter,
+    // and first segment must NOT be a known framework (those go to blueprint).
     if s.contains('/') && !s.starts_with("./") && !s.starts_with("../") {
         let parts: Vec<&str> = s.split('/').collect();
         if parts.len() >= 2 && !parts[0].is_empty() && !parts[1].is_empty() {
-            return true;
+            // If first segment is a known framework, it belongs to BlueprintProvider
+            // (already handled above in resolve_source), so skip here.
+            return !is_known_framework(parts[0]);
         }
     }
     false
 }
 
 fn is_local_path(s: &str) -> bool {
-    s.starts_with("./") || s.starts_with("../") || s.starts_with('/') || {
-        // Windows drive letter
-        s.len() >= 2 && s.chars().nth(1) == Some(':') && !s.contains("github.com") && !s.contains("gitlab.com") && !s.contains("bitbucket.org")
-    }
-}
-
-fn is_framework_slug(s: &str) -> bool {
-    // Simple slug: alphanumeric, hyphens, no slashes
-    !s.is_empty()
-        && !s.contains('/')
-        && !s.contains('.')
-        && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-')
-        && has_create_command(s)
+    s.starts_with("./")
+        || s.starts_with("../")
+        || s.starts_with('/')
+        || {
+            // Windows drive letter (e.g. C:\path or C:/path)
+            s.len() >= 2
+                && s.chars().nth(1) == Some(':')
+                && !s.contains("github.com")
+                && !s.contains("gitlab.com")
+                && !s.contains("bitbucket.org")
+        }
 }
 
 #[cfg(test)]
@@ -167,6 +198,8 @@ mod tests {
         assert!(is_git_source("user/repo"));
         assert!(!is_git_source("./local"));
         assert!(!is_git_source("astro"));
+        // framework/name must NOT be treated as git
+        assert!(!is_git_source("nextjs/ecommerce"));
     }
 
     #[test]
@@ -187,14 +220,14 @@ mod tests {
     #[test]
     fn test_resolve_framework() {
         let r = resolve_source("astro").unwrap();
-        assert_eq!(r.provider.slug(), "framework");
+        assert_eq!(r.provider.slug(), "blueprint");
         assert_eq!(r.source, "astro");
     }
 
     #[test]
     fn test_resolve_wordpress() {
         let r = resolve_source("wordpress").unwrap();
-        assert_eq!(r.provider.slug(), "wordpress");
+        assert_eq!(r.provider.slug(), "blueprint");
         assert_eq!(r.source, "wordpress");
     }
 }

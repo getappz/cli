@@ -704,13 +704,8 @@ async fn execute_setup_steps(
             let target = substitute_vars(target, vars);
             ui::info(&ctx.options, &format!("  rm {target}"));
             let fs = ctx.fs();
-            if fs.is_dir(&target) {
-                fs.remove_dir_all(&target)
-                    .map_err(|e| InitError::FsError(e.to_string()))?;
-            } else if fs.is_file(&target) {
-                fs.remove_file(&target)
-                    .map_err(|e| InitError::FsError(e.to_string()))?;
-            } else {
+            // Attempt file removal first, then dir; avoids TOCTOU race
+            if fs.remove_file(&target).is_err() && fs.remove_dir_all(&target).is_err() {
                 debug!("rm target does not exist, skipping: {target}");
             }
             continue;

@@ -330,9 +330,8 @@ impl AppSession for AppzSession {
         // Build task registry
         let mut reg = TaskRegistry::new();
 
-        // Register built-in tasks (deploy pipeline, laravel artisan)
+        // Register built-in deploy pipeline tasks
         builtin_tasks::register_common(&mut reg);
-        builtin_tasks::laravel::register_laravel(&mut reg);
 
         // Register tool installers (mise, ddev, docker)
         tools::mise::register_mise_tools(&mut reg);

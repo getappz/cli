@@ -9,38 +9,18 @@ use std::path::PathBuf;
 pub struct Cli {
     #[arg(long, short = 'v', global = true, help = "Print live progress")]
     pub verbose: bool,
-    #[arg(
-        value_enum,
-        long,
-        global = true,
-        help = "Lowest log level to output",
-        help_heading = "Global options"
-    )]
+    #[arg(value_enum, long, global = true, hide = true)]
     pub log: Option<LogLevel>,
-    #[arg(
-        long,
-        global = true,
-        help = "Dump a trace profile to the working directory",
-        help_heading = "Global options"
-    )]
+    #[arg(long, global = true, hide = true)]
     pub dump: bool,
-    #[arg(
-        long,
-        global = true,
-        help = "Path to a file to write logs to",
-        help_heading = "Global options"
-    )]
+    #[arg(long, global = true, hide = true)]
     pub log_file: Option<PathBuf>,
     #[arg(
         long, short = 't', global = true, hide = true
     )]
     pub token: Option<String>,
-    #[arg(
-        long,
-        global = true,
-        help = "Working directory (defaults to current directory)",
-        help_heading = "Global options"
-    )]
+    /// Working directory (defaults to current directory)
+    #[arg(long, global = true)]
     pub cwd: Option<String>,
     #[arg(long, short = 'S', global = true, hide = true)]
     pub scope: Option<String>,
@@ -115,14 +95,15 @@ impl LogLevel {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum Commands {
-    /// Detect and print the framework used in the project
+    /// Start the development server
     Dev(DevArgs),
     /// Build the project (install dependencies and build)
     Build,
     /// Preview the built project by serving static files from output directory
     #[cfg(feature = "dev-server")]
     Preview(PreviewArgs),
-    /// List deployments (from Appz cloud or hosting provider)
+    /// List deployments
+    #[command(hide = true)]
     Ls(LsArgs),
     /// Open the linked project in the Appz Dashboard
     #[cfg(feature = "appz-cloud")]
@@ -142,7 +123,7 @@ pub enum Commands {
     /// Show the username of the currently logged-in user
     #[cfg(feature = "appz-cloud")]
     Whoami(WhoamiArgs),
-    /// Initialize a new project from a template
+    /// Initialize a new project from a blueprint
     Init(InitArgs),
     /// Browse and manage blueprints
     #[command(name = "blueprints")]

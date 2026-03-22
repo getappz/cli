@@ -170,6 +170,7 @@ pub async fn run_cli(args: Vec<OsString>) -> MainResult {
                             args.output,
                             args.blueprint,
                             args.dry_run,
+                            args.deploy,
                         )
                         .await
                     }
@@ -287,6 +288,9 @@ pub async fn run_cli(args: Vec<OsString>) -> MainResult {
                             .await
                             .map_err(|e| miette::miette!("{}", e))?;
                         Ok(None)
+                    }
+                    Commands::Run { task, force } => {
+                        app::commands::run(session, task, force, false).await
                     }
                     Commands::External(args) => {
                         app::commands::external::run(session, args).await

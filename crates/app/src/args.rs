@@ -118,6 +118,9 @@ pub struct InitArgs {
     /// Preview setup steps without executing them
     #[arg(long)]
     pub dry_run: bool,
+    /// Add a deploy target after init (e.g. vercel, netlify)
+    #[arg(long)]
+    pub deploy: Option<String>,
 }
 
 #[derive(Args, Debug, Clone)]

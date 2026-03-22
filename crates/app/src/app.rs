@@ -250,6 +250,14 @@ pub enum Commands {
     // NOTE: The `migrate` command has been extracted to a downloadable plugin.
     // It is now handled by the External(Vec<String>) variant below.
     // Users run `appz migrate ...` which triggers the plugin system.
+    /// Run a task from .appz/blueprint.yaml (e.g. deploy, db:migrate)
+    Run {
+        /// Task name to execute
+        task: String,
+        /// Force execution even if sources haven't changed
+        #[arg(long)]
+        force: bool,
+    },
     /// Update appz itself to the latest version
     #[cfg(feature = "self_update")]
     SelfUpdate(SelfUpdateArgs),

@@ -46,13 +46,7 @@ pub struct Cli {
         help_heading = "Global options"
     )]
     pub cwd: Option<String>,
-    #[arg(
-        long,
-        short = 'S',
-        global = true,
-        help = "Execute command from a scope that's not currently active",
-        help_heading = "Global options"
-    )]
+    #[arg(long, short = 'S', global = true, hide = true)]
     pub scope: Option<String>,
     #[command(subcommand)]
     pub command: Commands,

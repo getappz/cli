@@ -33,6 +33,7 @@ pub async fn run(
     json_output: bool,
     blueprint: Option<String>,
     no_cache: bool,
+    dry_run: bool,
 ) -> InitResult<Option<InitOutput>> {
     let (source, project_name) = if let (Some(src), Some(proj)) = (template_source, project_name) {
         (src, proj)
@@ -43,6 +44,9 @@ pub async fn run(
     let project_path = output_dir.join(&project_name);
 
     if project_path.exists() && !force {
+        if project_path.join(".appz").join("blueprint.yaml").exists() {
+            return Err(InitError::AlreadyInitialized(project_path.display().to_string()));
+        }
         return Err(InitError::DirectoryExists(project_path.display().to_string()));
     }
 
@@ -63,6 +67,7 @@ pub async fn run(
         is_ci,
         blueprint,
         no_cache,
+        dry_run,
     };
 
     let settings = SandboxSettings::default();

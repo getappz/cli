@@ -61,6 +61,13 @@ pub enum InitError {
     DirectoryExists(String),
 
     #[diagnostic(
+        code(init::already_initialized),
+        help("Use --force to reinitialize. This will delete the existing project and start fresh.")
+    )]
+    #[error("Project already initialized at {0}")]
+    AlreadyInitialized(String),
+
+    #[diagnostic(
         code(init::archive_error),
         help("Ensure the file is a valid archive (zip, tar.gz, tar.xz, tar.zstd).")
     )]

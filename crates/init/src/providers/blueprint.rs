@@ -53,6 +53,11 @@ impl InitProvider for BlueprintProvider {
             "Blueprint resolved"
         );
 
+        // Dry-run: print what would happen and exit
+        if ctx.options.dry_run {
+            return print_dry_run(&schema, &framework_slug, &blueprint_name, ctx);
+        }
+
         // 2. Base scaffolding (framework create command)
         run_base_scaffolding(ctx, &schema, &framework_slug).await?;
 
@@ -81,6 +86,117 @@ impl InitProvider for BlueprintProvider {
             installed: false,
         })
     }
+}
+
+// ---------------------------------------------------------------------------
+// Dry-run preview
+// ---------------------------------------------------------------------------
+
+fn print_dry_run(
+    schema: &BlueprintSchema,
+    framework_slug: &str,
+    blueprint_name: &str,
+    ctx: &InitContext,
+) -> InitResult<InitOutput> {
+    println!("\n{}", "Dry run — no changes will be made\n");
+
+    // Blueprint info
+    if let Some(meta) = &schema.meta {
+        println!("Blueprint: {} ({})",
+            meta.name.as_deref().unwrap_or(blueprint_name),
+            format!("{}/{}", framework_slug, blueprint_name));
+        if let Some(desc) = &meta.description {
+            println!("  {}", desc);
+        }
+    }
+
+    // Scaffolding
+    let create_cmd = schema.meta.as_ref()
+        .and_then(|m| m.create_command.as_deref())
+        .or_else(|| get_create_command(framework_slug));
+    if let Some(cmd) = create_cmd {
+        println!("\nScaffolding:");
+        println!("  run: {} .", cmd);
+    }
+
+    // Package manager
+    let pm = detect_package_manager(ctx, schema);
+    println!("\nPackage manager: {}", pm);
+
+    // Config variables
+    let vars = extract_config_vars(schema);
+    if !vars.is_empty() {
+        println!("\nConfig variables:");
+        for (key, val) in &vars {
+            println!("  {{{{{}}}}} = \"{}\"", key, val);
+        }
+    }
+
+    // Setup steps
+    if let Some(steps) = &schema.setup {
+        println!("\nSetup steps ({}):", steps.len());
+        for (i, step) in steps.iter().enumerate() {
+            let desc = step.desc.as_deref().unwrap_or("(unnamed)");
+            println!("\n  {}. {}", i + 1, desc);
+
+            if let Some(dir) = &step.cd {
+                println!("     cd {}", substitute_vars(dir, &vars));
+            }
+            if let Some(deps) = &step.add_dependency {
+                let dev_flag = if step.dev.unwrap_or(false) { " (dev)" } else { "" };
+                println!("     add_dependency{}: {}", dev_flag, deps.join(", "));
+                let cmd = install_command(&pm, deps, step.dev.unwrap_or(false));
+                println!("     -> {}", substitute_vars(&cmd, &vars));
+            }
+            if let Some(wf) = &step.write_file {
+                let path = substitute_vars(&wf.path, &vars);
+                if wf.template.is_some() {
+                    println!("     write_file: {} (from template)", path);
+                } else {
+                    println!("     write_file: {}", path);
+                }
+            }
+            if let Some(pf) = &step.patch_file {
+                let path = substitute_vars(&pf.path, &vars);
+                println!("     patch_file: {}", path);
+            }
+            if let Some(env) = &step.set_env {
+                for (key, val) in env {
+                    println!("     set_env: {}={}", key, substitute_vars(val, &vars));
+                }
+            }
+            if let Some(cmd) = &step.run_locally {
+                println!("     run: {}", substitute_vars(cmd, &vars));
+            }
+            if let Some(dir) = &step.mkdir {
+                println!("     mkdir: {}", substitute_vars(dir, &vars));
+            }
+            if let Some(cp) = &step.cp {
+                println!("     cp: {} -> {}", substitute_vars(&cp.src, &vars), substitute_vars(&cp.dest, &vars));
+            }
+            if let Some(rm) = &step.rm {
+                println!("     rm: {}", substitute_vars(rm, &vars));
+            }
+        }
+    }
+
+    // Tasks
+    if let Some(tasks) = &schema.tasks {
+        if let Some(obj) = tasks.as_object() {
+            println!("\nTasks ({}):", obj.len());
+            for name in obj.keys() {
+                println!("  - {}", name);
+            }
+        }
+    }
+
+    println!();
+
+    Ok(InitOutput {
+        project_path: ctx.options.project_path(),
+        framework: frameworks::find_by_slug(framework_slug).map(|f| f.name.to_string()),
+        installed: false,
+    })
 }
 
 // ---------------------------------------------------------------------------

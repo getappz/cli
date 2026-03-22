@@ -20,6 +20,7 @@ pub async fn init(
     force: bool,
     output: Option<PathBuf>,
     blueprint: Option<String>,
+    dry_run: bool,
 ) -> AppResult {
     let (template_source, project_name) = resolve_template_and_name(
         template_or_name,
@@ -45,6 +46,7 @@ pub async fn init(
         false,
         blueprint,
         false, // no_cache
+        dry_run,
     )
     .await
     .map_err(|e| miette!("{}", e))?;

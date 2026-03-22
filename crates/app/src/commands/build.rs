@@ -161,16 +161,22 @@ pub async fn build(session: AppzSession) -> AppResult {
         .as_deref()
         .is_some_and(|s| s == "wordpress" && has_ddev_config(&project_path));
 
-    let using_appz_install = registry.get("appz:install").is_some();
+    let install_task = if registry.get("appz:install").is_some() {
+        Some("appz:install")
+    } else if registry.get("install").is_some() {
+        Some("install")
+    } else {
+        None
+    };
 
     if skip_install_for_wordpress_ddev {
         println!("✓ Skipping install for WordPress DDEV project");
-    } else if using_appz_install {
-        println!("✓ Found appz:install recipe task, using recipe install...");
+    } else if let Some(task_name) = install_task {
+        println!("✓ Found {} blueprint task, using blueprint install...", task_name);
         println!("\n📦 Running install command...");
         run_recipe_task(
             &registry,
-            "appz:install",
+            task_name,
             project_path.clone(),
             session.cli.verbose,
         )
@@ -201,7 +207,14 @@ pub async fn build(session: AppzSession) -> AppResult {
 
     // Execute build step
     let is_wordpress = detected.slug.as_deref() == Some("wordpress");
-    let using_appz_build = registry.get("appz:build").is_some();
+    let build_task = if registry.get("appz:build").is_some() {
+        Some("appz:build")
+    } else if registry.get("build").is_some() {
+        Some("build")
+    } else {
+        None
+    };
+    let using_appz_build = build_task.is_some();
 
     if is_wordpress {
         // WordPress: use StaticExporter to export to dist/
@@ -292,12 +305,12 @@ pub async fn build(session: AppzSession) -> AppResult {
                 }
             }
         }
-    } else if using_appz_build {
-        println!("✓ Found appz:build recipe task, using recipe build...");
+    } else if let Some(task_name) = build_task {
+        println!("✓ Found {} blueprint task, using blueprint build...", task_name);
         println!("\n🔨 Running build command...");
         run_recipe_task(
             &registry,
-            "appz:build",
+            task_name,
             project_path.clone(),
             session.cli.verbose,
         )

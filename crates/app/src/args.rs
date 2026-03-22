@@ -115,6 +115,9 @@ pub struct InitArgs {
     /// Blueprint name (from registry), local file path, or URL
     #[arg(long)]
     pub blueprint: Option<String>,
+    /// Preview setup steps without executing them
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 #[derive(Args, Debug, Clone)]

@@ -78,8 +78,6 @@ pub fn register_common(reg: &mut TaskRegistry) {
     reg.fail("deploy", "deploy:failed");
 }
 
-pub mod common;
 pub mod deploy;
 pub mod laravel;
 pub mod tools;
-pub mod vercel;

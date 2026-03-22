@@ -337,9 +337,8 @@ impl AppSession for AppzSession {
         recipe::tools::ddev::register_ddev_tools(&mut reg);
         recipe::tools::docker::register_docker_tools(&mut reg);
 
-        // Register recipes
+        // Register Laravel built-in tasks
         recipe::laravel::register_laravel(&mut reg);
-        recipe::vercel::register_vercel(&mut reg);
 
         // Import blueprint file: prefer APPZ_IMPORT, otherwise auto-detect .appz/blueprint.{yaml,json,jsonc} then legacy recipe.yaml/recipe.json
         if let Ok(path) = std::env::var("APPZ_IMPORT") {

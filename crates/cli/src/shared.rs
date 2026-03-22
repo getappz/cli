@@ -172,9 +172,6 @@ pub async fn run_cli(args: Vec<OsString>) -> MainResult {
                         )
                         .await
                     }
-                    Commands::Blueprint { command } => {
-                        app::commands::blueprint::run(session, command).await
-                    }
                     Commands::Blueprints { framework, no_cache } => {
                         app::commands::blueprints::list(framework, no_cache).await
                     }

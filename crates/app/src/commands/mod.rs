@@ -1,6 +1,5 @@
 #[cfg(feature = "appz-cloud")]
 pub mod aliases;
-pub mod blueprint;
 pub mod blueprints;
 pub mod build;
 mod install_helpers;

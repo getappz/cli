@@ -5,84 +5,98 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 
+fn is_false(v: &bool) -> bool { !v }
+fn is_empty_vec<T>(v: &Vec<T>) -> bool { v.is_empty() }
+
 #[derive(Debug, Deserialize, Serialize, Default)]
 pub struct BlueprintSchema {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<u32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub meta: Option<BlueprintMeta>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hosts: Option<serde_json::Value>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tools: Option<serde_json::Value>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub setup: Option<Vec<SetupStep>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tasks: Option<serde_json::Value>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub before: Option<HashMap<String, Vec<String>>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after: Option<HashMap<String, Vec<String>>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub includes: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Default)]
 pub struct BlueprintMeta {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub author: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub framework: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_empty_vec")]
     pub categories: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub create_command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub package_manager: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Default, Clone)]
 pub struct SetupStep {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub desc: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_locally: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cd: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub add_dependency: Option<Vec<String>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dev: Option<bool>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub write_file: Option<WriteFileDef>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub patch_file: Option<PatchFileDef>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub set_env: Option<HashMap<String, String>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mkdir: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cp: Option<CopyDef>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rm: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub once: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Default, Clone)]
 pub struct WriteFileDef {
     pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub template: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Default, Clone)]
 pub struct PatchFileDef {
     pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub before: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replace: Option<String>,
     pub content: String,
 }

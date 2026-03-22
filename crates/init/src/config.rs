@@ -33,6 +33,9 @@ pub struct InitOptions {
 
     /// Skip registry cache (from --no-cache flag).
     pub no_cache: bool,
+
+    /// Preview setup steps without executing (from --dry-run flag).
+    pub dry_run: bool,
 }
 
 impl InitOptions {

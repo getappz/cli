@@ -169,6 +169,7 @@ pub async fn run_cli(args: Vec<OsString>) -> MainResult {
                             args.force,
                             args.output,
                             args.blueprint,
+                            args.dry_run,
                         )
                         .await
                     }

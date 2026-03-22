@@ -33,6 +33,7 @@ pub async fn run(
     json_output: bool,
     blueprint: Option<String>,
     no_cache: bool,
+    dry_run: bool,
 ) -> InitResult<Option<InitOutput>> {
     let (source, project_name) = if let (Some(src), Some(proj)) = (template_source, project_name) {
         (src, proj)
@@ -63,6 +64,7 @@ pub async fn run(
         is_ci,
         blueprint,
         no_cache,
+        dry_run,
     };
 
     let settings = SandboxSettings::default();

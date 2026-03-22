@@ -1,0 +1,14 @@
+{
+  // This is a JSONC blueprint with comments
+  "version": 1,
+  "meta": {
+    "name": "JSONC Blueprint",
+    "framework": "vite"
+  },
+  "setup": [
+    {
+      "desc": "Install deps",
+      "add_dependency": ["vite-plugin-pwa"]
+    }
+  ]
+}

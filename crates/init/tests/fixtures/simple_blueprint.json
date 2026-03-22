@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "meta": {
+    "name": "JSON Blueprint",
+    "framework": "nextjs"
+  },
+  "setup": [
+    {
+      "desc": "Install deps",
+      "add_dependency": ["react"],
+      "dev": false
+    }
+  ],
+  "tasks": {
+    "build": [{ "run_locally": "npm run build" }]
+  }
+}

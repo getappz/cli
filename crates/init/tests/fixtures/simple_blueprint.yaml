@@ -1,0 +1,44 @@
+version: 1
+
+meta:
+  name: "Test Blueprint"
+  description: "A test blueprint"
+  author: "test"
+  framework: "nextjs"
+  categories: ["test"]
+  create_command: "npx create-next-app@latest"
+  package_manager: "npm"
+
+config:
+  app_name: "myapp"
+
+tools:
+  node: "20"
+
+setup:
+  - desc: "Install deps"
+    add_dependency: ["tailwindcss", "postcss"]
+    dev: true
+
+  - desc: "Create config"
+    write_file:
+      path: "tailwind.config.js"
+      content: |
+        module.exports = { content: ['./src/**/*.{js,ts,jsx,tsx}'] }
+
+  - desc: "Set env"
+    set_env:
+      APP_NAME: "{{app_name}}"
+
+  - desc: "Run init"
+    run_locally: "echo setup complete"
+
+tasks:
+  build:
+    - run_locally: "npm run build"
+  dev:
+    - run_locally: "npm run dev"
+
+before:
+  build:
+    - dev

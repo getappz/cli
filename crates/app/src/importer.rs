@@ -422,13 +422,16 @@ fn create_task_from_steps(
         }
     }
 
-    // Make host registry static for use in closure
-    let host_registry_static: &'static HostRegistry = Box::leak(Box::new(host_registry.clone()));
-    let steps_static: &'static [Step] = Box::leak(steps.into_boxed_slice());
-    let action = task::task_fn_async!(|ctx: std::sync::Arc<task::Context>| async move {
+    let host_registry_arc = Arc::new(host_registry.clone());
+    let steps_arc: Arc<[Step]> = steps.into();
+    let action: task::types::AsyncTaskFn = {
+        Arc::new(move |ctx: std::sync::Arc<task::Context>| {
+            let host_registry_arc = host_registry_arc.clone();
+            let steps_arc = steps_arc.clone();
+            Box::pin(async move {
         let mut cwd_opt: Option<std::path::PathBuf> = None;
         let mut remote_cwd: Option<String> = None;
-        for st in steps_static.iter() {
+        for st in steps_arc.iter() {
             // Handle working directory
             if let Some(path) = &st.cd {
                 let parsed = ctx.parse(path);
@@ -459,7 +462,7 @@ fn create_task_from_steps(
                 if st.host.is_some() || has_hosts {
                     let host_name = st.host.as_deref().unwrap_or("default");
                     // Get the host config from static registry (safe to borrow multiple times)
-                    let host_config = host_registry_static
+                    let host_config = host_registry_arc
                         .get(host_name)
                         .map_err(|e| miette!("Failed to get host '{}': {}", host_name, e))?
                         .clone();
@@ -606,7 +609,7 @@ fn create_task_from_steps(
             }
         }
         Ok(())
-    });
+    })})};
 
     let mut t = Task::new(name.clone(), action);
     if let Some(d) = description {
@@ -871,12 +874,13 @@ pub fn import_file<P: AsRef<Path> + std::fmt::Debug>(
 
     // Register tools installer that installs tools using mise
     if schema.tools != serde_json::Value::Null {
-        let tools_static: &'static serde_json::Value = Box::leak(Box::new(schema.tools.clone()));
+        let tools_arc = Arc::new(schema.tools.clone());
         reg.register(
             Task::new(
                 "tools:install",
-                task::task_fn_async!(|ctx: std::sync::Arc<task::Context>| async move {
-                    // Ensure mise is installed first
+                { let tools_arc = tools_arc.clone(); Arc::new(move |ctx: std::sync::Arc<task::Context>| -> std::pin::Pin<Box<dyn std::future::Future<Output = miette::Result<()>> + Send>> {
+                    let tools_arc = tools_arc.clone();
+                    Box::pin(async move {
                     if !crate::shell::command_exists("mise") {
                         crate::log::info("mise not found, installing...");
                         crate::tools::mise::ensure_mise()
@@ -884,10 +888,9 @@ pub fn import_file<P: AsRef<Path> + std::fmt::Debug>(
                             .map_err(|e| miette!("Failed to install mise: {}", e))?;
                     }
 
-                    // Collect tool@version pairs and install tools
                     let mut tool_version_pairs: Vec<(String, String)> = Vec::new();
 
-                    if let serde_json::Value::Object(map) = tools_static {
+                    if let serde_json::Value::Object(map) = tools_arc.as_ref() {
                         for (tool_name, version_val) in map.iter() {
                             let version = match version_val {
                                 serde_json::Value::String(s) => s.as_str(),
@@ -994,7 +997,7 @@ pub fn import_file<P: AsRef<Path> + std::fmt::Debug>(
                     }
 
                     Ok(())
-                }),
+                })}) as task::types::AsyncTaskFn },
             )
             .hidden()
             .desc("Install tools defined in blueprint using mise"),
@@ -1018,12 +1021,14 @@ pub fn import_file<P: AsRef<Path> + std::fmt::Debug>(
 
     // Register config applier that injects config values into Context
     if schema.config != serde_json::Value::Null {
-        let config_static: &'static serde_json::Value = Box::leak(Box::new(schema.config.clone()));
+        let config_arc = Arc::new(schema.config.clone());
         reg.register(
             Task::new(
                 "config:apply",
-                task::task_fn_sync!(|ctx: std::sync::Arc<task::Context>| {
-                    if let serde_json::Value::Object(map) = config_static {
+                { let config_arc = config_arc.clone(); Arc::new(move |ctx: std::sync::Arc<task::Context>| -> std::pin::Pin<Box<dyn std::future::Future<Output = miette::Result<()>> + Send>> {
+                    let config_arc = config_arc.clone();
+                    Box::pin(async move {
+                    if let serde_json::Value::Object(map) = config_arc.as_ref() {
                         for (k, v) in map.iter() {
                             // Store simple values as strings
                             let val_str = match v {
@@ -1036,7 +1041,7 @@ pub fn import_file<P: AsRef<Path> + std::fmt::Debug>(
                         }
                     }
                     Ok(())
-                }),
+                })}) as task::types::AsyncTaskFn },
             )
             .hidden()
             .desc("Apply config values to context"),

@@ -245,6 +245,7 @@ pub fn command_name_for_telemetry(command: crate::app::Commands) -> String {
         #[cfg(feature = "self_update")]
         Commands::SelfUpdate(_) => "self-update",
         Commands::Blueprint { .. } => "blueprint",
+        Commands::Blueprints { .. } => "blueprints",
         Commands::WpExport(_) => "wp-export",
         Commands::External(_) => "external",
     };

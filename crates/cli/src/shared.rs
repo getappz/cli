@@ -176,6 +176,9 @@ pub async fn run_cli(args: Vec<OsString>) -> MainResult {
                     Commands::Blueprint { command } => {
                         app::commands::blueprint::run(session, command).await
                     }
+                    Commands::Blueprints { framework, no_cache } => {
+                        app::commands::blueprints::list(framework, no_cache).await
+                    }
                     #[cfg(feature = "appz-cloud")]
                     Commands::Switch(args) => {
                         app::commands::teams::switch(session, args.team).await

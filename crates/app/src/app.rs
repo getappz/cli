@@ -160,6 +160,15 @@ pub enum Commands {
         #[command(subcommand)]
         command: crate::commands::blueprint::BlueprintCommands,
     },
+    /// Browse blueprints available in the registry
+    #[command(name = "blueprints")]
+    Blueprints {
+        /// Filter by framework slug (e.g. nextjs, wordpress)
+        framework: Option<String>,
+        /// Skip local cache and fetch fresh data from the registry
+        #[arg(long)]
+        no_cache: bool,
+    },
     /// Switch the active team context
     #[cfg(feature = "appz-cloud")]
     Switch(SwitchArgs),

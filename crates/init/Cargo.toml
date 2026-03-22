@@ -25,6 +25,8 @@ reqwest = { workspace = true, features = ["json", "gzip", "zstd", "blocking", "s
 starbase_archive = { workspace = true }
 starbase_utils = { workspace = true }
 tempfile = { workspace = true }
+bytes = "1"
+dirs = "5"
 tracing = "0.1"
 
 [dev-dependencies]

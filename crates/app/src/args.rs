@@ -224,7 +224,7 @@ pub struct RemoveArgs {
 }
 
 #[derive(Args, Debug, Clone)]
-pub struct Site2StaticArgs {
+pub struct SsgArgs {
     /// Output directory for the static export (default: ./dist)
     #[arg(short, long)]
     pub output: Option<PathBuf>,

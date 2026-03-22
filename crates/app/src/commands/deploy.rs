@@ -448,7 +448,7 @@ pub async fn deploy(
         if is_empty {
             return Err(miette!(
                 "Build output directory is empty: {}\n\
-                 Run 'appz build' or 'appz site2static' first to generate output files.",
+                 Run 'appz build' or 'appz ssg' first to generate output files.",
                 output_path.display()
             ));
         }

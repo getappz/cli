@@ -237,8 +237,8 @@ pub enum Commands {
     #[command(alias = "rm")]
     Remove(RemoveArgs),
     /// [PRO] Scrape any site to static HTML for deployment
-    #[command(name = "site2static")]
-    Site2Static(Site2StaticArgs),
+    #[command(name = "ssg")]
+    Ssg(SsgArgs),
     /// Deploy to a hosting provider (Vercel, Netlify, Cloudflare Pages, etc.)
     #[cfg(feature = "deploy")]
     Deploy(DeployArgs),

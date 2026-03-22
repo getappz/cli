@@ -268,8 +268,8 @@ pub async fn run_cli(args: Vec<OsString>) -> MainResult {
                         )
                         .await
                     }
-                    Commands::Site2Static(args) => {
-                        app::commands::site2static(session, args).await
+                    Commands::Ssg(args) => {
+                        app::commands::ssg(session, args).await
                     }
                     #[cfg(feature = "deploy")]
                     Commands::Deploy(args) => {

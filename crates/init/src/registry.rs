@@ -103,6 +103,12 @@ fn cache_is_fresh(path: &std::path::Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Try reading a cached registry index (even if stale).
+fn read_cached_index(path: &std::path::Path) -> Result<RegistryIndex, ()> {
+    let raw = std::fs::read_to_string(path).map_err(|_| ())?;
+    serde_json::from_str(&raw).map_err(|_| ())
+}
+
 // ---------------------------------------------------------------------------
 // RegistryClient
 // ---------------------------------------------------------------------------
@@ -133,44 +139,62 @@ impl RegistryClient {
     pub async fn fetch_index(&self, no_cache: bool) -> miette::Result<RegistryIndex> {
         use miette::IntoDiagnostic;
 
+        // Try fresh cache first (skip if --no-cache)
         if !no_cache {
             if let Some(cp) = cache_path() {
                 if cache_is_fresh(&cp) {
-                    let raw = std::fs::read_to_string(&cp).into_diagnostic()?;
-                    let index: RegistryIndex =
-                        serde_json::from_str(&raw).into_diagnostic()?;
-                    return Ok(index);
+                    if let Ok(index) = read_cached_index(&cp) {
+                        return Ok(index);
+                    }
                 }
             }
         }
 
+        // Try fetching from network
         let url = registry_index_url();
-        let response = self
-            .http
-            .get(&url)
-            .send()
-            .await
-            .into_diagnostic()?;
-
-        let status = response.status();
-        if !status.is_success() {
-            return Err(miette::miette!(
-                "Failed to fetch registry index from {url}: HTTP {status}"
-            ));
-        }
-
-        let raw = response.text().await.into_diagnostic()?;
-        let index: RegistryIndex = serde_json::from_str(&raw).into_diagnostic()?;
-
-        // Best-effort cache write — ignore errors so offline environments don't break.
-        if let Some(cp) = cache_path() {
-            if let Some(parent) = cp.parent() {
-                let _ = std::fs::create_dir_all(parent);
+        let fetch_result = async {
+            let response = self.http.get(&url).send().await.into_diagnostic()?;
+            let status = response.status();
+            if !status.is_success() {
+                return Err(miette::miette!(
+                    "HTTP {status} from {url}"
+                ));
             }
-            let _ = std::fs::write(&cp, &raw);
-        }
+            let raw = response.text().await.into_diagnostic()?;
+            let index: RegistryIndex = serde_json::from_str(&raw).into_diagnostic()?;
 
-        Ok(index)
+            // Best-effort cache write
+            if let Some(cp) = cache_path() {
+                if let Some(parent) = cp.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let _ = std::fs::write(&cp, &raw);
+            }
+
+            Ok(index)
+        }
+        .await;
+
+        match fetch_result {
+            Ok(index) => Ok(index),
+            Err(network_err) => {
+                // Network failed — try stale cache as fallback
+                if let Some(cp) = cache_path() {
+                    if let Ok(index) = read_cached_index(&cp) {
+                        eprintln!(
+                            "Warning: Could not refresh registry ({}). Using cached data.",
+                            network_err
+                        );
+                        return Ok(index);
+                    }
+                }
+                // No cache at all — return helpful error
+                Err(miette::miette!(
+                    "Could not fetch blueprint registry ({}).\n\nAlternatives:\n  appz init <framework> --blueprint ./local-blueprint.yaml\n  appz init <framework> --blueprint https://example.com/blueprint.yaml",
+                    network_err
+                ))
+            }
+        }
     }
 
     /// Fetches a blueprint's `blueprint.yaml` as a raw string.
@@ -182,21 +206,22 @@ impl RegistryClient {
         use miette::IntoDiagnostic;
 
         let url = resolve_blueprint_url(framework, blueprint);
-        let response = self
-            .http
-            .get(&url)
-            .send()
-            .await
-            .into_diagnostic()?;
-
-        let status = response.status();
-        if !status.is_success() {
-            return Err(miette::miette!(
-                "Failed to fetch blueprint {framework}/{blueprint} from {url}: HTTP {status}"
-            ));
+        let result = async {
+            let response = self.http.get(&url).send().await.into_diagnostic()?;
+            let status = response.status();
+            if !status.is_success() {
+                return Err(miette::miette!("HTTP {status}"));
+            }
+            response.text().await.into_diagnostic()
         }
+        .await;
 
-        response.text().await.into_diagnostic()
+        result.map_err(|e| {
+            miette::miette!(
+                "Could not fetch blueprint '{}/{}' ({}).\n\nAlternatives:\n  appz init {} --blueprint ./local-blueprint.yaml\n  appz init {} --blueprint https://example.com/blueprint.yaml",
+                framework, blueprint, e, framework, framework
+            )
+        })
     }
 
     /// Fetches an arbitrary template file inside a blueprint directory as raw bytes.

@@ -268,8 +268,8 @@ pub async fn run_cli(args: Vec<OsString>) -> MainResult {
                         )
                         .await
                     }
-                    Commands::WpExport(args) => {
-                        app::commands::wp_export(session, args).await
+                    Commands::Site2Static(args) => {
+                        app::commands::site2static(session, args).await
                     }
                     #[cfg(feature = "deploy")]
                     Commands::Deploy(args) => {

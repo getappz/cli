@@ -246,7 +246,7 @@ pub fn command_name_for_telemetry(command: crate::app::Commands) -> String {
         Commands::SelfUpdate(_) => "self-update",
         Commands::Blueprints { .. } => "blueprints",
         Commands::Run { .. } => "run",
-        Commands::WpExport(_) => "wp-export",
+        Commands::Site2Static(_) => "site2static",
         Commands::External(_) => "external",
     };
     name.to_string()

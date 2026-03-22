@@ -1,11 +1,11 @@
 //! Blueprint file schema — the unified format for scaffolding + operations.
 
 use miette::{miette, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Serialize, Default)]
 pub struct BlueprintSchema {
     #[serde(default)]
     pub version: Option<u32>,
@@ -29,7 +29,7 @@ pub struct BlueprintSchema {
     pub includes: Option<Vec<String>>,
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Serialize, Default)]
 pub struct BlueprintMeta {
     pub name: Option<String>,
     pub description: Option<String>,
@@ -41,7 +41,7 @@ pub struct BlueprintMeta {
     pub package_manager: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Default, Clone)]
+#[derive(Debug, Deserialize, Serialize, Default, Clone)]
 pub struct SetupStep {
     #[serde(default)]
     pub desc: Option<String>,
@@ -71,14 +71,14 @@ pub struct SetupStep {
     pub once: Option<bool>,
 }
 
-#[derive(Debug, Deserialize, Default, Clone)]
+#[derive(Debug, Deserialize, Serialize, Default, Clone)]
 pub struct WriteFileDef {
     pub path: String,
     pub content: Option<String>,
     pub template: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Default, Clone)]
+#[derive(Debug, Deserialize, Serialize, Default, Clone)]
 pub struct PatchFileDef {
     pub path: String,
     pub after: Option<String>,
@@ -87,7 +87,7 @@ pub struct PatchFileDef {
     pub content: String,
 }
 
-#[derive(Debug, Deserialize, Default, Clone)]
+#[derive(Debug, Deserialize, Serialize, Default, Clone)]
 pub struct CopyDef {
     pub src: String,
     pub dest: String,

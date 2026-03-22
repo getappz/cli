@@ -29,12 +29,16 @@ The blueprint format extends the current recipe schema with scaffolding fields.
 
 ```yaml
 # blueprint.yaml
+version: 1
+
 meta:
   name: "Next.js E-commerce Starter"
   description: "Next.js with Tailwind, Prisma, and Stripe"
   author: "appz-community"
   framework: "nextjs"
   categories: ["ecommerce", "fullstack"]
+  create_command: "npx create-next-app@latest"  # optional, overrides built-in
+  package_manager: "pnpm"                       # optional, overrides detection
 
 config:
   db_provider: "postgresql"
@@ -104,14 +108,25 @@ before:
 
 | Field | Purpose | Inherited From |
 |---|---|---|
-| `meta` | Blueprint metadata (name, description, author, framework, categories) | New |
+| `version` | Schema version (currently `1`). Future-proofs the parser. | New |
+| `meta` | Blueprint metadata: `name`, `description`, `author`, `framework`, `categories`, `create_command` (optional override for base scaffolding), `package_manager` (optional override for detection) | New |
 | `config` | Variable definitions for `{{var}}` substitution | Recipe |
 | `tools` | Tool versions to install via mise | Recipe |
 | `setup` | Ordered scaffolding steps, executed during `appz init` | New |
 | `tasks` | Named operational tasks (build, deploy, dev, etc.) | Recipe |
 | `before` | Pre-task hooks | Recipe |
 | `after` | Post-task hooks | Recipe |
-| `includes` | Include other blueprint/task files | Recipe |
+| `hosts` | SSH host definitions for remote execution | Recipe |
+| `includes` | Include other blueprint/task files. Included files can contain `tasks` only (not `setup`). Paths resolve relative to the project root. | Recipe |
+
+### Task-Level Features (Preserved from Recipes)
+
+All existing task-level features carry forward unchanged in the `tasks` section:
+- `confirm` — prompt before execution
+- `ask` — interactive prompt with variable storage
+- `only_if` / `unless` — conditional execution
+- `depends` / `wait_for` — task dependencies (hard and soft)
+- `sources` / `outputs` — change detection / caching
 
 ### Setup Step Types
 
@@ -121,7 +136,8 @@ before:
 | `run` | Execute a remote command (existing) |
 | `add_dependency` | Install packages via detected package manager. `dev: true` for dev deps. |
 | `write_file` | Create/overwrite a file. Fields: `path`, `content`. Supports `{{var}}` substitution. |
-| `set_env` | Append key-value pairs to `.env` file |
+| `set_env` | Upsert key-value pairs in `.env` file (creates if missing, updates if key exists). Also sets the variable in the process environment for subsequent steps. |
+| `patch_file` | Insert or replace content in an existing file. Fields: `path`, `after` (insert after match), `before` (insert before match), `replace` (regex match), `content`. |
 | `mkdir` | Create a directory |
 | `cp` | Copy files. Fields: `src`, `dest` |
 | `rm` | Remove a file or directory |
@@ -136,7 +152,19 @@ before:
 - `pnpm-lock.yaml` present -> pnpm
 - `bun.lockb` present -> bun
 - `composer.json` present -> composer
+- `package-lock.json` present -> npm
+- `Cargo.toml` present -> cargo
+- `go.mod` present -> go
+- `Gemfile` present -> bundler
+- `pyproject.toml` present -> poetry/pip
 - Default -> npm
+
+A blueprint can also explicitly specify the package manager:
+
+```yaml
+meta:
+  package_manager: "pnpm"
+```
 
 ---
 
@@ -167,6 +195,12 @@ appz init npm:create-foo            -> NpmProvider
 ### Disambiguation: `framework/blueprint` vs `user/repo`
 
 The first segment is checked against the known framework registry. If it matches a framework slug, route to BlueprintProvider. Otherwise, route to GitProvider.
+
+**Escape hatch:** If a user has a GitHub repo named after a framework (e.g., `nextjs/my-template`), they can force Git resolution with a `git:` prefix:
+
+```
+appz init git:nextjs/my-template   -> GitProvider (forced)
+```
 
 ---
 
@@ -235,10 +269,10 @@ Lightweight index fetched by the CLI to discover available blueprints:
 
 ### Fetching Flow
 
-1. CLI fetches `registry.json` (cached locally with TTL)
+1. CLI fetches `registry.json` (cached at `~/.appz/cache/registry.json`, TTL 24 hours, `--no-cache` flag to force refresh)
 2. Validates that framework and blueprint exist in registry
 3. Fetches `{framework}/{blueprint}/blueprint.yaml` via GitHub raw URL
-4. If blueprint references template files (`templates/`), fetches those too
+4. If blueprint contains `write_file` steps with `template: "filename"` instead of inline `content`, fetches the referenced file from the `templates/` directory in the registry
 
 ### CLI Commands
 
@@ -299,8 +333,8 @@ Full flow for `appz init nextjs/ecommerce`:
 2. **Fetch blueprint** from registry (or local file / URL)
 3. **Detect format** -> if Playground JSON, convert to generic format
 4. **Parse blueprint** YAML/JSON/JSONC
-5. **Run base framework scaffolding** (`meta.framework` -> `npm create`, `composer create-project`, etc.)
-6. **Execute `setup` steps** sequentially:
+5. **Run base framework scaffolding** using `meta.create_command` if specified, otherwise fall back to the built-in framework create command table (migrated from `FrameworkProvider::FRAMEWORK_CREATE`). If neither exists, skip scaffolding (blueprint handles everything via setup steps).
+6. **Execute `setup` steps** sequentially (fail-fast — if a step fails, halt and report which step failed; prior steps' effects remain in place; setup steps should be written to be idempotent):
    - `add_dependency` -> detect package manager and install
    - `write_file` -> write to project directory with `{{var}}` substitution
    - `set_env` -> append to `.env` file
@@ -351,7 +385,7 @@ The full blueprint is saved to `.appz/blueprint.yaml` in the project. On subsequ
 |---|---|
 | `crates/init/` | Remove `FrameworkProvider`, `WordPressProvider`. Add `BlueprintProvider`. Update `detect.rs` resolution logic. |
 | `crates/blueprint/` | Repurpose as Playground compatibility layer. Keep types for parsing Playground JSON. Add `convert_to_generic()`. |
-| `crates/app/src/importer.rs` | Extend `Step` struct with new scaffolding fields. Add execution logic for each. Rename "recipe" references to "blueprint". |
+| `crates/app/src/importer.rs` | Extend `Step` struct with new scaffolding fields (`add_dependency`, `write_file`, `set_env`, `patch_file`, `mkdir`, `cp`, `rm`). Add execution logic for each. Rename "recipe" references to "blueprint". Relax validation: a blueprint is valid if it has `setup`, `tasks`, or both (current code rejects empty `tasks`). Add JSONC support via `json_comments` or `jsonc-parser` crate for stripping comments before `serde_json`. |
 | `crates/app/src/commands/` | Update `init.rs` to use BlueprintProvider. Add `blueprints.rs` command (`list`). Retire `blueprint.rs` (old WP-only commands). |
 | `crates/app/src/session.rs` | Change recipe discovery to look for `.appz/blueprint.yaml` instead of `recipe.yaml`. |
 | `crates/task/` | No changes — the task runner stays as-is. |
@@ -379,6 +413,23 @@ The full blueprint is saved to `.appz/blueprint.yaml` in the project. On subsequ
 - `crates/app/src/commands/blueprint.rs` — replaced by new `blueprints.rs`
 - `crates/app/src/recipe/` — renamed/merged into blueprint logic
 - `recipes/` directory — migrated into `appz-blueprints` repo
+
+### CLI Argument Changes
+
+In `crates/app/src/commands/init.rs`, the `--blueprint` clap argument already exists for WordPress. It is generalized: accepts a blueprint name (resolved via registry), local file path, or URL. The `template_or_name` positional argument gains support for the `framework/blueprint` shorthand. Add `--no-cache` flag to bypass registry cache. Add `git:` prefix support in source detection.
+
+### Re-init Behavior
+
+If `.appz/blueprint.yaml` already exists in the target directory, `appz init` errors with a message: "Project already initialized. Use `--force` to reinitialize." With `--force`, the existing blueprint is overwritten and setup steps re-run.
+
+---
+
+## Error Handling
+
+- **Setup step failure:** Fail-fast. If step N fails, steps 1..N-1 remain in place. The error message identifies which step failed and why. Setup steps should be idempotent so re-running after a fix is safe.
+- **Registry fetch failure:** If the registry or blueprint cannot be fetched (network error, 404), error with a clear message. Suggest `--blueprint ./path` as a fallback for offline use.
+- **Playground conversion failure:** If a Playground JSON step cannot be mapped, warn and skip (non-fatal) rather than aborting the entire blueprint.
+- **Package manager detection failure:** If `add_dependency` cannot determine the package manager, error with a suggestion to set `meta.package_manager` explicitly.
 
 ---
 

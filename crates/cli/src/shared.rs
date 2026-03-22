@@ -168,8 +168,7 @@ pub async fn run_cli(args: Vec<OsString>) -> MainResult {
                             args.skip_install,
                             args.force,
                             args.output,
-                            args.blueprint,
-                            args.playground,
+                            args.blueprint.map(|p| p.to_string_lossy().to_string()),
                         )
                         .await
                     }

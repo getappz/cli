@@ -566,7 +566,6 @@ async fn execute_setup_steps(
             .unwrap_or("(unnamed step)");
         debug!(step = i + 1, desc, "Executing setup step");
 
-        // cd
         if let Some(dir) = &step.cd {
             let dir = substitute_vars(dir, vars);
             cwd = PathBuf::from(&dir);
@@ -574,7 +573,6 @@ async fn execute_setup_steps(
             continue;
         }
 
-        // mkdir
         if let Some(dir) = &step.mkdir {
             let dir = substitute_vars(dir, vars);
             ui::info(&ctx.options, &format!("  mkdir {dir}"));
@@ -584,13 +582,11 @@ async fn execute_setup_steps(
             continue;
         }
 
-        // write_file
         if let Some(wf) = &step.write_file {
             let path = substitute_vars(&wf.path, vars);
             ui::info(&ctx.options, &format!("  write {path}"));
 
             let content = if let Some(template) = &wf.template {
-                // Fetch template from registry
                 let client = RegistryClient::new();
                 let bytes = client
                     .fetch_template(framework_slug, blueprint_name, template)
@@ -608,7 +604,6 @@ async fn execute_setup_steps(
             continue;
         }
 
-        // patch_file
         if let Some(pf) = &step.patch_file {
             let path = substitute_vars(&pf.path, vars);
             let content = substitute_vars(&pf.content, vars);
@@ -626,7 +621,6 @@ async fn execute_setup_steps(
             continue;
         }
 
-        // set_env
         if let Some(env_vars) = &step.set_env {
             ui::info(&ctx.options, "  set_env");
             let env_path = ".env";
@@ -662,7 +656,6 @@ async fn execute_setup_steps(
             continue;
         }
 
-        // add_dependency
         if let Some(deps) = &step.add_dependency {
             let is_dev = step.dev.unwrap_or(false);
             let deps_str = deps.iter().map(|d| substitute_vars(d, vars)).collect::<Vec<_>>();
@@ -672,7 +665,6 @@ async fn execute_setup_steps(
             continue;
         }
 
-        // run_locally
         if let Some(cmd) = &step.run_locally {
             let cmd = substitute_vars(cmd, vars);
             ui::info(&ctx.options, &format!("  run: {cmd}"));
@@ -680,7 +672,6 @@ async fn execute_setup_steps(
             continue;
         }
 
-        // run (alias for run_locally)
         if let Some(cmd) = &step.run {
             let cmd = substitute_vars(cmd, vars);
             ui::info(&ctx.options, &format!("  run: {cmd}"));
@@ -688,7 +679,6 @@ async fn execute_setup_steps(
             continue;
         }
 
-        // cp
         if let Some(cp) = &step.cp {
             let src = substitute_vars(&cp.src, vars);
             let dest = substitute_vars(&cp.dest, vars);
@@ -699,18 +689,12 @@ async fn execute_setup_steps(
             continue;
         }
 
-        // rm
         if let Some(target) = &step.rm {
             let target = substitute_vars(target, vars);
             ui::info(&ctx.options, &format!("  rm {target}"));
             let fs = ctx.fs();
-            if fs.is_dir(&target) {
-                fs.remove_dir_all(&target)
-                    .map_err(|e| InitError::FsError(e.to_string()))?;
-            } else if fs.is_file(&target) {
-                fs.remove_file(&target)
-                    .map_err(|e| InitError::FsError(e.to_string()))?;
-            } else {
+            // Attempt file removal first, then dir; avoids TOCTOU race
+            if fs.remove_file(&target).is_err() && fs.remove_dir_all(&target).is_err() {
                 debug!("rm target does not exist, skipping: {target}");
             }
             continue;

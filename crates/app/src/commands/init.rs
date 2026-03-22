@@ -143,11 +143,9 @@ async fn interactive_init(
             .collect();
         fw_options.sort_by(|a, b| a.0.cmp(&b.0));
 
-        // Step 1: Select framework
-        let fw_display: Vec<(String, String)> = fw_options;
         let selected_fw = ui::select_template_interactive(
             "Select a framework:",
-            &fw_display,
+            &fw_options,
         )
         .map_err(|e| miette!("Failed to select framework: {}", e))?
         .ok_or_else(|| miette::Report::from(UserCancellation::selection()))?;

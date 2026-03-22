@@ -203,64 +203,41 @@ pub fn convert_playground_to_generic(raw: &str) -> Result<GenericBlueprint> {
 // Step converter
 // ---------------------------------------------------------------------------
 
+/// Shared helper for installPlugin / installTheme conversion.
+fn convert_wp_install(
+    obj: &serde_json::Map<String, Value>,
+    wp_type: &str,
+    data_key: &str,
+    zip_key: &str,
+) -> Vec<GenericSetupStep> {
+    let slug = slug_from_resource(obj.get(data_key))
+        .or_else(|| slug_from_resource(obj.get(zip_key)))
+        .unwrap_or_else(|| format!("unknown-{wp_type}"));
+    let activate = obj
+        .get("options")
+        .and_then(|o| o.get("activate"))
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let flag = if activate { " --activate" } else { "" };
+    vec![run_locally(format!("wp {wp_type} install {slug}{flag}"))]
+}
+
 fn convert_step(val: &Value) -> Option<Vec<GenericSetupStep>> {
     let obj = val.as_object()?;
     let step_type = obj.get("step")?.as_str()?;
 
     let result: Vec<GenericSetupStep> = match step_type {
-        // --- installPlugin ---------------------------------------------------
-        "installPlugin" => {
-            let slug = slug_from_resource(obj.get("pluginData"))
-                .or_else(|| slug_from_resource(obj.get("pluginZipFile")))
-                .unwrap_or_else(|| String::from("unknown-plugin"));
-            let activate = obj
-                .get("options")
-                .and_then(|o| o.get("activate"))
-                .and_then(Value::as_bool)
-                .unwrap_or(true);
-            let cmd = if activate {
-                format!("wp plugin install {slug} --activate")
-            } else {
-                format!("wp plugin install {slug}")
-            };
-            vec![run_locally(cmd)]
-        }
+        "installPlugin" => convert_wp_install(obj, "plugin", "pluginData", "pluginZipFile"),
+        "installTheme" => convert_wp_install(obj, "theme", "themeData", "themeZipFile"),
 
-        // --- installTheme ----------------------------------------------------
-        "installTheme" => {
-            let slug = slug_from_resource(obj.get("themeData"))
-                .or_else(|| slug_from_resource(obj.get("themeZipFile")))
-                .unwrap_or_else(|| String::from("unknown-theme"));
-            let activate = obj
-                .get("options")
-                .and_then(|o| o.get("activate"))
-                .and_then(Value::as_bool)
-                .unwrap_or(true);
-            let cmd = if activate {
-                format!("wp theme install {slug} --activate")
-            } else {
-                format!("wp theme install {slug}")
-            };
-            vec![run_locally(cmd)]
-        }
-
-        // --- activatePlugin --------------------------------------------------
         "activatePlugin" => {
-            let path = obj
-                .get("pluginPath")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown");
             // pluginPath is like "woocommerce/woocommerce.php" — take the folder name
+            let path = obj.get("pluginPath").and_then(Value::as_str).unwrap_or("unknown");
             let slug = path.split('/').next().unwrap_or(path);
             vec![run_locally(format!("wp plugin activate {slug}"))]
         }
-
-        // --- activateTheme ---------------------------------------------------
         "activateTheme" => {
-            let folder = obj
-                .get("themeFolderName")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown");
+            let folder = obj.get("themeFolderName").and_then(Value::as_str).unwrap_or("unknown");
             vec![run_locally(format!("wp theme activate {folder}"))]
         }
 

@@ -263,8 +263,7 @@ fn parse_file_schema<P: AsRef<Path> + std::fmt::Debug>(path: P) -> Result<FileSc
 /// Blueprint tasks are simple `Vec<Step>` arrays, while FileSchema expects
 /// `TaskDefWithMetadata` wrappers. This converts between the two formats.
 fn convert_blueprint_to_file_schema(raw: &str, ext: &str, path: &Path) -> Result<FileSchema> {
-    // Parse as generic YAML/JSON Value first
-    let value: serde_json::Value = if ext == "yaml" || ext == "yml" {
+    let mut schema_value: serde_json::Value = if ext == "yaml" || ext == "yml" {
         serde_yaml::from_str(raw)
             .map_err(|e| miette!("Invalid YAML in {}: {}", path.display(), e))?
     } else {
@@ -272,9 +271,7 @@ fn convert_blueprint_to_file_schema(raw: &str, ext: &str, path: &Path) -> Result
             .map_err(|e| miette!("Invalid JSON in {}: {}", path.display(), e))?
     };
 
-    // Build a FileSchema-compatible value by wrapping simple task arrays
-    // into the TaskDefWithMetadata format (which expects {steps: [...]} for arrays)
-    let mut schema_value = value.clone();
+    // Wrap simple task arrays as {steps: [...]} for TaskDefWithMetadata compat
     if let Some(tasks) = schema_value.get_mut("tasks") {
         if let Some(tasks_obj) = tasks.as_object_mut() {
             for (_name, task_val) in tasks_obj.iter_mut() {

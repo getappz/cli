@@ -21,6 +21,7 @@ pub async fn init(
     output: Option<PathBuf>,
     blueprint: Option<String>,
     dry_run: bool,
+    deploy: Option<String>,
 ) -> AppResult {
     let (template_source, project_name) = resolve_template_and_name(
         template_or_name,
@@ -50,6 +51,24 @@ pub async fn init(
     )
     .await
     .map_err(|e| miette!("{}", e))?;
+
+    // Add deploy target if --deploy was specified
+    if let Some(target) = deploy {
+        if dry_run {
+            println!("\nDeploy target: {}", target);
+            println!("  Would run: appz blueprints add {}", target);
+        } else {
+            let project_path = output_dir.join(&project_name);
+            println!();
+            let deploy_bp = init::deploy::add_deploy_target(&project_path, &target, false)
+                .await
+                .map_err(|e| miette!("{}", e))?;
+            init::deploy::run_deploy_setup(&project_path, &deploy_bp)
+                .await
+                .map_err(|e| miette!("{}", e))?;
+            println!("Added deploy target: {}", target);
+        }
+    }
 
     Ok(None)
 }

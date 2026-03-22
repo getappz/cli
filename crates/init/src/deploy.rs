@@ -82,23 +82,14 @@ pub async fn run_deploy_setup(
             return Ok(());
         }
         println!("Running deploy target setup...");
+        // Detect package manager once, outside the loop
+        let pm = detect_pm(project_path);
         for step in steps {
             let desc = step.desc.as_deref().unwrap_or("(setup)");
 
             if let Some(deps) = &step.add_dependency {
                 let is_dev = step.dev.unwrap_or(false);
-                let dev_flag = if is_dev { " --save-dev" } else { "" };
-                // Detect package manager from lock files
-                let pm = if project_path.join("yarn.lock").exists() { "yarn add" }
-                    else if project_path.join("pnpm-lock.yaml").exists() { "pnpm add" }
-                    else if project_path.join("bun.lockb").exists() { "bun add" }
-                    else { "npm install" };
-                let dev_flags = match pm {
-                    "yarn add" | "pnpm add" => if is_dev { " -D" } else { "" },
-                    "bun add" => if is_dev { " -d" } else { "" },
-                    _ => dev_flag,
-                };
-                let cmd = format!("{}{} {}", pm, dev_flags, deps.join(" "));
+                let cmd = pm_install_cmd(&pm, deps, is_dev);
                 println!("  -> {}", desc);
                 run_shell(project_path, &cmd, desc)?;
             }
@@ -124,4 +115,29 @@ fn run_shell(cwd: &Path, cmd: &str, desc: &str) -> Result<()> {
         return Err(miette!("Setup step failed: {}", desc));
     }
     Ok(())
+}
+
+fn detect_pm(project_path: &Path) -> String {
+    let lock_files: &[(&str, &str)] = &[
+        ("yarn.lock", "yarn"), ("pnpm-lock.yaml", "pnpm"),
+        ("bun.lockb", "bun"), ("package-lock.json", "npm"),
+        ("composer.json", "composer"),
+    ];
+    for (file, pm) in lock_files {
+        if project_path.join(file).exists() {
+            return pm.to_string();
+        }
+    }
+    "npm".to_string()
+}
+
+fn pm_install_cmd(pm: &str, deps: &[String], is_dev: bool) -> String {
+    let pkgs = deps.join(" ");
+    match pm {
+        "yarn" => if is_dev { format!("yarn add -D {pkgs}") } else { format!("yarn add {pkgs}") },
+        "pnpm" => if is_dev { format!("pnpm add -D {pkgs}") } else { format!("pnpm add {pkgs}") },
+        "bun" => if is_dev { format!("bun add -d {pkgs}") } else { format!("bun add {pkgs}") },
+        "composer" => if is_dev { format!("composer require --dev {pkgs}") } else { format!("composer require {pkgs}") },
+        _ => if is_dev { format!("npm install --save-dev {pkgs}") } else { format!("npm install {pkgs}") },
+    }
 }

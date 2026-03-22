@@ -252,8 +252,8 @@ pub enum Commands {
     // Users run `appz migrate ...` which triggers the plugin system.
     /// Run a task from .appz/blueprint.yaml (e.g. deploy, db:migrate)
     Run {
-        /// Task name to execute
-        task: String,
+        /// Task name to execute (omit to list available tasks)
+        task: Option<String>,
         /// Force execution even if sources haven't changed
         #[arg(long)]
         force: bool,

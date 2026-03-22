@@ -33,6 +33,7 @@
 //! ```
 
 pub mod blueprint_schema;
+pub mod deploy;
 pub mod registry;
 pub mod config;
 pub mod detect;

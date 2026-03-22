@@ -21,6 +21,8 @@ const RAW_BASE: &str = "https://raw.githubusercontent.com";
 pub struct RegistryIndex {
     pub version: u32,
     pub frameworks: HashMap<String, FrameworkEntry>,
+    #[serde(default)]
+    pub deploy: HashMap<String, DeployTargetEntry>,
 }
 
 impl RegistryIndex {
@@ -36,6 +38,17 @@ impl RegistryIndex {
             .map(|f| f.blueprints.contains_key(blueprint))
             .unwrap_or(false)
     }
+
+    /// Returns `true` if a deploy target exists.
+    pub fn has_deploy_target(&self, target: &str) -> bool {
+        self.deploy.contains_key(target)
+    }
+}
+
+/// Per-deploy-target entry in the registry.
+#[derive(Debug, Deserialize)]
+pub struct DeployTargetEntry {
+    pub description: String,
 }
 
 /// Per-framework entry in the registry.

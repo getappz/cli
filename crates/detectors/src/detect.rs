@@ -8,6 +8,23 @@ use std::collections::HashMap;
 use regex::Regex;
 use std::sync::Arc;
 
+/// Cache compiled regexes to avoid recompilation across 80+ framework detectors.
+fn cached_regex(pattern: &str) -> Result<Regex, String> {
+    use std::cell::RefCell;
+    thread_local! {
+        static CACHE: RefCell<HashMap<String, Regex>> = RefCell::new(HashMap::new());
+    }
+    CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some(re) = cache.get(pattern) {
+            return Ok(re.clone());
+        }
+        let re = Regex::new(pattern).map_err(|e| format!("Invalid regex: {}", e))?;
+        cache.insert(pattern.to_string(), re.clone());
+        Ok(re)
+    })
+}
+
 /// Package manager detection result
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackageManagerInfo {
@@ -142,8 +159,7 @@ async fn check_detector_item(
                 regex::escape(match_package)
             );
 
-            let regex =
-                Regex::new(&pattern).map_err(|e| format!("Invalid regex pattern: {}", e))?;
+            let regex = cached_regex(&pattern)?;
 
             Ok(regex
                 .captures(&content)
@@ -172,8 +188,7 @@ async fn check_detector_item(
                 .await
                 .map_err(|e| format!("Failed to read {}: {}", path, e))?;
 
-            let regex = Regex::new(match_content)
-                .map_err(|e| format!("Invalid regex pattern in matchContent: {}", e))?;
+            let regex = cached_regex(match_content)?;
 
             Ok(regex.is_match(&content).then_some((String::new(), None)))
         }

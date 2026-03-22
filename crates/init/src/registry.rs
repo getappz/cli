@@ -7,7 +7,7 @@ use std::collections::HashMap;
 // Constants
 // ---------------------------------------------------------------------------
 
-pub const REGISTRY_REPO: &str = "AviHS/appz-blueprints";
+pub const REGISTRY_REPO: &str = "getappz/blueprints";
 pub const REGISTRY_BRANCH: &str = "main";
 
 const RAW_BASE: &str = "https://raw.githubusercontent.com";

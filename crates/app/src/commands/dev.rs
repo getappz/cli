@@ -378,14 +378,20 @@ pub async fn dev(session: AppzSession, args: crate::args::DevArgs) -> AppResult 
                 }
 
                 let registry = session.get_task_registry();
-                let using_appz_install = registry.get("appz:install").is_some();
+                let install_task = if registry.get("appz:install").is_some() {
+                    Some("appz:install")
+                } else if registry.get("install").is_some() {
+                    Some("install")
+                } else {
+                    None
+                };
 
-                if using_appz_install {
-                    println!("✓ Found appz:install recipe task, using recipe install...");
+                if let Some(task_name) = install_task {
+                    println!("✓ Found {} blueprint task, using blueprint install...", task_name);
                     println!("\n📦 Running install command...");
                     run_recipe_task(
                         &registry,
-                        "appz:install",
+                        task_name,
                         project_path.clone(),
                         session.cli.verbose,
                     )

@@ -1,7 +1,7 @@
 //! Built-in tasks registered into the task runner on every session.
 //!
 //! - `deploy::*` — common deploy pipeline (prepare, publish, cleanup, etc.)
-//! - `laravel` — artisan convenience tasks
+//! Laravel artisan tasks are now in the blueprint registry (laravel/default).
 
 use crate::log::{info, warning};
 use task::{Task, TaskRegistry};
@@ -82,4 +82,3 @@ pub fn register_common(reg: &mut TaskRegistry) {
 }
 
 pub mod deploy;
-pub mod laravel;

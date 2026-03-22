@@ -366,6 +366,7 @@ struct Step {
     add_dependency: Option<Vec<String>>,
     dev: Option<bool>,
     write_file: Option<WriteFileDef>,
+    patch_file: Option<PatchFileDef>,
     set_env: Option<HashMap<String, String>>,
     mkdir: Option<String>,
     cp: Option<CopyDef>,

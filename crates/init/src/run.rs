@@ -44,6 +44,9 @@ pub async fn run(
     let project_path = output_dir.join(&project_name);
 
     if project_path.exists() && !force {
+        if project_path.join(".appz").join("blueprint.yaml").exists() {
+            return Err(InitError::AlreadyInitialized(project_path.display().to_string()));
+        }
         return Err(InitError::DirectoryExists(project_path.display().to_string()));
     }
 

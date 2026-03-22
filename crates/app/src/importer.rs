@@ -899,7 +899,7 @@ pub fn import_file<P: AsRef<Path> + std::fmt::Debug>(
                     // Ensure mise is installed first
                     if !crate::shell::command_exists("mise") {
                         crate::log::info("mise not found, installing...");
-                        crate::recipe::tools::mise::ensure_mise()
+                        crate::tools::mise::ensure_mise()
                             .await
                             .map_err(|e| miette!("Failed to install mise: {}", e))?;
                     }

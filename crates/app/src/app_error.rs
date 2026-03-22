@@ -16,16 +16,16 @@ pub enum AppError {
     #[error("Unable to determine your current working directory.")]
     MissingWorkingDir,
 
-    #[diagnostic(code(app::recipe::invalid_file))]
+    #[diagnostic(code(app::blueprint::invalid_file))]
     #[error(
-        "Unable to parse recipe file: {}",
+        "Unable to parse blueprint file: {}",
         .0
     )]
     InvalidRecipeFile(String),
 
-    #[diagnostic(code(app::recipe::file_not_found))]
+    #[diagnostic(code(app::blueprint::file_not_found))]
     #[error(
-        "Recipe file not found: {}",
+        "Blueprint file not found: {}",
         .0
     )]
     RecipeFileNotFound(String),

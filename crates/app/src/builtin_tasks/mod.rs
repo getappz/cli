@@ -1,9 +1,13 @@
+//! Built-in tasks registered into the task runner on every session.
+//!
+//! - `deploy::*` — common deploy pipeline (prepare, publish, cleanup, etc.)
+//! - `laravel` — artisan convenience tasks
+
 use crate::log::{info, warning};
 use task::{Task, TaskRegistry};
 
-/// Registers the common deploy recipe similar to Deployer's `recipe/common.php`.
+/// Registers the common deploy pipeline tasks.
 pub fn register_common(reg: &mut TaskRegistry) {
-    // Building block tasks (real implementations)
     deploy::info::register_info(reg);
     deploy::setup::register_setup(reg);
     deploy::lock::register_lock(reg);
@@ -30,7 +34,6 @@ pub fn register_common(reg: &mut TaskRegistry) {
     );
 
     deploy::symlink::register_symlink(reg);
-    // unlock already registered in lock.rs
     deploy::cleanup::register_cleanup(reg);
     reg.register(
         Task::new(
@@ -80,4 +83,3 @@ pub fn register_common(reg: &mut TaskRegistry) {
 
 pub mod deploy;
 pub mod laravel;
-pub mod tools;

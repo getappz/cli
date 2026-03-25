@@ -121,6 +121,19 @@ pub async fn dev(session: AppzSession, args: crate::args::DevArgs) -> AppResult 
         None
     };
 
+    // Try to start / connect to the appz-server daemon. Failure is non-fatal.
+    #[cfg(feature = "appz-server")]
+    let server_available: bool = match appz_server_client::ensure_running(47831).await {
+        Ok(()) => {
+            tracing::debug!("appz-server daemon is available");
+            true
+        }
+        Err(e) => {
+            tracing::warn!("appz-server unavailable, continuing without daemon: {}", e);
+            false
+        }
+    };
+
     // Create filesystem detector
     let fs: Arc<dyn DetectorFilesystem> =
         Arc::new(StdFilesystem::new(Some(project_path.clone())));
@@ -433,6 +446,30 @@ pub async fn dev(session: AppzSession, args: crate::args::DevArgs) -> AppResult 
                         || resolved_runtime.as_ref().map(|r| r.slug() == "playground").unwrap_or(false))
                 });
 
+            // Register the app with the appz-server daemon before starting dev.
+            #[cfg(feature = "appz-server")]
+            if server_available {
+                let config_path = session.working_dir.to_string_lossy().to_string();
+                let app_name = session.working_dir
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "app".to_string());
+                let command_parts = shell_words::split(&dev_cmd).unwrap_or_default();
+                let app_port = args.port.unwrap_or(3000);
+
+                let _ = appz_server_client::register_app(
+                    config_path.clone(),
+                    session.working_dir.to_string_lossy().to_string(),
+                    app_name,
+                    app_port,
+                    command_parts,
+                    std::collections::HashMap::new(),
+                    vec!["localhost".to_string()],
+                    None,
+                    true,
+                ).await;
+            }
+
             let result = if use_runtime_dev {
                 if let Some(ref runtime) = resolved_runtime {
                     println!("✓ Using {} (site served by {})", runtime.name(), runtime.name());
@@ -457,6 +494,13 @@ pub async fn dev(session: AppzSession, args: crate::args::DevArgs) -> AppResult 
             // Clean up tunnel after command completes (success or failure)
             if let Some(ref mut t) = tunnel {
                 let _ = t.stop().await;
+            }
+
+            // Unregister the app from the appz-server daemon on exit.
+            #[cfg(feature = "appz-server")]
+            if server_available {
+                let config_path = session.working_dir.to_string_lossy().to_string();
+                let _ = appz_server_client::unregister_app(config_path).await;
             }
 
             // Propagate runtime errors or handle Windows shell script fallback

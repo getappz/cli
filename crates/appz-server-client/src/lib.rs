@@ -68,13 +68,11 @@ pub async fn ping() -> Result<()> {
 }
 
 /// Query server info. Returns (listen_port, app_count, uptime_secs).
-///
-/// Note: the current protocol's ServerInfo response carries `version` and
-/// `app_count` only. `listen_port` and `uptime_secs` are not transmitted,
-/// so both are returned as 0.
 pub async fn info() -> Result<(u16, usize, u64)> {
     match send_request(&Request::Info).await? {
-        Response::ServerInfo { app_count, .. } => Ok((0, app_count, 0)),
+        Response::ServerInfo { listen_port, app_count, uptime_secs } => {
+            Ok((listen_port, app_count, uptime_secs))
+        }
         Response::Error { message } => Err(ClientError::Server(message)),
         other => Err(ClientError::Server(format!("unexpected response: {other:?}"))),
     }
@@ -93,12 +91,6 @@ pub async fn register_app(
     static_dir: Option<String>,
     hot_reload: bool,
 ) -> Result<String> {
-    let url = if let Some(host) = hosts.first() {
-        format!("http://{host}")
-    } else {
-        format!("http://localhost:{upstream_port}")
-    };
-
     let req = Request::RegisterApp {
         config_path,
         project_dir,
@@ -112,7 +104,7 @@ pub async fn register_app(
     };
 
     match send_request(&req).await? {
-        Response::AppRegistered { .. } => Ok(url),
+        Response::AppRegistered { url, .. } => Ok(url),
         Response::Error { message } => Err(ClientError::Server(message)),
         other => Err(ClientError::Server(format!("unexpected response: {other:?}"))),
     }
@@ -128,20 +120,8 @@ pub async fn unregister_app(config_path: String) -> Result<()> {
 }
 
 /// Hand off a running process (by PID) to the server for monitoring.
-///
-/// Note: the protocol's HandoffApp request carries only `config_path`; the
-/// `pid` is set via a preceding SetAppStatus / state mutation on the server.
-/// This function first records the PID via SetAppStatus then sends HandoffApp.
 pub async fn handoff_app(config_path: String, pid: u32) -> Result<()> {
-    // Record the PID on the server side before handing off.
-    let set_req = Request::SetAppStatus {
-        config_path: config_path.clone(),
-        status: format!("running:{pid}"),
-    };
-    // Best-effort: ignore errors from the status update so we can still hand off.
-    let _ = send_request(&set_req).await;
-
-    match send_request(&Request::HandoffApp { config_path }).await? {
+    match send_request(&Request::HandoffApp { config_path, pid }).await? {
         Response::AppHandedOff { .. } => Ok(()),
         Response::Error { message } => Err(ClientError::Server(message)),
         other => Err(ClientError::Server(format!("unexpected response: {other:?}"))),

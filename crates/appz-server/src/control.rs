@@ -139,16 +139,17 @@ async fn process_request(
     request: Request,
     state: Arc<AppState>,
     events: Arc<EventBus>,
-    _start_time: Instant,
-    _proxy_port: u16,
+    start_time: Instant,
+    proxy_port: u16,
     shutdown: broadcast::Sender<()>,
 ) -> Response {
     match request {
         Request::Ping => Response::Pong,
 
         Request::Info => Response::ServerInfo {
-            version: env!("CARGO_PKG_VERSION").to_string(),
+            listen_port: proxy_port,
             app_count: state.app_count(),
+            uptime_secs: start_time.elapsed().as_secs(),
         },
 
         Request::RegisterApp {
@@ -162,13 +163,7 @@ async fn process_request(
             static_dir,
             hot_reload,
         } => {
-            // Build URL from first host, or fall back to port.
-            let _url = if let Some(host) = hosts.first() {
-                format!("http://{host}")
-            } else {
-                format!("http://localhost:{upstream_port}")
-            };
-
+            let first_host = hosts.first().cloned().unwrap_or_else(|| "localhost".to_string());
             let app = RuntimeApp {
                 config_path: config_path.clone(),
                 project_dir,
@@ -187,10 +182,13 @@ async fn process_request(
                 Ok(()) => {
                     events.publish(ServerEvent::AppStatusChanged {
                         config_path: config_path.clone(),
-                        app_name,
-                        status: "idle".to_string(),
+                        app_name: app_name.clone(),
+                        status: "registered".to_string(),
                     });
-                    Response::AppRegistered { config_path }
+                    Response::AppRegistered {
+                        app_name,
+                        url: format!("http://{}:{}", first_host, proxy_port),
+                    }
                 }
                 Err(e) => Response::Error {
                     message: format!("register failed: {e}"),
@@ -233,30 +231,18 @@ async fn process_request(
             }
         }
 
-        Request::HandoffApp { config_path } => {
-            // The client is telling us it already started the process at the registered port.
-            // We just need to monitor it.
-            match state.get(&config_path) {
-                None => Response::Error {
-                    message: format!("app not found: {config_path}"),
-                },
-                Some(app) => {
-                    if let Some(pid) = app.pid {
-                        state.set_status(&config_path, AppStatus::Running);
-                        tokio::spawn(process::monitor_external_pid(
-                            pid,
-                            config_path.clone(),
-                            state.clone(),
-                            events.clone(),
-                        ));
-                        Response::AppHandedOff { config_path }
-                    } else {
-                        Response::Error {
-                            message: format!("no PID set for app: {config_path}"),
-                        }
-                    }
-                }
-            }
+        Request::HandoffApp { config_path, pid } => {
+            state.set_pid(&config_path, Some(pid));
+            state.set_status(&config_path, AppStatus::Running);
+
+            tokio::spawn(process::monitor_external_pid(
+                pid,
+                config_path.clone(),
+                state.clone(),
+                events.clone(),
+            ));
+
+            Response::AppHandedOff { config_path, pid }
         }
 
         Request::RestartApp { config_path } => {

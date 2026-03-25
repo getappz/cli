@@ -26,6 +26,7 @@ pub enum Request {
     },
     HandoffApp {
         config_path: String,
+        pid: u32,
     },
     RestartApp {
         config_path: String,
@@ -40,11 +41,13 @@ pub enum Request {
 pub enum Response {
     Pong,
     ServerInfo {
-        version: String,
+        listen_port: u16,
         app_count: usize,
+        uptime_secs: u64,
     },
     AppRegistered {
-        config_path: String,
+        app_name: String,
+        url: String,
     },
     AppUnregistered {
         config_path: String,
@@ -55,6 +58,7 @@ pub enum Response {
     },
     AppHandedOff {
         config_path: String,
+        pid: u32,
     },
     AppRestarted {
         config_path: String,

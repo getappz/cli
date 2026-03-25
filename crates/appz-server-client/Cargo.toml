@@ -1,0 +1,17 @@
+[package]
+name = "appz-server-client"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+publish = false
+
+[dependencies]
+tokio = { workspace = true, features = ["net", "io-util", "process", "time"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = "0.1"
+dirs-next = "2.0"
+which = { workspace = true }
+libc = "0.2"
+appz-server = { path = "../appz-server" }

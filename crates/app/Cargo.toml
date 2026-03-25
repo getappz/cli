@@ -70,8 +70,9 @@ dev-server = { path = "../dev-server", optional = true }
 deployer = { path = "../deployer", optional = true }
 appz-client = { path = "../appz-client", optional = true }
 checker = { path = "../checker", optional = true }
+appz-server-client = { path = "../appz-server-client", optional = true }
 [features]
-default = ["self_update", "dev-server", "deploy"]
+default = ["self_update", "dev-server", "deploy", "appz-server"]
 
 # Situational TUI components (select, confirm) - used when commands need interactive input
 tui = ["ui/tui"]
@@ -88,6 +89,9 @@ check = ["dep:checker"]
 
 # Appz Cloud platform management (teams, projects, domains, aliases, env, etc.)
 appz-cloud = []
+
+# Appz server daemon integration (appz dev registers with local daemon)
+appz-server = ["dep:appz-server-client"]
 
 # AI-powered site builder (extracted to feature/site-builder branch)
 # site = ["dep:site-builder"]

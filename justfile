@@ -15,6 +15,15 @@ build-rel:
 	export CARGO_BUILD_JOBS=$(nproc)
 	cargo build -p cli --release -j $(nproc)
 	sudo cp ./target/release/appz ~/.local/bin/appz
+build-server:
+	cargo build -p appz-server -j $(nproc)
+build-server-rel:
+	cargo build -p appz-server --release -j $(nproc)
+install-server: build-server
+	cp target/debug/appz-server ~/.local/bin/appz-server
+run-server *ARGS:
+	cargo run -p appz-server -- {{ARGS}}
+
 build-pageflare:
 	cargo build -p pageflare
 	sudo cp ./target/debug/pageflare ~/.local/bin/pageflare

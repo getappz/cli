@@ -1,0 +1,25 @@
+[package]
+name = "appz-server"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "appz-server"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { workspace = true, features = ["full"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+http-body-util = { workspace = true }
+rusqlite = { workspace = true }
+libc = "0.2"
+dirs-next = "2.0"

@@ -139,7 +139,12 @@ jobs:
       actions: read   # generator reads the workflow run for provenance
       id-token: write # OIDC keyless signing (same trust model as cosign)
       contents: write # attach the attestation to the release
-    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@f7dd8c54c2067bafc12ca7a55595d5ee9b75204a # v2.1.0
+    # This generator MUST be referenced by a plain @vX.Y.Z tag, not a commit
+    # SHA -- its internal "fetch the builder" step derives the trusted
+    # builder release from the caller's own ref and fails with "Invalid ref"
+    # if that ref isn't refs/tags/vX.Y.Z. See "Referencing the SLSA generator"
+    # in https://github.com/slsa-framework/slsa-github-generator/blob/main/internal/builders/generic/README.md
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0 # zizmor: ignore[unpinned-uses] tag ref is required here, not a hash -- see comment above
     with:
       base64-subjects: ${{ needs.release.outputs.hashes }}
       upload-assets: true
@@ -327,22 +332,11 @@ jobs:
             --repo getappz/cli \
             -f version="${GITHUB_REF_NAME}"
 
-  trigger-ppa-publish:
-    name: Trigger PPA publish
-    needs: release
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write # gh workflow run
-    steps:
-      - name: Dispatch ppa-publish workflow
-        if: env.PPA_GPG_KEY != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PPA_GPG_KEY: ${{ secrets.PPA_GPG_KEY }}
-        run: |
-          gh workflow run ppa-publish.yml \
-            --repo getappz/cli \
-            -f distributions="noble"
+  # PPA/Launchpad disabled for now: the curl install already covers Linux,
+  # and Launchpad + GPG key custody isn't worth the setup cost without an
+  # actual `apt install appz` request from users. ppa-publish.yml still
+  # exists and can be dispatched manually if that changes; re-add a
+  # trigger-ppa-publish job here (see git history) to re-automate it.
 
   trigger-docker-publish:
     name: Trigger Docker publish

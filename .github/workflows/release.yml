@@ -327,22 +327,11 @@ jobs:
             --repo getappz/cli \
             -f version="${GITHUB_REF_NAME}"
 
-  trigger-ppa-publish:
-    name: Trigger PPA publish
-    needs: release
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write # gh workflow run
-    steps:
-      - name: Dispatch ppa-publish workflow
-        if: env.PPA_GPG_KEY != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PPA_GPG_KEY: ${{ secrets.PPA_GPG_KEY }}
-        run: |
-          gh workflow run ppa-publish.yml \
-            --repo getappz/cli \
-            -f distributions="noble"
+  # PPA/Launchpad disabled for now: the curl install already covers Linux,
+  # and Launchpad + GPG key custody isn't worth the setup cost without an
+  # actual `apt install appz` request from users. ppa-publish.yml still
+  # exists and can be dispatched manually if that changes; re-add a
+  # trigger-ppa-publish job here (see git history) to re-automate it.
 
   trigger-docker-publish:
     name: Trigger Docker publish

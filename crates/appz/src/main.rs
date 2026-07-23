@@ -266,10 +266,7 @@ fn detect_package_manager(root: &PathBuf) -> Option<&'static str> {
     }
 }
 
-fn mise_cd_args(mise_path: &std::path::Path) -> Vec<String> {
-    let dir = mise_path.parent().unwrap_or(mise_path);
-    vec!["--cd".to_string(), dir.to_string_lossy().to_string()]
-}
+
 
 fn do_detect_and_write(root: &PathBuf) -> Vec<appz_core::DetectedToolchain> {
     let toolchains = with_spinner("detecting toolchains...", "toolchains detected", || {
@@ -302,17 +299,9 @@ fn do_mise_install(root: &PathBuf) {
         warning(&e);
         return;
     }
-    let mise_path = appz_core::mise_config_path(root);
-    let cd_args = mise_cd_args(&mise_path);
-    let mut args = cd_args;
-    args.push("install".to_string());
 
     with_spinner("installing mise tools...", "mise tools ready", || {
-        run_cmd(
-            "mise",
-            &args.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
-            root,
-        );
+        run_cmd("mise", &["install"], root);
     });
 }
 

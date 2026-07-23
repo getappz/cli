@@ -67,8 +67,9 @@ pub fn state_path(root: &Path) -> PathBuf {
     project_dir(root).join("state.jsonl")
 }
 
+/// Path to `mise.toml` in the project root (no longer a shadow dir).
 pub fn mise_config_path(root: &Path) -> PathBuf {
-    project_dir(root).join("mise.toml")
+    root.join("mise.toml")
 }
 
 /// Files whose content changes should trigger re-detection + re-install.
@@ -147,11 +148,11 @@ impl From<&DetectedToolchain> for StoredToolchain {
 // ── Write / Read ─────────────────────────────────────────────────
 
 /// Write current state + input hash as one JSONL line, regenerate mise.toml.
-/// Returns path to the generated mise.toml.
+/// Returns path to the generated mise.toml (in project root, merged with any existing).
 pub fn write_state(root: &Path, toolchains: &[DetectedToolchain]) -> PathBuf {
     let dir = ensure_project_dir(root);
     let sp = dir.join("state.jsonl");
-    let mp = dir.join("mise.toml");
+    let mp = mise_config_path(root);
 
     let snapshot = StateSnapshot {
         ts: Utc::now().to_rfc3339(),
@@ -169,8 +170,9 @@ pub fn write_state(root: &Path, toolchains: &[DetectedToolchain]) -> PathBuf {
         std::process::exit(1);
     });
 
-    // Write derived mise.toml
-    let toml = generator::generate(toolchains);
+    // Write merged mise.toml to project root
+    let existing = fs::read_to_string(&mp).ok();
+    let toml = generator::generate_merged(existing.as_deref(), toolchains);
     fs::write(&mp, &toml).unwrap_or_else(|e| {
         eprintln!("error: cannot write mise config '{}': {e}", mp.display());
         std::process::exit(1);
@@ -203,7 +205,8 @@ pub fn inputs_unchanged(root: &Path) -> bool {
 pub fn print_location(root: &Path) {
     let pdir = project_dir(root);
     println!("appz home: {}", home_dir().display());
-    println!("project:   {}/", pdir.display());
+    println!("state:     {}/", pdir.display());
+    println!("mise.toml: {}", mise_config_path(root).display());
 }
 
 #[cfg(test)]

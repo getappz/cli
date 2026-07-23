@@ -1,1 +1,4 @@
 /target
+
+# Reference clones of external repos for code research — large, transient, per-machine
+/.refs/

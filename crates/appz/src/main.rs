@@ -2,7 +2,7 @@ use clap::{Args, Parser, Subcommand};
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
-use flare_devops::{detect_toolchains, generate_claude_md, run_doctor};
+use appz_core::{detect_toolchains, generate_claude_md, run_doctor};
 
 // ── CLI ─────────────────────────────────────────────────────────
 
@@ -202,7 +202,7 @@ fn resolve_root(dir: &PathBuf) -> PathBuf {
 
 // ── JSON output ─────────────────────────────────────────────────
 
-fn json_out(toolchains: &[flare_devops::DetectedToolchain], status: &str) {
+fn json_out(toolchains: &[appz_core::DetectedToolchain], status: &str) {
     let r = serde_json::json!({
         "status": status,
         "toolchains": toolchains,
@@ -271,7 +271,7 @@ fn mise_cd_args(mise_path: &std::path::Path) -> Vec<String> {
     vec!["--cd".to_string(), dir.to_string_lossy().to_string()]
 }
 
-fn do_detect_and_write(root: &PathBuf) -> Vec<flare_devops::DetectedToolchain> {
+fn do_detect_and_write(root: &PathBuf) -> Vec<appz_core::DetectedToolchain> {
     let toolchains = with_spinner("detecting toolchains...", "toolchains detected", || {
         let tc = detect_toolchains(root).unwrap_or_else(|e| error(&format!("detection failed: {e}")));
         if tc.is_empty() {
@@ -281,7 +281,7 @@ fn do_detect_and_write(root: &PathBuf) -> Vec<flare_devops::DetectedToolchain> {
     });
 
     with_spinner("writing project state...", "state written", || {
-        flare_devops::write_state(root, &toolchains);
+        appz_core::write_state(root, &toolchains);
     });
 
     for tc in &toolchains {
@@ -298,11 +298,11 @@ fn do_detect_and_write(root: &PathBuf) -> Vec<flare_devops::DetectedToolchain> {
 }
 
 fn do_mise_install(root: &PathBuf) {
-    if let Err(e) = flare_devops::ensure_mise(root) {
+    if let Err(e) = appz_core::ensure_mise(root) {
         warning(&e);
         return;
     }
-    let mise_path = flare_devops::mise_config_path(root);
+    let mise_path = appz_core::mise_config_path(root);
     let cd_args = mise_cd_args(&mise_path);
     let mut args = cd_args;
     args.push("install".to_string());
@@ -316,13 +316,13 @@ fn do_mise_install(root: &PathBuf) {
     });
 }
 
-fn do_pm_install(root: &PathBuf, toolchains: &[flare_devops::DetectedToolchain]) {
+fn do_pm_install(root: &PathBuf, toolchains: &[appz_core::DetectedToolchain]) {
     let has_node = toolchains.iter().any(|t| t.slug == "node");
     let has_rust = toolchains.iter().any(|t| t.slug == "rust");
 
     if has_node {
         let pm = detect_package_manager(root).unwrap_or("npm");
-        let cmd = flare_devops::pm_install_cmd(pm);
+        let cmd = appz_core::pm_install_cmd(pm);
         let parts: Vec<&str> = cmd.split(' ').collect();
         let (prog, args) = parts.split_first().unwrap_or((&"npm", &[]));
         run_cmd(prog, args, root);
@@ -332,7 +332,7 @@ fn do_pm_install(root: &PathBuf, toolchains: &[flare_devops::DetectedToolchain])
     }
 }
 
-fn do_full_install(root: &PathBuf) -> Vec<flare_devops::DetectedToolchain> {
+fn do_full_install(root: &PathBuf) -> Vec<appz_core::DetectedToolchain> {
     let toolchains = do_detect_and_write(root);
     do_mise_install(root);
     do_pm_install(root, &toolchains);
@@ -390,7 +390,7 @@ fn run_install(args: InstallArgs, json: bool) {
     intro("appz install");
     let canonical = resolve_root(&args.dir);
 
-    if !args.skip_mise && flare_devops::inputs_unchanged(&canonical) && args.skip_pm {
+    if !args.skip_mise && appz_core::inputs_unchanged(&canonical) && args.skip_pm {
         success("inputs unchanged, tools already up to date");
         outro("nothing to install");
         return;
@@ -421,8 +421,8 @@ fn run_build(args: BuildArgs, json: bool) {
     let canonical = resolve_root(&args.dir);
 
     // Cache hit
-    if !args.command.is_some() && !args.skip_install && flare_devops::inputs_unchanged(&canonical) {
-        if let Some(snap) = flare_devops::read_latest_snapshot(&canonical) {
+    if !args.command.is_some() && !args.skip_install && appz_core::inputs_unchanged(&canonical) {
+        if let Some(snap) = appz_core::read_latest_snapshot(&canonical) {
             let cmds: Vec<String> = snap.toolchains.iter()
                 .filter_map(|t| t.build_command.clone())
                 .collect();
@@ -492,8 +492,8 @@ fn run_dev(args: DevArgs, json: bool) {
     let canonical = resolve_root(&args.dir);
 
     // Cache hit
-    if !args.command.is_some() && !args.skip_install && flare_devops::inputs_unchanged(&canonical) {
-        if let Some(snap) = flare_devops::read_latest_snapshot(&canonical) {
+    if !args.command.is_some() && !args.skip_install && appz_core::inputs_unchanged(&canonical) {
+        if let Some(snap) = appz_core::read_latest_snapshot(&canonical) {
             let cmds: Vec<String> = snap.toolchains.iter()
                 .filter_map(|t| t.dev_command.clone())
                 .collect();
@@ -568,8 +568,8 @@ macro_rules! lifecycle_fn {
             let canonical = resolve_root(&args.dir);
 
             // Cache hit
-            if !args.command.is_some() && !args.skip_install && flare_devops::inputs_unchanged(&canonical) {
-                if let Some(snap) = flare_devops::read_latest_snapshot(&canonical) {
+            if !args.command.is_some() && !args.skip_install && appz_core::inputs_unchanged(&canonical) {
+                if let Some(snap) = appz_core::read_latest_snapshot(&canonical) {
                     let cmds: Vec<String> = snap.toolchains.iter()
                         .filter_map(|t| t.$field.clone())
                         .collect();

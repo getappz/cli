@@ -16,4 +16,4 @@ clap = { version = "4", features = ["derive"] }
 cliclack = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-flare-devops = { path = "../flare-devops" }
+appz-core = { path = "../appz-core" }

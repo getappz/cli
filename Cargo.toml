@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/appz", "crates/flare-devops"]
+members = ["crates/appz", "crates/appz-core"]
 resolver = "2"
 
 [profile.release]

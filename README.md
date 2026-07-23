@@ -19,7 +19,7 @@ appz doctor    # diagnose project stack, config, and suggestions
 ## Layout
 
 - `crates/appz` — the CLI binary
-- `crates/flare-devops` — toolchain detection, `mise.toml` generation, and
+- `crates/appz-core` — toolchain detection, `mise.toml` generation, and
   the doctor/report logic `appz` runs on top of
 
 ## Build
@@ -27,5 +27,3 @@ appz doctor    # diagnose project stack, config, and suggestions
 ```
 cargo build --release
 ```
-
-Extracted from [agentflare](https://github.com/getappz/agentflare) with history.

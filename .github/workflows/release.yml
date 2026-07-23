@@ -1,0 +1,353 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+# Least privilege: read-only token by default, elevated per job below.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+            cross: true
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 # zizmor: ignore[cache-poisoning] save-if already gates writes to main
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build (native)
+        if: ${{ !matrix.cross }}
+        run: cargo build --release --target ${{ matrix.target }} -p appz
+
+      - name: Build (cross)
+        if: matrix.cross
+        run: cross build --release --target ${{ matrix.target }} -p appz
+
+      - name: Package (unix)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar -czf ../../../appz-${{ matrix.target }}.tar.gz appz
+          cd -
+
+      - name: Package (windows)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path target/${{ matrix.target }}/release/appz.exe -DestinationPath appz-${{ matrix.target }}.zip
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: appz-${{ matrix.target }}
+          path: appz-${{ matrix.target }}.*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # creates the GitHub release and uploads assets
+      id-token: write # required for cosign keyless signing via GitHub OIDC
+    outputs:
+      hashes: ${{ steps.checksums.outputs.hashes }} # base64 SHA256SUMS, consumed by the provenance job below
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create source tarball
+        # Feeds the AUR PKGBUILD (aur/appz/PKGBUILD), which builds from
+        # source rather than a prebuilt binary.
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          git archive --format=tar.gz --prefix="appz-${VERSION}/" "${GITHUB_REF_NAME}" -o "dist/appz-${VERSION}-source.tar.gz"
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS
+          cd -
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Sign binaries with cosign (keyless)
+        # OIDC-based keyless signing: the certificate is issued by Fulcio and
+        # bound to this workflow's identity (no long-lived key to manage or
+        # leak), and the signing event is recorded in the Rekor transparency
+        # log. The .cosign.bundle carries cert + signature + Rekor entry, so
+        # verifiers only need one extra download.
+        run: |
+          cd dist
+          for file in *.tar.gz *.zip; do
+            [ -e "$file" ] || continue
+            echo "Signing $file..."
+            cosign sign-blob --yes --bundle "${file}.cosign.bundle" "$file"
+          done
+          cd -
+
+      - name: Compute hashes for SLSA provenance
+        id: checksums
+        run: |
+          cd dist
+          echo "hashes=$(base64 -w0 < SHA256SUMS)" >> "$GITHUB_OUTPUT"
+          cd -
+
+      - name: Create release
+        uses: softprops/action-gh-release@7c4723f7a335432393329f8f1c564994ce50185d # v3
+        with:
+          files: dist/*
+          generate_release_notes: true
+
+  provenance:
+    name: SLSA provenance
+    needs: release
+    permissions:
+      actions: read   # generator reads the workflow run for provenance
+      id-token: write # OIDC keyless signing (same trust model as cosign)
+      contents: write # attach the attestation to the release
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@f7dd8c54c2067bafc12ca7a55595d5ee9b75204a # v2.1.0
+    with:
+      base64-subjects: ${{ needs.release.outputs.hashes }}
+      upload-assets: true
+
+  update-homebrew:
+    name: Update Homebrew
+    needs: release
+    runs-on: ubuntu-latest
+    # No-op until HOMEBREW_TOKEN is configured (repo secret) and the
+    # getappz/homebrew-appz tap repo exists — set both to enable this channel.
+    if: vars.HOMEBREW_TAP_ENABLED == 'true'
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Download checksums and extract platform hashes
+        id: checksums
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+          gh release download "${GITHUB_REF_NAME}" \
+            --repo getappz/cli --pattern "SHA256SUMS" --dir .
+
+          AARCH64_DARWIN=$(grep "aarch64-apple-darwin" SHA256SUMS | awk '{print $1}')
+          X86_64_DARWIN=$(grep "x86_64-apple-darwin" SHA256SUMS | awk '{print $1}')
+          AARCH64_LINUX_GNU=$(grep "aarch64-unknown-linux-gnu" SHA256SUMS | awk '{print $1}')
+          X86_64_LINUX_GNU=$(grep "x86_64-unknown-linux-gnu" SHA256SUMS | awk '{print $1}')
+
+          echo "aarch64_darwin_sha=${AARCH64_DARWIN}" >> "$GITHUB_OUTPUT"
+          echo "x86_64_darwin_sha=${X86_64_DARWIN}" >> "$GITHUB_OUTPUT"
+          echo "aarch64_linux_sha=${AARCH64_LINUX_GNU}" >> "$GITHUB_OUTPUT"
+          echo "x86_64_linux_sha=${X86_64_LINUX_GNU}" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Clone and generate formula
+        run: |
+          VERSION="${{ steps.checksums.outputs.version }}"
+          AARCH64_DARWIN_SHA="${{ steps.checksums.outputs.aarch64_darwin_sha }}"
+          X86_64_DARWIN_SHA="${{ steps.checksums.outputs.x86_64_darwin_sha }}"
+          AARCH64_LINUX_SHA="${{ steps.checksums.outputs.aarch64_linux_sha }}"
+          X86_64_LINUX_SHA="${{ steps.checksums.outputs.x86_64_linux_sha }}"
+          DESC=$(grep -m1 '^description = ' crates/appz/Cargo.toml | cut -d'"' -f2)
+
+          git clone "https://x-access-token:${HOMEBREW_TOKEN}@github.com/getappz/homebrew-appz.git"
+          cd homebrew-appz
+          mkdir -p Formula
+
+          cat > Formula/appz.rb <<EOF
+          class Appz < Formula
+            desc "${DESC}"
+            homepage "https://github.com/getappz/cli"
+            version "${VERSION}"
+            license "Apache-2.0"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "https://github.com/getappz/cli/releases/download/v${VERSION}/appz-aarch64-apple-darwin.tar.gz"
+                sha256 "${AARCH64_DARWIN_SHA}"
+              else
+                url "https://github.com/getappz/cli/releases/download/v${VERSION}/appz-x86_64-apple-darwin.tar.gz"
+                sha256 "${X86_64_DARWIN_SHA}"
+              end
+            end
+
+            on_linux do
+              if Hardware::CPU.arm?
+                url "https://github.com/getappz/cli/releases/download/v${VERSION}/appz-aarch64-unknown-linux-gnu.tar.gz"
+                sha256 "${AARCH64_LINUX_SHA}"
+              else
+                url "https://github.com/getappz/cli/releases/download/v${VERSION}/appz-x86_64-unknown-linux-gnu.tar.gz"
+                sha256 "${X86_64_LINUX_SHA}"
+              end
+            end
+
+            def install
+              bin.install "appz"
+            end
+
+            test do
+              assert_match "appz ${VERSION}", shell_output("#{bin}/appz --version")
+            end
+          end
+          EOF
+          sed -i 's/^          //' Formula/appz.rb
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/appz.rb
+          git diff --cached --quiet || git commit -m "appz ${VERSION}"
+          git push
+        env:
+          HOMEBREW_TOKEN: ${{ secrets.HOMEBREW_GITHUB_TOKEN }}
+
+  update-scoop:
+    name: Update Scoop
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: main
+
+      - name: Download checksums and extract windows hash
+        id: checksums
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+          gh release download "${GITHUB_REF_NAME}" \
+            --repo getappz/cli --pattern "SHA256SUMS" --dir .
+
+          WINDOWS_SHA=$(grep "x86_64-pc-windows-msvc" SHA256SUMS | awk '{print $1}')
+          echo "windows_sha=${WINDOWS_SHA}" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Generate manifest and open PR
+        run: |
+          VERSION="${{ steps.checksums.outputs.version }}"
+          WINDOWS_SHA="${{ steps.checksums.outputs.windows_sha }}"
+          DESC=$(grep -m1 '^description = ' crates/appz/Cargo.toml | cut -d'"' -f2)
+
+          mkdir -p bucket
+
+          cat > bucket/appz.json <<EOF
+          {
+            "version": "${VERSION}",
+            "description": "${DESC}",
+            "homepage": "https://github.com/getappz/cli",
+            "license": "Apache-2.0",
+            "url": "https://github.com/getappz/cli/releases/download/v${VERSION}/appz-x86_64-pc-windows-msvc.zip",
+            "hash": "sha256:${WINDOWS_SHA}",
+            "bin": "appz.exe",
+            "checkver": "github",
+            "autoupdate": {
+              "url": "https://github.com/getappz/cli/releases/download/v\$version/appz-x86_64-pc-windows-msvc.zip"
+            }
+          }
+          EOF
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add bucket/appz.json
+          if git diff --cached --quiet; then
+            echo "no manifest changes, skipping PR"
+            exit 0
+          fi
+
+          BRANCH="scoop-manifest-${VERSION}"
+          git checkout -b "$BRANCH"
+          git commit -m "scoop manifest: appz ${VERSION}"
+          git push origin "$BRANCH"
+
+          gh pr create --base main --head "$BRANCH" \
+            --title "scoop manifest: appz ${VERSION}" \
+            --body "Automated Scoop manifest update for release ${GITHUB_REF_NAME}."
+          gh pr merge "$BRANCH" --auto --squash --delete-branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  trigger-npm-publish:
+    name: Trigger npm publish
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write # gh workflow run
+    # No-op until NPM_TOKEN is configured — set the repo secret to enable.
+    if: vars.NPM_PUBLISH_ENABLED == 'true'
+    steps:
+      - name: Dispatch npm-publish workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run npm-publish.yml \
+            --repo getappz/cli \
+            -f version="${GITHUB_REF_NAME}"
+
+  trigger-ppa-publish:
+    name: Trigger PPA publish
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write # gh workflow run
+    steps:
+      - name: Dispatch ppa-publish workflow
+        if: env.PPA_GPG_KEY != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PPA_GPG_KEY: ${{ secrets.PPA_GPG_KEY }}
+        run: |
+          gh workflow run ppa-publish.yml \
+            --repo getappz/cli \
+            -f distributions="noble"
+
+  trigger-docker-publish:
+    name: Trigger Docker publish
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write # gh workflow run
+    steps:
+      - name: Dispatch docker workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run docker.yml \
+            --repo getappz/cli

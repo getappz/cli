@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::detect::{self, detect_monorepo, detect_toolchains, DetectedToolchain, MonorepoConfig};
+use crate::detect::{self, DetectedToolchain, MonorepoConfig, detect_monorepo, detect_toolchains};
 
 #[derive(serde::Serialize)]
 pub struct DoctorReport {
@@ -55,7 +55,10 @@ pub fn run_doctor(root: &Path) -> DoctorReport {
 
     if let Some(ref pm) = pm {
         let install_cmd = detect::pm_install_cmd(pm);
-        suggestions.push(format!("package manager: {} — install via `{}`", pm, install_cmd));
+        suggestions.push(format!(
+            "package manager: {} — install via `{}`",
+            pm, install_cmd
+        ));
     }
 
     if root.join("package.json").exists() {

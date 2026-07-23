@@ -144,7 +144,7 @@ jobs:
     # builder release from the caller's own ref and fails with "Invalid ref"
     # if that ref isn't refs/tags/vX.Y.Z. See "Referencing the SLSA generator"
     # in https://github.com/slsa-framework/slsa-github-generator/blob/main/internal/builders/generic/README.md
-    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0 # zizmor: ignore[unpinned-uses] tag ref is required here, not a hash -- see comment above
     with:
       base64-subjects: ${{ needs.release.outputs.hashes }}
       upload-assets: true

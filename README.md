@@ -47,8 +47,9 @@ appz mcp       # stdio MCP server exposing detect/doctor/run to AI agents
 
 ## Install
 
-**Linux/macOS** (downloads a prebuilt binary, checksum-verified; builds from
-source instead if run from inside a clone):
+**Linux/macOS** (downloads a prebuilt binary and verifies it against the
+release's `SHA256SUMS` when `sha256sum`/`shasum` is available, otherwise warns
+and skips; builds from source instead if run from inside a clone):
 ```bash
 curl -fsSL https://raw.githubusercontent.com/getappz/cli/main/install.sh | sh
 ```
@@ -74,31 +75,38 @@ scoop install appz
 npm install -g @getappz/appz
 ```
 
-**Docker:**
+**Docker** (pin a version — `latest` isn't tied to a specific verifiable
+release):
 ```bash
-docker run --rm ghcr.io/getappz/cli:latest appz --version
+docker run --rm ghcr.io/getappz/cli:v0.1.0 appz --version
 ```
 
-**Any platform with Rust, no clone needed:**
+**Any platform with Rust, no clone needed** (builds from source, no
+checksum applicable):
 ```bash
 cargo install --git https://github.com/getappz/cli appz
 ```
 
-**Uninstall:**
+**Uninstall** (curl install only — for the others: `scoop uninstall appz`,
+`npm uninstall -g @getappz/appz`, `cargo uninstall appz`, or remove the
+Docker image):
 ```bash
 curl -fsSL https://raw.githubusercontent.com/getappz/cli/main/install.sh | sh -s -- --uninstall
 ```
 
 ## Verifying release binaries
 
-The install methods above verify SHA-256 checksums by default — enough to
-catch a corrupted download, not a substituted one. For higher-assurance
-environments, verify the cryptographic signature and build provenance before
-running the binary.
+The curl installer verifies SHA-256 checksums against the release's
+`SHA256SUMS` when `sha256sum`/`shasum` is available — enough to catch a
+corrupted download, not a substituted one. Scoop verifies its manifest's own
+`hash` field (sourced from the same `SHA256SUMS`); npm, Docker, and
+`cargo install` don't consume `SHA256SUMS` at all. For higher-assurance
+environments, verify the cryptographic signature and build provenance
+before running the binary.
 
 ### cosign (signing identity)
 
-Every release binary is signed in CI using
+Every release archive (`.tar.gz`/`.zip`) is signed in CI using
 [cosign](https://docs.sigstore.dev/cosign/overview/) keyless signing via the
 GitHub OIDC token — the certificate is issued by Fulcio and bound to this
 repo's `release.yml` workflow, so verifiers pin to the workflow identity
@@ -112,7 +120,7 @@ curl -fL -o "${FILE}.cosign.bundle" "https://github.com/getappz/cli/releases/dow
 
 cosign verify-blob \
   --bundle "${FILE}.cosign.bundle" \
-  --certificate-identity-regexp '^https://github\.com/getappz/cli/\.github/workflows/release\.yml@refs/tags/v.*' \
+  --certificate-identity-regexp "^https://github\.com/getappz/cli/\.github/workflows/release\.yml@refs/tags/${VERSION}\$" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   "$FILE"
 ```

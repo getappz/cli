@@ -1,6 +1,6 @@
 use clap::{Args, Parser, Subcommand};
 use std::io::IsTerminal;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use appz_core::{detect_toolchains, generate_claude_md, run_doctor};
 
@@ -44,7 +44,10 @@ enum AppzCmd {
 struct DevInstallArgs {
     #[arg(long, help = "Build in debug mode instead of the default --release")]
     debug: bool,
-    #[arg(long, help = "Build and verify, but report what would be installed without replacing")]
+    #[arg(
+        long,
+        help = "Build and verify, but report what would be installed without replacing"
+    )]
     dry_run: bool,
 }
 
@@ -205,7 +208,7 @@ fn with_spinner<T>(start: &str, done: &str, f: impl FnOnce() -> T) -> T {
 
 // ── Core logic ──────────────────────────────────────────────────
 
-fn resolve_root(dir: &PathBuf) -> PathBuf {
+fn resolve_root(dir: &Path) -> PathBuf {
     match dir.canonicalize() {
         Ok(p) => p,
         Err(e) => error(&format!("cannot resolve path '{}': {e}", dir.display())),
@@ -224,7 +227,7 @@ fn json_out(toolchains: &[appz_core::DetectedToolchain], status: &str) {
 
 // ── CLAUDE.md generator ────────────────────────────────
 
-fn do_make_claude(root: &PathBuf) {
+fn do_make_claude(root: &Path) {
     if root.join("CLAUDE.md").exists() {
         warning("CLAUDE.md exists — use `appz init --claude --force` to overwrite");
         return;
@@ -238,7 +241,7 @@ fn do_make_claude(root: &PathBuf) {
 
 // ── Init scaffolding ────────────────────────────────────────────
 
-fn scaffold_init(root: &PathBuf) {
+fn scaffold_init(root: &Path) {
     let appz_jsonc = root.join("appz.jsonc");
     if !appz_jsonc.exists() {
         let template = r#"{
@@ -264,7 +267,7 @@ fn run_cmd(program: &str, args: &[&str], dir: &std::path::Path) -> bool {
     }
 }
 
-fn detect_package_manager(root: &PathBuf) -> Option<&'static str> {
+fn detect_package_manager(root: &Path) -> Option<&'static str> {
     if root.join("pnpm-lock.yaml").exists() {
         Some("pnpm")
     } else if root.join("yarn.lock").exists() {
@@ -278,9 +281,10 @@ fn detect_package_manager(root: &PathBuf) -> Option<&'static str> {
     }
 }
 
-fn do_detect_and_write(root: &PathBuf) -> Vec<appz_core::DetectedToolchain> {
+fn do_detect_and_write(root: &Path) -> Vec<appz_core::DetectedToolchain> {
     let toolchains = with_spinner("detecting toolchains...", "toolchains detected", || {
-        let tc = detect_toolchains(root).unwrap_or_else(|e| error(&format!("detection failed: {e}")));
+        let tc =
+            detect_toolchains(root).unwrap_or_else(|e| error(&format!("detection failed: {e}")));
         if tc.is_empty() {
             error(&format!("no toolchains detected in '{}'", root.display()));
         }
@@ -298,13 +302,16 @@ fn do_detect_and_write(root: &PathBuf) -> Vec<appz_core::DetectedToolchain> {
             let names: Vec<&str> = tc.frameworks.iter().map(|f| f.name).collect();
             format!(" — {}", names.join(", "))
         };
-        info(&format!("{} ({} @ {}){}", tc.name, tc.mise_plugin, tc.version, fw));
+        info(&format!(
+            "{} ({} @ {}){}",
+            tc.name, tc.mise_plugin, tc.version, fw
+        ));
     }
 
     toolchains
 }
 
-fn do_mise_install(root: &PathBuf) {
+fn do_mise_install(root: &Path) {
     if let Err(e) = appz_core::ensure_mise(root) {
         warning(&e);
         return;
@@ -318,7 +325,7 @@ fn do_mise_install(root: &PathBuf) {
     });
 }
 
-fn do_pm_install(root: &PathBuf, toolchains: &[appz_core::DetectedToolchain]) {
+fn do_pm_install(root: &Path, toolchains: &[appz_core::DetectedToolchain]) {
     let has_node = toolchains.iter().any(|t| t.slug == "node");
     let has_rust = toolchains.iter().any(|t| t.slug == "rust");
 
@@ -334,7 +341,7 @@ fn do_pm_install(root: &PathBuf, toolchains: &[appz_core::DetectedToolchain]) {
     }
 }
 
-fn do_full_install(root: &PathBuf) -> Vec<appz_core::DetectedToolchain> {
+fn do_full_install(root: &Path) -> Vec<appz_core::DetectedToolchain> {
     let toolchains = do_detect_and_write(root);
     do_mise_install(root);
     do_pm_install(root, &toolchains);
@@ -423,23 +430,27 @@ fn run_build(args: BuildArgs, json: bool) {
     let canonical = resolve_root(&args.dir);
 
     // Cache hit
-    if !args.command.is_some() && !args.skip_install && appz_core::inputs_unchanged(&canonical) {
-        if let Some(snap) = appz_core::read_latest_snapshot(&canonical) {
-            let cmds: Vec<String> = snap.toolchains.iter()
-                .filter_map(|t| t.build_command.clone())
-                .collect();
-            if !cmds.is_empty() {
-                success("inputs unchanged — running cached build command");
-                for cmd in &cmds {
-                    let parts: Vec<&str> = cmd.split(' ').collect();
-                    let (prog, args) = parts.split_first().unwrap_or((&"npm", &[]));
-                    if !run_cmd(prog, args, &canonical) {
-                        std::process::exit(1);
-                    }
+    if args.command.is_none()
+        && !args.skip_install
+        && appz_core::inputs_unchanged(&canonical)
+        && let Some(snap) = appz_core::read_latest_snapshot(&canonical)
+    {
+        let cmds: Vec<String> = snap
+            .toolchains
+            .iter()
+            .filter_map(|t| t.build_command.clone())
+            .collect();
+        if !cmds.is_empty() {
+            success("inputs unchanged — running cached build command");
+            for cmd in &cmds {
+                let parts: Vec<&str> = cmd.split(' ').collect();
+                let (prog, args) = parts.split_first().unwrap_or((&"npm", &[]));
+                if !run_cmd(prog, args, &canonical) {
+                    std::process::exit(1);
                 }
-                outro("build complete");
-                return;
             }
+            outro("build complete");
+            return;
         }
     }
 
@@ -494,23 +505,27 @@ fn run_dev(args: DevArgs, json: bool) {
     let canonical = resolve_root(&args.dir);
 
     // Cache hit
-    if !args.command.is_some() && !args.skip_install && appz_core::inputs_unchanged(&canonical) {
-        if let Some(snap) = appz_core::read_latest_snapshot(&canonical) {
-            let cmds: Vec<String> = snap.toolchains.iter()
-                .filter_map(|t| t.dev_command.clone())
-                .collect();
-            if !cmds.is_empty() {
-                success("inputs unchanged — running cached dev command");
-                for cmd in &cmds {
-                    let parts: Vec<&str> = cmd.split(' ').collect();
-                    let (prog, args) = parts.split_first().unwrap_or((&"npm", &[]));
-                    if !run_cmd(prog, args, &canonical) {
-                        std::process::exit(1);
-                    }
+    if args.command.is_none()
+        && !args.skip_install
+        && appz_core::inputs_unchanged(&canonical)
+        && let Some(snap) = appz_core::read_latest_snapshot(&canonical)
+    {
+        let cmds: Vec<String> = snap
+            .toolchains
+            .iter()
+            .filter_map(|t| t.dev_command.clone())
+            .collect();
+        if !cmds.is_empty() {
+            success("inputs unchanged — running cached dev command");
+            for cmd in &cmds {
+                let parts: Vec<&str> = cmd.split(' ').collect();
+                let (prog, args) = parts.split_first().unwrap_or((&"npm", &[]));
+                if !run_cmd(prog, args, &canonical) {
+                    std::process::exit(1);
                 }
-                outro("dev server stopped");
-                return;
             }
+            outro("dev server stopped");
+            return;
         }
     }
 
@@ -570,9 +585,14 @@ macro_rules! lifecycle_fn {
             let canonical = resolve_root(&args.dir);
 
             // Cache hit
-            if !args.command.is_some() && !args.skip_install && appz_core::inputs_unchanged(&canonical) {
+            if !args.command.is_some()
+                && !args.skip_install
+                && appz_core::inputs_unchanged(&canonical)
+            {
                 if let Some(snap) = appz_core::read_latest_snapshot(&canonical) {
-                    let cmds: Vec<String> = snap.toolchains.iter()
+                    let cmds: Vec<String> = snap
+                        .toolchains
+                        .iter()
                         .filter_map(|t| t.$field.clone())
                         .collect();
                     if !cmds.is_empty() {
@@ -609,7 +629,10 @@ macro_rules! lifecycle_fn {
                         }
                     }
                     if cmds.is_empty() {
-                        error(&format!("no {} command detected — use --command to specify one", stringify!($name)));
+                        error(&format!(
+                            "no {} command detected — use --command to specify one",
+                            stringify!($name)
+                        ));
                     }
                     cmds
                 }
@@ -646,8 +669,16 @@ fn run_doctor_cmd(args: DoctorArgs, json: bool) {
     step("toolchains");
     for tc in &report.toolchains {
         let fw: Vec<&str> = tc.frameworks.iter().map(|f| f.name).collect();
-        let fw_str = if fw.is_empty() { String::new() } else { format!(" [{}]", fw.join(", ")) };
-        let ver = if tc.version.is_empty() { String::new() } else { format!(" @{}", tc.version) };
+        let fw_str = if fw.is_empty() {
+            String::new()
+        } else {
+            format!(" [{}]", fw.join(", "))
+        };
+        let ver = if tc.version.is_empty() {
+            String::new()
+        } else {
+            format!(" @{}", tc.version)
+        };
         let build = tc.build_command.as_deref().unwrap_or("-");
         let dev = tc.dev_command.as_deref().unwrap_or("-");
         info(&format!(

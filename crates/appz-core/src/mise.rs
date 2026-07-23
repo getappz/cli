@@ -27,7 +27,8 @@ pub fn install_mise() -> Result<(), String> {
         // Fallback: PowerShell script
         let ps = Command::new("powershell")
             .args([
-                "-NoProfile", "-Command",
+                "-NoProfile",
+                "-Command",
                 "irm https://mise.jdx.dev/install.ps1 | iex",
             ])
             .status()

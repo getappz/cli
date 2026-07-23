@@ -121,8 +121,14 @@ pub fn scan_npm(content: &str) -> Vec<DetectedFramework> {
     let mut found = Vec::new();
 
     for (pkgs, name) in NPM_FRAMEWORKS {
-        if pkgs.iter().any(|p| deps.keys().any(|d| d == p || d.starts_with(p))) {
-            found.push(DetectedFramework { name, ecosystem: "npm" });
+        if pkgs
+            .iter()
+            .any(|p| deps.keys().any(|d| d == p || d.starts_with(p)))
+        {
+            found.push(DetectedFramework {
+                name,
+                ecosystem: "npm",
+            });
         }
     }
 
@@ -145,7 +151,10 @@ pub fn scan_cargo(content: &str) -> Vec<DetectedFramework> {
 
     for (crates, name) in CARGO_FRAMEWORKS {
         if crates.iter().any(|c| deps.contains(c)) {
-            found.push(DetectedFramework { name, ecosystem: "cargo" });
+            found.push(DetectedFramework {
+                name,
+                ecosystem: "cargo",
+            });
         }
     }
 
@@ -158,7 +167,10 @@ pub fn scan_python(content: &str) -> Vec<DetectedFramework> {
 
     for (pkgs, name) in PYTHON_FRAMEWORKS {
         if pkgs.iter().any(|p| content.contains(p)) {
-            found.push(DetectedFramework { name, ecosystem: "python" });
+            found.push(DetectedFramework {
+                name,
+                ecosystem: "python",
+            });
         }
     }
 
@@ -171,7 +183,10 @@ pub fn scan_go(content: &str) -> Vec<DetectedFramework> {
 
     for (pkgs, name) in GO_FRAMEWORKS {
         if pkgs.iter().any(|p| content.contains(p)) {
-            found.push(DetectedFramework { name, ecosystem: "go" });
+            found.push(DetectedFramework {
+                name,
+                ecosystem: "go",
+            });
         }
     }
 
@@ -184,7 +199,10 @@ pub fn scan_ruby(content: &str) -> Vec<DetectedFramework> {
 
     for (pkgs, name) in RUBY_FRAMEWORKS {
         if pkgs.iter().any(|p| content.contains(p)) {
-            found.push(DetectedFramework { name, ecosystem: "ruby" });
+            found.push(DetectedFramework {
+                name,
+                ecosystem: "ruby",
+            });
         }
     }
 
@@ -197,7 +215,10 @@ pub fn scan_java(content: &str) -> Vec<DetectedFramework> {
 
     for (pkgs, name) in JAVA_FRAMEWORKS {
         if pkgs.iter().any(|p| content.contains(p)) {
-            found.push(DetectedFramework { name, ecosystem: "java" });
+            found.push(DetectedFramework {
+                name,
+                ecosystem: "java",
+            });
         }
     }
 
@@ -210,7 +231,10 @@ pub fn scan_elixir(content: &str) -> Vec<DetectedFramework> {
 
     for (pkgs, name) in ELIXIR_FRAMEWORKS {
         if pkgs.iter().any(|p| content.contains(p)) {
-            found.push(DetectedFramework { name, ecosystem: "elixir" });
+            found.push(DetectedFramework {
+                name,
+                ecosystem: "elixir",
+            });
         }
     }
 

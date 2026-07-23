@@ -34,8 +34,8 @@ pub fn detect_monorepo(root: &Path) -> MonorepoConfig {
         }
 
         // Check for npm/yarn workspaces in package.json
-        if let Ok(val) = content.parse::<serde_json::Value>() {
-            if let Some(ws) = val.get("workspaces") {
+        if let Ok(val) = content.parse::<serde_json::Value>()
+            && let Some(ws) = val.get("workspaces") {
                 // pnpm / yarn
                 if let Some(arr) = ws.as_array() {
                     return MonorepoConfig {
@@ -46,16 +46,14 @@ pub fn detect_monorepo(root: &Path) -> MonorepoConfig {
                     };
                 }
                 // npm workspaces
-                if let Some(arr) = val.pointer("/workspaces/packages") {
-                    if let Some(arr) = arr.as_array() {
+                if let Some(arr) = val.pointer("/workspaces/packages")
+                    && let Some(arr) = arr.as_array() {
                         return MonorepoConfig {
                             manager: Some("npm".to_string()),
                             package_paths: arr.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
                         };
                     }
-                }
             }
-        }
     }
 
     // lerna.json
@@ -68,18 +66,15 @@ pub fn detect_monorepo(root: &Path) -> MonorepoConfig {
 
     // pnpm-workspace.yaml
     let pnpm_yaml = root.join("pnpm-workspace.yaml");
-    if pnpm_yaml.exists() {
-        if let Ok(content) = std::fs::read_to_string(&pnpm_yaml) {
-            if let Ok(val) = serde_yaml::from_str::<serde_yaml::Value>(&content) {
-                if let Some(pkgs) = val.get("packages").and_then(|v| v.as_sequence()) {
+    if pnpm_yaml.exists()
+        && let Ok(content) = std::fs::read_to_string(&pnpm_yaml)
+            && let Ok(val) = serde_yaml::from_str::<serde_yaml::Value>(&content)
+                && let Some(pkgs) = val.get("packages").and_then(|v| v.as_sequence()) {
                     return MonorepoConfig {
                         manager: Some("pnpm".to_string()),
                         package_paths: pkgs.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
                     };
                 }
-            }
-        }
-    }
 
     MonorepoConfig::default()
 }
@@ -113,11 +108,11 @@ fn read_overrides(root: &Path) -> CommandOverrides {
     let yaml_path = root.join("appz.yaml");
 
     // JSONC
-    if jsonc_path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&jsonc_path) {
+    if jsonc_path.exists()
+        && let Ok(content) = std::fs::read_to_string(&jsonc_path) {
             let cleaned = strip_jsonc(&content);
-            if let Ok(val) = cleaned.parse::<serde_json::Value>() {
-                if let Some(obj) = val.as_object() {
+            if let Ok(val) = cleaned.parse::<serde_json::Value>()
+                && let Some(obj) = val.as_object() {
                     let mut ov = CommandOverrides::default();
                     if let Some(s) = obj.get("buildCommand").and_then(|v| v.as_str()) {
                         ov.build_command = Some(s.to_string());
@@ -130,14 +125,12 @@ fn read_overrides(root: &Path) -> CommandOverrides {
                     }
                     return ov;
                 }
-            }
         }
-    }
 
     // TOML
-    if toml_path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&toml_path) {
-            if let Ok(val) = content.parse::<toml::Value>() {
+    if toml_path.exists()
+        && let Ok(content) = std::fs::read_to_string(&toml_path)
+            && let Ok(val) = content.parse::<toml::Value>() {
                 let mut ov = CommandOverrides::default();
                 if let Some(s) = val.get("build_command").and_then(|v| v.as_str()) {
                     ov.build_command = Some(s.to_string());
@@ -150,14 +143,12 @@ fn read_overrides(root: &Path) -> CommandOverrides {
                 }
                 return ov;
             }
-        }
-    }
 
     // YAML
-    if yaml_path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&yaml_path) {
-            if let Ok(val) = serde_yaml::from_str::<serde_yaml::Value>(&content) {
-                if let Some(mapping) = val.as_mapping() {
+    if yaml_path.exists()
+        && let Ok(content) = std::fs::read_to_string(&yaml_path)
+            && let Ok(val) = serde_yaml::from_str::<serde_yaml::Value>(&content)
+                && let Some(mapping) = val.as_mapping() {
                     let mut ov = CommandOverrides::default();
                     for (k, v) in mapping {
                         if let (Some(key), Some(val)) = (k.as_str(), v.as_str()) {
@@ -171,9 +162,6 @@ fn read_overrides(root: &Path) -> CommandOverrides {
                     }
                     return ov;
                 }
-            }
-        }
-    }
 
     CommandOverrides::default()
 }
@@ -288,11 +276,10 @@ fn detect_package_version(fs: &DetectorFilesystem, tc: &Framework) -> Option<Str
     for d in detectors {
         if let Some(pkg) = d.match_package {
             let content = fs.read_file("package.json")?;
-            if let Some(v) = crate::pkg::parse_deps(&content).get(pkg) {
-                if !v.is_empty() {
+            if let Some(v) = crate::pkg::parse_deps(&content).get(pkg)
+                && !v.is_empty() {
                     return Some(v.clone());
                 }
-            }
         }
     }
     None

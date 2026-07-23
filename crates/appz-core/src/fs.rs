@@ -37,8 +37,8 @@ impl DetectorFilesystem {
     }
 
     fn abs_path(&self, name: &str) -> PathBuf {
-        if name.starts_with('/') {
-            self.root.join(&name[1..])
+        if let Some(stripped) = name.strip_prefix('/') {
+            self.root.join(stripped)
         } else {
             self.root.join(name)
         }

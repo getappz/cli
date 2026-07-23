@@ -1,0 +1,25 @@
+[package]
+name = "agentflare-flare-devops"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.91"
+description = "Auto-detect project toolchains and generate mise.toml (adopting from Vercel CLI's detection architecture)"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+regex = "1"
+thiserror = "2"
+glob = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+toml = "0.8"
+chrono = { version = "0.4", features = ["serde"] }
+
+[lints.rust]
+unsafe_code = "warn"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"

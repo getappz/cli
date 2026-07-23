@@ -88,3 +88,19 @@ pub fn ensure_mise(_root: &Path) -> Result<(), String> {
         Err("mise installed but not on PATH — restart your terminal or add it manually".to_string())
     }
 }
+
+/// Mark a project's mise.toml as trusted so mise will auto-activate its
+/// tool versions. Best-effort — appz generated the file itself, so a
+/// failure here is a warning for the caller to surface, not a hard error.
+pub fn trust(root: &Path) -> Result<(), String> {
+    let status = Command::new("mise")
+        .arg("trust")
+        .current_dir(root)
+        .status()
+        .map_err(|e| format!("failed to run 'mise trust': {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("'mise trust' exited with status {status}"))
+    }
+}

@@ -25,51 +25,32 @@ impl FnvHasher {
     }
 }
 
-/// Stable FNV-1a hash (32-bit) for project folder naming.
-fn stable_hash(input: &str) -> String {
-    let mut h = FnvHasher::new();
-    h.update(input.as_bytes());
-    format!("{:08x}", h.0 & 0xFFFF_FFFF)
-}
-
-/// Appz home: `%APPDATA%\appz` on Windows, `~/.config/appz` on Unix.
-pub fn home_dir() -> PathBuf {
-    if let Some(appdata) = std::env::var_os("APPDATA") {
-        PathBuf::from(appdata).join("appz")
-    } else if let Some(home) = std::env::var_os("HOME") {
-        PathBuf::from(home).join(".config").join("appz")
-    } else {
-        PathBuf::from(".appz")
-    }
-}
-
-fn project_dir(root: &Path) -> PathBuf {
-    let canonical = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-    let path_str = canonical.to_string_lossy();
-    let dir_name = canonical
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "root".to_string());
-    let h = stable_hash(&path_str);
-    home_dir().join("projects").join(format!("{dir_name}_{h}"))
-}
-
-fn ensure_project_dir(root: &Path) -> PathBuf {
-    let dir = project_dir(root);
-    fs::create_dir_all(&dir).unwrap_or_else(|e| {
-        eprintln!("error: cannot create appz project dir '{}': {e}", dir.display());
-        std::process::exit(1);
-    });
-    dir
-}
-
+/// appz's own bookkeeping for a project: `<root>/.appz/state.jsonl`.
 pub fn state_path(root: &Path) -> PathBuf {
-    project_dir(root).join("state.jsonl")
+    root.join(".appz").join("state.jsonl")
 }
 
 /// Path to `mise.toml` in the project root (no longer a shadow dir).
 pub fn mise_config_path(root: &Path) -> PathBuf {
     root.join("mise.toml")
+}
+
+/// Ensure `<root>/.gitignore` contains a `.appz/` entry. Idempotent.
+fn ensure_gitignored(root: &Path) {
+    let gitignore = root.join(".gitignore");
+    let existing = fs::read_to_string(&gitignore).unwrap_or_default();
+    if existing.lines().any(|l| l.trim() == ".appz/") {
+        return;
+    }
+    let mut content = existing;
+    if !content.is_empty() && !content.ends_with('\n') {
+        content.push('\n');
+    }
+    content.push_str("# appz local state (not shared)\n.appz/\n");
+    fs::write(&gitignore, content).unwrap_or_else(|e| {
+        eprintln!("error: cannot write '.gitignore' at '{}': {e}", gitignore.display());
+        std::process::exit(1);
+    });
 }
 
 /// Files whose content changes should trigger re-detection + re-install.
@@ -147,11 +128,18 @@ impl From<&DetectedToolchain> for StoredToolchain {
 
 // ── Write / Read ─────────────────────────────────────────────────
 
-/// Write current state + input hash as one JSONL line, regenerate mise.toml.
-/// Returns path to the generated mise.toml (in project root, merged with any existing).
+/// Write current state + input hash as one JSONL line under `.appz/`, and
+/// write (or merge into) `mise.toml` at the project root.
+/// Returns the path to `mise.toml`.
 pub fn write_state(root: &Path, toolchains: &[DetectedToolchain]) -> PathBuf {
-    let dir = ensure_project_dir(root);
-    let sp = dir.join("state.jsonl");
+    let appz_dir = root.join(".appz");
+    fs::create_dir_all(&appz_dir).unwrap_or_else(|e| {
+        eprintln!("error: cannot create '.appz' dir '{}': {e}", appz_dir.display());
+        std::process::exit(1);
+    });
+    ensure_gitignored(root);
+
+    let sp = state_path(root);
     let mp = mise_config_path(root);
 
     let snapshot = StateSnapshot {
@@ -170,9 +158,12 @@ pub fn write_state(root: &Path, toolchains: &[DetectedToolchain]) -> PathBuf {
         std::process::exit(1);
     });
 
-    // Write merged mise.toml to project root
+    // Write or merge mise.toml
     let existing = fs::read_to_string(&mp).ok();
-    let toml = generator::generate_merged(existing.as_deref(), toolchains);
+    let toml = generator::generate_merged(existing.as_deref(), toolchains).unwrap_or_else(|e| {
+        eprintln!("error: cannot parse existing '{}': {e}", mp.display());
+        std::process::exit(1);
+    });
     fs::write(&mp, &toml).unwrap_or_else(|e| {
         eprintln!("error: cannot write mise config '{}': {e}", mp.display());
         std::process::exit(1);
@@ -202,30 +193,30 @@ pub fn inputs_unchanged(root: &Path) -> bool {
     }
 }
 
-pub fn print_location(root: &Path) {
-    let pdir = project_dir(root);
-    println!("appz home: {}", home_dir().display());
-    println!("state:     {}/", pdir.display());
-    println!("mise.toml: {}", mise_config_path(root).display());
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
 
-    #[test]
-    fn test_stable_hash_deterministic() {
-        let a = stable_hash("hello");
-        let b = stable_hash("hello");
-        assert_eq!(a, b);
-    }
+    use crate::detect::DetectedToolchain;
 
-    #[test]
-    fn test_stable_hash_differs() {
-        let a = stable_hash("/path/project-a");
-        let b = stable_hash("/path/project-b");
-        assert_ne!(a, b);
+    fn sample_toolchain() -> DetectedToolchain {
+        DetectedToolchain {
+            name: "Node.js",
+            slug: "node",
+            mise_plugin: "node",
+            version: "20".to_string(),
+            version_files: &[],
+            frameworks: Vec::new(),
+            build_command: None,
+            install_command: None,
+            dev_command: None,
+            test_command: None,
+            lint_command: None,
+            format_command: None,
+            output_directory: None,
+            env_prefix: None,
+        }
     }
 
     #[test]
@@ -252,6 +243,54 @@ mod tests {
         fs::write(dir.join("package.json"), r#"{"name":"y","dependencies":{"next":"^14"}}"#).unwrap();
         let h2 = compute_input_hash(&dir);
         assert_ne!(h1, h2);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_write_state_creates_mise_toml_and_state_at_root() {
+        let dir = std::env::temp_dir().join("appz-write-state-fresh");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        write_state(&dir, &[sample_toolchain()]);
+
+        assert!(dir.join("mise.toml").exists(), "mise.toml written to project root");
+        assert!(dir.join(".appz").join("state.jsonl").exists(), "state cache written under .appz/");
+        let toml = fs::read_to_string(dir.join("mise.toml")).unwrap();
+        assert!(toml.contains("node = \"20\""));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_write_state_merges_into_existing_mise_toml() {
+        let dir = std::env::temp_dir().join("appz-write-state-merge");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("mise.toml"), "[tasks.build]\nrun = \"echo hi\"\n# keep me\n").unwrap();
+
+        write_state(&dir, &[sample_toolchain()]);
+
+        let toml = fs::read_to_string(dir.join("mise.toml")).unwrap();
+        assert!(toml.contains("[tasks.build]"), "existing table preserved:\n{toml}");
+        assert!(toml.contains("# keep me"), "existing comment preserved:\n{toml}");
+        assert!(toml.contains("node = \"20\""), "tools table upserted:\n{toml}");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_write_state_gitignores_appz_dir_idempotently() {
+        let dir = std::env::temp_dir().join("appz-write-state-gitignore");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        write_state(&dir, &[sample_toolchain()]);
+        write_state(&dir, &[sample_toolchain()]);
+
+        let gitignore = fs::read_to_string(dir.join(".gitignore")).unwrap();
+        assert_eq!(gitignore.matches(".appz/").count(), 1, "entry appended exactly once:\n{gitignore}");
+
         let _ = fs::remove_dir_all(&dir);
     }
 }

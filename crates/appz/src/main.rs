@@ -266,8 +266,6 @@ fn detect_package_manager(root: &PathBuf) -> Option<&'static str> {
     }
 }
 
-
-
 fn do_detect_and_write(root: &PathBuf) -> Vec<appz_core::DetectedToolchain> {
     let toolchains = with_spinner("detecting toolchains...", "toolchains detected", || {
         let tc = detect_toolchains(root).unwrap_or_else(|e| error(&format!("detection failed: {e}")));
@@ -298,6 +296,9 @@ fn do_mise_install(root: &PathBuf) {
     if let Err(e) = appz_core::ensure_mise(root) {
         warning(&e);
         return;
+    }
+    if let Err(e) = appz_core::trust(root) {
+        warning(&format!("mise trust: {e}"));
     }
 
     with_spinner("installing mise tools...", "mise tools ready", || {

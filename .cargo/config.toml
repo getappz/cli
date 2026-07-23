@@ -1,9 +1,0 @@
-[build]
-# Isolated per worktree (see item #133). Registry deps are
-# better shared via sccache (RUSTC_WRAPPER + SCCACHE_BASEDIRS),
-# not a shared CARGO_TARGET_DIR, which leaks artifacts across worktrees.
-target-dir = "target"
-rustc-wrapper = "sccache"
-
-[env]
-SCCACHE_BASEDIRS = "C:/Users/shiva/workspace/appz-cli\\.worktrees\\task\\1"

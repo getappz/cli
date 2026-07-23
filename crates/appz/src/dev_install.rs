@@ -24,7 +24,10 @@ pub fn run(release: bool, dry_run: bool) {
     ));
     let built = match build_and_locate(release) {
         Ok(p) if p.exists() => p,
-        Ok(p) => crate::error(&format!("cargo reported {} but it does not exist", p.display())),
+        Ok(p) => crate::error(&format!(
+            "cargo reported {} but it does not exist",
+            p.display()
+        )),
         Err(e) => crate::error(&e),
     };
 
@@ -56,7 +59,11 @@ pub fn run(release: bool, dry_run: bool) {
         return;
     }
 
-    crate::step(&format!("installing {} -> {}", built.display(), target.display()));
+    crate::step(&format!(
+        "installing {} -> {}",
+        built.display(),
+        target.display()
+    ));
     if let Err(e) = replace_binary(&built, &target) {
         crate::error(&format!("error installing binary: {e}"));
     }
@@ -219,7 +226,9 @@ mod tests {
         );
         assert_eq!(
             parse_executable_path(json),
-            Some(PathBuf::from("/repo/target/x86_64-pc-windows-msvc/release/appz.exe"))
+            Some(PathBuf::from(
+                "/repo/target/x86_64-pc-windows-msvc/release/appz.exe"
+            ))
         );
     }
 

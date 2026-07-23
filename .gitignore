@@ -5,3 +5,5 @@
 
 # Per-repo agentflare-backend project link, machine-local, not shared
 /.agentflare/
+# appz local state (not shared)
+.appz/

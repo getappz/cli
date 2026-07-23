@@ -245,6 +245,12 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           ref: main
+          # Owner PAT: main requires an approved PR + passing required
+          # checks (enforce_admins is on, so no push — including an admin's
+          # — bypasses that). GITHUB_TOKEN-authored branch pushes/PRs don't
+          # trigger required CI checks, so this job needs a real user PAT to
+          # open a mergeable PR below rather than pushing directly.
+          token: ${{ secrets.CLA_SIGNATURES_TOKEN }}
 
       - name: Download checksums and extract windows hash
         id: checksums
@@ -302,7 +308,7 @@ jobs:
             --body "Automated Scoop manifest update for release ${GITHUB_REF_NAME}."
           gh pr merge "$BRANCH" --auto --squash --delete-branch
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.CLA_SIGNATURES_TOKEN }}
 
   trigger-npm-publish:
     name: Trigger npm publish

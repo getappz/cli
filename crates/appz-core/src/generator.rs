@@ -2,16 +2,116 @@ use std::collections::BTreeMap;
 
 use crate::detect::DetectedToolchain;
 
+/// One generated mise task derived from detected lifecycle commands.
+struct GeneratedTask {
+    run: Vec<String>,
+    sources: Option<Vec<String>>,
+    outputs: Option<Vec<String>>,
+}
+
+/// Lifecycle kinds that get task-level caching (`sources`/`outputs`).
+/// `dev`/`test`/`lint`/`format` always run — skipping them by default would
+/// silently hide real work (a stale dev server, a skipped test run). `build`
+/// and `install` are the two cases where "skip if inputs unchanged" is
+/// unambiguously the right default.
+const CACHED_KINDS: &[&str] = &["build", "install"];
+
+fn universal_source_excludes() -> Vec<String> {
+    [
+        ".git/**",
+        "node_modules/**",
+        "target/**",
+        ".mise/**",
+        ".appz/**",
+    ]
+    .iter()
+    .map(|s| format!("!{s}"))
+    .collect()
+}
+
+/// Conservative `sources` glob for one toolchain's contribution to a cached
+/// task: its version files (e.g. `package.json`) plus a broad recursive glob,
+/// excluding vendor/build dirs and its own output directory (so a task never
+/// invalidates itself by writing into its own sources).
+fn task_sources(tc: &DetectedToolchain) -> Vec<String> {
+    let mut sources: Vec<String> = tc.version_files.iter().map(|s| s.to_string()).collect();
+    sources.push("**/*".to_string());
+    sources.extend(universal_source_excludes());
+    if let Some(out) = tc.output_directory {
+        sources.push(format!("!{out}/**"));
+    }
+    sources
+}
+
+/// Build one mise task per lifecycle kind (build/install/dev/test/lint/format),
+/// aggregating each contributing toolchain's command into a `run` array (same
+/// semantics as the CLI's existing "run every toolchain's command" loop).
+fn build_tasks(toolchains: &[DetectedToolchain]) -> BTreeMap<&'static str, GeneratedTask> {
+    let kinds: &[(&str, fn(&DetectedToolchain) -> &Option<String>)] = &[
+        ("build", |tc| &tc.build_command),
+        ("install", |tc| &tc.install_command),
+        ("dev", |tc| &tc.dev_command),
+        ("test", |tc| &tc.test_command),
+        ("lint", |tc| &tc.lint_command),
+        ("format", |tc| &tc.format_command),
+    ];
+
+    let mut tasks = BTreeMap::new();
+    for (name, get_cmd) in kinds {
+        let mut run = Vec::new();
+        let mut sources = Vec::new();
+        let mut outputs = Vec::new();
+        for tc in toolchains {
+            if let Some(cmd) = get_cmd(tc) {
+                run.push(cmd.clone());
+                if CACHED_KINDS.contains(name) {
+                    sources.extend(task_sources(tc));
+                    // `output_directory` is the BUILD artifact location — only
+                    // attach it as `outputs` for the build task. `install`
+                    // produces `node_modules`/vendor dirs, not the build
+                    // output; it's still cached via `sources`, just with no
+                    // explicit `outputs` (mise falls back to its own
+                    // auto-tracked touch file, which is the right default
+                    // when we don't know the real output location).
+                    if *name == "build" {
+                        if let Some(out) = tc.output_directory {
+                            outputs.push(format!("{out}/**/*"));
+                        }
+                    }
+                }
+            }
+        }
+        if run.is_empty() {
+            continue;
+        }
+        sources.sort();
+        sources.dedup();
+        tasks.insert(
+            *name,
+            GeneratedTask {
+                run,
+                sources: (!sources.is_empty()).then_some(sources),
+                outputs: (!outputs.is_empty()).then_some(outputs),
+            },
+        );
+    }
+    tasks
+}
+
 /// Generate mise.toml content from detected toolchains.
 /// Deduplicates by mise_plugin, merging framework comments.
 fn build_groups<'a>(toolchains: &'a [DetectedToolchain]) -> BTreeMap<&'a str, GroupedEntry<'a>> {
     let mut groups: BTreeMap<&str, GroupedEntry> = BTreeMap::new();
     for tc in toolchains {
-        let entry = groups.entry(tc.mise_plugin).or_insert_with(|| GroupedEntry {
-            version: tc.version.clone(),
-            frameworks: Vec::new(),
-        });
-        entry.frameworks.extend(tc.frameworks.iter().map(|f| f.name));
+        let entry = groups
+            .entry(tc.mise_plugin)
+            .or_insert_with(|| GroupedEntry {
+                version: tc.version.clone(),
+                frameworks: Vec::new(),
+            });
+        entry
+            .frameworks
+            .extend(tc.frameworks.iter().map(|f| f.name));
     }
     groups
 }
@@ -39,40 +139,134 @@ pub fn generate(toolchains: &[DetectedToolchain]) -> String {
     write_tools_section(&groups).join("\n")
 }
 
-/// Merge appz-detected toolchains into an existing mise.toml's `[tools]`
-/// table, leaving every other table/key/comment in the document untouched
-/// (uses `toml_edit`, which preserves document structure and comments,
-/// instead of a parse-to-value-and-reserialize round trip — that round trip
-/// is what corrupts nested tables like `[tasks.build]`).
-///
-/// A tool the user already pinned in `[tools]` keeps their version; appz
-/// only fills in tools it detected that aren't already present. Tools the
-/// user has that appz didn't detect are left alone (never touched).
-///
-/// `existing` is the current mise.toml content, if any. Errs if `existing`
-/// is `Some` but fails to parse as TOML — callers must not overwrite a file
-/// they can't safely parse.
-pub fn generate_merged(existing: Option<&str>, toolchains: &[DetectedToolchain]) -> Result<String, String> {
-    let groups = build_groups(toolchains);
+fn toml_quote(s: &str) -> String {
+    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
 
-    let existing = match existing {
-        Some(s) => s,
-        None => return Ok(write_tools_section(&groups).join("\n")),
-    };
+/// Plain-text `[tasks.*]` section for the "no existing mise.toml" case
+/// (mirrors `write_tools_section`'s hand-formatted style for a first-time
+/// `mise.toml`).
+fn write_tasks_section(tasks: &BTreeMap<&str, GeneratedTask>) -> Vec<String> {
+    let mut lines = Vec::new();
+    for (name, task) in tasks {
+        lines.push(format!("[tasks.{name}]"));
+        if task.run.len() == 1 {
+            lines.push(format!("run = {}", toml_quote(&task.run[0])));
+        } else {
+            let items: Vec<String> = task.run.iter().map(|r| toml_quote(r)).collect();
+            lines.push(format!("run = [{}]", items.join(", ")));
+        }
+        if let Some(sources) = &task.sources {
+            let items: Vec<String> = sources.iter().map(|s| toml_quote(s)).collect();
+            lines.push(format!("sources = [{}]", items.join(", ")));
+        }
+        if let Some(outputs) = &task.outputs {
+            let items: Vec<String> = outputs.iter().map(|s| toml_quote(s)).collect();
+            lines.push(format!("outputs = [{}]", items.join(", ")));
+        }
+        lines.push(String::new());
+    }
+    lines
+}
 
-    let mut doc = existing.parse::<toml_edit::DocumentMut>().map_err(|e| e.to_string())?;
-
+fn merge_tools_into(
+    doc: &mut toml_edit::DocumentMut,
+    groups: &BTreeMap<&str, GroupedEntry>,
+) -> Result<(), String> {
     if doc.get("tools").is_none() {
         doc["tools"] = toml_edit::table();
     }
     let tools = doc["tools"]
         .as_table_mut()
         .ok_or_else(|| "`tools` in mise.toml is not a table".to_string())?;
-    for (plugin, group) in &groups {
+    for (plugin, group) in groups {
         if !tools.contains_key(plugin) {
             tools[plugin] = toml_edit::value(group.version.as_str());
         }
     }
+    Ok(())
+}
+
+/// Upsert generated `[tasks.<name>]` tables. A task name the user already
+/// defined (build/install/dev/test/lint/format or otherwise) is left
+/// completely untouched — same "never clobber what's already there"
+/// philosophy as the `[tools]` merge.
+fn merge_tasks_into(
+    doc: &mut toml_edit::DocumentMut,
+    tasks: &BTreeMap<&str, GeneratedTask>,
+) -> Result<(), String> {
+    if tasks.is_empty() {
+        return Ok(());
+    }
+    if doc.get("tasks").is_none() {
+        doc["tasks"] = toml_edit::table();
+    }
+    let tasks_table = doc["tasks"]
+        .as_table_mut()
+        .ok_or_else(|| "`tasks` in mise.toml is not a table".to_string())?;
+    for (name, task) in tasks {
+        if tasks_table.contains_key(name) {
+            continue;
+        }
+        let mut task_table = toml_edit::Table::new();
+        if task.run.len() == 1 {
+            task_table["run"] = toml_edit::value(task.run[0].as_str());
+        } else {
+            let arr: toml_edit::Array = task.run.iter().map(String::as_str).collect();
+            task_table["run"] = toml_edit::value(arr);
+        }
+        if let Some(sources) = &task.sources {
+            let arr: toml_edit::Array = sources.iter().map(String::as_str).collect();
+            task_table["sources"] = toml_edit::value(arr);
+        }
+        if let Some(outputs) = &task.outputs {
+            let arr: toml_edit::Array = outputs.iter().map(String::as_str).collect();
+            task_table["outputs"] = toml_edit::value(arr);
+        }
+        tasks_table[name] = toml_edit::Item::Table(task_table);
+    }
+    Ok(())
+}
+
+/// Merge appz-detected toolchains into an existing mise.toml's `[tools]` and
+/// `[tasks]` tables, leaving every other table/key/comment in the document
+/// untouched (uses `toml_edit`, which preserves document structure and
+/// comments, instead of a parse-to-value-and-reserialize round trip — that
+/// round trip is what corrupts nested tables like `[tasks.build]`).
+///
+/// A tool the user already pinned in `[tools]` keeps their version; a task
+/// the user already defined in `[tasks]` keeps their definition. appz only
+/// fills in what it detected and isn't already present — user config is
+/// never touched.
+///
+/// Generated tasks carry `sources`/`outputs` for `build`/`install` so mise's
+/// own task cache — not a second hand-rolled one — decides "inputs
+/// unchanged, skip". `dev`/`test`/`lint`/`format` always run.
+///
+/// `existing` is the current mise.toml content, if any. Errs if `existing`
+/// is `Some` but fails to parse as TOML — callers must not overwrite a file
+/// they can't safely parse.
+pub fn generate_merged(
+    existing: Option<&str>,
+    toolchains: &[DetectedToolchain],
+) -> Result<String, String> {
+    let groups = build_groups(toolchains);
+    let tasks = build_tasks(toolchains);
+
+    let existing = match existing {
+        Some(s) => s,
+        None => {
+            let mut lines = write_tools_section(&groups);
+            lines.extend(write_tasks_section(&tasks));
+            return Ok(lines.join("\n"));
+        }
+    };
+
+    let mut doc = existing
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|e| e.to_string())?;
+    merge_tools_into(&mut doc, &groups)?;
+    merge_tasks_into(&mut doc, &tasks)?;
 
     Ok(doc.to_string())
 }
@@ -86,17 +280,24 @@ struct GroupedEntry<'a> {
 mod tests {
     use super::*;
 
-    fn make_tc(plugin: &'static str, version: &str, framework: Option<&'static str>) -> DetectedToolchain {
+    fn make_tc(
+        plugin: &'static str,
+        version: &str,
+        framework: Option<&'static str>,
+    ) -> DetectedToolchain {
         DetectedToolchain {
             name: plugin,
             slug: plugin,
             mise_plugin: plugin,
             version: version.to_string(),
             version_files: &[],
-            frameworks: framework.map(|f| crate::frameworks::DetectedFramework {
-                name: f,
-                ecosystem: f,
-            }).into_iter().collect(),
+            frameworks: framework
+                .map(|f| crate::frameworks::DetectedFramework {
+                    name: f,
+                    ecosystem: f,
+                })
+                .into_iter()
+                .collect(),
             build_command: None,
             install_command: None,
             dev_command: None,
@@ -121,9 +322,15 @@ mod tests {
         let existing = Some("[tools]\nnode = \"20\"\n\n[settings]\nalways_keep_download = true\n");
         let tcs = vec![make_tc("node", "lts", None)];
         let out = generate_merged(existing, &tcs).unwrap();
-        assert!(out.contains("node = \"20\""), "should keep user version, got:\n{out}");
+        assert!(
+            out.contains("node = \"20\""),
+            "should keep user version, got:\n{out}"
+        );
         assert!(out.contains("[settings]"), "should keep settings section");
-        assert!(out.contains("always_keep_download = true"), "should keep settings content");
+        assert!(
+            out.contains("always_keep_download = true"),
+            "should keep settings content"
+        );
     }
 
     #[test]
@@ -131,8 +338,14 @@ mod tests {
         let existing = Some("[tools]\nnode = \"20\"\njava = \"17\"\n");
         let tcs = vec![make_tc("node", "22", None)];
         let out = generate_merged(existing, &tcs).unwrap();
-        assert!(out.contains("node = \"20\""), "user version overrides appz: {out}");
-        assert!(out.contains("java = \"17\""), "user-only tool preserved: {out}");
+        assert!(
+            out.contains("node = \"20\""),
+            "user version overrides appz: {out}"
+        );
+        assert!(
+            out.contains("java = \"17\""),
+            "user-only tool preserved: {out}"
+        );
     }
 
     #[test]
@@ -158,16 +371,125 @@ mod tests {
         let existing = Some("[tasks.build]\nrun = \"echo hi\"\n# keep me\n");
         let tcs = vec![make_tc("node", "lts", None)];
         let out = generate_merged(existing, &tcs).unwrap();
-        assert!(out.contains("[tasks.build]"), "nested table preserved, got:\n{out}");
-        assert!(out.contains("run = \"echo hi\""), "task content preserved:\n{out}");
+        assert!(
+            out.contains("[tasks.build]"),
+            "nested table preserved, got:\n{out}"
+        );
+        assert!(
+            out.contains("run = \"echo hi\""),
+            "task content preserved:\n{out}"
+        );
         assert!(out.contains("# keep me"), "comment preserved:\n{out}");
-        assert!(out.contains("node = \"lts\""), "tools table upserted:\n{out}");
+        assert!(
+            out.contains("node = \"lts\""),
+            "tools table upserted:\n{out}"
+        );
     }
 
     #[test]
     fn test_generate_merged_rejects_unparseable_existing() {
         let bad = Some("this is not [ valid toml");
         let tcs = vec![make_tc("node", "lts", None)];
-        assert!(generate_merged(bad, &tcs).is_err(), "must not silently discard an unparseable file");
+        assert!(
+            generate_merged(bad, &tcs).is_err(),
+            "must not silently discard an unparseable file"
+        );
+    }
+
+    fn make_tc_with_build(
+        plugin: &'static str,
+        version: &str,
+        build_command: &str,
+        output_directory: Option<&'static str>,
+    ) -> DetectedToolchain {
+        let mut tc = make_tc(plugin, version, None);
+        tc.version_files = &["package.json"];
+        tc.build_command = Some(build_command.to_string());
+        tc.install_command = Some("npm install".to_string());
+        tc.output_directory = output_directory;
+        tc
+    }
+
+    #[test]
+    fn test_generate_merged_emits_build_task_with_sources_and_outputs() {
+        let tcs = vec![make_tc_with_build(
+            "node",
+            "22",
+            "npm run build",
+            Some("dist"),
+        )];
+        let out = generate_merged(None, &tcs).unwrap();
+        assert!(out.contains("[tasks.build]"), "build task emitted:\n{out}");
+        assert!(
+            out.contains("run = \"npm run build\""),
+            "run command present:\n{out}"
+        );
+        assert!(
+            out.contains("sources ="),
+            "sources present for a cached kind:\n{out}"
+        );
+        assert!(
+            out.contains("\"package.json\""),
+            "version file is a source:\n{out}"
+        );
+        assert!(
+            out.contains("!node_modules/**"),
+            "vendor dir excluded:\n{out}"
+        );
+        assert!(
+            out.contains("!dist/**"),
+            "own output dir excluded from sources:\n{out}"
+        );
+        assert!(out.contains("outputs ="), "outputs present:\n{out}");
+        assert!(out.contains("\"dist/**/*\""), "output dir tracked:\n{out}");
+        assert!(
+            out.contains("[tasks.install]"),
+            "install task emitted (also cached):\n{out}"
+        );
+
+        let install_section = out.split("[tasks.install]").nth(1).unwrap_or("");
+        let next_section_start = install_section
+            .find("[tasks.")
+            .unwrap_or(install_section.len());
+        assert!(
+            !install_section[..next_section_start].contains("outputs"),
+            "install must not claim the build's output dir as its own outputs:\n{out}"
+        );
+    }
+
+    #[test]
+    fn test_generate_merged_never_overwrites_user_defined_task() {
+        let existing = Some("[tasks.build]\nrun = \"echo custom\"\n");
+        let tcs = vec![make_tc_with_build(
+            "node",
+            "22",
+            "npm run build",
+            Some("dist"),
+        )];
+        let out = generate_merged(existing, &tcs).unwrap();
+        assert!(
+            out.contains("run = \"echo custom\""),
+            "user's task body untouched:\n{out}"
+        );
+        assert!(
+            !out.contains("npm run build"),
+            "appz must not inject into a user-owned task:\n{out}"
+        );
+    }
+
+    #[test]
+    fn test_generate_merged_dev_task_has_no_sources() {
+        let mut tc = make_tc("node", "22", None);
+        tc.dev_command = Some("npm run dev".to_string());
+        let out = generate_merged(None, &[tc]).unwrap();
+        assert!(out.contains("[tasks.dev]"));
+        assert!(out.contains("run = \"npm run dev\""));
+        // dev/test/lint/format always run — no sources/outputs caching.
+        let dev_section = out.split("[tasks.dev]").nth(1).unwrap_or("");
+        let next_section_start = dev_section.find("[tasks.").unwrap_or(dev_section.len());
+        assert!(
+            !dev_section[..next_section_start].contains("sources"),
+            "dev task must not be cached:\n{out}"
+        );
     }
 }

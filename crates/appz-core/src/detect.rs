@@ -85,7 +85,7 @@ pub fn detect_monorepo(root: &Path) -> MonorepoConfig {
 }
 
 /// Strip JSONC comments (// and /* */) before JSON parsing.
-fn strip_jsonc(s: &str) -> String {
+pub fn strip_jsonc(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let chars: Vec<char> = s.chars().collect();
     let mut i = 0;

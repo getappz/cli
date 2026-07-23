@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use appz_core::{detect_toolchains, generate_claude_md, run_doctor};
 
 mod dev_install;
+mod mcp;
 
 // ── CLI ─────────────────────────────────────────────────────────
 
@@ -38,6 +39,8 @@ enum AppzCmd {
     Doctor(DoctorArgs),
     /// Build the checkout and install it over the running `appz` binary
     DevInstall(DevInstallArgs),
+    /// Run a stdio MCP server exposing appz to AI agents
+    Mcp,
 }
 
 #[derive(Args)]
@@ -735,5 +738,10 @@ fn main() {
         AppzCmd::Format(a) => run_format(a, json),
         AppzCmd::Doctor(a) => run_doctor_cmd(a, json),
         AppzCmd::DevInstall(a) => dev_install::run(!a.debug, a.dry_run),
+        AppzCmd::Mcp => {
+            if let Err(e) = mcp::serve() {
+                error(&e);
+            }
+        }
     }
 }

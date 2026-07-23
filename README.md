@@ -40,8 +40,20 @@ appz lint      # run the linter
 appz format    # run the formatter
 appz deploy    # deploy via the target platform's own CLI
 appz doctor    # diagnose project stack, config, and suggestions
-appz mcp       # stdio MCP server exposing appz to AI agents
+appz mcp       # stdio MCP server exposing detect/doctor/run to AI agents
 ```
+
+## MCP server
+
+`appz mcp` speaks the [Model Context Protocol](https://modelcontextprotocol.io)
+over stdio so AI agents can drive appz directly. Tools:
+
+- `detect` — JSON toolchain report for a directory
+- `doctor` — JSON diagnosis + suggestions
+- `run` — execute a lifecycle command (`install`/`build`/`test`/`lint`/`format`)
+  and return its output
+
+Point an MCP client at `appz mcp` (e.g. `{"command": "appz", "args": ["mcp"]}`).
 
 ## Layout
 

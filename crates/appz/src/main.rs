@@ -734,7 +734,7 @@ fn run_doctor_cmd(args: DoctorArgs, json: bool) {
         ("appz.jsonc", report.has_appz_jsonc),
         ("CLAUDE.md", report.has_claude_md),
         ("AGENTS.md", report.has_agents_md),
-        (".mise.toml", report.has_mise_config),
+        ("mise.toml", report.has_mise_config),
         ("state (JSONL)", report.has_state),
     ]
     .iter()

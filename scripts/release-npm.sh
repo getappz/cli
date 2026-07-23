@@ -10,7 +10,7 @@ error() {
 : "${APPZ_VERSION:?APPZ_VERSION must be set}"
 NPM_PREFIX="${NPM_PREFIX:-appz}"
 NPM_SCOPE="${NPM_SCOPE:-@getappz}"
-NPM_MAIN="${NPM_MAIN:-${NPM_SCOPE}/${NPM_PREFIX}}"
+NPM_MAIN="${NPM_MAIN:-${NPM_SCOPE}/cli}"
 
 mkdir -p "$RELEASE_DIR/npm"
 

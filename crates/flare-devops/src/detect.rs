@@ -189,6 +189,9 @@ pub struct DetectedToolchain {
     pub build_command: Option<String>,
     pub install_command: Option<String>,
     pub dev_command: Option<String>,
+    pub test_command: Option<String>,
+    pub lint_command: Option<String>,
+    pub format_command: Option<String>,
     pub output_directory: Option<&'static str>,
     pub env_prefix: Option<&'static str>,
 }
@@ -322,6 +325,9 @@ pub fn detect_toolchains(root: &Path) -> Result<Vec<DetectedToolchain>, String> 
             let build_cmd = over.build_command.clone().or_else(|| tc.commands.build.map(String::from));
             let install_cmd = over.install_command.clone().or_else(|| tc.commands.install.map(String::from));
             let dev_cmd = over.dev_command.clone().or_else(|| tc.commands.dev.map(String::from));
+            let test_cmd = tc.commands.test.map(String::from);
+            let lint_cmd = tc.commands.lint.map(String::from);
+            let format_cmd = tc.commands.format.map(String::from);
 
             detected.push(DetectedToolchain {
                 name: tc.name,
@@ -333,6 +339,9 @@ pub fn detect_toolchains(root: &Path) -> Result<Vec<DetectedToolchain>, String> 
                 build_command: build_cmd,
                 install_command: install_cmd,
                 dev_command: dev_cmd,
+                test_command: test_cmd,
+                lint_command: lint_cmd,
+                format_command: format_cmd,
                 output_directory: tc.output_directory,
                 env_prefix: tc.env_prefix,
             });

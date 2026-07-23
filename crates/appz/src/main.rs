@@ -26,6 +26,12 @@ enum AppzCmd {
     Build(BuildArgs),
     /// Start the dev server
     Dev(DevArgs),
+    /// Run tests
+    Test(TestArgs),
+    /// Run linter
+    Lint(LintArgs),
+    /// Run code formatter
+    Format(FormatArgs),
     /// Diagnose project stack, config, and suggestions
     Doctor(DoctorArgs),
 }
@@ -50,6 +56,36 @@ struct InstallArgs {
     skip_mise: bool,
     #[arg(long, help = "Skip package manager install")]
     skip_pm: bool,
+}
+
+#[derive(Args)]
+struct TestArgs {
+    #[arg(default_value = ".")]
+    dir: PathBuf,
+    #[arg(short, long, help = "Override test command")]
+    command: Option<String>,
+    #[arg(long, help = "Skip auto-install before test")]
+    skip_install: bool,
+}
+
+#[derive(Args)]
+struct LintArgs {
+    #[arg(default_value = ".")]
+    dir: PathBuf,
+    #[arg(short, long, help = "Override lint command")]
+    command: Option<String>,
+    #[arg(long, help = "Skip auto-install before lint")]
+    skip_install: bool,
+}
+
+#[derive(Args)]
+struct FormatArgs {
+    #[arg(default_value = ".")]
+    dir: PathBuf,
+    #[arg(short, long, help = "Override format command")]
+    command: Option<String>,
+    #[arg(long, help = "Skip auto-install before format")]
+    skip_install: bool,
 }
 
 #[derive(Args)]
@@ -512,6 +548,88 @@ fn run_dev(args: DevArgs, json: bool) {
     outro("dev server stopped");
 }
 
+macro_rules! lifecycle_fn {
+    ($name:ident, $ty:ty, $field:ident) => {
+        fn $name(args: $ty, json: bool) {
+            let canonical = resolve_root(&args.dir);
+
+            if json {
+                let toolchains = do_detect_and_write(&canonical);
+                if !args.skip_install {
+                    do_mise_install(&canonical);
+                    do_pm_install(&canonical, &toolchains);
+                }
+                json_out(&toolchains, "ok");
+                return;
+            }
+
+            intro(concat!("appz ", stringify!($name)));
+
+            let canonical = resolve_root(&args.dir);
+
+            // Cache hit
+            if !args.command.is_some() && !args.skip_install && flare_devops::inputs_unchanged(&canonical) {
+                if let Some(snap) = flare_devops::read_latest_snapshot(&canonical) {
+                    let cmds: Vec<String> = snap.toolchains.iter()
+                        .filter_map(|t| t.$field.clone())
+                        .collect();
+                    if !cmds.is_empty() {
+                        success("inputs unchanged — running cached command");
+                        for cmd in &cmds {
+                            let parts: Vec<&str> = cmd.split(' ').collect();
+                            let (prog, args) = parts.split_first().unwrap_or((&"npm", &[]));
+                            if !run_cmd(prog, args, &canonical) {
+                                std::process::exit(1);
+                            }
+                        }
+                        outro(concat!(stringify!($name), " complete"));
+                        return;
+                    }
+                }
+            }
+
+            // Full pipeline
+            let toolchains = {
+                if !args.skip_install {
+                    do_full_install(&canonical)
+                } else {
+                    do_detect_and_write(&canonical)
+                }
+            };
+
+            let cmds: Vec<String> = match args.command {
+                Some(c) => vec![c],
+                None => {
+                    let mut cmds = Vec::new();
+                    for tc in &toolchains {
+                        if let Some(ref b) = tc.$field {
+                            cmds.push(b.to_string());
+                        }
+                    }
+                    if cmds.is_empty() {
+                        error(&format!("no {} command detected — use --command to specify one", stringify!($name)));
+                    }
+                    cmds
+                }
+            };
+
+            step(concat!("running ", stringify!($name), "..."));
+            for cmd in &cmds {
+                let parts: Vec<&str> = cmd.split(' ').collect();
+                let (prog, args) = parts.split_first().unwrap_or((&"npm", &[]));
+                if !run_cmd(prog, args, &canonical) {
+                    std::process::exit(1);
+                }
+            }
+            outro(concat!(stringify!($name), " complete"));
+        }
+    };
+}
+
+lifecycle_fn!(run_test, TestArgs, test_command);
+lifecycle_fn!(run_lint, LintArgs, lint_command);
+lifecycle_fn!(run_format, FormatArgs, format_command);
+
 fn run_doctor_cmd(args: DoctorArgs, json: bool) {
     let canonical = resolve_root(&args.dir);
     let report = run_doctor(&canonical);
@@ -579,6 +697,9 @@ fn main() {
         AppzCmd::Install(a) => run_install(a, json),
         AppzCmd::Build(a) => run_build(a, json),
         AppzCmd::Dev(a) => run_dev(a, json),
+        AppzCmd::Test(a) => run_test(a, json),
+        AppzCmd::Lint(a) => run_lint(a, json),
+        AppzCmd::Format(a) => run_format(a, json),
         AppzCmd::Doctor(a) => run_doctor_cmd(a, json),
     }
 }

@@ -117,6 +117,9 @@ pub struct StoredToolchain {
     pub build_command: Option<String>,
     pub install_command: Option<String>,
     pub dev_command: Option<String>,
+    pub test_command: Option<String>,
+    pub lint_command: Option<String>,
+    pub format_command: Option<String>,
     pub output_directory: Option<String>,
     pub env_prefix: Option<String>,
 }
@@ -132,6 +135,9 @@ impl From<&DetectedToolchain> for StoredToolchain {
             build_command: tc.build_command.clone(),
             install_command: tc.install_command.clone(),
             dev_command: tc.dev_command.clone(),
+            test_command: tc.test_command.clone(),
+            lint_command: tc.lint_command.clone(),
+            format_command: tc.format_command.clone(),
             output_directory: tc.output_directory.map(|s| s.to_string()),
             env_prefix: tc.env_prefix.map(|s| s.to_string()),
         }

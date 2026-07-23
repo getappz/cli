@@ -1,0 +1,15 @@
+pkgbase = appz
+	pkgdesc = Detect toolchains, wire up mise, and run install/build/dev/test/lint/format/doctor for any project
+	pkgver = 0.1.0
+	pkgrel = 1
+	url = https://github.com/getappz/cli
+	arch = x86_64
+	arch = aarch64
+	license = Apache-2.0
+	makedepends = cargo
+	makedepends = gcc
+	depends = gcc-libs
+	source = appz-0.1.0.tar.gz::https://github.com/getappz/cli/releases/download/v0.1.0/appz-0.1.0-source.tar.gz
+	sha256sums = 0000000000000000000000000000000000000000000000000000000000000000
+
+pkgname = appz

@@ -30,9 +30,27 @@ pub fn state_path(root: &Path) -> PathBuf {
     root.join(".appz").join("state.jsonl")
 }
 
-/// Path to `mise.toml` in the project root (no longer a shadow dir).
+/// Path to the project's mise config (no longer a shadow dir).
+///
+/// mise treats `mise.toml` and `.mise.toml` as the same config slot in a
+/// given directory — "paths which start with `mise` can be dotfiles"
+/// (<https://mise.jdx.dev/configuration.html>) — and its own maintainers'
+/// stated intent is that a project already using the dotfile form keeps
+/// using it (<https://github.com/jdx/mise/discussions/2206>: "if you have a
+/// `.mise.toml` file it should just reuse that"). Empirically mise will
+/// actually load *both* if they coexist and merge them, with `.mise.toml`
+/// winning on key collisions — so blindly writing `mise.toml` into a
+/// project that already has `.mise.toml` doesn't create an inert duplicate,
+/// it creates a second live config whose tool versions can be silently
+/// shadowed by the older file. Prefer an existing `.mise.toml`; only default
+/// to `mise.toml` when neither is present.
 pub fn mise_config_path(root: &Path) -> PathBuf {
-    root.join("mise.toml")
+    let dotfile = root.join(".mise.toml");
+    if dotfile.exists() {
+        dotfile
+    } else {
+        root.join("mise.toml")
+    }
 }
 
 /// Ensure `<root>/.gitignore` contains a `.appz/` entry. Idempotent.
@@ -325,6 +343,54 @@ mod tests {
         assert!(
             toml.contains("node = \"20\""),
             "tools table upserted:\n{toml}"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_mise_config_path_prefers_existing_dotfile_variant() {
+        let dir = std::env::temp_dir().join("appz-mise-config-path-dotfile");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        assert_eq!(
+            mise_config_path(&dir).file_name().unwrap(),
+            "mise.toml",
+            "no existing config: defaults to mise.toml"
+        );
+
+        fs::write(dir.join(".mise.toml"), "[tools]\nnode = \"18\"\n").unwrap();
+        assert_eq!(
+            mise_config_path(&dir).file_name().unwrap(),
+            ".mise.toml",
+            "an existing .mise.toml is reused instead of creating a second mise.toml"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_write_state_merges_into_existing_dotfile_variant_not_a_new_mise_toml() {
+        let dir = std::env::temp_dir().join("appz-write-state-dotfile-merge");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(".mise.toml"), "[tools]\njava = \"17\"\n").unwrap();
+
+        write_state(&dir, &[sample_toolchain()]);
+
+        assert!(
+            !dir.join("mise.toml").exists(),
+            "must not create a second, competing mise.toml next to an existing .mise.toml"
+        );
+        let toml = fs::read_to_string(dir.join(".mise.toml")).unwrap();
+        assert!(
+            toml.contains("java = \"17\""),
+            "existing tool preserved:\n{toml}"
+        );
+        assert!(
+            toml.contains("node = \"20\""),
+            "detected tool upserted:\n{toml}"
         );
 
         let _ = fs::remove_dir_all(&dir);

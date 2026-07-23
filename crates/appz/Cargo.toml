@@ -5,6 +5,7 @@ edition = "2024"
 rust-version = "1.91"
 description = "Detect toolchains, wire up mise, and run install/build/dev/test/lint/format/doctor for any project."
 license = "Apache-2.0"
+repository = "https://github.com/getappz/cli"
 publish = false
 
 [[bin]]

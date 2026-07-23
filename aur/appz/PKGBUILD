@@ -1,0 +1,42 @@
+# Maintainer: Shivakumar <kumar@appz.dev>
+pkgname=appz
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Detect toolchains, wire up mise, and run install/build/dev/test/lint/format/doctor for any project"
+arch=('x86_64' 'aarch64')
+url="https://github.com/getappz/cli"
+license=('Apache-2.0')
+makedepends=('cargo' 'gcc')
+depends=('gcc-libs')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/getappz/cli/releases/download/v$pkgver/appz-$pkgver-source.tar.gz")
+# Placeholder — replace with the real sha256 of the source tarball once
+# v0.1.0 is actually tagged and released (release.yml's "Create source
+# tarball" step produces it), then regenerate .SRCINFO with
+# `makepkg --printsrcinfo > .SRCINFO` before submitting to the AUR.
+sha256sums=('0000000000000000000000000000000000000000000000000000000000000000')
+
+prepare() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release -p appz
+}
+
+check() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  ./target/release/appz --version
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  install -Dm755 "target/release/appz" "$pkgdir/usr/bin/appz"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

@@ -4,6 +4,8 @@ use std::path::PathBuf;
 
 use appz_core::{detect_toolchains, generate_claude_md, run_doctor};
 
+mod dev_install;
+
 // ── CLI ─────────────────────────────────────────────────────────
 
 #[derive(Parser)]
@@ -34,6 +36,16 @@ enum AppzCmd {
     Format(FormatArgs),
     /// Diagnose project stack, config, and suggestions
     Doctor(DoctorArgs),
+    /// Build the checkout and install it over the running `appz` binary
+    DevInstall(DevInstallArgs),
+}
+
+#[derive(Args)]
+struct DevInstallArgs {
+    #[arg(long, help = "Build in debug mode instead of the default --release")]
+    debug: bool,
+    #[arg(long, help = "Build and verify, but report what would be installed without replacing")]
+    dry_run: bool,
 }
 
 #[derive(Args)]
@@ -691,5 +703,6 @@ fn main() {
         AppzCmd::Lint(a) => run_lint(a, json),
         AppzCmd::Format(a) => run_format(a, json),
         AppzCmd::Doctor(a) => run_doctor_cmd(a, json),
+        AppzCmd::DevInstall(a) => dev_install::run(!a.debug, a.dry_run),
     }
 }

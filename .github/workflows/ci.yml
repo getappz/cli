@@ -16,6 +16,7 @@ jobs:
       contents: read
     outputs:
       code: ${{ steps.filter.outputs.code }}
+      devcontainer: ${{ steps.filter.outputs.devcontainer }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
@@ -28,6 +29,10 @@ jobs:
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'crates/**'
+              - '.github/workflows/ci.yml'
+            devcontainer:
+              - 'src/appz/**'
+              - 'test/appz/**'
               - '.github/workflows/ci.yml'
 
   build:
@@ -128,6 +133,27 @@ jobs:
         with:
           manifest-path: Cargo.toml
 
+  devcontainer-feature-test:
+    needs: changes
+    if: always()
+    permissions:
+      contents: read
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    steps:
+      - if: needs.changes.result != 'success' || needs.changes.outputs.devcontainer == 'true'
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          fetch-depth: 0
+      - if: needs.changes.result != 'success' || needs.changes.outputs.devcontainer == 'true'
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "22.x"
+      - if: needs.changes.result != 'success' || needs.changes.outputs.devcontainer == 'true'
+        run: npm install -g @devcontainers/cli
+      - if: needs.changes.result != 'success' || needs.changes.outputs.devcontainer == 'true'
+        run: devcontainer features test -f appz --base-image debian:13-slim
+
   # Single aggregating gate. Point branch protection at THIS job instead of
   # every leg above — stays correct when jobs are added/removed and can't be
   # bypassed by a silently-missing required check.
@@ -139,6 +165,7 @@ jobs:
       - clippy
       - fmt
       - deny
+      - devcontainer-feature-test
     runs-on: ubuntu-latest
     permissions: {}
     steps:

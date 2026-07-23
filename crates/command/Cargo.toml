@@ -1,0 +1,13 @@
+[package]
+name = "command"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "Process execution builder: shell-aware or arg-vector, PATH/env control, structured errors."
+
+[dependencies]
+miette = "7"
+thiserror = "2"
+shell-words = "1"
+which = "6"

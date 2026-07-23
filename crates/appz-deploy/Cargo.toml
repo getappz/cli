@@ -1,0 +1,19 @@
+[package]
+name = "appz-deploy"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.91"
+description = "Unified deploy front-end: drives each hosting platform's own CLI (Vercel, Netlify, ...)."
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+command = { path = "../command" }
+appz-core = { path = "../appz-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+chrono = { version = "0.4", features = ["serde"] }
+
+[lints.rust]
+unsafe_code = "warn"

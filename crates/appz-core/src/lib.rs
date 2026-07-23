@@ -12,6 +12,7 @@ mod toolchains;
 pub use claude::generate_claude_md;
 pub use detect::{
     DetectedToolchain, MonorepoConfig, detect_monorepo, detect_toolchains, pm_install_cmd,
+    strip_jsonc,
 };
 pub use doctor::{DoctorReport, run_doctor};
 pub use fs::DetectorFilesystem;

@@ -72,7 +72,7 @@ scoop install appz
 
 **npm:**
 ```bash
-npm install -g @getappz/appz
+npm install -g @getappz/cli
 ```
 
 **Docker** (pin a version — `latest` isn't tied to a specific verifiable
@@ -88,7 +88,7 @@ cargo install --git https://github.com/getappz/cli appz
 ```
 
 **Uninstall** (curl install only — for the others: `scoop uninstall appz`,
-`npm uninstall -g @getappz/appz`, `cargo uninstall appz`, or remove the
+`npm uninstall -g @getappz/cli`, `cargo uninstall appz`, or remove the
 Docker image):
 ```bash
 curl -fsSL https://raw.githubusercontent.com/getappz/cli/main/install.sh | sh -s -- --uninstall

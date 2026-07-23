@@ -158,7 +158,7 @@ Point an MCP client at `appz mcp` (e.g. `{"command": "appz", "args": ["mcp"]}`).
 ## GitHub Action
 
 ```yaml
-- uses: getappz/cli@v1
+- uses: getappz/cli@v0.1.0
   with:
     command: deploy   # init/install/build/dev/test/lint/format/deploy/doctor
     # version: latest

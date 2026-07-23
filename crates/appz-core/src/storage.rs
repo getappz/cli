@@ -384,8 +384,14 @@ mod tests {
             "must not create a second, competing mise.toml next to an existing .mise.toml"
         );
         let toml = fs::read_to_string(dir.join(".mise.toml")).unwrap();
-        assert!(toml.contains("java = \"17\""), "existing tool preserved:\n{toml}");
-        assert!(toml.contains("node = \"20\""), "detected tool upserted:\n{toml}");
+        assert!(
+            toml.contains("java = \"17\""),
+            "existing tool preserved:\n{toml}"
+        );
+        assert!(
+            toml.contains("node = \"20\""),
+            "detected tool upserted:\n{toml}"
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }

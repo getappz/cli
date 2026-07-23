@@ -4,7 +4,7 @@ use serde::Serialize;
 
 use crate::frameworks;
 use crate::fs::DetectorFilesystem;
-use crate::toolchains::{DetectionConfidence, DetectionCriteria, Framework, FRAMEWORKS};
+use crate::toolchains::{DetectionConfidence, DetectionCriteria, FRAMEWORKS, Framework};
 
 /// Overrides read from project config file (vercel.json / appz.json).
 #[derive(Debug, Default, Clone)]
@@ -35,25 +35,37 @@ pub fn detect_monorepo(root: &Path) -> MonorepoConfig {
 
         // Check for npm/yarn workspaces in package.json
         if let Ok(val) = content.parse::<serde_json::Value>()
-            && let Some(ws) = val.get("workspaces") {
-                // pnpm / yarn
-                if let Some(arr) = ws.as_array() {
-                    return MonorepoConfig {
-                        manager: if root.join("pnpm-lock.yaml").exists() { Some("pnpm".to_string()) }
-                                else if root.join("yarn.lock").exists() { Some("yarn".to_string()) }
-                                else { Some("npm".to_string()) },
-                        package_paths: arr.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
-                    };
-                }
-                // npm workspaces
-                if let Some(arr) = val.pointer("/workspaces/packages")
-                    && let Some(arr) = arr.as_array() {
-                        return MonorepoConfig {
-                            manager: Some("npm".to_string()),
-                            package_paths: arr.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
-                        };
-                    }
+            && let Some(ws) = val.get("workspaces")
+        {
+            // pnpm / yarn
+            if let Some(arr) = ws.as_array() {
+                return MonorepoConfig {
+                    manager: if root.join("pnpm-lock.yaml").exists() {
+                        Some("pnpm".to_string())
+                    } else if root.join("yarn.lock").exists() {
+                        Some("yarn".to_string())
+                    } else {
+                        Some("npm".to_string())
+                    },
+                    package_paths: arr
+                        .iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect(),
+                };
             }
+            // npm workspaces
+            if let Some(arr) = val.pointer("/workspaces/packages")
+                && let Some(arr) = arr.as_array()
+            {
+                return MonorepoConfig {
+                    manager: Some("npm".to_string()),
+                    package_paths: arr
+                        .iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect(),
+                };
+            }
+        }
     }
 
     // lerna.json
@@ -68,13 +80,17 @@ pub fn detect_monorepo(root: &Path) -> MonorepoConfig {
     let pnpm_yaml = root.join("pnpm-workspace.yaml");
     if pnpm_yaml.exists()
         && let Ok(content) = std::fs::read_to_string(&pnpm_yaml)
-            && let Ok(val) = serde_yaml::from_str::<serde_yaml::Value>(&content)
-                && let Some(pkgs) = val.get("packages").and_then(|v| v.as_sequence()) {
-                    return MonorepoConfig {
-                        manager: Some("pnpm".to_string()),
-                        package_paths: pkgs.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
-                    };
-                }
+        && let Ok(val) = serde_yaml::from_str::<serde_yaml::Value>(&content)
+        && let Some(pkgs) = val.get("packages").and_then(|v| v.as_sequence())
+    {
+        return MonorepoConfig {
+            manager: Some("pnpm".to_string()),
+            package_paths: pkgs
+                .iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect(),
+        };
+    }
 
     MonorepoConfig::default()
 }
@@ -87,10 +103,14 @@ fn strip_jsonc(s: &str) -> String {
     while i < chars.len() {
         if i + 1 < chars.len() && chars[i] == '/' && chars[i + 1] == '/' {
             i += 2;
-            while i < chars.len() && chars[i] != '\n' { i += 1; }
+            while i < chars.len() && chars[i] != '\n' {
+                i += 1;
+            }
         } else if i + 1 < chars.len() && chars[i] == '/' && chars[i + 1] == '*' {
             i += 2;
-            while i + 1 < chars.len() && !(chars[i] == '*' && chars[i + 1] == '/') { i += 1; }
+            while i + 1 < chars.len() && !(chars[i] == '*' && chars[i + 1] == '/') {
+                i += 1;
+            }
             i += 2;
         } else {
             out.push(chars[i]);
@@ -109,59 +129,65 @@ fn read_overrides(root: &Path) -> CommandOverrides {
 
     // JSONC
     if jsonc_path.exists()
-        && let Ok(content) = std::fs::read_to_string(&jsonc_path) {
-            let cleaned = strip_jsonc(&content);
-            if let Ok(val) = cleaned.parse::<serde_json::Value>()
-                && let Some(obj) = val.as_object() {
-                    let mut ov = CommandOverrides::default();
-                    if let Some(s) = obj.get("buildCommand").and_then(|v| v.as_str()) {
-                        ov.build_command = Some(s.to_string());
-                    }
-                    if let Some(s) = obj.get("installCommand").and_then(|v| v.as_str()) {
-                        ov.install_command = Some(s.to_string());
-                    }
-                    if let Some(s) = obj.get("devCommand").and_then(|v| v.as_str()) {
-                        ov.dev_command = Some(s.to_string());
-                    }
-                    return ov;
-                }
+        && let Ok(content) = std::fs::read_to_string(&jsonc_path)
+    {
+        let cleaned = strip_jsonc(&content);
+        if let Ok(val) = cleaned.parse::<serde_json::Value>()
+            && let Some(obj) = val.as_object()
+        {
+            let mut ov = CommandOverrides::default();
+            if let Some(s) = obj.get("buildCommand").and_then(|v| v.as_str()) {
+                ov.build_command = Some(s.to_string());
+            }
+            if let Some(s) = obj.get("installCommand").and_then(|v| v.as_str()) {
+                ov.install_command = Some(s.to_string());
+            }
+            if let Some(s) = obj.get("devCommand").and_then(|v| v.as_str()) {
+                ov.dev_command = Some(s.to_string());
+            }
+            return ov;
         }
+    }
 
     // TOML
     if toml_path.exists()
         && let Ok(content) = std::fs::read_to_string(&toml_path)
-            && let Ok(val) = content.parse::<toml::Value>() {
-                let mut ov = CommandOverrides::default();
-                if let Some(s) = val.get("build_command").and_then(|v| v.as_str()) {
-                    ov.build_command = Some(s.to_string());
-                }
-                if let Some(s) = val.get("install_command").and_then(|v| v.as_str()) {
-                    ov.install_command = Some(s.to_string());
-                }
-                if let Some(s) = val.get("dev_command").and_then(|v| v.as_str()) {
-                    ov.dev_command = Some(s.to_string());
-                }
-                return ov;
-            }
+        && let Ok(val) = content.parse::<toml::Value>()
+    {
+        let mut ov = CommandOverrides::default();
+        if let Some(s) = val.get("build_command").and_then(|v| v.as_str()) {
+            ov.build_command = Some(s.to_string());
+        }
+        if let Some(s) = val.get("install_command").and_then(|v| v.as_str()) {
+            ov.install_command = Some(s.to_string());
+        }
+        if let Some(s) = val.get("dev_command").and_then(|v| v.as_str()) {
+            ov.dev_command = Some(s.to_string());
+        }
+        return ov;
+    }
 
     // YAML
     if yaml_path.exists()
         && let Ok(content) = std::fs::read_to_string(&yaml_path)
-            && let Ok(val) = serde_yaml::from_str::<serde_yaml::Value>(&content)
-                && let Some(mapping) = val.as_mapping() {
-                    let mut ov = CommandOverrides::default();
-                    for (k, v) in mapping {
-                        if let (Some(key), Some(val)) = (k.as_str(), v.as_str()) {
-                            match key {
-                                "build_command" | "buildCommand" => ov.build_command = Some(val.to_string()),
-                                "install_command" | "installCommand" => ov.install_command = Some(val.to_string()),
-                                "dev_command" | "devCommand" => ov.dev_command = Some(val.to_string()),
-                                _ => {}
-                            }
-                        }
+        && let Ok(val) = serde_yaml::from_str::<serde_yaml::Value>(&content)
+        && let Some(mapping) = val.as_mapping()
+    {
+        let mut ov = CommandOverrides::default();
+        for (k, v) in mapping {
+            if let (Some(key), Some(val)) = (k.as_str(), v.as_str()) {
+                match key {
+                    "build_command" | "buildCommand" => ov.build_command = Some(val.to_string()),
+                    "install_command" | "installCommand" => {
+                        ov.install_command = Some(val.to_string())
                     }
-                    return ov;
+                    "dev_command" | "devCommand" => ov.dev_command = Some(val.to_string()),
+                    _ => {}
                 }
+            }
+        }
+        return ov;
+    }
 
     CommandOverrides::default()
 }
@@ -191,14 +217,24 @@ fn check_criteria(fs: &DetectorFilesystem, criteria: &DetectionCriteria) -> bool
         return false;
     }
     for detector in criteria.every {
-        if !fs.check_detector(detector.path, detector.is_glob, detector.match_content, detector.match_package) {
+        if !fs.check_detector(
+            detector.path,
+            detector.is_glob,
+            detector.match_content,
+            detector.match_package,
+        ) {
             return false;
         }
     }
     if !criteria.some.is_empty() {
         let mut some_match = false;
         for detector in criteria.some {
-            if fs.check_detector(detector.path, detector.is_glob, detector.match_content, detector.match_package) {
+            if fs.check_detector(
+                detector.path,
+                detector.is_glob,
+                detector.match_content,
+                detector.match_package,
+            ) {
                 some_match = true;
                 break;
             }
@@ -224,10 +260,12 @@ fn detect_version(fs: &DetectorFilesystem, version_files: &[&str]) -> Option<Str
 
 fn scan_frameworks(fs: &DetectorFilesystem, slug: &str) -> Vec<frameworks::DetectedFramework> {
     match slug {
-        "node" => fs.read_file("package.json")
+        "node" => fs
+            .read_file("package.json")
             .map(|c| frameworks::scan_npm(&c))
             .unwrap_or_default(),
-        "rust" => fs.read_file("Cargo.toml")
+        "rust" => fs
+            .read_file("Cargo.toml")
             .map(|c| frameworks::scan_cargo(&c))
             .unwrap_or_default(),
         "python" => {
@@ -240,7 +278,8 @@ fn scan_frameworks(fs: &DetectorFilesystem, slug: &str) -> Vec<frameworks::Detec
             }
             f
         }
-        "go" => fs.read_file("go.mod")
+        "go" => fs
+            .read_file("go.mod")
             .map(|c| frameworks::scan_go(&c))
             .unwrap_or_default(),
         "ruby" => {
@@ -263,7 +302,8 @@ fn scan_frameworks(fs: &DetectorFilesystem, slug: &str) -> Vec<frameworks::Detec
             }
             f
         }
-        "elixir" => fs.read_file("mix.exs")
+        "elixir" => fs
+            .read_file("mix.exs")
             .map(|c| frameworks::scan_elixir(&c))
             .unwrap_or_default(),
         _ => Vec::new(),
@@ -277,9 +317,10 @@ fn detect_package_version(fs: &DetectorFilesystem, tc: &Framework) -> Option<Str
         if let Some(pkg) = d.match_package {
             let content = fs.read_file("package.json")?;
             if let Some(v) = crate::pkg::parse_deps(&content).get(pkg)
-                && !v.is_empty() {
-                    return Some(v.clone());
-                }
+                && !v.is_empty()
+            {
+                return Some(v.clone());
+            }
         }
     }
     None
@@ -301,9 +342,18 @@ pub fn detect_toolchains(root: &Path) -> Result<Vec<DetectedToolchain>, String> 
             let frameworks = scan_frameworks(&fs, tc.slug);
 
             let over = &overrides;
-            let build_cmd = over.build_command.clone().or_else(|| tc.commands.build.map(String::from));
-            let install_cmd = over.install_command.clone().or_else(|| tc.commands.install.map(String::from));
-            let dev_cmd = over.dev_command.clone().or_else(|| tc.commands.dev.map(String::from));
+            let build_cmd = over
+                .build_command
+                .clone()
+                .or_else(|| tc.commands.build.map(String::from));
+            let install_cmd = over
+                .install_command
+                .clone()
+                .or_else(|| tc.commands.install.map(String::from));
+            let dev_cmd = over
+                .dev_command
+                .clone()
+                .or_else(|| tc.commands.dev.map(String::from));
             let test_cmd = tc.commands.test.map(String::from);
             let lint_cmd = tc.commands.lint.map(String::from);
             let format_cmd = tc.commands.format.map(String::from);
@@ -339,11 +389,15 @@ pub fn detect_toolchains(root: &Path) -> Result<Vec<DetectedToolchain>, String> 
 
     // Third pass: if any strong match exists, drop weak-only matches
     let has_strong = detected.iter().any(|tc| {
-        FRAMEWORKS.iter().any(|f| f.slug == tc.slug && matches!(f.detection_confidence, DetectionConfidence::Strong))
+        FRAMEWORKS.iter().any(|f| {
+            f.slug == tc.slug && matches!(f.detection_confidence, DetectionConfidence::Strong)
+        })
     });
     if has_strong {
         detected.retain(|tc| {
-            !FRAMEWORKS.iter().any(|f| f.slug == tc.slug && matches!(f.detection_confidence, DetectionConfidence::Weak))
+            !FRAMEWORKS.iter().any(|f| {
+                f.slug == tc.slug && matches!(f.detection_confidence, DetectionConfidence::Weak)
+            })
         });
     }
 
@@ -387,12 +441,19 @@ mod tests {
     #[test]
     fn test_detect_rust_from_cargo_toml() {
         let dir = test_dir("rust");
-        fs::write(dir.join("Cargo.toml"), "[package]\nname = \"test\"\n[dependencies]\naxum = \"0.7\"").unwrap();
+        fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"test\"\n[dependencies]\naxum = \"0.7\"",
+        )
+        .unwrap();
 
         let result = detect_toolchains(&dir).unwrap();
         let rust = result.iter().find(|t| t.slug == "rust");
         assert!(rust.is_some(), "rust should be detected");
-        assert!(rust.unwrap().frameworks.iter().any(|f| f.name == "Axum"), "axum framework should be detected");
+        assert!(
+            rust.unwrap().frameworks.iter().any(|f| f.name == "Axum"),
+            "axum framework should be detected"
+        );
     }
 
     #[test]
@@ -466,7 +527,11 @@ mod tests {
     #[test]
     fn test_detect_cargo_framework_axum() {
         let dir = test_dir("cargo-axum");
-        fs::write(dir.join("Cargo.toml"), "[dependencies]\naxum = \"0.7\"\ntokio = \"1\"").unwrap();
+        fs::write(
+            dir.join("Cargo.toml"),
+            "[dependencies]\naxum = \"0.7\"\ntokio = \"1\"",
+        )
+        .unwrap();
 
         let result = detect_toolchains(&dir).unwrap();
         let rust = result.iter().find(|t| t.slug == "rust").unwrap();

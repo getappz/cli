@@ -1,0 +1,6 @@
+{
+  // Command overrides for appz
+  // "buildCommand": "npm run build",
+  // "installCommand": "npm install",
+  // "devCommand": "npm run dev"
+}

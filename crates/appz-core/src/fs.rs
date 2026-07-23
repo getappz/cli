@@ -114,7 +114,7 @@ impl DetectorFilesystem {
                 Some(c) => c,
                 None => return false,
             };
-            return content.contains(&format!("\"{pkg}\""));
+            return crate::pkg::has_dependency(&content, pkg);
         }
 
         if is_glob {

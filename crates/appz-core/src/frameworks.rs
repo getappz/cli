@@ -115,37 +115,13 @@ const ELIXIR_FRAMEWORKS: &[(&[&str], &str)] = &[
     (&["absinthe"], "Absinthe (GraphQL)"),
 ];
 
-/// Parse a JSON value as an object or return empty.
-fn parse_json_deps(content: &str) -> Vec<String> {
-    let Ok(val) = self::json::parse(content) else {
-        return Vec::new();
-    };
-
-    fn get_deps(val: &self::json::Value, key: &str) -> Vec<String> {
-        match val {
-            self::json::Value::Object(map) => {
-                if let Some(self::json::Value::Object(deps)) = map.get(key) {
-                    deps.iter().map(|(k, _)| k.clone()).collect()
-                } else {
-                    Vec::new()
-                }
-            }
-            _ => Vec::new(),
-        }
-    }
-
-    let mut deps = get_deps(&val, "dependencies");
-    deps.extend(get_deps(&val, "devDependencies"));
-    deps
-}
-
 /// Scan package.json content for known frameworks.
 pub fn scan_npm(content: &str) -> Vec<DetectedFramework> {
-    let deps = parse_json_deps(content);
+    let deps = crate::pkg::parse_deps(content);
     let mut found = Vec::new();
 
     for (pkgs, name) in NPM_FRAMEWORKS {
-        if pkgs.iter().any(|p| deps.iter().any(|d| d == p || d.starts_with(p))) {
+        if pkgs.iter().any(|p| deps.keys().any(|d| d == p || d.starts_with(p))) {
             found.push(DetectedFramework { name, ecosystem: "npm" });
         }
     }
@@ -157,17 +133,15 @@ pub fn scan_npm(content: &str) -> Vec<DetectedFramework> {
 pub fn scan_cargo(content: &str) -> Vec<DetectedFramework> {
     let mut found = Vec::new();
 
-    // Simple parser: find [dependencies] or [dev-dependencies] sections,
-    // then look for crate names on subsequent lines.
-    let in_deps = content
-        .lines()
-        .skip_while(|l| !l.trim().starts_with('['));
-    let deps: Vec<&str> = in_deps
-        .take_while(|l| l.trim().starts_with('[') || l.contains('='))
-        .filter(|l| l.contains('='))
-        .filter_map(|l| l.split('=').next())
-        .map(|s| s.trim())
-        .collect();
+    let Ok(val) = content.parse::<toml::Value>() else {
+        return found;
+    };
+    let mut deps: Vec<&str> = Vec::new();
+    for key in ["dependencies", "dev-dependencies"] {
+        if let Some(table) = val.get(key).and_then(|v| v.as_table()) {
+            deps.extend(table.keys().map(String::as_str));
+        }
+    }
 
     for (crates, name) in CARGO_FRAMEWORKS {
         if crates.iter().any(|c| deps.contains(c)) {
@@ -241,175 +215,4 @@ pub fn scan_elixir(content: &str) -> Vec<DetectedFramework> {
     }
 
     found
-}
-
-/// Minimal JSON parser for dependency scanning (no serde dep).
-#[allow(dead_code)]
-mod json {
-    use std::collections::BTreeMap;
-
-    #[derive(Debug)]
-    pub enum Value {
-        Object(BTreeMap<String, Value>),
-        Array(Vec<Value>),
-        String(String),
-        Number(f64),
-        Bool(bool),
-        Null,
-    }
-
-    impl Value {
-        pub fn entries(&self) -> Vec<(String, &Value)> {
-            match self {
-                Value::Object(map) => map.iter().map(|(k, v)| (k.clone(), v)).collect(),
-                _ => Vec::new(),
-            }
-        }
-
-        pub fn as_str(&self) -> Option<&str> {
-            match self {
-                Value::String(s) => Some(s),
-                _ => None,
-            }
-        }
-
-        pub fn get(&self, key: &str) -> Option<&Value> {
-            match self {
-                Value::Object(map) => map.get(key),
-                _ => None,
-            }
-        }
-    }
-
-    pub fn parse(input: &str) -> Result<Value, String> {
-        let chars: Vec<char> = input.chars().collect();
-        let mut pos = 0;
-        skip_ws(&chars, &mut pos);
-        parse_value(&chars, &mut pos)
-    }
-
-    fn skip_ws(chars: &[char], pos: &mut usize) {
-        while *pos < chars.len() && chars[*pos].is_ascii_whitespace() {
-            *pos += 1;
-        }
-    }
-
-    fn parse_value(chars: &[char], pos: &mut usize) -> Result<Value, String> {
-        skip_ws(chars, pos);
-        if *pos >= chars.len() {
-            return Err("unexpected end".to_string());
-        }
-        match chars[*pos] {
-            '"' => parse_string(chars, pos).map(Value::String),
-            '{' => parse_object(chars, pos).map(Value::Object),
-            '[' => parse_array(chars, pos).map(Value::Array),
-            't' | 'f' => parse_bool(chars, pos).map(Value::Bool),
-            'n' => parse_null(chars, pos).map(|_| Value::Null),
-            _ if chars[*pos].is_ascii_digit() || chars[*pos] == '-' => {
-                parse_number(chars, pos).map(Value::Number)
-            }
-            c => Err(format!("unexpected char: {c} at pos {pos}")),
-        }
-    }
-
-    fn parse_string(chars: &[char], pos: &mut usize) -> Result<String, String> {
-        assert_eq!(chars[*pos], '"');
-        *pos += 1;
-        let mut s = String::new();
-        while *pos < chars.len() && chars[*pos] != '"' {
-            if chars[*pos] == '\\' {
-                *pos += 1;
-                if *pos < chars.len() {
-                    s.push(chars[*pos]);
-                    *pos += 1;
-                }
-            } else {
-                s.push(chars[*pos]);
-                *pos += 1;
-            }
-        }
-        if *pos < chars.len() {
-            *pos += 1; // skip closing "
-        }
-        Ok(s)
-    }
-
-    fn parse_number(chars: &[char], pos: &mut usize) -> Result<f64, String> {
-        let start = *pos;
-        if chars[*pos] == '-' {
-            *pos += 1;
-        }
-        while *pos < chars.len() && (chars[*pos].is_ascii_digit() || chars[*pos] == '.') {
-            *pos += 1;
-        }
-        let s: String = chars[start..*pos].iter().collect();
-        s.parse::<f64>().map_err(|e| format!("{e}"))
-    }
-
-    fn parse_bool(chars: &[char], pos: &mut usize) -> Result<bool, String> {
-        if chars[*pos..].starts_with(&['t', 'r', 'u', 'e']) {
-            *pos += 4;
-            Ok(true)
-        } else if chars[*pos..].starts_with(&['f', 'a', 'l', 's', 'e']) {
-            *pos += 5;
-            Ok(false)
-        } else {
-            Err("expected bool".to_string())
-        }
-    }
-
-    fn parse_null(chars: &[char], pos: &mut usize) -> Result<(), String> {
-        if chars[*pos..].starts_with(&['n', 'u', 'l', 'l']) {
-            *pos += 4;
-            Ok(())
-        } else {
-            Err("expected null".to_string())
-        }
-    }
-
-    fn parse_object(chars: &[char], pos: &mut usize) -> Result<BTreeMap<String, Value>, String> {
-        assert_eq!(chars[*pos], '{');
-        *pos += 1;
-        let mut map = BTreeMap::new();
-        loop {
-            skip_ws(chars, pos);
-            if *pos < chars.len() && chars[*pos] == '}' {
-                *pos += 1;
-                return Ok(map);
-            }
-            let key = parse_value(chars, pos)?;
-            let key = match key {
-                Value::String(s) => s,
-                _ => return Err("expected string key".to_string()),
-            };
-            skip_ws(chars, pos);
-            if *pos < chars.len() && chars[*pos] == ':' {
-                *pos += 1;
-            }
-            let val = parse_value(chars, pos)?;
-            map.insert(key, val);
-            skip_ws(chars, pos);
-            if *pos < chars.len() && chars[*pos] == ',' {
-                *pos += 1;
-            }
-        }
-    }
-
-    fn parse_array(chars: &[char], pos: &mut usize) -> Result<Vec<Value>, String> {
-        assert_eq!(chars[*pos], '[');
-        *pos += 1;
-        let mut arr = Vec::new();
-        loop {
-            skip_ws(chars, pos);
-            if *pos < chars.len() && chars[*pos] == ']' {
-                *pos += 1;
-                return Ok(arr);
-            }
-            arr.push(parse_value(chars, pos)?);
-            skip_ws(chars, pos);
-            if *pos < chars.len() && chars[*pos] == ',' {
-                *pos += 1;
-            }
-        }
-    }
 }

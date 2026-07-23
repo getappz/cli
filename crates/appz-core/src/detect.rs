@@ -282,23 +282,15 @@ fn scan_frameworks(fs: &DetectorFilesystem, slug: &str) -> Vec<frameworks::Detec
     }
 }
 
-/// Extract version from package.json matchPackage regex.
+/// Extract version from package.json for a Framework's matchPackage detector.
 fn detect_package_version(fs: &DetectorFilesystem, tc: &Framework) -> Option<String> {
     let detectors = tc.detectors.every.iter().chain(tc.detectors.some.iter());
     for d in detectors {
         if let Some(pkg) = d.match_package {
             let content = fs.read_file("package.json")?;
-            let pattern = format!(
-                r#""(dev)?(d|D)ependencies":\s*{{[^}}]*"{}":\s*"(.+?)"[^}}]*}}"#,
-                regex::escape(pkg)
-            );
-            let re = regex::Regex::new(&pattern).ok()?;
-            if let Some(caps) = re.captures(&content) {
-                if let Some(v) = caps.get(2) {
-                    let v = v.as_str().to_string();
-                    if !v.is_empty() {
-                        return Some(v);
-                    }
+            if let Some(v) = crate::pkg::parse_deps(&content).get(pkg) {
+                if !v.is_empty() {
+                    return Some(v.clone());
                 }
             }
         }
@@ -381,52 +373,6 @@ pub fn pm_install_cmd(slug: &str) -> &'static str {
     }
 }
 
-/// Resolve the build command: prefer framework-specific, fall back to toolchain default.
-pub fn resolve_build(
-    _toolchain_slug: &str,
-    toolchain_build: Option<String>,
-    frameworks: &[frameworks::DetectedFramework],
-) -> Option<String> {
-    for fw in frameworks {
-        if let Some(cmd) = framework_build_cmd(fw.name) {
-            return Some(cmd.to_string());
-        }
-    }
-    toolchain_build
-}
-
-fn framework_build_cmd(name: &str) -> Option<&'static str> {
-    Some(match name {
-        "Next.js" => "next build",
-        "React" => "react-scripts build",
-        "Vue" => "vue-cli-service build",
-        "Angular" => "ng build",
-        "Svelte" => "rollup -c",
-        "SvelteKit" => "vite build",
-        "Nuxt" => "nuxt build",
-        "Astro" => "astro build",
-        "Gatsby" => "gatsby build",
-        "Remix" => "remix build",
-        "SolidJS" => "vinxi build",
-        "NestJS" => "nest build",
-        "Express" | "Fastify" | "Hono" | "Elysia" => "npm run build",
-        "Axum" | "Actix" => "cargo build",
-        "Rocket" => "cargo build",
-        "Leptos" => "cargo leptos build",
-        "Yew" => "trunk build",
-        "Dioxus" => "dx build",
-        "Django" => "python manage.py collectstatic",
-        "FastAPI" | "Flask" => "pip install -r requirements.txt",
-        "Gin" | "Echo" | "Chi" | "Fiber" | "Templ" => "go build -o ./bin/main .",
-        "Buffalo" => "buffalo build",
-        "Ruby on Rails" => "rails assets:precompile",
-        "Sinatra" | "Hanami" => "bundle exec rake",
-        "Spring Boot" | "Quarkus" | "Micronaut" => "mvn package",
-        "Phoenix" => "mix release",
-        _ => return None,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -434,7 +380,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn test_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("flare-devops-test-{}", name));
+        let dir = std::env::temp_dir().join(format!("appz-core-test-{}", name));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir

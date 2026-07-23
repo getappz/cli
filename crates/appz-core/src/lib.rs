@@ -5,12 +5,13 @@ mod doctor;
 mod frameworks;
 mod fs;
 mod generator;
+mod pkg;
 mod storage;
 mod toolchains;
 
 pub use claude::generate_claude_md;
 pub use mise::{ensure_mise, mise_on_path};
-pub use detect::{detect_monorepo, detect_toolchains, pm_install_cmd, resolve_build, DetectedToolchain, MonorepoConfig};
+pub use detect::{detect_monorepo, detect_toolchains, pm_install_cmd, DetectedToolchain, MonorepoConfig};
 pub use doctor::{run_doctor, DoctorReport};
 pub use fs::DetectorFilesystem;
 pub use generator::generate;

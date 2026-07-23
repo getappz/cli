@@ -7,7 +7,14 @@ AUTOINSTALL="${AUTOINSTALL:-false}"
 echo "appz feature: installing appz (version: ${VERSION})"
 
 if ! command -v curl >/dev/null 2>&1; then
-  echo "Error: curl not found in this base image — appz's installer requires it."
+  if command -v apt-get >/dev/null 2>&1; then
+    echo "curl not found — installing via apt-get..."
+    apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
+  fi
+fi
+
+if ! command -v curl >/dev/null 2>&1; then
+  echo "Error: curl not found in this base image and could not be installed automatically — appz's installer requires it."
   exit 1
 fi
 

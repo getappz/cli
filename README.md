@@ -1,3 +1,13 @@
+<div align="center">
+
+<pre>
++-+-+-+-+
+|a|p|p|z|
++-+-+-+-+
+</pre>
+
+</div>
+
 # appz
 
 Zero-config project toolchain detection and lifecycle runner. `appz` detects

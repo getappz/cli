@@ -204,13 +204,12 @@ pub static FRAMEWORKS: &[Framework] = &[
     POSTGRES,
     REDIS,
     MASTRA,
-    OTHER,
 ];
 // ── JS meta-frameworks (mise_plugin: "node") ─────────────
 pub static CONTAINER: Framework = fw!(
     "Container", "container", "docker", &[], "latest",
     &[], &[d!("Dockerfile.vercel"), d!("Containerfile.vercel")],
-    cmds!(C!("docker build ."), C!("None"), C!("None")),
+    cmds!(C!("docker build ."), NONE!(), NONE!()),
 );
 pub static BLITZJS_LEGACY: Framework = fw_ext!(
     "Blitz.js (Legacy)", "blitzjs", "node", &[], "lts",
@@ -341,6 +340,12 @@ pub static SVELTE: Framework = fw_ext!(
     &[], DetectionConfidence::Strong,
     Some("public"), None,
 );
+// NOTE: match_package only checks for a dependency *key* in package.json,
+// not its version — so a version-suffixed key like "@sveltejs/kit@1.0.0-next"
+// below can never match a real package.json (versions live in the value).
+// This detector is effectively dead for pre-1.0 SvelteKit; left as-is rather
+// than dropping the version suffix, which would make it match every current
+// SvelteKit project alongside SVELTEKIT below (duplicate detection).
 pub static SVELTEKIT_V0: Framework = fw_ext!(
     "SvelteKit (v0)", "sveltekit", "node", &[], "lts",
     &[], &[d_pkg!("@sveltejs/kit@1.0.0-next")],
@@ -411,7 +416,7 @@ pub static REDWOODJS: Framework = fw_ext!(
 pub static HUGO: Framework = fw!(
     "Hugo", "hugo", "go", &[], "latest",
     &[], &[d!("config.yaml", "baseURL"), d!("config.toml", "baseURL"), d!("config.json", "baseURL")],
-    cmds!(C!("hugo --gc"), C!("None"), C!("hugo server -D -w -p $PORT")),
+    cmds!(C!("hugo --gc"), NONE!(), C!("hugo server -D -w -p $PORT")),
 );
 pub static JEKYLL: Framework = fw!(
     "Jekyll", "jekyll", "ruby", &[], "latest",
@@ -431,7 +436,7 @@ pub static MIDDLEMAN: Framework = fw!(
 pub static ZOLA: Framework = fw!(
     "Zola", "zola", "zola", &[], "latest",
     &[d!("config.toml")], &[],
-    cmds!(C!("zola build"), C!("None"), C!("zola serve --port $PORT")),
+    cmds!(C!("zola build"), NONE!(), C!("zola serve --port $PORT")),
 );
 pub static HYDROGEN: Framework = fw_ext!(
     "Hydrogen (v1)", "hydrogen", "node", &[], "lts",
@@ -793,9 +798,4 @@ pub static MASTRA: Framework = fw_ext!(
     cmds!(C!("npm run build"), C!("npm install"), C!("npm run dev")),
     &["node"], DetectionConfidence::Strong,
     None, None,
-);
-pub static OTHER: Framework = fw!(
-    "Other", "other", "", &[], "latest",
-    &[], &[],
-    cmds!(NONE!(), NONE!(), NONE!())
 );

@@ -2,3 +2,6 @@
 
 # Reference clones of external repos for code research — large, transient, per-machine
 /.refs/
+
+# Per-repo agentflare-backend project link, machine-local, not shared
+/.agentflare/

@@ -1,0 +1,35 @@
+name: "appz"
+description: "Detect toolchains, wire up mise, and run install/build/dev/test/lint/format/deploy for any project."
+author: "getappz"
+branding:
+  icon: "package"
+  color: "purple"
+
+inputs:
+  command:
+    description: "appz subcommand to run (init/install/build/dev/test/lint/format/deploy/doctor)"
+    required: true
+  version:
+    description: "@getappz/cli version to install (npm dist-tag or semver)"
+    required: false
+    default: "latest"
+  working-directory:
+    description: "Directory to run appz in"
+    required: false
+    default: "."
+  args:
+    description: "Extra raw arguments appended to the appz command"
+    required: false
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install appz
+      shell: bash
+      run: npm install -g "@getappz/cli@${{ inputs.version }}"
+
+    - name: Run appz ${{ inputs.command }}
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: appz ${{ inputs.command }} ${{ inputs.args }}

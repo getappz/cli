@@ -55,6 +55,22 @@ over stdio so AI agents can drive appz directly. Tools:
 
 Point an MCP client at `appz mcp` (e.g. `{"command": "appz", "args": ["mcp"]}`).
 
+## GitHub Action
+
+```yaml
+- uses: getappz/cli@v1
+  with:
+    command: deploy   # init/install/build/dev/test/lint/format/deploy/doctor
+    # version: latest
+    # working-directory: .
+    # args: ""
+```
+
+`appz deploy` shells out to each target platform's own CLI (Vercel, Netlify,
+...), so set that platform's native env vars/secrets (e.g. `VERCEL_TOKEN`)
+directly on the step or job — the action doesn't take platform-specific
+inputs.
+
 ## Layout
 
 - `crates/appz` — the CLI binary

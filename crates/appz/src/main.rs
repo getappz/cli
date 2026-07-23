@@ -138,6 +138,17 @@ fn is_tty() -> bool {
     std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
 }
 
+const BRAND: &str = "+-+-+-+-+\n|a|p|p|z|\n+-+-+-+-+";
+
+/// Shown once, at `appz init` — a first-run touch, not decoration on every
+/// command. Skipped outside a real terminal so it never lands in piped/CI
+/// output.
+fn print_brand() {
+    if is_tty() {
+        println!("{BRAND}");
+    }
+}
+
 fn intro(msg: &str) {
     if is_tty() {
         let _ = cliclack::intro(msg);
@@ -166,7 +177,9 @@ fn info(msg: &str) {
     if is_tty() {
         let _ = cliclack::log::info(msg);
     } else {
-        println!("    {msg}");
+        for line in msg.lines() {
+            println!("    {line}");
+        }
     }
 }
 
@@ -370,6 +383,7 @@ fn run_init(args: InitArgs, json: bool) {
         json_out(&toolchains, "ok");
         return;
     }
+    print_brand();
     intro("appz init");
     let canonical = resolve_root(&args.dir);
     let toolchains = do_detect_and_write(&canonical);
@@ -669,57 +683,77 @@ fn run_doctor_cmd(args: DoctorArgs, json: bool) {
 
     intro("appz doctor");
 
+    // cliclack's log::info/step each end their own block with a trailing
+    // blank line — one call per field (the old shape) meant one blank line
+    // per field. Batching a section into a single multi-line call keeps one
+    // bullet + continuation bars for the whole section, with only one
+    // trailing blank at the end of it.
     step("toolchains");
-    for tc in &report.toolchains {
-        let fw: Vec<&str> = tc.frameworks.iter().map(|f| f.name).collect();
-        let fw_str = if fw.is_empty() {
-            String::new()
-        } else {
-            format!(" [{}]", fw.join(", "))
-        };
-        let ver = if tc.version.is_empty() {
-            String::new()
-        } else {
-            format!(" @{}", tc.version)
-        };
-        let build = tc.build_command.as_deref().unwrap_or("-");
-        let dev = tc.dev_command.as_deref().unwrap_or("-");
-        info(&format!(
-            "  {}: {}{}{}  build: {}  dev: {}",
-            tc.name, tc.slug, ver, fw_str, build, dev
-        ));
-    }
+    let toolchain_lines: Vec<String> = report
+        .toolchains
+        .iter()
+        .map(|tc| {
+            let fw: Vec<&str> = tc.frameworks.iter().map(|f| f.name).collect();
+            let fw_str = if fw.is_empty() {
+                String::new()
+            } else {
+                format!(" [{}]", fw.join(", "))
+            };
+            let ver = if tc.version.is_empty() {
+                String::new()
+            } else {
+                format!(" @{}", tc.version)
+            };
+            let build = tc.build_command.as_deref().unwrap_or("-");
+            let dev = tc.dev_command.as_deref().unwrap_or("-");
+            format!(
+                "{}: {}{}{}  build: {}  dev: {}",
+                tc.name, tc.slug, ver, fw_str, build, dev
+            )
+        })
+        .collect();
+    info(&if toolchain_lines.is_empty() {
+        "(none detected)".to_string()
+    } else {
+        toolchain_lines.join("\n")
+    });
 
     step("environment");
-    match &report.package_manager {
-        Some(pm) => info(&format!("  package manager: {pm}")),
-        None => info("  package manager: (none detected)"),
-    }
+    let mut env_lines = vec![match &report.package_manager {
+        Some(pm) => format!("package manager: {pm}"),
+        None => "package manager: (none detected)".to_string(),
+    }];
     if let Some(ref mgr) = report.monorepo.manager {
-        info(&format!(
-            "  monorepo: {} ({} paths)",
+        env_lines.push(format!(
+            "monorepo: {} ({} paths)",
             mgr,
             report.monorepo.package_paths.len()
         ));
     }
+    info(&env_lines.join("\n"));
 
     step("config");
-    for (label, exists) in [
+    let config_line = [
         ("appz.jsonc", report.has_appz_jsonc),
         ("CLAUDE.md", report.has_claude_md),
         ("AGENTS.md", report.has_agents_md),
         (".mise.toml", report.has_mise_config),
         ("state (JSONL)", report.has_state),
-    ] {
-        let icon = if exists { "✓" } else { "✗" };
-        info(&format!("  {icon} {label}"));
-    }
+    ]
+    .iter()
+    .map(|(label, exists)| format!("{} {label}", if *exists { "✓" } else { "✗" }))
+    .collect::<Vec<_>>()
+    .join("   ");
+    info(&config_line);
 
     if !report.suggestions.is_empty() {
         step("suggestions");
-        for s in &report.suggestions {
-            info(&format!("  → {s}"));
-        }
+        let suggestion_lines: Vec<String> = report
+            .suggestions
+            .iter()
+            .map(|s| format!("→ {s}"))
+            .collect();
+        info(&suggestion_lines.join("\n"));
     }
 
     outro("diagnosis complete");

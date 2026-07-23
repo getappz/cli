@@ -7,14 +7,14 @@
 use std::path::PathBuf;
 
 use rmcp::{
+    ErrorData as McpError, ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerInfo},
     schemars, tool, tool_handler, tool_router,
     transport::stdio,
-    ErrorData as McpError, ServerHandler, ServiceExt,
 };
 
-use appz_core::{detect_toolchains, run_doctor, DetectedToolchain};
+use appz_core::{DetectedToolchain, detect_toolchains, run_doctor};
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct DirArg {
@@ -163,12 +163,12 @@ impl ServerHandler for AppzServer {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("appz", env!("CARGO_PKG_VERSION")))
             .with_instructions(
-            "appz drives project toolchains. Tools: `detect` (JSON toolchain \
+                "appz drives project toolchains. Tools: `detect` (JSON toolchain \
              report), `doctor` (JSON diagnosis + suggestions), `run` (execute \
              install/build/test/lint/format and return output). Pass `dir` to \
              target a project; it defaults to the current directory."
-                .to_string(),
-        )
+                    .to_string(),
+            )
     }
 }
 
@@ -180,7 +180,10 @@ pub fn serve() -> Result<(), String> {
             .serve(stdio())
             .await
             .map_err(|e| format!("serve: {e}"))?;
-        service.waiting().await.map_err(|e| format!("waiting: {e}"))?;
+        service
+            .waiting()
+            .await
+            .map_err(|e| format!("waiting: {e}"))?;
         Ok(())
     })
 }

@@ -48,22 +48,47 @@ fn ensure_gitignored(root: &Path) {
     }
     content.push_str("# appz local state (not shared)\n.appz/\n");
     fs::write(&gitignore, content).unwrap_or_else(|e| {
-        eprintln!("error: cannot write '.gitignore' at '{}': {e}", gitignore.display());
+        eprintln!(
+            "error: cannot write '.gitignore' at '{}': {e}",
+            gitignore.display()
+        );
         std::process::exit(1);
     });
 }
 
 /// Files whose content changes should trigger re-detection + re-install.
 const INPUT_FILES: &[&str] = &[
-    "package.json", "package-lock.json",
-    "pnpm-lock.yaml", "yarn.lock", "bun.lockb", "bun.lock",
-    "Cargo.toml", "Cargo.lock",
-    "go.mod", "go.sum",
-    ".nvmrc", ".node-version", ".python-version", ".ruby-version", ".go-version",
-    "rust-toolchain.toml", "rust-toolchain", ".terraform-version",
-    "requirements.txt", "pyproject.toml", "Pipfile", "Gemfile", "Gemfile.lock", "setup.py",
-    "turbo.json", "rush.json", "nx.json",
-    "Dockerfile", "Dockerfile.vercel", "mcp.json", "mix.exs",
+    "package.json",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "bun.lockb",
+    "bun.lock",
+    "Cargo.toml",
+    "Cargo.lock",
+    "go.mod",
+    "go.sum",
+    ".nvmrc",
+    ".node-version",
+    ".python-version",
+    ".ruby-version",
+    ".go-version",
+    "rust-toolchain.toml",
+    "rust-toolchain",
+    ".terraform-version",
+    "requirements.txt",
+    "pyproject.toml",
+    "Pipfile",
+    "Gemfile",
+    "Gemfile.lock",
+    "setup.py",
+    "turbo.json",
+    "rush.json",
+    "nx.json",
+    "Dockerfile",
+    "Dockerfile.vercel",
+    "mcp.json",
+    "mix.exs",
 ];
 
 /// Hash of all input files in the project that affect detection/mise config.
@@ -134,7 +159,10 @@ impl From<&DetectedToolchain> for StoredToolchain {
 pub fn write_state(root: &Path, toolchains: &[DetectedToolchain]) -> PathBuf {
     let appz_dir = root.join(".appz");
     fs::create_dir_all(&appz_dir).unwrap_or_else(|e| {
-        eprintln!("error: cannot create '.appz' dir '{}': {e}", appz_dir.display());
+        eprintln!(
+            "error: cannot create '.appz' dir '{}': {e}",
+            appz_dir.display()
+        );
         std::process::exit(1);
     });
     ensure_gitignored(root);
@@ -240,7 +268,11 @@ mod tests {
         fs::write(dir.join("package.json"), r#"{"name":"x"}"#).unwrap();
 
         let h1 = compute_input_hash(&dir);
-        fs::write(dir.join("package.json"), r#"{"name":"y","dependencies":{"next":"^14"}}"#).unwrap();
+        fs::write(
+            dir.join("package.json"),
+            r#"{"name":"y","dependencies":{"next":"^14"}}"#,
+        )
+        .unwrap();
         let h2 = compute_input_hash(&dir);
         assert_ne!(h1, h2);
         let _ = fs::remove_dir_all(&dir);
@@ -254,8 +286,14 @@ mod tests {
 
         write_state(&dir, &[sample_toolchain()]);
 
-        assert!(dir.join("mise.toml").exists(), "mise.toml written to project root");
-        assert!(dir.join(".appz").join("state.jsonl").exists(), "state cache written under .appz/");
+        assert!(
+            dir.join("mise.toml").exists(),
+            "mise.toml written to project root"
+        );
+        assert!(
+            dir.join(".appz").join("state.jsonl").exists(),
+            "state cache written under .appz/"
+        );
         let toml = fs::read_to_string(dir.join("mise.toml")).unwrap();
         assert!(toml.contains("node = \"20\""));
 
@@ -267,14 +305,27 @@ mod tests {
         let dir = std::env::temp_dir().join("appz-write-state-merge");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("mise.toml"), "[tasks.build]\nrun = \"echo hi\"\n# keep me\n").unwrap();
+        fs::write(
+            dir.join("mise.toml"),
+            "[tasks.build]\nrun = \"echo hi\"\n# keep me\n",
+        )
+        .unwrap();
 
         write_state(&dir, &[sample_toolchain()]);
 
         let toml = fs::read_to_string(dir.join("mise.toml")).unwrap();
-        assert!(toml.contains("[tasks.build]"), "existing table preserved:\n{toml}");
-        assert!(toml.contains("# keep me"), "existing comment preserved:\n{toml}");
-        assert!(toml.contains("node = \"20\""), "tools table upserted:\n{toml}");
+        assert!(
+            toml.contains("[tasks.build]"),
+            "existing table preserved:\n{toml}"
+        );
+        assert!(
+            toml.contains("# keep me"),
+            "existing comment preserved:\n{toml}"
+        );
+        assert!(
+            toml.contains("node = \"20\""),
+            "tools table upserted:\n{toml}"
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -289,7 +340,11 @@ mod tests {
         write_state(&dir, &[sample_toolchain()]);
 
         let gitignore = fs::read_to_string(dir.join(".gitignore")).unwrap();
-        assert_eq!(gitignore.matches(".appz/").count(), 1, "entry appended exactly once:\n{gitignore}");
+        assert_eq!(
+            gitignore.matches(".appz/").count(),
+            1,
+            "entry appended exactly once:\n{gitignore}"
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }

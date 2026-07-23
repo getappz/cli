@@ -37,8 +37,8 @@ impl DetectorFilesystem {
     }
 
     fn abs_path(&self, name: &str) -> PathBuf {
-        if name.starts_with('/') {
-            self.root.join(&name[1..])
+        if let Some(stripped) = name.strip_prefix('/') {
+            self.root.join(stripped)
         } else {
             self.root.join(name)
         }
@@ -46,16 +46,16 @@ impl DetectorFilesystem {
 
     pub fn has_path(&self, path: &str) -> bool {
         let mut cache = self.path_cache.lock().unwrap();
-        *cache.entry(path.to_string()).or_insert_with(|| {
-            self.abs_path(path).exists()
-        })
+        *cache
+            .entry(path.to_string())
+            .or_insert_with(|| self.abs_path(path).exists())
     }
 
     pub fn is_file(&self, name: &str) -> bool {
         let mut cache = self.file_cache.lock().unwrap();
-        *cache.entry(name.to_string()).or_insert_with(|| {
-            self.abs_path(name).is_file()
-        })
+        *cache
+            .entry(name.to_string())
+            .or_insert_with(|| self.abs_path(name).is_file())
     }
 
     pub fn read_file(&self, name: &str) -> Option<String> {
@@ -84,13 +84,13 @@ impl DetectorFilesystem {
                             .filter_map(|e| e.ok())
                             .map(|e| {
                                 let name = e.file_name().to_string_lossy().to_string();
-                                let path = format!(
-                                    "{}/{}",
-                                    dir_path.trim_end_matches('/'),
-                                    name
-                                );
+                                let path = format!("{}/{}", dir_path.trim_end_matches('/'), name);
                                 let is_file = e.file_type().map(|t| t.is_file()).unwrap_or(false);
-                                FsEntry { name, path, is_file }
+                                FsEntry {
+                                    name,
+                                    path,
+                                    is_file,
+                                }
                             })
                             .collect::<Vec<_>>()
                     })
@@ -103,11 +103,19 @@ impl DetectorFilesystem {
     pub fn has_glob(&self, pattern: &str) -> bool {
         let full = self.root.join(pattern);
         let s = full.to_string_lossy();
-        glob(&s).ok().is_some_and(|entries| entries.filter_map(|e| e.ok()).any(|p| p.is_file()))
+        glob(&s)
+            .ok()
+            .is_some_and(|entries| entries.filter_map(|e| e.ok()).any(|p| p.is_file()))
     }
 
     /// Check a detector: exact path or glob, with optional content regex and package match.
-    pub fn check_detector(&self, path: &str, is_glob: bool, match_content: Option<&str>, match_package: Option<&str>) -> bool {
+    pub fn check_detector(
+        &self,
+        path: &str,
+        is_glob: bool,
+        match_content: Option<&str>,
+        match_package: Option<&str>,
+    ) -> bool {
         // match_package: check if a dependency exists in package.json
         if let Some(pkg) = match_package {
             let content = match self.read_file("package.json") {
@@ -139,11 +147,9 @@ impl DetectorFilesystem {
                         Some(r) => r,
                         None => return false,
                     };
-                    entries.iter().any(|p| {
-                        fs::read_to_string(p)
-                            .ok()
-                            .is_some_and(|c| re.is_match(&c))
-                    })
+                    entries
+                        .iter()
+                        .any(|p| fs::read_to_string(p).ok().is_some_and(|c| re.is_match(&c)))
                 }
             }
         } else {
@@ -154,9 +160,8 @@ impl DetectorFilesystem {
                 None => true,
                 Some(re_str) => {
                     let content = self.read_file(path);
-                    content.is_some_and(|c| {
-                        Regex::new(re_str).ok().is_some_and(|re| re.is_match(&c))
-                    })
+                    content
+                        .is_some_and(|c| Regex::new(re_str).ok().is_some_and(|re| re.is_match(&c)))
                 }
             }
         }

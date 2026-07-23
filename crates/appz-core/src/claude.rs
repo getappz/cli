@@ -23,9 +23,17 @@ pub fn generate_claude_md(report: &DoctorReport, root: &Path) -> String {
     lines.push(String::new());
 
     for tc in &report.toolchains {
-        let ver = if tc.version.is_empty() || tc.version == "latest" { String::new() } else { format!(" @{}", tc.version) };
+        let ver = if tc.version.is_empty() || tc.version == "latest" {
+            String::new()
+        } else {
+            format!(" @{}", tc.version)
+        };
         let fw: Vec<&str> = tc.frameworks.iter().map(|f| f.name).collect();
-        let fw_str = if fw.is_empty() { String::new() } else { format!(" — {}", fw.join(", ")) };
+        let fw_str = if fw.is_empty() {
+            String::new()
+        } else {
+            format!(" — {}", fw.join(", "))
+        };
         lines.push(format!("- **{}{}** — {}{}", tc.name, ver, tc.slug, fw_str));
     }
 
@@ -79,7 +87,11 @@ pub fn generate_claude_md(report: &DoctorReport, root: &Path) -> String {
         lines.push(String::new());
         for tc in &report.toolchains {
             if !tc.mise_plugin.is_empty() {
-                let v = if tc.version.is_empty() || tc.version == "latest" { String::new() } else { format!("@{}", tc.version) };
+                let v = if tc.version.is_empty() || tc.version == "latest" {
+                    String::new()
+                } else {
+                    format!("@{}", tc.version)
+                };
                 lines.push(format!("- `{plugin}{v}`", plugin = tc.mise_plugin));
             }
         }
@@ -91,7 +103,10 @@ pub fn generate_claude_md(report: &DoctorReport, root: &Path) -> String {
     lines.push(String::new());
     lines.push("This project uses `appz` to manage toolchains and commands.".to_string());
     lines.push(String::new());
-    lines.push("- Setup: `appz install` — detect toolchains + install mise tools + dependencies".to_string());
+    lines.push(
+        "- Setup: `appz install` — detect toolchains + install mise tools + dependencies"
+            .to_string(),
+    );
     lines.push("- Build: `appz build`".to_string());
     lines.push("- Dev: `appz dev`".to_string());
     lines.push("- Test: `appz test`".to_string());

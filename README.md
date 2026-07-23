@@ -171,6 +171,22 @@ Point an MCP client at `appz mcp` (e.g. `{"command": "appz", "args": ["mcp"]}`).
 directly on the step or job — the action doesn't take platform-specific
 inputs.
 
+## devcontainer Feature
+
+```json
+"features": {
+  "ghcr.io/getappz/cli/appz:1": {
+    "version": "latest",
+    "autoInstall": false
+  }
+}
+```
+
+`autoInstall` runs `appz install` once, after the workspace is created, via the
+Feature's own `postCreateCommand` — if your own `devcontainer.json` also sets
+`postCreateCommand`, both run (the Feature's first), it doesn't override
+yours.
+
 ## Layout
 
 - `crates/appz` — the CLI binary

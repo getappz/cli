@@ -22,6 +22,56 @@ fn resolve_target_dir(repo: &str, force: bool) -> Result<std::path::PathBuf, Str
     Ok(target)
 }
 
+/// Capture `gh`'s stdout for `args`, or `None` if `gh` is missing, not
+/// authenticated, or exits non-zero. Never panics — an ownership check that
+/// can't be confirmed must fail closed, not crash `appz init`.
+fn gh_stdout(args: &[&str]) -> Option<String> {
+    let output = command::Command::new("gh").args(args).exec().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Whether the authenticated `gh` user owns `owner` — either directly (their
+/// own login) or via an org they belong to. Only meaningful for GitHub;
+/// GitLab/Bitbucket have no equivalent check via `gh`, so they always report
+/// `false` (routing the caller to the template-download path).
+fn is_owned(host: appz_core::Host, owner: &str) -> bool {
+    if host != appz_core::Host::GitHub {
+        return false;
+    }
+    let Some(login) = gh_stdout(&["api", "user", "--jq", ".login"]) else {
+        return false;
+    };
+    if login.eq_ignore_ascii_case(owner) {
+        return true;
+    }
+    let Some(orgs) = gh_stdout(&["api", "user/orgs", "--jq", ".[].login"]) else {
+        return false;
+    };
+    orgs.lines().any(|org| org.eq_ignore_ascii_case(owner))
+}
+
+/// `git clone <url> <target>` — a full clone (history, branches) since this
+/// path is only taken for repos the user owns and may push back to.
+fn clone_repo(remote: &appz_core::RemoteSource, target: &std::path::Path) -> Result<(), String> {
+    let output = command::Command::new("git")
+        .arg("clone")
+        .arg(&remote.url)
+        .arg(target)
+        .exec()
+        .map_err(|e| format!("failed to run git clone: {e}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "git clone failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

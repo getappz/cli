@@ -10,6 +10,24 @@ fn resolve_target_dir(repo: &str, force: bool) -> Result<std::path::PathBuf, Str
     let target = cwd.join(repo);
     if target.exists() {
         if force {
+            // Defense in depth: a parsed repo name is already checked upstream
+            // to reject "." and "..", but OS-specific path normalization
+            // (e.g. Windows silently stripping trailing spaces/dots from a
+            // path component) can make other strings resolve to the same
+            // dangerous locations despite not matching that string check.
+            // Canonicalize and verify `target` is genuinely a direct child of
+            // `cwd` — checking filesystem identity, not string content —
+            // before ever removing anything.
+            let canonical_cwd = std::fs::canonicalize(&cwd)
+                .map_err(|e| format!("cannot resolve current directory: {e}"))?;
+            let canonical_target = std::fs::canonicalize(&target)
+                .map_err(|e| format!("cannot resolve '{}': {e}", target.display()))?;
+            if canonical_target.parent() != Some(canonical_cwd.as_path()) {
+                return Err(format!(
+                    "refusing to remove '{}' — it does not resolve to a direct child of the current directory",
+                    target.display()
+                ));
+            }
             std::fs::remove_dir_all(&target)
                 .map_err(|e| format!("failed to remove existing '{}': {e}", target.display()))?;
         } else {
@@ -266,6 +284,33 @@ mod tests {
         let target = result.unwrap();
         assert!(!target.join("marker.txt").exists());
         let _ = fs::remove_dir_all(&cwd);
+    }
+
+    #[test]
+    fn resolve_target_dir_refuses_to_remove_non_child_paths() {
+        let _guard = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let cwd = std::env::temp_dir().join(format!("appz-init-test-traversal-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&cwd);
+        fs::create_dir_all(&cwd).unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&cwd).unwrap();
+
+        // " ." resolves on Windows filesystem lookups to the same location as
+        // the current directory itself (trailing space/dot stripped by path
+        // normalization), despite not being the literal string "." — this is
+        // the confirmed bypass this fix closes.
+        let result = resolve_target_dir(" .", true);
+
+        let still_exists_after = cwd.exists();
+
+        std::env::set_current_dir(&prev).unwrap();
+        let _ = fs::remove_dir_all(&cwd);
+
+        assert!(result.is_err(), "expected rejection of a non-child target, got: {:?}", result);
+        assert!(
+            still_exists_after,
+            "the current directory must NOT have been deleted"
+        );
     }
 
     #[test]

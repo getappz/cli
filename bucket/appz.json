@@ -1,10 +1,10 @@
 {
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Detect toolchains, wire up mise, and run install/build/dev/test/lint/format/doctor for any project.",
   "homepage": "https://github.com/getappz/cli",
   "license": "Apache-2.0",
-  "url": "https://github.com/getappz/cli/releases/download/v0.1.0/appz-x86_64-pc-windows-msvc.zip",
-  "hash": "sha256:8ee5e24bc79530e98fc153ef2b1e4a42ff60793d6badeae7b1b314e01e894066",
+  "url": "https://github.com/getappz/cli/releases/download/v0.2.0/appz-x86_64-pc-windows-msvc.zip",
+  "hash": "sha256:90e2da9a22696aab1c62b3bbcffe578c215cfe91a6007a5c01833fd3901ebf04",
   "bin": "appz.exe",
   "checkver": "github",
   "autoupdate": {

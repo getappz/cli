@@ -72,16 +72,23 @@ mod tests {
     fn find_node_modules_bin_paths_walks_up_from_nested_dir() {
         let root = std::env::temp_dir().join("appz-paths-test-nested");
         let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join("node_modules/.bin")).unwrap();
-        let nested = root.join("packages/site");
+        fs::create_dir_all(root.join("node_modules").join(".bin")).unwrap();
+        let nested = root.join("packages").join("site");
         fs::create_dir_all(&nested).unwrap();
-        fs::create_dir_all(nested.join("node_modules/.bin")).unwrap();
+        fs::create_dir_all(nested.join("node_modules").join(".bin")).unwrap();
+
+        // Canonicalize the expected dirs the same way the function under
+        // test does — on some Windows runners (e.g. GitHub Actions'
+        // `runneradmin` user) canonicalize resolves to the 8.3 short name,
+        // so comparing against a non-canonicalized path is flaky.
+        let canonical_nested = canonicalize(&nested).unwrap();
+        let canonical_root = canonicalize(&root).unwrap();
 
         let found = find_node_modules_bin_paths(&nested);
 
         assert_eq!(found.len(), 2);
-        assert_eq!(found[0], nested.join("node_modules/.bin"));
-        assert_eq!(found[1], root.join("node_modules/.bin"));
+        assert_eq!(found[0], canonical_nested.join("node_modules").join(".bin"));
+        assert_eq!(found[1], canonical_root.join("node_modules").join(".bin"));
         let _ = fs::remove_dir_all(&root);
     }
 

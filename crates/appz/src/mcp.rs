@@ -77,9 +77,7 @@ impl AppzServer {
 
     fn resolve(dir: &Option<String>) -> PathBuf {
         let raw = dir.as_deref().unwrap_or(".");
-        PathBuf::from(raw)
-            .canonicalize()
-            .unwrap_or_else(|_| PathBuf::from(raw))
+        appz_core::canonicalize(std::path::Path::new(raw)).unwrap_or_else(|_| PathBuf::from(raw))
     }
 
     fn err(msg: String) -> CallToolResult {
@@ -212,13 +210,15 @@ fn mise_task_name(command: Lifecycle) -> Option<&'static str> {
     }
 }
 
-/// Run one command (no shell), capturing output into a `CallToolResult`.
+/// Run one command, capturing output into a `CallToolResult`. Shell-wrapped
+/// (cmd /C on Windows) so npm's `.cmd`/`.ps1` shims resolve — see the
+/// matching comment on `run_cmd` in main.rs.
 fn exec_one(root: &std::path::Path, prog: &str, args: &[&str]) -> CallToolResult {
-    match std::process::Command::new(prog)
-        .args(args)
-        .current_dir(root)
-        .output()
-    {
+    let mut cmd = command::Command::new(prog);
+    cmd.args(args)
+        .cwd(root)
+        .prepend_paths(appz_core::find_node_modules_bin_paths(root));
+    match cmd.exec() {
         Ok(o) => {
             let mut text = String::from_utf8_lossy(&o.stdout).into_owned();
             text.push_str(&String::from_utf8_lossy(&o.stderr));

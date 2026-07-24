@@ -249,7 +249,7 @@ fn with_spinner<T>(start: &str, done: &str, f: impl FnOnce() -> T) -> T {
 // ── Core logic ──────────────────────────────────────────────────
 
 fn resolve_root(dir: &Path) -> PathBuf {
-    match dir.canonicalize() {
+    match appz_core::canonicalize(dir) {
         Ok(p) => p,
         Err(e) => error(&format!("cannot resolve path '{}': {e}", dir.display())),
     }
@@ -296,11 +296,14 @@ fn scaffold_init(root: &Path) {
 }
 
 fn run_cmd(program: &str, args: &[&str], dir: &std::path::Path) -> bool {
-    match std::process::Command::new(program)
-        .args(args)
-        .current_dir(dir)
-        .status()
-    {
+    // Shell-wrapped (cmd /C on Windows) so npm's `.cmd`/`.ps1` shims resolve —
+    // std::process::Command's direct CreateProcess call won't find them even
+    // with the right PATH, since only a real shell does PATHEXT lookup.
+    let mut cmd = command::Command::new(program);
+    cmd.args(args)
+        .cwd(dir)
+        .prepend_paths(appz_core::find_node_modules_bin_paths(dir));
+    match cmd.exec_interactive() {
         Ok(status) if status.success() => true,
         Ok(status) => std::process::exit(status.code().unwrap_or(1)),
         Err(e) => error(&format!("failed to run '{program}': {e}")),
@@ -580,7 +583,7 @@ fn run_dev(args: DevArgs, json: bool) {
 }
 
 macro_rules! lifecycle_fn {
-    ($name:ident, $ty:ty, $field:ident) => {
+    ($name:ident, $ty:ty, $field:ident, $label:literal) => {
         fn $name(args: $ty, json: bool) {
             let canonical = resolve_root(&args.dir);
 
@@ -594,7 +597,7 @@ macro_rules! lifecycle_fn {
                 return;
             }
 
-            intro(concat!("appz ", stringify!($name)));
+            intro(concat!("appz ", $label));
 
             let canonical = resolve_root(&args.dir);
 
@@ -618,7 +621,7 @@ macro_rules! lifecycle_fn {
                                 std::process::exit(1);
                             }
                         }
-                        outro(concat!(stringify!($name), " complete"));
+                        outro(concat!($label, " complete"));
                         return;
                     }
                 }
@@ -645,14 +648,14 @@ macro_rules! lifecycle_fn {
                     if cmds.is_empty() {
                         error(&format!(
                             "no {} command detected — use --command to specify one",
-                            stringify!($name)
+                            $label
                         ));
                     }
                     cmds
                 }
             };
 
-            step(concat!("running ", stringify!($name), "..."));
+            step(concat!("running ", $label, "..."));
             for cmd in &cmds {
                 let parts: Vec<&str> = cmd.split(' ').collect();
                 let (prog, args) = parts.split_first().unwrap_or((&"npm", &[]));
@@ -660,14 +663,14 @@ macro_rules! lifecycle_fn {
                     std::process::exit(1);
                 }
             }
-            outro(concat!(stringify!($name), " complete"));
+            outro(concat!($label, " complete"));
         }
     };
 }
 
-lifecycle_fn!(run_test, TestArgs, test_command);
-lifecycle_fn!(run_lint, LintArgs, lint_command);
-lifecycle_fn!(run_format, FormatArgs, format_command);
+lifecycle_fn!(run_test, TestArgs, test_command, "test");
+lifecycle_fn!(run_lint, LintArgs, lint_command, "lint");
+lifecycle_fn!(run_format, FormatArgs, format_command, "format");
 
 fn run_doctor_cmd(args: DoctorArgs, json: bool) {
     let canonical = resolve_root(&args.dir);

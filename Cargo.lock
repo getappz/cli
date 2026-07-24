@@ -78,6 +78,7 @@ dependencies = [
  "appz-deploy",
  "clap",
  "cliclack",
+ "command",
  "rmcp",
  "serde",
  "serde_json",

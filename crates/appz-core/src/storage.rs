@@ -111,7 +111,7 @@ const INPUT_FILES: &[&str] = &[
 
 /// Hash of all input files in the project that affect detection/mise config.
 pub fn compute_input_hash(root: &Path) -> String {
-    let canonical = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let canonical = crate::paths::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
     let mut hasher = FnvHasher::new();
     for name in INPUT_FILES {
         let path = canonical.join(name);

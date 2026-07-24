@@ -90,13 +90,24 @@ pub fn parse_remote(source: &str) -> Option<RemoteSource> {
 }
 
 fn split_owner_repo(path: &str) -> Option<(String, String)> {
-    let mut parts = path.split('/').filter(|s| !s.is_empty());
-    let owner = parts.next()?.to_string();
-    let repo = parts.next()?.trim_end_matches(".git").to_string();
+    // A single trailing slash is a common copy-paste artifact from a browser
+    // URL bar and is not an extra path segment; strip at most one before
+    // splitting.
+    let path = path.strip_suffix('/').unwrap_or(path);
+    let mut parts = path.split('/');
+    let owner = parts.next()?;
+    let repo = parts.next()?;
+    // Anything beyond `owner/repo` (a subfolder, `tree/main`, etc.) or an
+    // empty segment in the middle (e.g. `foo//bar`) is not a supported
+    // remote-URL shape — reject rather than silently truncating/collapsing.
+    if parts.next().is_some() {
+        return None;
+    }
+    let repo = repo.trim_end_matches(".git");
     if owner.is_empty() || repo.is_empty() {
         return None;
     }
-    Some((owner, repo))
+    Some((owner.to_string(), repo.to_string()))
 }
 
 /// Build the platform-specific archive-download URL for `ref_name` (a
@@ -171,6 +182,28 @@ mod tests {
         assert!(parse_remote("./foo").is_none());
         assert!(parse_remote("../foo").is_none());
         assert!(parse_remote("C:\\Users\\shiva\\workspace\\appz-dev-site").is_none());
+    }
+
+    #[test]
+    fn parse_remote_rejects_subfolder_path() {
+        assert!(parse_remote("https://github.com/owner/repo/subfolder").is_none());
+    }
+
+    #[test]
+    fn parse_remote_rejects_tree_branch_path() {
+        assert!(parse_remote("https://github.com/owner/repo/tree/main").is_none());
+    }
+
+    #[test]
+    fn parse_remote_rejects_double_slash() {
+        assert!(parse_remote("https://github.com/foo//bar").is_none());
+    }
+
+    #[test]
+    fn parse_remote_allows_single_trailing_slash() {
+        let r = parse_remote("https://github.com/owner/repo/").unwrap();
+        assert_eq!(r.owner, "owner");
+        assert_eq!(r.repo, "repo");
     }
 
     #[test]

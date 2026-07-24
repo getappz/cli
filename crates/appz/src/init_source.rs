@@ -194,6 +194,29 @@ fn download_template(remote: &appz_core::RemoteSource, target: &std::path::Path)
     }))
 }
 
+/// Resolve an `appz init` source argument to a local directory: an existing
+/// local path is returned as-is; a remote git URL is cloned (owned repos,
+/// full history) or downloaded as a template (not owned / GitLab / Bitbucket
+/// / no `gh`, no `.git`) into `./<repo>` first.
+pub fn resolve(source: &str, force: bool) -> Result<std::path::PathBuf, String> {
+    match appz_core::classify(source) {
+        appz_core::InitSource::Local(p) => Ok(p),
+        appz_core::InitSource::Remote(remote) => {
+            let target = resolve_target_dir(&remote.repo, force)?;
+            if is_owned(remote.host, &remote.owner) {
+                crate::with_spinner("cloning repository...", "repository cloned", || {
+                    clone_repo(&remote, &target)
+                })?;
+            } else {
+                crate::with_spinner("downloading template...", "template downloaded", || {
+                    download_template(&remote, &target)
+                })?;
+            }
+            Ok(target)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

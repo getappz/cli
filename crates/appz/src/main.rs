@@ -96,14 +96,22 @@ struct DevInstallArgs {
 
 #[derive(Args)]
 struct InitArgs {
-    #[arg(default_value = ".")]
-    dir: PathBuf,
+    #[arg(
+        default_value = ".",
+        help = "Local path, or a github.com/gitlab.com/bitbucket.org URL to clone/download"
+    )]
+    source: String,
     #[arg(long, help = "Skip mise install after init")]
     skip_mise: bool,
     #[arg(long, help = "Skip package manager install after init")]
     skip_pm: bool,
     #[arg(long, help = "Generate CLAUDE.md from detected toolchains")]
     claude: bool,
+    #[arg(
+        long,
+        help = "Overwrite the target directory if a remote source's destination already exists"
+    )]
+    force: bool,
 }
 
 #[derive(Args)]
@@ -411,7 +419,8 @@ fn do_full_install(root: &Path) -> Vec<appz_core::DetectedToolchain> {
 
 fn run_init(args: InitArgs, json: bool) {
     if json {
-        let canonical = resolve_root(&args.dir);
+        let resolved = init_source::resolve(&args.source, args.force).unwrap_or_else(|e| error(&e));
+        let canonical = resolve_root(&resolved);
         let toolchains = do_detect_and_write(&canonical);
         scaffold_init(&canonical);
         if args.claude {
@@ -428,7 +437,8 @@ fn run_init(args: InitArgs, json: bool) {
     }
     print_brand();
     intro("appz init");
-    let canonical = resolve_root(&args.dir);
+    let resolved = init_source::resolve(&args.source, args.force).unwrap_or_else(|e| error(&e));
+    let canonical = resolve_root(&resolved);
     let toolchains = do_detect_and_write(&canonical);
     scaffold_init(&canonical);
     if args.claude {

@@ -72,7 +72,7 @@ scoop install appz
 
 **npm:**
 ```bash
-npm install -g @getappz/appz
+npm install -g @getappz/cli
 ```
 
 **Docker** (pin a version — `latest` isn't tied to a specific verifiable
@@ -88,7 +88,7 @@ cargo install --git https://github.com/getappz/cli appz
 ```
 
 **Uninstall** (curl install only — for the others: `scoop uninstall appz`,
-`npm uninstall -g @getappz/appz`, `cargo uninstall appz`, or remove the
+`npm uninstall -g @getappz/cli`, `cargo uninstall appz`, or remove the
 Docker image):
 ```bash
 curl -fsSL https://raw.githubusercontent.com/getappz/cli/main/install.sh | sh -s -- --uninstall
@@ -158,7 +158,7 @@ Point an MCP client at `appz mcp` (e.g. `{"command": "appz", "args": ["mcp"]}`).
 ## GitHub Action
 
 ```yaml
-- uses: getappz/cli@v1
+- uses: getappz/cli@v0.1.0
   with:
     command: deploy   # init/install/build/dev/test/lint/format/deploy/doctor
     # version: latest

@@ -1,3 +1,32 @@
 [workspace]
 git_release_enable = false
 release_always = false
+
+# All 4 workspace crates set `publish = false` (they're internal/binary
+# crates, not published to crates.io) — release-plz skips publish=false
+# packages by default, so without these overrides it silently tracks no
+# versions at all. `release = true` opts each back into version-bump +
+# changelog tracking without publishing to a registry.
+#
+# `version_group` locks all 4 to one shared version: release.yml's whole
+# build/publish pipeline triggers off a single `v*` tag, so these must
+# never drift into independent per-package versions/tags.
+[[package]]
+name = "appz"
+release = true
+version_group = "appz"
+
+[[package]]
+name = "appz-core"
+release = true
+version_group = "appz"
+
+[[package]]
+name = "appz-deploy"
+release = true
+version_group = "appz"
+
+[[package]]
+name = "command"
+release = true
+version_group = "appz"

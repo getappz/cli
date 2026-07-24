@@ -27,8 +27,14 @@ mod tests {
     use super::*;
     use std::fs;
 
+    // `set_current_dir` mutates process-wide (not per-thread) state, and
+    // `cargo test` runs tests in parallel threads by default. Serialize the
+    // two tests below so they never race each other's cwd changes.
+    static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn resolve_target_dir_errors_when_existing_and_not_forced() {
+        let _guard = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let cwd = std::env::temp_dir().join(format!("appz-init-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&cwd);
         fs::create_dir_all(&cwd).unwrap();
@@ -47,6 +53,7 @@ mod tests {
 
     #[test]
     fn resolve_target_dir_removes_existing_when_forced() {
+        let _guard = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let cwd = std::env::temp_dir().join(format!("appz-init-test-force-{}", std::process::id()));
         let _ = fs::remove_dir_all(&cwd);
         fs::create_dir_all(&cwd).unwrap();

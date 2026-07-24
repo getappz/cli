@@ -328,7 +328,7 @@ fn detect_package_version(fs: &DetectorFilesystem, tc: &Framework) -> Option<Str
 
 /// Detect all applicable toolchains in the given root directory.
 pub fn detect_toolchains(root: &Path) -> Result<Vec<DetectedToolchain>, String> {
-    let root = root.canonicalize().map_err(|e| e.to_string())?;
+    let root = crate::paths::canonicalize(root).map_err(|e| e.to_string())?;
     let fs = DetectorFilesystem::new(root.clone());
     let overrides = read_overrides(&root);
     let mut detected: Vec<DetectedToolchain> = Vec::new();

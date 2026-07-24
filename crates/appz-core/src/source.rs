@@ -20,7 +20,7 @@ impl Host {
     }
 
     fn from_domain(s: &str) -> Option<Host> {
-        match s {
+        match s.to_ascii_lowercase().as_str() {
             "github.com" => Some(Host::GitHub),
             "gitlab.com" => Some(Host::GitLab),
             "bitbucket.org" => Some(Host::Bitbucket),
@@ -104,10 +104,23 @@ fn split_owner_repo(path: &str) -> Option<(String, String)> {
         return None;
     }
     let repo = repo.trim_end_matches(".git");
-    if owner.is_empty() || repo.is_empty() {
+    if owner.is_empty()
+        || repo.is_empty()
+        || is_dot_or_dotdot(owner)
+        || is_dot_or_dotdot(repo)
+    {
         return None;
     }
     Some((owner.to_string(), repo.to_string()))
+}
+
+/// `.` and `..` are filesystem-relative path components, not valid git
+/// owner/repo names — reject them here so a downstream `cwd.join(repo)`
+/// (used to compute the local target dir for `appz init`) can never resolve
+/// to the current directory or its parent, which `--force` would otherwise
+/// `remove_dir_all` on.
+fn is_dot_or_dotdot(s: &str) -> bool {
+    s == "." || s == ".."
 }
 
 /// Build the platform-specific archive-download URL for `ref_name` (a
@@ -204,6 +217,40 @@ mod tests {
         let r = parse_remote("https://github.com/owner/repo/").unwrap();
         assert_eq!(r.owner, "owner");
         assert_eq!(r.repo, "repo");
+    }
+
+    #[test]
+    fn parse_remote_rejects_dot_repo() {
+        assert!(parse_remote("https://github.com/foo/.").is_none());
+    }
+
+    #[test]
+    fn parse_remote_rejects_dotdot_repo() {
+        assert!(parse_remote("https://github.com/foo/..").is_none());
+    }
+
+    #[test]
+    fn parse_remote_rejects_dot_owner() {
+        assert!(parse_remote("https://github.com/./repo").is_none());
+    }
+
+    #[test]
+    fn parse_remote_rejects_dotdot_owner() {
+        assert!(parse_remote("https://github.com/../repo").is_none());
+    }
+
+    #[test]
+    fn parse_remote_accepts_uppercase_host() {
+        let r = parse_remote("https://GitHub.com/owner/repo").unwrap();
+        assert_eq!(r.host, Host::GitHub);
+        assert_eq!(r.owner, "owner");
+        assert_eq!(r.repo, "repo");
+    }
+
+    #[test]
+    fn parse_remote_accepts_mixed_case_host() {
+        let r = parse_remote("https://GitLab.COM/owner/repo").unwrap();
+        assert_eq!(r.host, Host::GitLab);
     }
 
     #[test]

@@ -1,0 +1,31 @@
+name: devcontainer-feature-publish
+
+on:
+  workflow_dispatch: {}
+
+# After the first successful publish, set ghcr.io/getappz/cli/appz's package
+# visibility to Public in the repo's package settings — GHCR defaults new
+# packages to private, and consumers referencing this Feature will get a
+# pull-access-denied error until that's done.
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Publish Features
+        uses: devcontainers/action@1082abd5d2bf3a11abccba70eef98df068277772 # v1.4.3
+        with:
+          publish-features: "true"
+          base-path-to-features: "./src"
+          generate-docs: "true"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

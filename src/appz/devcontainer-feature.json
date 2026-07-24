@@ -1,0 +1,22 @@
+{
+  "id": "appz",
+  "version": "1.0.0",
+  "name": "appz",
+  "description": "Detect toolchains, wire up mise, and run install/build/dev/test/lint/format/deploy.",
+  "documentationURL": "https://github.com/getappz/cli",
+  "licenseURL": "https://github.com/getappz/cli/blob/main/LICENSE",
+  "options": {
+    "version": {
+      "type": "string",
+      "proposals": ["latest"],
+      "default": "latest",
+      "description": "appz release tag to install (e.g. v0.1.0), or \"latest\"."
+    },
+    "autoInstall": {
+      "type": "boolean",
+      "default": false,
+      "description": "Run `appz install` once after the workspace is created."
+    }
+  },
+  "postCreateCommand": "sh -c 'if [ \"$(cat /usr/local/share/appz-autoinstall 2>/dev/null)\" = \"true\" ]; then appz install; fi'"
+}

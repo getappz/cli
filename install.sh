@@ -125,15 +125,21 @@ install_download() {
   echo "Platform: $target"
   echo ""
 
-  echo "Fetching latest release..."
-  latest="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-    | grep '"tag_name"' | head -1 | cut -d'"' -f4)"
+  pinned="${APPZ_VERSION:-latest}"
+  if [ "$pinned" = "latest" ]; then
+    echo "Fetching latest release..."
+    latest="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
+      | grep '"tag_name"' | head -1 | cut -d'"' -f4)"
 
-  if [ -z "$latest" ]; then
-    echo "Error: could not determine latest release."
-    exit 1
+    if [ -z "$latest" ]; then
+      echo "Error: could not determine latest release."
+      exit 1
+    fi
+    echo "Latest: $latest"
+  else
+    latest="$pinned"
+    echo "Pinned: $latest"
   fi
-  echo "Latest: $latest"
 
   asset_url="https://github.com/${REPO}/releases/download/${latest}/appz-${target}.tar.gz"
   sums_url="https://github.com/${REPO}/releases/download/${latest}/SHA256SUMS"
@@ -258,6 +264,7 @@ case "${1:-}" in
     echo ""
     echo "Environment:"
     echo "  APPZ_INSTALL_DIR  Custom install directory (default: ~/.local/bin)"
+    echo "  APPZ_VERSION      Pin to a release tag, e.g. v0.1.0 (default: latest)"
     ;;
   *)
     if [ "$SCRIPT_IS_FILE" = "1" ] && [ -f "$SCRIPT_DIR/Cargo.toml" ]; then

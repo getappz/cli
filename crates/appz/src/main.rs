@@ -6,6 +6,7 @@ use appz_core::{detect_toolchains, generate_claude_md, run_doctor};
 
 mod deploy;
 mod dev_install;
+mod init_source;
 mod mcp;
 mod update;
 

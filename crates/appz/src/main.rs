@@ -7,6 +7,7 @@ use appz_core::{detect_toolchains, generate_claude_md, run_doctor};
 mod deploy;
 mod dev_install;
 mod mcp;
+mod update;
 
 // ── CLI ─────────────────────────────────────────────────────────
 
@@ -44,6 +45,8 @@ enum AppzCmd {
     Mcp,
     /// Deploy to a hosting platform (drives that platform's own CLI)
     Deploy(DeployArgs),
+    /// Self-update to the latest (or a specific) release
+    Update(UpdateArgs),
 }
 
 #[derive(Args)]
@@ -65,6 +68,18 @@ struct DeployArgs {
     /// Show what would be deployed without deploying
     #[arg(long)]
     dry_run: bool,
+}
+
+#[derive(Args)]
+struct UpdateArgs {
+    /// Install this version instead of the latest (e.g. 0.3.0 or v0.3.0)
+    version: Option<String>,
+    /// Only report whether a newer version is available; don't install it
+    #[arg(long)]
+    check: bool,
+    /// Suppress progress output
+    #[arg(long)]
+    quiet: bool,
 }
 
 #[derive(Args)]
@@ -778,6 +793,7 @@ fn main() {
             }
         }
         AppzCmd::Deploy(a) => run_deploy(a, json),
+        AppzCmd::Update(a) => update::run(a.version, a.check, a.quiet),
     }
 }
 

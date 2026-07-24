@@ -22,3 +22,10 @@ appz-deploy = { path = "../appz-deploy" }
 command = { path = "../command" }
 rmcp = { version = "2", features = ["server", "macros", "transport-io"] }
 tokio = { version = "1", features = ["rt-multi-thread", "io-std"] }
+chrono = "0.4"
+dirs = "6"
+flate2 = "1"
+sha2 = "0.10"
+tar = "0.4"
+ureq = { version = "2", features = ["json"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }

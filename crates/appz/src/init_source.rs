@@ -121,18 +121,32 @@ fn download_zip(url: &str) -> Result<Vec<u8>, String> {
 /// top-level directory GitHub/GitLab/Bitbucket archives wrap their contents
 /// in (e.g. `appz-dev-site-main/`) so `target` ends up holding the repo's
 /// files directly, not one level deeper.
+///
+/// The actual work happens in `extract_into`, using a temp directory that
+/// this function unconditionally cleans up afterwards — whether `extract_into`
+/// succeeded or bailed out on its first failing step, not just on the last one.
 fn extract_template(data: &[u8], target: &std::path::Path) -> Result<(), String> {
     let tmp = std::env::temp_dir().join(format!("appz-init-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
-    std::fs::create_dir_all(&tmp).map_err(|e| format!("create tmpdir: {e}"))?;
+    let result = extract_into(data, target, &tmp);
+    let _ = std::fs::remove_dir_all(&tmp);
+    result
+}
+
+/// Does the actual extraction into `tmp`, then copies the unwrapped
+/// top-level directory's contents into `target`. Split out from
+/// `extract_template` so every fallible step here — however it fails —
+/// still lets the caller clean up `tmp` afterwards.
+fn extract_into(data: &[u8], target: &std::path::Path, tmp: &std::path::Path) -> Result<(), String> {
+    std::fs::create_dir_all(tmp).map_err(|e| format!("create tmpdir: {e}"))?;
 
     let cursor = std::io::Cursor::new(data);
     let mut archive = zip::ZipArchive::new(cursor).map_err(|e| format!("zip error: {e}"))?;
     archive
-        .extract(&tmp)
+        .extract(tmp)
         .map_err(|e| format!("extract error: {e}"))?;
 
-    let extracted_root = std::fs::read_dir(&tmp)
+    let extracted_root = std::fs::read_dir(tmp)
         .map_err(|e| format!("read tmpdir: {e}"))?
         .filter_map(Result::ok)
         .map(|e| e.path())
@@ -140,9 +154,7 @@ fn extract_template(data: &[u8], target: &std::path::Path) -> Result<(), String>
         .ok_or_else(|| "archive did not contain a top-level directory".to_string())?;
 
     std::fs::create_dir_all(target).map_err(|e| format!("create target: {e}"))?;
-    let result = copy_dir_contents(&extracted_root, target);
-    let _ = std::fs::remove_dir_all(&tmp);
-    result
+    copy_dir_contents(&extracted_root, target)
 }
 
 fn copy_dir_contents(src: &std::path::Path, dst: &std::path::Path) -> Result<(), String> {

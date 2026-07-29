@@ -52,6 +52,13 @@ pub struct SkillHit {
     pub installs: u64,
     pub source: String,
     pub installed: bool,
+    /// Verified subdirectory within `source` (e.g. `skills/frameworks/foo`),
+    /// found by scanning the repo's file tree for a `SKILL.md` under a
+    /// directory named `foo` — set only for sources too large to install in
+    /// full (see `MAX_SOURCE_FILES`). `None` means "clone/blob-install the
+    /// whole repo", which is what small sources do anyway.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_subpath: Option<String>,
 }
 
 pub struct SkillsRequest {
@@ -117,8 +124,10 @@ fn is_owner_repo(s: &str) -> bool {
     )
 }
 
-#[derive(Deserialize)]
-struct TreeEntry {}
+#[derive(Deserialize, Clone)]
+struct TreeEntry {
+    path: String,
+}
 
 #[derive(Deserialize, Default)]
 struct TreeResponse {
@@ -128,14 +137,13 @@ struct TreeResponse {
     truncated: bool,
 }
 
-/// Whether `owner/repo`'s default-branch tree has more than
-/// `MAX_SOURCE_FILES` entries. Fails open (returns `false`) on any network
-/// or parse error — this is a UX speed guard, not a security boundary.
-fn is_huge_source(owner_repo: &str) -> bool {
+/// Fetch `owner/repo`'s full default-branch file tree. `None` on any
+/// network or parse error.
+fn fetch_tree(owner_repo: &str) -> Option<TreeResponse> {
     let url = format!("https://api.github.com/repos/{owner_repo}/git/trees/HEAD?recursive=1");
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(10))
-        .timeout_read(Duration::from_secs(10))
+        .timeout_read(Duration::from_secs(15))
         .build();
     let mut req = agent
         .get(&url)
@@ -144,37 +152,68 @@ fn is_huge_source(owner_repo: &str) -> bool {
     if let Some(token) = skill::github::discover_token() {
         req = req.set("Authorization", &format!("Bearer {token}"));
     }
-    let Some(resp) = req
-        .call()
-        .ok()
-        .and_then(|r| r.into_json::<TreeResponse>().ok())
-    else {
-        return false;
-    };
-    resp.truncated || resp.tree.len() > MAX_SOURCE_FILES
+    req.call().ok()?.into_json::<TreeResponse>().ok()
 }
 
-/// Drop hits whose `owner/repo` source is a huge monorepo (see
-/// `is_huge_source`), caching the check per unique source so a batch of
-/// hits from the same repo only costs one API call.
-fn exclude_huge_sources(skills: Vec<ApiSkill>) -> (Vec<ApiSkill>, Vec<String>) {
-    let mut cache: HashMap<String, bool> = HashMap::new();
+/// Find the one directory in `tree` containing a `SKILL.md` whose own name
+/// matches `skill_name` — e.g. `skills/frameworks/clerk-nextjs-patterns/SKILL.md`
+/// resolves `clerk-nextjs-patterns` to `Some("skills/frameworks/clerk-nextjs-patterns")`.
+/// `None` when there's no match or more than one (ambiguous) — this is a
+/// verified lookup against the repo's real tree, never a guess.
+fn resolve_skill_subpath(tree: &TreeResponse, skill_name: &str) -> Option<String> {
+    let mut matches = tree.tree.iter().filter_map(|e| {
+        let dir = e.path.strip_suffix("SKILL.md")?.trim_end_matches('/');
+        let leaf = dir.rsplit('/').next().unwrap_or(dir);
+        (!dir.is_empty() && leaf.eq_ignore_ascii_case(skill_name)).then(|| dir.to_string())
+    });
+    let first = matches.next()?;
+    matches.next().is_none().then_some(first)
+}
+
+/// For sources whose tree exceeds `MAX_SOURCE_FILES` (fetched once per
+/// unique source, cached), try to resolve each of their skills to a
+/// verified subpath instead of downloading the whole repo. Skills that
+/// can't be confidently resolved are dropped and reported in the second
+/// return value; everything else (small sources, non-GitHub sources) is
+/// kept unscoped, same as before.
+fn resolve_and_filter_sources(
+    skills: Vec<ApiSkill>,
+) -> (Vec<(ApiSkill, Option<String>)>, Vec<String>) {
+    let mut tree_cache: HashMap<String, Option<TreeResponse>> = HashMap::new();
     let mut excluded = Vec::new();
-    let kept = skills
-        .into_iter()
-        .filter(|s| {
-            if !is_owner_repo(&s.source) {
-                return true;
+    let mut kept = Vec::new();
+
+    for skill in skills {
+        if !is_owner_repo(&skill.source) {
+            kept.push((skill, None));
+            continue;
+        }
+
+        let tree = tree_cache
+            .entry(skill.source.clone())
+            .or_insert_with(|| fetch_tree(&skill.source));
+
+        let Some(tree) = tree else {
+            // Couldn't check size at all — fail open, install whole repo.
+            kept.push((skill, None));
+            continue;
+        };
+
+        if !tree.truncated && tree.tree.len() <= MAX_SOURCE_FILES {
+            kept.push((skill, None));
+            continue;
+        }
+
+        match resolve_skill_subpath(tree, &skill.name) {
+            Some(subpath) => kept.push((skill, Some(subpath))),
+            None => {
+                if !excluded.contains(&skill.source) {
+                    excluded.push(skill.source.clone());
+                }
             }
-            let huge = *cache
-                .entry(s.source.clone())
-                .or_insert_with(|| is_huge_source(&s.source));
-            if huge && !excluded.contains(&s.source) {
-                excluded.push(s.source.clone());
-            }
-            !huge
-        })
-        .collect();
+        }
+    }
+
     (kept, excluded)
 }
 
@@ -279,9 +318,9 @@ pub fn search(root: &Path, req: &SkillsRequest) -> Result<SkillsReport, String> 
     };
 
     let (kept, excluded_large_sources) = if req.include_large {
-        (ranked, Vec::new())
+        (ranked.into_iter().map(|s| (s, None)).collect(), Vec::new())
     } else {
-        exclude_huge_sources(ranked)
+        resolve_and_filter_sources(ranked)
     };
 
     Ok(SkillsReport {
@@ -291,7 +330,7 @@ pub fn search(root: &Path, req: &SkillsRequest) -> Result<SkillsReport, String> 
     })
 }
 
-fn mark_installed(root: &Path, skills: Vec<ApiSkill>) -> Vec<SkillHit> {
+fn mark_installed(root: &Path, skills: Vec<(ApiSkill, Option<String>)>) -> Vec<SkillHit> {
     if skills.is_empty() {
         return Vec::new();
     }
@@ -316,12 +355,13 @@ fn mark_installed(root: &Path, skills: Vec<ApiSkill>) -> Vec<SkillHit> {
 
     skills
         .into_iter()
-        .map(|s| SkillHit {
+        .map(|(s, resolved_subpath)| SkillHit {
             installed: installed_names.contains(&s.name),
             skill_id: s.skill_id,
             name: s.name,
             installs: s.installs,
             source: s.source,
+            resolved_subpath,
         })
         .collect()
 }
@@ -340,19 +380,19 @@ pub fn install(root: &Path, hits: &[SkillHit]) -> Result<InstallSummary, String>
 async fn install_async(root: &Path, hits: &[SkillHit]) -> Result<InstallSummary, String> {
     let manager = std::sync::Arc::new(SkillManager::builder().cwd(root.to_path_buf()).build());
 
-    // Group by source: the registry's `source` (owner/repo) is the only
-    // reliable locator it gives us — its `id`/`skillId` fields are opaque
-    // identifiers, not real paths within the repo (e.g. clerk/skills' actual
-    // "clerk-nextjs-patterns" skill lives at `skills/frameworks/clerk-nextjs-patterns/`,
-    // three levels deep, which no field in the search response reveals). So
-    // each source is cloned/blob-installed once in full and its skills are
-    // located by discovery, not by a guessed subpath.
+    // Group by effective source: plain `owner/repo` for most hits (cloned/
+    // blob-installed once in full, then filtered by discovery), or
+    // `owner/repo/<verified subpath>` for hits from a large source where
+    // `resolve_skill_subpath` found the skill's real directory — that
+    // narrows the blob-install to just that folder instead of the whole
+    // repo. Never a guessed path (see `resolve_and_filter_sources`).
     let mut by_source: HashMap<String, Vec<String>> = HashMap::new();
     for hit in hits {
-        by_source
-            .entry(hit.source.clone())
-            .or_default()
-            .push(hit.name.clone());
+        let key = match &hit.resolved_subpath {
+            Some(subpath) => format!("{}/{subpath}", hit.source),
+            None => hit.source.clone(),
+        };
+        by_source.entry(key).or_default().push(hit.name.clone());
     }
 
     let mut target_agents = manager.detect_installed_agents().await;

@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use appz_core::{detect_toolchains, generate_claude_md, run_doctor};
 
+mod agents;
 mod deploy;
 mod dev_install;
 mod init_source;
@@ -49,6 +50,8 @@ enum AppzCmd {
     Deploy(DeployArgs),
     /// Discover and install agent skills relevant to this project
     Skills(SkillsArgs),
+    /// Manage AI agents — list, doctor, install, uninstall, update, refresh
+    Agents(AgentArgs),
     /// Self-update to the latest (or a specific) release
     Update(UpdateArgs),
 }
@@ -65,6 +68,43 @@ struct SkillsArgs {
     /// Also offer skills from large source repos (slow: full-repo download)
     #[arg(long)]
     include_large: bool,
+}
+
+#[derive(Args)]
+struct AgentArgs {
+    #[command(subcommand)]
+    action: AgentAction,
+    /// Project directory to operate on
+    #[arg(long, default_value = ".")]
+    dir: PathBuf,
+}
+
+#[derive(clap::Subcommand)]
+enum AgentAction {
+    /// List all known agents and detect which are installed
+    List,
+    /// Check agent configuration and installed skills
+    Doctor,
+    /// Install a skill for a specific agent
+    Install {
+        /// Agent to install for (e.g. cursor, claude-code)
+        #[arg(long)]
+        agent: Option<String>,
+        /// Name of the skill to install
+        skill: String,
+        /// Install without prompting
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+    /// Uninstall a skill
+    Uninstall {
+        /// Name of the skill to remove
+        skill: String,
+    },
+    /// Update installed skills to latest versions
+    Update,
+    /// Re-detect agents and list installed skills
+    Refresh,
 }
 
 #[derive(Args)]
@@ -822,8 +862,38 @@ fn main() {
         }
         AppzCmd::Deploy(a) => run_deploy(a, json),
         AppzCmd::Skills(a) => run_skills(a, json),
+        AppzCmd::Agents(a) => run_agents(a, json),
         AppzCmd::Update(a) => update::run(a.version, a.check, a.quiet),
     }
+}
+
+fn run_agents(args: AgentArgs, json: bool) {
+    let cmd = agents::AgentCommand {
+        kind: match args.action {
+            AgentAction::List => agents::AgentSubcommand::List,
+            AgentAction::Doctor => agents::AgentSubcommand::Doctor,
+            AgentAction::Install { .. } => agents::AgentSubcommand::Install,
+            AgentAction::Uninstall { .. } => agents::AgentSubcommand::Uninstall,
+            AgentAction::Update => agents::AgentSubcommand::Update,
+            AgentAction::Refresh => agents::AgentSubcommand::Refresh,
+        },
+        dir: args.dir,
+        agent: match &args.action {
+            AgentAction::Install { agent, .. } => agent.clone(),
+            _ => None,
+        },
+        skill_name: match &args.action {
+            AgentAction::Install { skill, .. } => Some(skill.clone()),
+            AgentAction::Uninstall { skill } => Some(skill.clone()),
+            _ => None,
+        },
+        yes: match &args.action {
+            AgentAction::Install { yes, .. } => *yes,
+            _ => false,
+        },
+        json,
+    };
+    agents::run(&cmd);
 }
 
 fn run_skills(args: SkillsArgs, json: bool) {

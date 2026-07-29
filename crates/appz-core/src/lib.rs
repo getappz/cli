@@ -17,6 +17,7 @@ pub use detect::{
     DetectedToolchain, MonorepoConfig, detect_monorepo, detect_toolchains, pm_install_cmd,
     strip_jsonc,
 };
+pub use diagnostics::{Diagnostic, parse_cargo_diagnostics};
 pub use doctor::{DoctorReport, run_doctor};
 pub use fs::DetectorFilesystem;
 pub use generator::{generate, generate_merged};

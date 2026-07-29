@@ -343,8 +343,11 @@ mod tests {
         )
         .unwrap();
         std::fs::create_dir_all(dir.join("src")).unwrap();
-        std::fs::write(dir.join("src/main.rs"), "fn main() {\n    println!(\"hi\");\n}\n")
-            .unwrap();
+        std::fs::write(
+            dir.join("src/main.rs"),
+            "fn main() {\n    println!(\"hi\");\n}\n",
+        )
+        .unwrap();
     }
 
     #[test]
@@ -360,15 +363,29 @@ mod tests {
         };
         let result = server.run(Parameters(arg)).unwrap();
 
-        assert_eq!(result.is_error, Some(true), "broken build must report an error result");
+        assert_eq!(
+            result.is_error,
+            Some(true),
+            "broken build must report an error result"
+        );
         let ContentBlock::Text(text) = result.content.into_iter().next().unwrap() else {
             panic!("expected text content");
         };
         let parsed: serde_json::Value = serde_json::from_str(&text.text).unwrap();
         assert_eq!(parsed["success"], false);
         let diagnostics = parsed["diagnostics"].as_array().unwrap();
-        assert!(!diagnostics.is_empty(), "must report at least one diagnostic");
-        assert_eq!(diagnostics[0]["file"], "src/main.rs");
+        assert!(
+            !diagnostics.is_empty(),
+            "must report at least one diagnostic"
+        );
+        // Cargo reports the span's file_name with the platform's own
+        // separator (`src\main.rs` on Windows) — assert on the
+        // OS-independent components instead of a literal forward-slash path.
+        let file = diagnostics[0]["file"].as_str().unwrap();
+        assert!(
+            file.ends_with("main.rs") && file.contains("src"),
+            "expected a src/main.rs-ish path, got {file:?}"
+        );
         assert_eq!(diagnostics[0]["severity"], "error");
     }
 

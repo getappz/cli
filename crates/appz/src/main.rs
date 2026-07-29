@@ -51,6 +51,20 @@ enum AppzCmd {
     Skills(SkillsArgs),
     /// Self-update to the latest (or a specific) release
     Update(UpdateArgs),
+    /// Manage toolchain registry
+    Toolchain(ToolchainArgs),
+}
+
+#[derive(Args)]
+struct ToolchainArgs {
+    #[command(subcommand)]
+    command: ToolchainCmd,
+}
+
+#[derive(Subcommand)]
+enum ToolchainCmd {
+    /// Refresh the toolchain registry cache from GitHub
+    Refresh,
 }
 
 #[derive(Args)]
@@ -823,6 +837,16 @@ fn main() {
         AppzCmd::Deploy(a) => run_deploy(a, json),
         AppzCmd::Skills(a) => run_skills(a, json),
         AppzCmd::Update(a) => update::run(a.version, a.check, a.quiet),
+        AppzCmd::Toolchain(a) => run_toolchain(a),
+    }
+}
+
+fn run_toolchain(args: ToolchainArgs) {
+    match args.command {
+        ToolchainCmd::Refresh => match appz_core::refresh_registry_cache() {
+            Ok(count) => success(&format!("toolchain registry refreshed ({count} entries)")),
+            Err(e) => error(&format!("refresh failed: {e}")),
+        },
     }
 }
 

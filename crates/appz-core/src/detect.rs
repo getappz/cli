@@ -4,7 +4,8 @@ use serde::Serialize;
 
 use crate::frameworks;
 use crate::fs::DetectorFilesystem;
-use crate::toolchains::{DetectionConfidence, DetectionCriteria, FRAMEWORKS, Framework};
+use crate::toolchain_registry::get_frameworks;
+use crate::toolchains::{DetectionConfidence, DetectionCriteria, Framework};
 
 /// Overrides read from project config file (vercel.json / appz.json).
 #[derive(Debug, Default, Clone)]
@@ -334,7 +335,7 @@ pub fn detect_toolchains(root: &Path) -> Result<Vec<DetectedToolchain>, String> 
     let mut detected: Vec<DetectedToolchain> = Vec::new();
 
     // First pass: collect all matches
-    for tc in FRAMEWORKS {
+    for tc in get_frameworks() {
         if check_criteria(&fs, &tc.detectors) {
             let version = detect_version(&fs, tc.version_files)
                 .or_else(|| detect_package_version(&fs, tc))
@@ -381,7 +382,7 @@ pub fn detect_toolchains(root: &Path) -> Result<Vec<DetectedToolchain>, String> 
     let mut superseded: Vec<&str> = Vec::new();
     for tc in &detected {
         // Find the Framework entry to check supersedes
-        if let Some(fw) = FRAMEWORKS.iter().find(|f| f.slug == tc.slug) {
+        if let Some(fw) = get_frameworks().iter().find(|f| f.slug == tc.slug) {
             superseded.extend(fw.supersedes.iter().copied());
         }
     }
@@ -389,13 +390,13 @@ pub fn detect_toolchains(root: &Path) -> Result<Vec<DetectedToolchain>, String> 
 
     // Third pass: if any strong match exists, drop weak-only matches
     let has_strong = detected.iter().any(|tc| {
-        FRAMEWORKS.iter().any(|f| {
+        get_frameworks().iter().any(|f| {
             f.slug == tc.slug && matches!(f.detection_confidence, DetectionConfidence::Strong)
         })
     });
     if has_strong {
         detected.retain(|tc| {
-            !FRAMEWORKS.iter().any(|f| {
+            !get_frameworks().iter().any(|f| {
                 f.slug == tc.slug && matches!(f.detection_confidence, DetectionConfidence::Weak)
             })
         });

@@ -37,6 +37,7 @@ struct CargoSpan {
     column_start: u32,
 }
 
+#[must_use]
 pub fn parse_cargo_diagnostics(ndjson: &str) -> Vec<Diagnostic> {
     ndjson
         .lines()

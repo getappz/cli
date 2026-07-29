@@ -75,7 +75,7 @@ struct AgentArgs {
     #[command(subcommand)]
     action: AgentAction,
     /// Project directory to operate on
-    #[arg(long, default_value = ".")]
+    #[arg(long, global = true, default_value = ".")]
     dir: PathBuf,
 }
 

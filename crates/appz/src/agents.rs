@@ -32,7 +32,21 @@ fn manager(root: &Path) -> SkillManager {
 }
 
 fn block_on<F: std::future::Future>(f: F) -> F::Output {
-    tokio::runtime::Runtime::new().unwrap().block_on(f)
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(f)
+}
+
+/// Runs `f` bare in JSON mode (no interleaved spinner text), or wrapped in a
+/// spinner for human output.
+fn run_task<T>(json: bool, start: &str, done: &str, f: impl FnOnce() -> T) -> T {
+    if json {
+        f()
+    } else {
+        super::with_spinner(start, done, f)
+    }
 }
 
 pub fn run(cmd: &AgentCommand) {
@@ -65,14 +79,12 @@ struct ListReport {
 fn run_list(root: &Path, json: bool) {
     let mgr = manager(root);
 
-    let installed = if json {
-        block_on(mgr.detect_installed_agents())
-    } else {
+    if !json {
         super::intro("appz agents list");
-        super::with_spinner("detecting agents...", "detection complete", || {
-            block_on(mgr.detect_installed_agents())
-        })
-    };
+    }
+    let installed = run_task(json, "detecting agents...", "detection complete", || {
+        block_on(mgr.detect_installed_agents())
+    });
     let registry = mgr.agents();
     let all_ids = registry.all_ids();
 
@@ -151,14 +163,12 @@ struct DoctorReport {
 fn run_doctor(root: &Path, json: bool) {
     let mgr = manager(root);
     let registry = mgr.agents();
-    let installed = if json {
-        block_on(mgr.detect_installed_agents())
-    } else {
+    if !json {
         super::intro("appz agents doctor");
-        super::with_spinner("probing agents...", "probing done", || {
-            block_on(mgr.detect_installed_agents())
-        })
-    };
+    }
+    let installed = run_task(json, "probing agents...", "probing done", || {
+        block_on(mgr.detect_installed_agents())
+    });
 
     let mut issues: Vec<String> = Vec::new();
     let mut entries: Vec<DoctorAgentEntry> = Vec::new();
@@ -271,13 +281,9 @@ fn run_install(root: &Path, cmd: &AgentCommand) {
     let agent_id = match &cmd.agent {
         Some(a) => AgentId::new(a.clone()),
         None => {
-            let installed = if json {
+            let installed = run_task(json, "detecting agents...", "", || {
                 block_on(mgr.detect_installed_agents())
-            } else {
-                super::with_spinner("detecting agents...", "", || {
-                    block_on(mgr.detect_installed_agents())
-                })
-            };
+            });
             if installed.is_empty() {
                 super::error("no agents detected — use --agent <name> to target a specific agent");
             }
@@ -313,23 +319,19 @@ fn run_install(root: &Path, cmd: &AgentCommand) {
         super::error("specify a skill name to install");
     }
 
-    let skills = if json {
-        block_on(mgr.discover_skills(
-            root,
-            &skill::types::DiscoverOptions {
-                ..Default::default()
-            },
-        ))
-    } else {
-        super::with_spinner(&format!("discovering skill '{skill_name}'..."), "", || {
+    let skills = run_task(
+        json,
+        &format!("discovering skill '{skill_name}'..."),
+        "",
+        || {
             block_on(mgr.discover_skills(
                 root,
                 &skill::types::DiscoverOptions {
                     ..Default::default()
                 },
             ))
-        })
-    };
+        },
+    );
 
     let skills = match skills {
         Ok(s) => s,
@@ -359,33 +361,22 @@ fn run_install(root: &Path, cmd: &AgentCommand) {
 
     let skill = matches.swap_remove(0);
 
-    let result = if json {
-        block_on(mgr.install_skill(
-            &skill,
-            &agent_id,
-            &InstallOptions {
-                scope: InstallScope::Project,
-                mode: InstallMode::Symlink,
-                cwd: None,
-            },
-        ))
-    } else {
-        super::with_spinner(
-            &format!("installing '{}' for {display}...", skill.name),
-            "installation complete",
-            || {
-                block_on(mgr.install_skill(
-                    &skill,
-                    &agent_id,
-                    &InstallOptions {
-                        scope: InstallScope::Project,
-                        mode: InstallMode::Symlink,
-                        cwd: None,
-                    },
-                ))
-            },
-        )
-    };
+    let result = run_task(
+        json,
+        &format!("installing '{}' for {display}...", skill.name),
+        "installation complete",
+        || {
+            block_on(mgr.install_skill(
+                &skill,
+                &agent_id,
+                &InstallOptions {
+                    scope: InstallScope::Project,
+                    mode: InstallMode::Symlink,
+                    cwd: None,
+                },
+            ))
+        },
+    );
 
     match result {
         Ok(r) => {
@@ -423,25 +414,21 @@ fn run_uninstall(root: &Path, cmd: &AgentCommand) {
         super::error("specify a skill name to uninstall");
     }
 
-    let remove = || {
-        block_on(mgr.remove_skills(
-            &[skill_name.to_string()],
-            &RemoveOptions {
-                scope: InstallScope::Project,
-                agents: Vec::new(),
-                cwd: None,
-            },
-        ))
-    };
-    let result = if json {
-        remove()
-    } else {
-        super::with_spinner(
-            &format!("removing '{skill_name}'..."),
-            "removal complete",
-            remove,
-        )
-    };
+    let result = run_task(
+        json,
+        &format!("removing '{skill_name}'..."),
+        "removal complete",
+        || {
+            block_on(mgr.remove_skills(
+                &[skill_name.to_string()],
+                &RemoveOptions {
+                    scope: InstallScope::Project,
+                    agents: Vec::new(),
+                    cwd: None,
+                },
+            ))
+        },
+    );
     if let Err(e) = result {
         super::error(&format!("removal failed: {e}"));
     }
@@ -477,14 +464,12 @@ struct RefreshReport {
 fn refresh_impl(root: &Path, json: bool, verb: &str) {
     let mgr = manager(root);
 
-    let installed = if json {
-        block_on(mgr.detect_installed_agents())
-    } else {
+    if !json {
         super::intro(&format!("appz agents {verb}"));
-        super::with_spinner("re-detecting agents...", "detection complete", || {
-            block_on(mgr.detect_installed_agents())
-        })
-    };
+    }
+    let installed = run_task(json, "re-detecting agents...", "detection complete", || {
+        block_on(mgr.detect_installed_agents())
+    });
 
     if !json {
         if installed.is_empty() {
@@ -502,13 +487,9 @@ fn refresh_impl(root: &Path, json: bool, verb: &str) {
         }
     }
 
-    let skills = if json {
+    let skills = run_task(json, "listing installed skills...", "", || {
         block_on(mgr.list_installed(&ListOptions::default()))
-    } else {
-        super::with_spinner("listing installed skills...", "", || {
-            block_on(mgr.list_installed(&ListOptions::default()))
-        })
-    };
+    });
 
     match skills {
         Ok(list) => {

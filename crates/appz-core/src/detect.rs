@@ -457,6 +457,24 @@ mod tests {
     }
 
     #[test]
+    fn test_detect_rust_gets_cargo_build_command() {
+        let dir = test_dir("rust-build-command");
+        fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"test\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+
+        let result = detect_toolchains(&dir).unwrap();
+        let rust = result.iter().find(|t| t.slug == "rust").unwrap();
+        assert_eq!(
+            rust.build_command.as_deref(),
+            Some("cargo build"),
+            "a bare Rust project (no web framework) must still get a build command"
+        );
+    }
+
+    #[test]
     fn test_detect_go_from_go_mod() {
         let dir = test_dir("go");
         fs::write(dir.join("go.mod"), "module test\ngo 1.21").unwrap();

@@ -40,6 +40,13 @@ pub struct RunArg {
     /// Project directory to run in. Defaults to the current directory.
     #[serde(default)]
     pub dir: Option<String>,
+    /// Return parsed diagnostics instead of raw text. Currently supported
+    /// only for a Rust project whose build is exactly `cargo build` (no
+    /// other toolchain also contributing a build command) — every other
+    /// case silently falls back to the normal raw-text response. Default:
+    /// false.
+    #[serde(default)]
+    pub structured: bool,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -109,7 +116,7 @@ impl AppzServer {
     }
 
     #[tool(
-        description = "Run a lifecycle command (install|build|test|lint|format) in a project directory and return its captured stdout/stderr. install/build are run via `mise run` (mise decides whether cached inputs let it skip the work); test/lint/format run directly. Call `detect` first if you want to see the resolved commands."
+        description = "Run a lifecycle command (install|build|test|lint|format) in a project directory and return its captured stdout/stderr. install/build are run via `mise run` (mise decides whether cached inputs let it skip the work); test/lint/format run directly. Set `structured: true` to get parsed diagnostics instead of raw text for a Rust `cargo build` — currently the only supported case; every other combination returns the normal raw-text response. Call `detect` first if you want to see the resolved commands."
     )]
     fn run(&self, Parameters(arg): Parameters<RunArg>) -> Result<CallToolResult, McpError> {
         let root = Self::resolve(&arg.dir);
@@ -117,6 +124,19 @@ impl AppzServer {
             Ok(t) => t,
             Err(e) => return Ok(Self::err(format!("detection failed: {e}"))),
         };
+
+        if arg.structured && matches!(arg.command, Lifecycle::Build) {
+            let build_contributors: Vec<&DetectedToolchain> = toolchains
+                .iter()
+                .filter(|tc| tc.build_command.is_some())
+                .collect();
+            if let [tc] = build_contributors[..]
+                && tc.slug == "rust"
+                && tc.build_command.as_deref() == Some("cargo build")
+            {
+                return Ok(run_structured_cargo_build(&root));
+            }
+        }
 
         if let Some(mise_task) = mise_task_name(arg.command) {
             let has_command = toolchains.iter().any(|tc| match arg.command {
@@ -235,6 +255,38 @@ fn exec_one(root: &std::path::Path, prog: &str, args: &[&str]) -> CallToolResult
     }
 }
 
+#[derive(serde::Serialize)]
+struct StructuredBuildResult {
+    success: bool,
+    diagnostics: Vec<appz_core::Diagnostic>,
+    raw: String,
+}
+
+fn run_structured_cargo_build(root: &std::path::Path) -> CallToolResult {
+    let mut cmd = command::Command::new("cargo");
+    cmd.args(["build", "--message-format=json"]).cwd(root);
+    match cmd.exec() {
+        Ok(o) => {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            let result = StructuredBuildResult {
+                success: o.status.success(),
+                diagnostics: appz_core::parse_cargo_diagnostics(&stdout),
+                raw: stderr.into_owned(),
+            };
+            let json = serde_json::to_string_pretty(&result).unwrap_or_default();
+            if result.success {
+                CallToolResult::success(vec![ContentBlock::text(json)])
+            } else {
+                CallToolResult::error(vec![ContentBlock::text(json)])
+            }
+        }
+        Err(e) => CallToolResult::error(vec![ContentBlock::text(format!(
+            "failed to run 'cargo build': {e}"
+        ))]),
+    }
+}
+
 #[tool_handler]
 impl ServerHandler for AppzServer {
     fn get_info(&self) -> ServerInfo {
@@ -264,4 +316,102 @@ pub fn serve() -> Result<(), String> {
             .map_err(|e| format!("waiting: {e}"))?;
         Ok(())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_broken_rust_project(dir: &std::path::Path) {
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"fixture\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("src/main.rs"),
+            "fn main() {\n    let x: i32 = \"not a number\";\n    println!(\"{}\", x);\n}\n",
+        )
+        .unwrap();
+    }
+
+    fn write_clean_rust_project(dir: &std::path::Path) {
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"fixture\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("src/main.rs"),
+            "fn main() {\n    println!(\"hi\");\n}\n",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_structured_build_reports_diagnostics_on_broken_project() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_broken_rust_project(tmp.path());
+
+        let server = AppzServer::new();
+        let arg = RunArg {
+            command: Lifecycle::Build,
+            dir: Some(tmp.path().to_string_lossy().to_string()),
+            structured: true,
+        };
+        let result = server.run(Parameters(arg)).unwrap();
+
+        assert_eq!(
+            result.is_error,
+            Some(true),
+            "broken build must report an error result"
+        );
+        let ContentBlock::Text(text) = result.content.into_iter().next().unwrap() else {
+            panic!("expected text content");
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&text.text).unwrap();
+        assert_eq!(parsed["success"], false);
+        let diagnostics = parsed["diagnostics"].as_array().unwrap();
+        assert!(
+            !diagnostics.is_empty(),
+            "must report at least one diagnostic"
+        );
+        // Cargo reports the span's file_name with the platform's own
+        // separator (`src\main.rs` on Windows) — assert on the
+        // OS-independent components instead of a literal forward-slash path.
+        let file = diagnostics[0]["file"].as_str().unwrap();
+        assert!(
+            file.ends_with("main.rs") && file.contains("src"),
+            "expected a src/main.rs-ish path, got {file:?}"
+        );
+        assert_eq!(diagnostics[0]["severity"], "error");
+    }
+
+    #[test]
+    fn test_structured_build_reports_no_diagnostics_on_clean_project() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_clean_rust_project(tmp.path());
+
+        let server = AppzServer::new();
+        let arg = RunArg {
+            command: Lifecycle::Build,
+            dir: Some(tmp.path().to_string_lossy().to_string()),
+            structured: true,
+        };
+        let result = server.run(Parameters(arg)).unwrap();
+
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "clean build must not be an error result"
+        );
+        let ContentBlock::Text(text) = result.content.into_iter().next().unwrap() else {
+            panic!("expected text content");
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&text.text).unwrap();
+        assert_eq!(parsed["success"], true);
+        assert_eq!(parsed["diagnostics"].as_array().unwrap().len(), 0);
+    }
 }

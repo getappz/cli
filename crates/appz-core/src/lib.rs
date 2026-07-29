@@ -1,5 +1,6 @@
 mod claude;
 mod detect;
+mod diagnostics;
 mod doctor;
 mod frameworks;
 mod fs;

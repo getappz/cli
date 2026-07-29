@@ -21,6 +21,12 @@ const SKILLS_API: &str = "https://skills.sh/api/search";
 const MIN_INSTALLS: u64 = 100;
 const MAX_RESULTS: usize = 8;
 const MAX_FRAMEWORK_RESULTS: usize = 4;
+/// Skip sources whose repo has more files than this. The registry only gives
+/// us `owner/repo`, not the skill's actual subdirectory (see the note on
+/// `install_from_source`), so installing from a source means downloading it
+/// file-by-file in full — fine for a typical skills repo, painfully slow
+/// (minutes) for a large monorepo like `wshobson/agents` (~2000 files).
+const MAX_SOURCE_FILES: usize = 300;
 
 #[derive(Deserialize, Debug, Clone)]
 struct ApiSkill {
@@ -50,12 +56,18 @@ pub struct SkillHit {
 
 pub struct SkillsRequest {
     pub query: Option<String>,
+    /// Skip the large-source-repo filter and offer everything the registry
+    /// returned, even sources that would be slow to install from.
+    pub include_large: bool,
 }
 
 #[derive(Serialize)]
 pub struct SkillsReport {
     pub context: String,
     pub hits: Vec<SkillHit>,
+    /// `owner/repo` sources dropped for having more than `MAX_SOURCE_FILES`
+    /// files (empty when `include_large` was set).
+    pub excluded_large_sources: Vec<String>,
 }
 
 pub struct InstallSummary {
@@ -93,6 +105,77 @@ fn search_api(query: &str) -> Vec<ApiSkill> {
         .and_then(|resp| resp.into_json::<ApiSearchResponse>().ok())
         .map(|r| r.skills)
         .unwrap_or_default()
+}
+
+/// `owner/repo`, no more or less — the shape the registry's `source` field
+/// takes for GitHub sources (the only ones we can size-check this way).
+fn is_owner_repo(s: &str) -> bool {
+    let mut parts = s.splitn(3, '/');
+    matches!(
+        (parts.next(), parts.next(), parts.next()),
+        (Some(o), Some(r), None) if !o.is_empty() && !r.is_empty()
+    )
+}
+
+#[derive(Deserialize)]
+struct TreeEntry {}
+
+#[derive(Deserialize, Default)]
+struct TreeResponse {
+    #[serde(default)]
+    tree: Vec<TreeEntry>,
+    #[serde(default)]
+    truncated: bool,
+}
+
+/// Whether `owner/repo`'s default-branch tree has more than
+/// `MAX_SOURCE_FILES` entries. Fails open (returns `false`) on any network
+/// or parse error — this is a UX speed guard, not a security boundary.
+fn is_huge_source(owner_repo: &str) -> bool {
+    let url = format!("https://api.github.com/repos/{owner_repo}/git/trees/HEAD?recursive=1");
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(10))
+        .timeout_read(Duration::from_secs(10))
+        .build();
+    let mut req = agent
+        .get(&url)
+        .set("User-Agent", "appz")
+        .set("Accept", "application/vnd.github+json");
+    if let Some(token) = skill::github::discover_token() {
+        req = req.set("Authorization", &format!("Bearer {token}"));
+    }
+    let Some(resp) = req
+        .call()
+        .ok()
+        .and_then(|r| r.into_json::<TreeResponse>().ok())
+    else {
+        return false;
+    };
+    resp.truncated || resp.tree.len() > MAX_SOURCE_FILES
+}
+
+/// Drop hits whose `owner/repo` source is a huge monorepo (see
+/// `is_huge_source`), caching the check per unique source so a batch of
+/// hits from the same repo only costs one API call.
+fn exclude_huge_sources(skills: Vec<ApiSkill>) -> (Vec<ApiSkill>, Vec<String>) {
+    let mut cache: HashMap<String, bool> = HashMap::new();
+    let mut excluded = Vec::new();
+    let kept = skills
+        .into_iter()
+        .filter(|s| {
+            if !is_owner_repo(&s.source) {
+                return true;
+            }
+            let huge = *cache
+                .entry(s.source.clone())
+                .or_insert_with(|| is_huge_source(&s.source));
+            if huge && !excluded.contains(&s.source) {
+                excluded.push(s.source.clone());
+            }
+            !huge
+        })
+        .collect();
+    (kept, excluded)
 }
 
 fn dedup(terms: Vec<String>) -> Vec<String> {
@@ -148,6 +231,7 @@ pub fn search(root: &Path, req: &SkillsRequest) -> Result<SkillsReport, String> 
                 return Ok(SkillsReport {
                     context: "no toolchains detected in this directory".to_string(),
                     hits: Vec::new(),
+                    excluded_large_sources: Vec::new(),
                 });
             }
 
@@ -194,9 +278,16 @@ pub fn search(root: &Path, req: &SkillsRequest) -> Result<SkillsReport, String> 
         }
     };
 
+    let (kept, excluded_large_sources) = if req.include_large {
+        (ranked, Vec::new())
+    } else {
+        exclude_huge_sources(ranked)
+    };
+
     Ok(SkillsReport {
         context,
-        hits: mark_installed(root, ranked),
+        hits: mark_installed(root, kept),
+        excluded_large_sources,
     })
 }
 

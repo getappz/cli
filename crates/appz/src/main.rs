@@ -62,6 +62,9 @@ struct SkillsArgs {
     /// Install all recommended/matching skills without prompting
     #[arg(short = 'y', long)]
     yes: bool,
+    /// Also offer skills from large source repos (slow: full-repo download)
+    #[arg(long)]
+    include_large: bool,
 }
 
 #[derive(Args)]
@@ -825,7 +828,13 @@ fn main() {
 
 fn run_skills(args: SkillsArgs, json: bool) {
     let root = resolve_root(&args.dir);
-    let report = match skills::search(&root, &skills::SkillsRequest { query: args.query }) {
+    let report = match skills::search(
+        &root,
+        &skills::SkillsRequest {
+            query: args.query,
+            include_large: args.include_large,
+        },
+    ) {
         Ok(r) => r,
         Err(e) => error(&e),
     };
@@ -837,6 +846,14 @@ fn run_skills(args: SkillsArgs, json: bool) {
 
     intro("appz skills");
     info(&report.context);
+
+    if !report.excluded_large_sources.is_empty() {
+        warning(&format!(
+            "skipped {} large source repo(s) (slow full-repo download): {} — pass --include-large to include them",
+            report.excluded_large_sources.len(),
+            report.excluded_large_sources.join(", ")
+        ));
+    }
 
     if report.hits.is_empty() {
         outro("no matching skills found — try `appz skills <query>`");

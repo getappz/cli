@@ -6,7 +6,9 @@ use appz_core::{detect_toolchains, generate_claude_md, run_doctor};
 
 mod deploy;
 mod dev_install;
+mod init_source;
 mod mcp;
+mod skills;
 mod update;
 
 // ── CLI ─────────────────────────────────────────────────────────
@@ -45,8 +47,24 @@ enum AppzCmd {
     Mcp,
     /// Deploy to a hosting platform (drives that platform's own CLI)
     Deploy(DeployArgs),
+    /// Discover and install agent skills relevant to this project
+    Skills(SkillsArgs),
     /// Self-update to the latest (or a specific) release
     Update(UpdateArgs),
+}
+
+#[derive(Args)]
+struct SkillsArgs {
+    /// Search skills.sh directly instead of auto-detecting the project
+    query: Option<String>,
+    #[arg(default_value = ".")]
+    dir: PathBuf,
+    /// Install all recommended/matching skills without prompting
+    #[arg(short = 'y', long)]
+    yes: bool,
+    /// Also offer skills from large source repos (slow: full-repo download)
+    #[arg(long)]
+    include_large: bool,
 }
 
 #[derive(Args)]
@@ -95,14 +113,22 @@ struct DevInstallArgs {
 
 #[derive(Args)]
 struct InitArgs {
-    #[arg(default_value = ".")]
-    dir: PathBuf,
+    #[arg(
+        default_value = ".",
+        help = "Local path, or a github.com/gitlab.com/bitbucket.org URL to clone/download"
+    )]
+    source: String,
     #[arg(long, help = "Skip mise install after init")]
     skip_mise: bool,
     #[arg(long, help = "Skip package manager install after init")]
     skip_pm: bool,
     #[arg(long, help = "Generate CLAUDE.md from detected toolchains")]
     claude: bool,
+    #[arg(
+        long,
+        help = "Overwrite the target directory if a remote source's destination already exists"
+    )]
+    force: bool,
 }
 
 #[derive(Args)]
@@ -410,7 +436,8 @@ fn do_full_install(root: &Path) -> Vec<appz_core::DetectedToolchain> {
 
 fn run_init(args: InitArgs, json: bool) {
     if json {
-        let canonical = resolve_root(&args.dir);
+        let resolved = init_source::resolve(&args.source, args.force).unwrap_or_else(|e| error(&e));
+        let canonical = resolve_root(&resolved);
         let toolchains = do_detect_and_write(&canonical);
         scaffold_init(&canonical);
         if args.claude {
@@ -427,7 +454,8 @@ fn run_init(args: InitArgs, json: bool) {
     }
     print_brand();
     intro("appz init");
-    let canonical = resolve_root(&args.dir);
+    let resolved = init_source::resolve(&args.source, args.force).unwrap_or_else(|e| error(&e));
+    let canonical = resolve_root(&resolved);
     let toolchains = do_detect_and_write(&canonical);
     scaffold_init(&canonical);
     if args.claude {
@@ -793,7 +821,103 @@ fn main() {
             }
         }
         AppzCmd::Deploy(a) => run_deploy(a, json),
+        AppzCmd::Skills(a) => run_skills(a, json),
         AppzCmd::Update(a) => update::run(a.version, a.check, a.quiet),
+    }
+}
+
+fn run_skills(args: SkillsArgs, json: bool) {
+    let root = resolve_root(&args.dir);
+    let report = match skills::search(
+        &root,
+        &skills::SkillsRequest {
+            query: args.query,
+            include_large: args.include_large,
+        },
+    ) {
+        Ok(r) => r,
+        Err(e) => error(&e),
+    };
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report).unwrap());
+        return;
+    }
+
+    intro("appz skills");
+    info(&report.context);
+
+    if !report.excluded_large_sources.is_empty() {
+        warning(&format!(
+            "skipped {} large source repo(s) (slow full-repo download): {} — pass --include-large to include them",
+            report.excluded_large_sources.len(),
+            report.excluded_large_sources.join(", ")
+        ));
+    }
+
+    if report.hits.is_empty() {
+        outro("no matching skills found — try `appz skills <query>`");
+        return;
+    }
+
+    for hit in &report.hits {
+        let mark = if hit.installed { " (installed)" } else { "" };
+        step(&format!(
+            "{}  {} installs  {}{mark}",
+            hit.name,
+            skills::format_installs(hit.installs),
+            hit.source
+        ));
+    }
+
+    let installable: Vec<skills::SkillHit> =
+        report.hits.into_iter().filter(|h| !h.installed).collect();
+    if installable.is_empty() {
+        outro("all recommended skills are already installed");
+        return;
+    }
+
+    let selected: Vec<skills::SkillHit> = if args.yes {
+        installable
+    } else if !is_tty() {
+        error("confirmation required — pass --yes to install without prompting");
+    } else {
+        let mut ms = cliclack::multiselect("select skills to install");
+        for hit in &installable {
+            ms = ms.item(hit.skill_id.clone(), hit.name.clone(), hit.source.clone());
+        }
+        match ms.interact() {
+            Ok(ids) => installable
+                .into_iter()
+                .filter(|h| ids.contains(&h.skill_id))
+                .collect(),
+            Err(_) => {
+                warning("selection cancelled");
+                return;
+            }
+        }
+    };
+
+    if selected.is_empty() {
+        outro("no skills selected");
+        return;
+    }
+
+    let summary = with_spinner("installing skills...", "installation complete", || {
+        skills::install(&root, &selected)
+    });
+
+    match summary {
+        Ok(s) => {
+            for name in &s.installed {
+                success(&format!("installed {name}"));
+            }
+            for name in &s.failed {
+                warning(&format!("failed to install {name}"));
+            }
+            outro("done — review skills before use; they run with full agent permissions");
+        }
+        Err(e) => error(&e),
     }
 }
 

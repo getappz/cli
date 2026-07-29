@@ -9,19 +9,23 @@ use std::time::Duration;
 
 pub(crate) const REPO: &str = "getappz/cli";
 
-pub(crate) fn target_triple() -> &'static str {
+pub(crate) fn target_triple() -> Result<&'static str, String> {
     if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
-        "x86_64-unknown-linux-gnu"
+        Ok("x86_64-unknown-linux-gnu")
     } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
-        "aarch64-unknown-linux-gnu"
+        Ok("aarch64-unknown-linux-gnu")
     } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
-        "x86_64-apple-darwin"
+        Ok("x86_64-apple-darwin")
     } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-        "aarch64-apple-darwin"
+        Ok("aarch64-apple-darwin")
     } else if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
-        "x86_64-pc-windows-msvc"
+        Ok("x86_64-pc-windows-msvc")
     } else {
-        ""
+        Err(format!(
+            "no release asset available for {}/{}",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        ))
     }
 }
 
@@ -29,8 +33,8 @@ pub(crate) fn asset_ext() -> &'static str {
     if cfg!(windows) { "zip" } else { "tar.gz" }
 }
 
-pub(crate) fn asset_name(_version: &str) -> String {
-    format!("appz-{}.{}", target_triple(), asset_ext())
+pub(crate) fn asset_name(_version: &str) -> Result<String, String> {
+    Ok(format!("appz-{}.{}", target_triple()?, asset_ext()))
 }
 
 /// The binary filename inside a release archive for the current platform.
@@ -172,6 +176,13 @@ fn read_stale_cache() -> Result<Option<String>, String> {
     if version.is_empty() {
         return Ok(None);
     }
+    // The cache is written unconditionally, including when the check found
+    // no update — without this, that same "up to date" version would be
+    // reported as a pending update the next time the network call fails.
+    let current = format!("v{}", env!("CARGO_PKG_VERSION"));
+    if version == current {
+        return Ok(None);
+    }
     Ok(Some(version.to_string()))
 }
 
@@ -227,8 +238,37 @@ mod tests {
 
     #[test]
     fn asset_name_uses_target_triple() {
-        let name = asset_name("v1.0.0");
+        // Every platform this repo actually ships releases for must resolve
+        // a triple; only a genuinely unsupported target would error.
+        let name = asset_name("v1.0.0").unwrap();
         assert!(name.contains("appz-"));
+    }
+
+    #[test]
+    fn read_stale_cache_treats_current_version_as_up_to_date() {
+        // Regression: `write_cache` runs on every successful check, including
+        // "already up to date" ones, so a stale-cache fallback must not treat
+        // that cached version as a pending update.
+        let path = cache_path();
+        let backup = std::fs::read(&path).ok();
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let current = format!("v{}", env!("CARGO_PKG_VERSION"));
+        std::fs::write(&path, format!("2020-01-01T00:00:00Z\n{current}\n")).unwrap();
+
+        let result = read_stale_cache();
+
+        match backup {
+            Some(data) => {
+                let _ = std::fs::write(&path, data);
+            }
+            None => {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+
+        assert_eq!(result.unwrap(), None);
     }
 
     #[test]

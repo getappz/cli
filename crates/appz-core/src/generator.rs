@@ -111,6 +111,14 @@ fn build_groups<'a>(toolchains: &'a [DetectedToolchain]) -> BTreeMap<&'a str, Gr
                 version: tc.version.clone(),
                 frameworks: Vec::new(),
             });
+        // Prefer the canonical runtime toolchain's version (slug == mise_plugin,
+        // e.g. NODE_RUNTIME for "node") over a meta-framework's — the latter's
+        // `version` may have fallen back to its own npm package's semver range
+        // (e.g. astro "^5") via detect_package_version, which is never a valid
+        // runtime version. Insertion order must not decide this.
+        if tc.slug == tc.mise_plugin {
+            entry.version = tc.version.clone();
+        }
         entry
             .frameworks
             .extend(tc.frameworks.iter().map(|f| f.name));
@@ -396,6 +404,29 @@ mod tests {
         assert!(
             generate_merged(bad, &tcs).is_err(),
             "must not silently discard an unparseable file"
+        );
+    }
+
+    #[test]
+    fn test_generate_prefers_runtime_slug_version_over_meta_framework() {
+        // Astro (mise_plugin "node") with no version_files falls back to
+        // detect_package_version, which returns its own npm dependency range
+        // ("^5") — never a valid node version. NODE_RUNTIME (slug == mise_plugin
+        // "node") detects the real version via .nvmrc/default "lts". Astro is
+        // detected first (FRAMEWORKS array order), so the group must not just
+        // take the first toolchain's version.
+        let mut astro = make_tc("node", "^5", None);
+        astro.slug = "astro";
+        let node_runtime = make_tc("node", "lts", None);
+        let tcs = vec![astro, node_runtime];
+        let out = generate(&tcs);
+        assert!(
+            out.contains("node = \"lts\""),
+            "runtime version must win over meta-framework's borrowed package range:\n{out}"
+        );
+        assert!(
+            !out.contains("\"^5\""),
+            "meta-framework's npm semver range must never leak into mise.toml:\n{out}"
         );
     }
 

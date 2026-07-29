@@ -8,6 +8,7 @@ mod deploy;
 mod dev_install;
 mod init_source;
 mod mcp;
+mod skills;
 mod update;
 
 // ── CLI ─────────────────────────────────────────────────────────
@@ -46,8 +47,21 @@ enum AppzCmd {
     Mcp,
     /// Deploy to a hosting platform (drives that platform's own CLI)
     Deploy(DeployArgs),
+    /// Discover and install agent skills relevant to this project
+    Skills(SkillsArgs),
     /// Self-update to the latest (or a specific) release
     Update(UpdateArgs),
+}
+
+#[derive(Args)]
+struct SkillsArgs {
+    /// Search skills.sh directly instead of auto-detecting the project
+    query: Option<String>,
+    #[arg(default_value = ".")]
+    dir: PathBuf,
+    /// Install all recommended/matching skills without prompting
+    #[arg(short = 'y', long)]
+    yes: bool,
 }
 
 #[derive(Args)]
@@ -804,7 +818,89 @@ fn main() {
             }
         }
         AppzCmd::Deploy(a) => run_deploy(a, json),
+        AppzCmd::Skills(a) => run_skills(a, json),
         AppzCmd::Update(a) => update::run(a.version, a.check, a.quiet),
+    }
+}
+
+fn run_skills(args: SkillsArgs, json: bool) {
+    let root = resolve_root(&args.dir);
+    let report = match skills::search(&root, &skills::SkillsRequest { query: args.query }) {
+        Ok(r) => r,
+        Err(e) => error(&e),
+    };
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report).unwrap());
+        return;
+    }
+
+    intro("appz skills");
+    info(&report.context);
+
+    if report.hits.is_empty() {
+        outro("no matching skills found — try `appz skills <query>`");
+        return;
+    }
+
+    for hit in &report.hits {
+        let mark = if hit.installed { " (installed)" } else { "" };
+        step(&format!(
+            "{}  {} installs  {}{mark}",
+            hit.name,
+            skills::format_installs(hit.installs),
+            hit.source
+        ));
+    }
+
+    let installable: Vec<skills::SkillHit> =
+        report.hits.into_iter().filter(|h| !h.installed).collect();
+    if installable.is_empty() {
+        outro("all recommended skills are already installed");
+        return;
+    }
+
+    let selected: Vec<skills::SkillHit> = if args.yes {
+        installable
+    } else if !is_tty() {
+        error("confirmation required — pass --yes to install without prompting");
+    } else {
+        let mut ms = cliclack::multiselect("select skills to install");
+        for hit in &installable {
+            ms = ms.item(hit.skill_id.clone(), hit.name.clone(), hit.source.clone());
+        }
+        match ms.interact() {
+            Ok(ids) => installable
+                .into_iter()
+                .filter(|h| ids.contains(&h.skill_id))
+                .collect(),
+            Err(_) => {
+                warning("selection cancelled");
+                return;
+            }
+        }
+    };
+
+    if selected.is_empty() {
+        outro("no skills selected");
+        return;
+    }
+
+    let summary = with_spinner("installing skills...", "installation complete", || {
+        skills::install(&root, &selected)
+    });
+
+    match summary {
+        Ok(s) => {
+            for name in &s.installed {
+                success(&format!("installed {name}"));
+            }
+            for name in &s.failed {
+                warning(&format!("failed to install {name}"));
+            }
+            outro("done — review skills before use; they run with full agent permissions");
+        }
+        Err(e) => error(&e),
     }
 }
 

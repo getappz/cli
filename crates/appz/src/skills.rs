@@ -1,0 +1,400 @@
+//! `appz skills [query]` — discover agent skills relevant to a project and
+//! install them, porting `vercel skills` (https://vercel.com/docs/cli/skills).
+//!
+//! Search against the skills.sh registry is done the same way `vercel
+//! skills` and `skills-cli` (https://github.com/qntx/skill) do it — a plain
+//! GET against `skills.sh/api/search`. Installation, however, is native:
+//! it drives the published `skill` crate directly instead of shelling out
+//! to `npx skills add`, so this command has no Node.js dependency.
+
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use serde::{Deserialize, Serialize};
+use skill::SkillManager;
+use skill::types::{
+    AgentId, DiscoverOptions, InstallMode, InstallOptions, InstallScope, ParsedSource, SourceType,
+};
+
+const SKILLS_API: &str = "https://skills.sh/api/search";
+const MIN_INSTALLS: u64 = 100;
+const MAX_RESULTS: usize = 8;
+const MAX_FRAMEWORK_RESULTS: usize = 4;
+
+#[derive(Deserialize, Debug, Clone)]
+struct ApiSkill {
+    #[serde(rename = "skillId")]
+    skill_id: String,
+    name: String,
+    #[serde(default)]
+    installs: u64,
+    #[serde(default)]
+    source: String,
+}
+
+#[derive(Deserialize, Default)]
+struct ApiSearchResponse {
+    #[serde(default)]
+    skills: Vec<ApiSkill>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct SkillHit {
+    pub skill_id: String,
+    pub name: String,
+    pub installs: u64,
+    pub source: String,
+    pub installed: bool,
+}
+
+pub struct SkillsRequest {
+    pub query: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct SkillsReport {
+    pub context: String,
+    pub hits: Vec<SkillHit>,
+}
+
+pub struct InstallSummary {
+    pub installed: Vec<String>,
+    pub failed: Vec<String>,
+}
+
+fn percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+fn search_api(query: &str) -> Vec<ApiSkill> {
+    if query.trim().chars().count() < 2 {
+        return Vec::new();
+    }
+    let url = format!("{SKILLS_API}?q={}&limit=10", percent_encode(query));
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(10))
+        .timeout_read(Duration::from_secs(10))
+        .build();
+    agent
+        .get(&url)
+        .set("User-Agent", "appz")
+        .call()
+        .ok()
+        .and_then(|resp| resp.into_json::<ApiSearchResponse>().ok())
+        .map(|r| r.skills)
+        .unwrap_or_default()
+}
+
+fn dedup(terms: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    terms
+        .into_iter()
+        .filter(|t| seen.insert(t.clone()))
+        .collect()
+}
+
+fn merge_best(map: &mut HashMap<String, ApiSkill>, results: Vec<ApiSkill>) {
+    for s in results {
+        map.entry(s.skill_id.clone())
+            .and_modify(|existing| {
+                if s.installs > existing.installs {
+                    *existing = s.clone();
+                }
+            })
+            .or_insert(s);
+    }
+}
+
+pub fn format_installs(n: u64) -> String {
+    if n >= 1000 {
+        format!("{:.1}k", n as f64 / 1000.0)
+    } else {
+        n.to_string()
+    }
+}
+
+/// Search skills.sh, either directly (query given) or by auto-detecting the
+/// project's toolchains/frameworks via `appz-core`, then mark which of the
+/// results are already installed for this project.
+pub fn search(root: &Path, req: &SkillsRequest) -> Result<SkillsReport, String> {
+    let (context, ranked) = match req
+        .query
+        .as_deref()
+        .map(str::trim)
+        .filter(|q| !q.is_empty())
+    {
+        Some(q) => {
+            let mut results: Vec<ApiSkill> = search_api(q)
+                .into_iter()
+                .filter(|s| s.installs >= MIN_INSTALLS)
+                .collect();
+            results.sort_by_key(|s| std::cmp::Reverse(s.installs));
+            results.truncate(MAX_RESULTS);
+            (format!("Search: \"{q}\""), results)
+        }
+        None => {
+            let toolchains = appz_core::detect_toolchains(root)?;
+            if toolchains.is_empty() {
+                return Ok(SkillsReport {
+                    context: "no toolchains detected in this directory".to_string(),
+                    hits: Vec::new(),
+                });
+            }
+
+            let mut framework_terms = Vec::new();
+            let mut toolchain_terms = Vec::new();
+            let mut detected_parts = Vec::new();
+            for tc in &toolchains {
+                toolchain_terms.push(tc.name.to_lowercase());
+                detected_parts.push(tc.name.to_string());
+                for fw in &tc.frameworks {
+                    framework_terms.push(fw.name.to_lowercase());
+                    detected_parts.push(fw.name.to_string());
+                }
+            }
+
+            let mut framework_hits: HashMap<String, ApiSkill> = HashMap::new();
+            for term in dedup(framework_terms) {
+                merge_best(&mut framework_hits, search_api(&term));
+            }
+            let mut dep_hits: HashMap<String, ApiSkill> = HashMap::new();
+            for term in dedup(toolchain_terms) {
+                merge_best(&mut dep_hits, search_api(&term));
+            }
+
+            let mut top_framework: Vec<ApiSkill> = framework_hits
+                .into_values()
+                .filter(|s| s.installs >= MIN_INSTALLS)
+                .collect();
+            top_framework.sort_by_key(|s| std::cmp::Reverse(s.installs));
+            top_framework.truncate(MAX_FRAMEWORK_RESULTS);
+            let framework_ids: HashSet<String> =
+                top_framework.iter().map(|s| s.skill_id.clone()).collect();
+
+            let mut top_dep: Vec<ApiSkill> = dep_hits
+                .into_values()
+                .filter(|s| s.installs >= MIN_INSTALLS && !framework_ids.contains(&s.skill_id))
+                .collect();
+            top_dep.sort_by_key(|s| std::cmp::Reverse(s.installs));
+            top_dep.truncate(MAX_RESULTS.saturating_sub(top_framework.len()));
+
+            let mut ranked = top_framework;
+            ranked.extend(top_dep);
+            (format!("Detected: {}", detected_parts.join(" + ")), ranked)
+        }
+    };
+
+    Ok(SkillsReport {
+        context,
+        hits: mark_installed(root, ranked),
+    })
+}
+
+fn mark_installed(root: &Path, skills: Vec<ApiSkill>) -> Vec<SkillHit> {
+    if skills.is_empty() {
+        return Vec::new();
+    }
+
+    let installed_names: HashSet<String> = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .ok()
+        .map(|rt| {
+            rt.block_on(async {
+                let manager = SkillManager::builder().cwd(root.to_path_buf()).build();
+                manager
+                    .list_installed(&skill::types::ListOptions::default())
+                    .await
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|s| s.name)
+                    .collect()
+            })
+        })
+        .unwrap_or_default();
+
+    skills
+        .into_iter()
+        .map(|s| SkillHit {
+            installed: installed_names.contains(&s.name),
+            skill_id: s.skill_id,
+            name: s.name,
+            installs: s.installs,
+            source: s.source,
+        })
+        .collect()
+}
+
+/// Install the given skills natively, grouped by their `owner/repo` source so
+/// each repository is only cloned/downloaded once, with independent sources
+/// installed concurrently.
+pub fn install(root: &Path, hits: &[SkillHit]) -> Result<InstallSummary, String> {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| e.to_string())?;
+    rt.block_on(install_async(root, hits))
+}
+
+async fn install_async(root: &Path, hits: &[SkillHit]) -> Result<InstallSummary, String> {
+    let manager = std::sync::Arc::new(SkillManager::builder().cwd(root.to_path_buf()).build());
+
+    // Group by source: the registry's `source` (owner/repo) is the only
+    // reliable locator it gives us — its `id`/`skillId` fields are opaque
+    // identifiers, not real paths within the repo (e.g. clerk/skills' actual
+    // "clerk-nextjs-patterns" skill lives at `skills/frameworks/clerk-nextjs-patterns/`,
+    // three levels deep, which no field in the search response reveals). So
+    // each source is cloned/blob-installed once in full and its skills are
+    // located by discovery, not by a guessed subpath.
+    let mut by_source: HashMap<String, Vec<String>> = HashMap::new();
+    for hit in hits {
+        by_source
+            .entry(hit.source.clone())
+            .or_default()
+            .push(hit.name.clone());
+    }
+
+    let mut target_agents = manager.detect_installed_agents().await;
+    if target_agents.is_empty() {
+        target_agents = manager.agents().universal_agents();
+    }
+    let target_agents = std::sync::Arc::new(target_agents);
+
+    // Each source is an independent clone/blob-download + install, so run
+    // them concurrently — sequentially they add up fast (a handful of
+    // sources easily takes minutes one at a time over real network).
+    let mut set = tokio::task::JoinSet::new();
+    for (source, names) in by_source {
+        let manager = std::sync::Arc::clone(&manager);
+        let target_agents = std::sync::Arc::clone(&target_agents);
+        let root = root.to_path_buf();
+        set.spawn(async move {
+            let result =
+                install_from_source(&manager, &source, &names, &target_agents, &root).await;
+            (names, result)
+        });
+    }
+
+    let mut installed = Vec::new();
+    let mut failed = Vec::new();
+    while let Some(joined) = set.join_next().await {
+        // A panicking install task is swallowed as a failure for its
+        // skills rather than aborting the whole batch: best-effort,
+        // matching how `detect_installed_agents` treats per-agent panics.
+        let Ok((names, result)) = joined else {
+            continue;
+        };
+        match result {
+            Ok(ok_names) => {
+                let ok: HashSet<&str> = ok_names.iter().map(String::as_str).collect();
+                for name in &names {
+                    if ok.contains(name.as_str()) {
+                        installed.push(name.clone());
+                    } else {
+                        failed.push(name.clone());
+                    }
+                }
+            }
+            Err(_) => failed.extend(names),
+        }
+    }
+
+    Ok(InstallSummary { installed, failed })
+}
+
+async fn install_from_source(
+    manager: &SkillManager,
+    source: &str,
+    names: &[String],
+    target_agents: &[AgentId],
+    root: &Path,
+) -> Result<Vec<String>, String> {
+    let parsed = manager.parse_source(source);
+    let (dir, _temp) = resolve_source(&parsed).await?;
+
+    let discovered = skill::skills::discover_skills(
+        &dir,
+        parsed.subpath.as_deref(),
+        &DiscoverOptions::default(),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let selected: Vec<_> = discovered
+        .into_iter()
+        .filter(|s| names.contains(&s.name))
+        .collect();
+    if selected.is_empty() {
+        return Err(format!("no matching skills found in {source}"));
+    }
+
+    let install_opts = InstallOptions {
+        scope: InstallScope::Project,
+        mode: InstallMode::Symlink,
+        cwd: Some(root.to_path_buf()),
+    };
+
+    let mut ok_names = Vec::new();
+    for skill_item in &selected {
+        let mut any_ok = false;
+        for agent_id in target_agents {
+            if manager
+                .install_skill(skill_item, agent_id, &install_opts)
+                .await
+                .is_ok()
+            {
+                any_ok = true;
+            }
+        }
+        if any_ok {
+            ok_names.push(skill_item.name.clone());
+        }
+    }
+    Ok(ok_names)
+}
+
+/// Resolve a parsed source to a local directory: GitHub blob fast-path (only
+/// downloads the target skill folder), falling back to a shallow git clone.
+/// Mirrors `skills add`'s own resolver (`skills-cli/src/commands/add/install.rs`),
+/// built only from the `skill` crate's public API.
+async fn resolve_source(
+    parsed: &ParsedSource,
+) -> Result<(PathBuf, Option<tempfile::TempDir>), String> {
+    if parsed.source_type == SourceType::Local {
+        let path = parsed.local_path.clone().ok_or("local path not resolved")?;
+        return Ok((path, None));
+    }
+
+    if parsed.source_type == SourceType::Github
+        && let Some(owner_repo) = skill::source::owner_repo(parsed)
+    {
+        let token = skill::github::discover_token();
+        if let Ok(Some(td)) = skill::blob::try_blob_install(
+            &owner_repo,
+            parsed.subpath.as_deref(),
+            parsed.git_ref.as_deref(),
+            token.as_deref(),
+        )
+        .await
+        {
+            let path = td.path().to_path_buf();
+            return Ok((path, Some(td)));
+        }
+    }
+
+    let td = skill::git::clone_repo(&parsed.url, parsed.git_ref.as_deref())
+        .await
+        .map_err(|e| e.to_string())?;
+    let path = td.path().to_path_buf();
+    Ok((path, Some(td)))
+}

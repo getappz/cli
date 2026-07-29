@@ -261,6 +261,29 @@ mod tests {
     static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
+    fn resolve_target_dir_rejects_a_fresh_target_escaping_cwd() {
+        // A repo string containing a separator (e.g. `..\secret` — rejected
+        // upstream by `split_owner_repo`, but this checks `resolve_target_dir`
+        // in isolation) would let `cwd.join(repo)` escape `cwd` even though
+        // the target doesn't exist yet, where the old code had no check at
+        // all — only the `--force` + already-exists path canonicalized.
+        let _guard = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let cwd =
+            std::env::temp_dir().join(format!("appz-init-test-escape-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&cwd);
+        fs::create_dir_all(&cwd).unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&cwd).unwrap();
+
+        let result = resolve_target_dir("../escaped", false);
+
+        std::env::set_current_dir(&prev).unwrap();
+        let _ = fs::remove_dir_all(&cwd);
+
+        assert!(result.is_err(), "expected rejection, got: {result:?}");
+    }
+
+    #[test]
     fn resolve_target_dir_errors_when_existing_and_not_forced() {
         let _guard = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let cwd = std::env::temp_dir().join(format!("appz-init-test-{}", std::process::id()));
@@ -302,6 +325,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
     fn resolve_target_dir_refuses_to_remove_non_child_paths() {
         let _guard = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let cwd =
@@ -314,7 +338,8 @@ mod tests {
         // " ." resolves on Windows filesystem lookups to the same location as
         // the current directory itself (trailing space/dot stripped by path
         // normalization), despite not being the literal string "." — this is
-        // the confirmed bypass this fix closes.
+        // the confirmed bypass this fix closes. Windows-only: on Linux/macOS
+        // " ." is just an ordinary, distinct directory name.
         let result = resolve_target_dir(" .", true);
 
         let still_exists_after = cwd.exists();

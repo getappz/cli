@@ -8,6 +8,18 @@
 fn resolve_target_dir(repo: &str, force: bool) -> Result<std::path::PathBuf, String> {
     let cwd = std::env::current_dir().map_err(|e| format!("cannot determine current dir: {e}"))?;
     let target = cwd.join(repo);
+    // `repo` is validated upstream to be a single path component (no `.`,
+    // `..`, or embedded separator), but check the join's actual shape too —
+    // a value like a Windows drive-qualified segment (`C:evil`) could still
+    // make `join` behave unexpectedly. This runs unconditionally, unlike the
+    // canonicalize check below which only applies once `target` already
+    // exists, so a *fresh* clone/download target is covered too.
+    if target.parent() != Some(cwd.as_path()) {
+        return Err(format!(
+            "refusing to resolve '{}' — it does not resolve to a direct child of the current directory",
+            target.display()
+        ));
+    }
     if target.exists() {
         if force {
             // Defense in depth: a parsed repo name is already checked upstream
@@ -140,22 +152,23 @@ fn download_zip(url: &str) -> Result<Vec<u8>, String> {
 /// in (e.g. `appz-dev-site-main/`) so `target` ends up holding the repo's
 /// files directly, not one level deeper.
 ///
-/// The actual work happens in `extract_into`, using a temp directory that
-/// this function unconditionally cleans up afterwards — whether `extract_into`
-/// succeeded or bailed out on its first failing step, not just on the last one.
+/// The actual work happens in `extract_into`, using a `tempfile::TempDir` —
+/// a unique, unguessable path with RAII cleanup on drop, including on panic —
+/// whether `extract_into` succeeded or bailed out on its first failing step.
 fn extract_template(data: &[u8], target: &std::path::Path) -> Result<(), String> {
-    let tmp = std::env::temp_dir().join(format!("appz-init-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&tmp);
-    let result = extract_into(data, target, &tmp);
-    let _ = std::fs::remove_dir_all(&tmp);
-    result
+    let tmp = tempfile::TempDir::new().map_err(|e| format!("create tmpdir: {e}"))?;
+    extract_into(data, target, tmp.path())
 }
 
 /// Does the actual extraction into `tmp`, then copies the unwrapped
 /// top-level directory's contents into `target`. Split out from
 /// `extract_template` so every fallible step here — however it fails —
 /// still lets the caller clean up `tmp` afterwards.
-fn extract_into(data: &[u8], target: &std::path::Path, tmp: &std::path::Path) -> Result<(), String> {
+fn extract_into(
+    data: &[u8],
+    target: &std::path::Path,
+    tmp: &std::path::Path,
+) -> Result<(), String> {
     std::fs::create_dir_all(tmp).map_err(|e| format!("create tmpdir: {e}"))?;
 
     let cursor = std::io::Cursor::new(data);
@@ -181,8 +194,7 @@ fn copy_dir_contents(src: &std::path::Path, dst: &std::path::Path) -> Result<(),
         let from = entry.path();
         let to = dst.join(entry.file_name());
         if from.is_dir() {
-            std::fs::create_dir_all(&to)
-                .map_err(|e| format!("create '{}': {e}", to.display()))?;
+            std::fs::create_dir_all(&to).map_err(|e| format!("create '{}': {e}", to.display()))?;
             copy_dir_contents(&from, &to)?;
         } else {
             std::fs::copy(&from, &to).map_err(|e| format!("copy '{}': {e}", from.display()))?;
@@ -194,7 +206,10 @@ fn copy_dir_contents(src: &std::path::Path, dst: &std::path::Path) -> Result<(),
 /// Download `remote` as a template archive (no `.git`) into `target`: try
 /// each candidate ref's archive URL in order, extracting the first one that
 /// downloads successfully.
-fn download_template(remote: &appz_core::RemoteSource, target: &std::path::Path) -> Result<(), String> {
+fn download_template(
+    remote: &appz_core::RemoteSource,
+    target: &std::path::Path,
+) -> Result<(), String> {
     let refs_to_try = candidate_refs(remote);
     let mut last_err = None;
     for ref_name in &refs_to_try {
@@ -289,7 +304,8 @@ mod tests {
     #[test]
     fn resolve_target_dir_refuses_to_remove_non_child_paths() {
         let _guard = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let cwd = std::env::temp_dir().join(format!("appz-init-test-traversal-{}", std::process::id()));
+        let cwd =
+            std::env::temp_dir().join(format!("appz-init-test-traversal-{}", std::process::id()));
         let _ = fs::remove_dir_all(&cwd);
         fs::create_dir_all(&cwd).unwrap();
         let prev = std::env::current_dir().unwrap();
@@ -306,7 +322,11 @@ mod tests {
         std::env::set_current_dir(&prev).unwrap();
         let _ = fs::remove_dir_all(&cwd);
 
-        assert!(result.is_err(), "expected rejection of a non-child target, got: {:?}", result);
+        assert!(
+            result.is_err(),
+            "expected rejection of a non-child target, got: {:?}",
+            result
+        );
         assert!(
             still_exists_after,
             "the current directory must NOT have been deleted"
@@ -329,10 +349,8 @@ mod tests {
             zip.finish().unwrap();
         }
 
-        let target = std::env::temp_dir().join(format!(
-            "appz-init-extract-test-{}",
-            std::process::id()
-        ));
+        let target =
+            std::env::temp_dir().join(format!("appz-init-extract-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&target);
 
         let result = extract_template(&buf, &target);

@@ -108,6 +108,8 @@ fn split_owner_repo(path: &str) -> Option<(String, String)> {
         || repo.is_empty()
         || is_dot_or_dotdot(owner)
         || is_dot_or_dotdot(repo)
+        || has_path_separator(owner)
+        || has_path_separator(repo)
     {
         return None;
     }
@@ -123,17 +125,26 @@ fn is_dot_or_dotdot(s: &str) -> bool {
     s == "." || s == ".."
 }
 
+/// `split_owner_repo` only splits on `/`, so a value like `..\secret` (a
+/// single segment containing a *backslash*) still passes through as a repo
+/// name despite not being `..` — and `\` is a path separator on Windows,
+/// letting `cwd.join(repo)` escape `cwd`. Reject embedded separators of
+/// either flavor regardless of host OS, not just the one this OS uses.
+fn has_path_separator(s: &str) -> bool {
+    s.contains('/') || s.contains('\\')
+}
+
 /// Build the platform-specific archive-download URL for `ref_name` (a
 /// branch name). Used by the template-download path (not-owned repos, or
 /// GitLab/Bitbucket, which have no ownership signal).
 pub fn archive_url(host: Host, owner: &str, repo: &str, ref_name: &str) -> String {
     match host {
-        Host::GitHub => format!(
-            "https://github.com/{owner}/{repo}/archive/refs/heads/{ref_name}.zip"
-        ),
-        Host::GitLab => format!(
-            "https://gitlab.com/{owner}/{repo}/-/archive/{ref_name}/{repo}-{ref_name}.zip"
-        ),
+        Host::GitHub => {
+            format!("https://github.com/{owner}/{repo}/archive/refs/heads/{ref_name}.zip")
+        }
+        Host::GitLab => {
+            format!("https://gitlab.com/{owner}/{repo}/-/archive/{ref_name}/{repo}-{ref_name}.zip")
+        }
         Host::Bitbucket => format!("https://bitbucket.org/{owner}/{repo}/get/{ref_name}.zip"),
     }
 }
@@ -237,6 +248,14 @@ mod tests {
     #[test]
     fn parse_remote_rejects_dotdot_owner() {
         assert!(parse_remote("https://github.com/../repo").is_none());
+    }
+
+    #[test]
+    fn parse_remote_rejects_embedded_backslash_traversal() {
+        // Not equal to "..", but a Windows path separator embedded in the
+        // segment would let `cwd.join(repo)` escape `cwd`.
+        assert!(parse_remote("https://github.com/owner/..\\secret").is_none());
+        assert!(parse_remote("https://github.com/owner/..\\..\\Windows").is_none());
     }
 
     #[test]

@@ -17,7 +17,13 @@ pub fn run(version: Option<String>, check_only: bool, quiet: bool) {
         None => return,
     };
 
-    let asset = github::asset_name(&target_version);
+    let asset = match github::asset_name(&target_version) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    };
 
     if !quiet {
         println!("downloading {asset}...");

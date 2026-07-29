@@ -162,7 +162,7 @@ fn fetch_tree(owner_repo: &str) -> Option<TreeResponse> {
 /// verified lookup against the repo's real tree, never a guess.
 fn resolve_skill_subpath(tree: &TreeResponse, skill_name: &str) -> Option<String> {
     let mut matches = tree.tree.iter().filter_map(|e| {
-        let dir = e.path.strip_suffix("SKILL.md")?.trim_end_matches('/');
+        let dir = e.path.strip_suffix("/SKILL.md")?;
         let leaf = dir.rsplit('/').next().unwrap_or(dir);
         (!dir.is_empty() && leaf.eq_ignore_ascii_case(skill_name)).then(|| dir.to_string())
     });
@@ -405,32 +405,49 @@ async fn install_async(root: &Path, hits: &[SkillHit]) -> Result<InstallSummary,
     // them concurrently — sequentially they add up fast (a handful of
     // sources easily takes minutes one at a time over real network).
     let mut set = tokio::task::JoinSet::new();
+    // Tracked outside the spawned task so a panicking task's skills are
+    // still attributable to `failed` below — `names` itself is moved into
+    // the task and unrecoverable from a `JoinError`.
+    let mut pending: HashMap<tokio::task::Id, Vec<String>> = HashMap::new();
     for (source, names) in by_source {
         let manager = std::sync::Arc::clone(&manager);
         let target_agents = std::sync::Arc::clone(&target_agents);
         let root = root.to_path_buf();
-        set.spawn(async move {
+        let owned = names.clone();
+        let handle = set.spawn(async move {
             let result =
                 install_from_source(&manager, &source, &names, &target_agents, &root).await;
             (names, result)
         });
+        pending.insert(handle.id(), owned);
     }
 
     let mut installed = Vec::new();
     let mut failed = Vec::new();
-    while let Some(joined) = set.join_next().await {
-        // A panicking install task is swallowed as a failure for its
-        // skills rather than aborting the whole batch: best-effort,
-        // matching how `detect_installed_agents` treats per-agent panics.
-        let Ok((names, result)) = joined else {
-            continue;
+    while let Some(joined) = set.join_next_with_id().await {
+        let (names, result) = match joined {
+            Ok((id, (names, result))) => {
+                pending.remove(&id);
+                (names, result)
+            }
+            // A panicking install task is counted as a failure for its
+            // skills rather than aborting the whole batch: best-effort,
+            // matching how `detect_installed_agents` treats per-agent panics.
+            Err(e) => {
+                if let Some(names) = pending.remove(&e.id()) {
+                    failed.extend(names);
+                }
+                continue;
+            }
         };
         match result {
-            Ok(ok_names) => {
+            Ok((ok_names, causes)) => {
                 let ok: HashSet<&str> = ok_names.iter().map(String::as_str).collect();
                 for name in &names {
                     if ok.contains(name.as_str()) {
                         installed.push(name.clone());
+                    } else if let Some(cause) = causes.get(name) {
+                        failed.push(format!("{name} ({cause})"));
                     } else {
                         failed.push(name.clone());
                     }
@@ -443,13 +460,17 @@ async fn install_async(root: &Path, hits: &[SkillHit]) -> Result<InstallSummary,
     Ok(InstallSummary { installed, failed })
 }
 
+/// Installs every skill in `names` found at `source`, for every target agent.
+/// Returns the names that installed on at least one agent, plus — for every
+/// name that failed on *all* agents — the last agent's error, so a total
+/// failure surfaces an actionable cause instead of a bare name.
 async fn install_from_source(
     manager: &SkillManager,
     source: &str,
     names: &[String],
     target_agents: &[AgentId],
     root: &Path,
-) -> Result<Vec<String>, String> {
+) -> Result<(Vec<String>, HashMap<String, String>), String> {
     let parsed = manager.parse_source(source);
     let (dir, _temp) = resolve_source(&parsed).await?;
 
@@ -476,22 +497,26 @@ async fn install_from_source(
     };
 
     let mut ok_names = Vec::new();
+    let mut causes = HashMap::new();
     for skill_item in &selected {
         let mut any_ok = false;
+        let mut last_err = None;
         for agent_id in target_agents {
-            if manager
+            match manager
                 .install_skill(skill_item, agent_id, &install_opts)
                 .await
-                .is_ok()
             {
-                any_ok = true;
+                Ok(_) => any_ok = true,
+                Err(e) => last_err = Some(e.to_string()),
             }
         }
         if any_ok {
             ok_names.push(skill_item.name.clone());
+        } else if let Some(err) = last_err {
+            causes.insert(skill_item.name.clone(), err);
         }
     }
-    Ok(ok_names)
+    Ok((ok_names, causes))
 }
 
 /// Resolve a parsed source to a local directory: GitHub blob fast-path (only

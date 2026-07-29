@@ -1237,7 +1237,7 @@ pub static RUST_RUNTIME: Framework = fw!(
     "latest",
     &[],
     &[d!("Cargo.toml")],
-    cmds!(NONE!(), NONE!(), NONE!())
+    cmds!(C!("cargo build"), NONE!(), NONE!())
 );
 pub static RUST_AXUM: Framework = fw_ext!(
     "Axum",

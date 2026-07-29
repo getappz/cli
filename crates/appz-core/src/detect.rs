@@ -15,6 +15,17 @@ pub struct CommandOverrides {
     pub dev_command: Option<String>,
 }
 
+impl CommandOverrides {
+    fn set_field(&mut self, key: &str, value: &str) {
+        match key {
+            "buildCommand" | "build_command" => self.build_command = Some(value.to_string()),
+            "installCommand" | "install_command" => self.install_command = Some(value.to_string()),
+            "devCommand" | "dev_command" => self.dev_command = Some(value.to_string()),
+            _ => {}
+        }
+    }
+}
+
 /// Workspace / monorepo manager detection result.
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct MonorepoConfig {
@@ -137,14 +148,10 @@ fn read_overrides(root: &Path) -> CommandOverrides {
             && let Some(obj) = val.as_object()
         {
             let mut ov = CommandOverrides::default();
-            if let Some(s) = obj.get("buildCommand").and_then(|v| v.as_str()) {
-                ov.build_command = Some(s.to_string());
-            }
-            if let Some(s) = obj.get("installCommand").and_then(|v| v.as_str()) {
-                ov.install_command = Some(s.to_string());
-            }
-            if let Some(s) = obj.get("devCommand").and_then(|v| v.as_str()) {
-                ov.dev_command = Some(s.to_string());
+            for (k, v) in obj {
+                if let Some(s) = v.as_str() {
+                    ov.set_field(k, s);
+                }
             }
             return ov;
         }
@@ -156,14 +163,12 @@ fn read_overrides(root: &Path) -> CommandOverrides {
         && let Ok(val) = content.parse::<toml::Value>()
     {
         let mut ov = CommandOverrides::default();
-        if let Some(s) = val.get("build_command").and_then(|v| v.as_str()) {
-            ov.build_command = Some(s.to_string());
-        }
-        if let Some(s) = val.get("install_command").and_then(|v| v.as_str()) {
-            ov.install_command = Some(s.to_string());
-        }
-        if let Some(s) = val.get("dev_command").and_then(|v| v.as_str()) {
-            ov.dev_command = Some(s.to_string());
+        if let Some(table) = val.as_table() {
+            for (k, v) in table {
+                if let Some(s) = v.as_str() {
+                    ov.set_field(k, s);
+                }
+            }
         }
         return ov;
     }
@@ -177,14 +182,7 @@ fn read_overrides(root: &Path) -> CommandOverrides {
         let mut ov = CommandOverrides::default();
         for (k, v) in mapping {
             if let (Some(key), Some(val)) = (k.as_str(), v.as_str()) {
-                match key {
-                    "build_command" | "buildCommand" => ov.build_command = Some(val.to_string()),
-                    "install_command" | "installCommand" => {
-                        ov.install_command = Some(val.to_string())
-                    }
-                    "dev_command" | "devCommand" => ov.dev_command = Some(val.to_string()),
-                    _ => {}
-                }
+                ov.set_field(key, val);
             }
         }
         return ov;

@@ -1,14 +1,14 @@
 use std::path::Path;
-use std::process::Command;
 
 /// Check if `mise` is on PATH. Returns true if available.
 pub fn mise_on_path() -> bool {
-    Command::new("mise")
+    command::Command::new("mise")
         .arg("--version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok()
+        .without_shell()
+        .set_error_on_nonzero(false)
+        .exec()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 /// Install mise using the platform-native method.
@@ -16,24 +16,26 @@ pub fn mise_on_path() -> bool {
 pub fn install_mise() -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        // winget is native on Win11+ / Win10 with App Installer
-        let winget = Command::new("winget")
+        if command::Command::new("winget")
             .args(["install", "jdx.mise"])
-            .status()
-            .map_err(|e| format!("failed to launch winget: {e}"))?;
-        if winget.success() {
+            .without_shell()
+            .exec_interactive()
+            .map_err(|e| format!("failed to launch winget: {e}"))?
+            .success()
+        {
             return Ok(());
         }
-        // Fallback: PowerShell script
-        let ps = Command::new("powershell")
+        if command::Command::new("powershell")
             .args([
                 "-NoProfile",
                 "-Command",
                 "irm https://mise.jdx.dev/install.ps1 | iex",
             ])
-            .status()
-            .map_err(|e| format!("failed to launch powershell: {e}"))?;
-        if ps.success() {
+            .without_shell()
+            .exec_interactive()
+            .map_err(|e| format!("failed to launch powershell: {e}"))?
+            .success()
+        {
             return Ok(());
         }
         Err("winget and PowerShell install both failed".to_string())
@@ -41,19 +43,22 @@ pub fn install_mise() -> Result<(), String> {
 
     #[cfg(target_os = "macos")]
     {
-        let brew = Command::new("brew")
+        if command::Command::new("brew")
             .args(["install", "mise"])
-            .status()
-            .map_err(|e| format!("failed to launch brew: {e}"))?;
-        if brew.success() {
+            .without_shell()
+            .exec_interactive()
+            .map_err(|e| format!("failed to launch brew: {e}"))?
+            .success()
+        {
             return Ok(());
         }
-        // Fallback: curl script
-        let curl = Command::new("sh")
+        if command::Command::new("sh")
             .args(["-c", "curl -fsSL https://mise.jdx.dev/install.sh | sh"])
-            .status()
-            .map_err(|e| format!("failed to run curl install: {e}"))?;
-        if curl.success() {
+            .without_shell()
+            .exec_interactive()
+            .map_err(|e| format!("failed to run curl install: {e}"))?
+            .success()
+        {
             return Ok(());
         }
         Err("brew and curl install both failed".to_string())
@@ -61,11 +66,13 @@ pub fn install_mise() -> Result<(), String> {
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
-        let curl = Command::new("sh")
+        if command::Command::new("sh")
             .args(["-c", "curl -fsSL https://mise.jdx.dev/install.sh | sh"])
-            .status()
-            .map_err(|e| format!("failed to run curl install: {e}"))?;
-        if curl.success() {
+            .without_shell()
+            .exec_interactive()
+            .map_err(|e| format!("failed to run curl install: {e}"))?
+            .success()
+        {
             return Ok(());
         }
         Err("mise install failed — install manually from https://mise.jdx.dev".to_string())
@@ -94,14 +101,10 @@ pub fn ensure_mise(_root: &Path) -> Result<(), String> {
 /// tool versions. Best-effort — appz generated the file itself, so a
 /// failure here is a warning for the caller to surface, not a hard error.
 pub fn trust(root: &Path) -> Result<(), String> {
-    let status = Command::new("mise")
+    command::Command::new("mise")
         .arg("trust")
-        .current_dir(root)
-        .status()
-        .map_err(|e| format!("failed to run 'mise trust': {e}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("'mise trust' exited with status {status}"))
-    }
+        .cwd(root)
+        .without_shell()
+        .run()
+        .map_err(|e| format!("failed to run 'mise trust': {e}"))
 }

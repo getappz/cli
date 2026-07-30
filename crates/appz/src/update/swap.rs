@@ -115,8 +115,9 @@ fn schedule_deferred_swap_windows(new_binary: &Path, target: &Path) -> Result<()
         target = target.display(),
     );
     std::fs::write(&bat, script).map_err(|e| format!("write deferred updater: {e}"))?;
-    std::process::Command::new("cmd")
+    command::Command::new("cmd")
         .args(["/C", "start", "/min", "", &bat.to_string_lossy()])
+        .without_shell()
         .spawn()
         .map_err(|e| format!("spawn deferred updater: {e}"))?;
     Ok(())
@@ -138,15 +139,17 @@ pub(crate) fn find_killable_pids() -> Vec<u32> {
 /// separate from [`parse_other_pids`] so the parsing is unit-testable.
 fn list_appz_pids_raw() -> String {
     #[cfg(windows)]
-    let output = std::process::Command::new("tasklist")
+    let result = command::Command::new("tasklist")
         .args(["/FI", "IMAGENAME eq appz.exe", "/FO", "CSV", "/NH"])
-        .output();
+        .without_shell()
+        .exec();
     #[cfg(not(windows))]
-    let output = std::process::Command::new("pgrep")
+    let result = command::Command::new("pgrep")
         .args(["-x", "appz"])
-        .output();
+        .without_shell()
+        .exec();
 
-    output
+    result
         .ok()
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())

@@ -111,6 +111,7 @@ name = "appz-core"
 version = "0.2.0"
 dependencies = [
  "chrono",
+ "command",
  "glob",
  "regex",
  "serde",

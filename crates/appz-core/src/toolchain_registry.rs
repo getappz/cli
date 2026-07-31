@@ -14,10 +14,7 @@ const CACHE_TTL_SECONDS: u64 = 24 * 3600;
 const CACHE_FILE: &str = "toolchains-registry.json";
 
 pub fn cache_path() -> PathBuf {
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home).join(".appz").join(CACHE_FILE)
+    crate::format_defaults::appz_home_dir().join(CACHE_FILE)
 }
 
 static FRAMEWORKS_CACHE: OnceLock<Vec<Framework>> = OnceLock::new();
@@ -296,6 +293,27 @@ fn detector_to_registry(d: &Detector) -> RegistryDetector {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `REGISTRY_URL` fetches `registry/toolchains.toml` from this repo's own
+    /// `main` branch, but nothing enforces the file actually exists there —
+    /// it was missing entirely from the repo despite the fetch code shipping
+    /// (framework-level detection silently fell back to the embedded-only
+    /// table). Guard against that regressing again.
+    #[test]
+    fn test_registry_toml_file_parses() {
+        let raw = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../registry/toolchains.toml"
+        ))
+        .expect("registry/toolchains.toml should exist at the repo root");
+        let frameworks = parse_registry_toml(&raw).expect("registry/toolchains.toml should parse");
+        assert!(
+            frameworks.len() > 50,
+            "expected the full framework catalog, got {}",
+            frameworks.len()
+        );
+        assert!(frameworks.iter().any(|f| f.slug == "nextjs"));
+    }
 
     #[test]
     fn test_parse_nextjs_toml() {

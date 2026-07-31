@@ -1,0 +1,1866 @@
+version = 1
+
+[[frameworks]]
+name = "Container"
+slug = "container"
+mise_plugin = "docker"
+version_files = []
+default_version = "latest"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+every = []
+
+[[frameworks.detectors.some]]
+path = "Dockerfile.vercel"
+
+[[frameworks.detectors.some]]
+path = "Containerfile.vercel"
+
+[frameworks.commands]
+build = "docker build ."
+
+[[frameworks]]
+name = "Blitz.js (Legacy)"
+slug = "blitzjs"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = [
+    "hydrogen",
+    "vite",
+    "node",
+]
+detection_confidence = "strong"
+env_prefix = "NEXT_PUBLIC_"
+
+[frameworks.detectors]
+every = []
+
+[[frameworks.detectors.some]]
+path = "blitz.config.js"
+
+[[frameworks.detectors.some]]
+path = "blitz.config.ts"
+
+[frameworks.commands]
+build = "blitz build"
+install = "npm install"
+dev = "blitz start"
+
+[[frameworks]]
+name = "Next.js"
+slug = "nextjs"
+mise_plugin = "node"
+version_files = [
+    ".nvmrc",
+    ".node-version",
+]
+default_version = "lts"
+supersedes = []
+detection_confidence = "strong"
+output_directory = ".next"
+env_prefix = "NEXT_PUBLIC_"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "next"
+
+[frameworks.commands]
+build = "next build"
+install = "npm install"
+dev = "next dev --port $PORT"
+
+[[frameworks]]
+name = "Gatsby.js"
+slug = "gatsby"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = []
+detection_confidence = "strong"
+output_directory = "public"
+env_prefix = "GATSBY_"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "gatsby"
+
+[frameworks.commands]
+build = "gatsby build"
+install = "npm install"
+dev = "gatsby develop --port $PORT"
+
+[[frameworks]]
+name = "Remix"
+slug = "remix"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = [
+    "vite",
+    "node",
+]
+detection_confidence = "strong"
+
+[frameworks.detectors]
+every = []
+
+[[frameworks.detectors.some]]
+path = "package.json"
+match_package = "@remix-run/dev"
+
+[[frameworks.detectors.some]]
+path = "remix.config.js"
+
+[[frameworks.detectors.some]]
+path = "remix.config.mjs"
+
+[frameworks.commands]
+build = "remix build"
+install = "npm install"
+dev = "remix dev"
+
+[[frameworks]]
+name = "React Router"
+slug = "react-router"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = [
+    "vite",
+    "node",
+]
+detection_confidence = "strong"
+output_directory = "build"
+
+[frameworks.detectors]
+every = []
+
+[[frameworks.detectors.some]]
+path = "react-router.config.js"
+
+[[frameworks.detectors.some]]
+path = "react-router.config.ts"
+
+[frameworks.commands]
+build = "react-router build"
+install = "npm install"
+dev = "react-router dev"
+
+[[frameworks]]
+name = "Astro"
+slug = "astro"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = []
+detection_confidence = "strong"
+output_directory = "dist"
+env_prefix = "PUBLIC_"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "astro"
+
+[frameworks.commands]
+build = "astro build"
+install = "npm install"
+dev = "astro dev --port $PORT"
+
+[[frameworks]]
+name = "Hexo"
+slug = "hexo"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "hexo"
+
+[frameworks.commands]
+build = "hexo generate"
+install = "npm install"
+dev = "hexo server --port $PORT"
+
+[[frameworks]]
+name = "Eleventy"
+slug = "eleventy"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "@11ty/eleventy"
+
+[frameworks.commands]
+build = "npx @11ty/eleventy"
+install = "npm install"
+dev = "npx @11ty/eleventy --serve --watch --port $PORT"
+
+[[frameworks]]
+name = "Docusaurus (v2+)"
+slug = "docusaurus-2"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+every = []
+
+[[frameworks.detectors.some]]
+path = "package.json"
+match_package = "@docusaurus/core"
+
+[frameworks.commands]
+build = "docusaurus build"
+install = "npm install"
+dev = "docusaurus start --port $PORT"
+
+[[frameworks]]
+name = "Docusaurus (v1)"
+slug = "docusaurus"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+every = []
+
+[[frameworks.detectors.some]]
+path = "package.json"
+match_package = "docusaurus"
+
+[frameworks.commands]
+build = "docusaurus-build"
+install = "npm install"
+dev = "docusaurus-start --port $PORT"
+
+[[frameworks]]
+name = "Preact"
+slug = "preact"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = []
+detection_confidence = "strong"
+output_directory = "build"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "preact-cli"
+
+[frameworks.commands]
+build = "preact build"
+install = "npm install"
+dev = "preact watch --port $PORT"
+
+[[frameworks]]
+name = "SolidStart (v1)"
+slug = "solidstart-1"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = ["vite"]
+detection_confidence = "strong"
+output_directory = ".output"
+env_prefix = "VITE_"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "solid-js"
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "@solidjs/start"
+
+[frameworks.commands]
+build = "vinxi build"
+install = "npm install"
+dev = "vinxi dev"
+
+[[frameworks]]
+name = "SolidStart (v0)"
+slug = "solidstart"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = ["vite"]
+detection_confidence = "strong"
+output_directory = ".output"
+env_prefix = "VITE_"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "solid-js"
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "solid-start"
+
+[frameworks.commands]
+build = "solid-start build"
+install = "npm install"
+dev = "solid-start dev"
+
+[[frameworks]]
+name = "Dojo"
+slug = "dojo"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+every = []
+
+[[frameworks.detectors.some]]
+path = "package.json"
+match_package = "@dojo/framework"
+
+[[frameworks.detectors.some]]
+path = ".dojorc"
+
+[frameworks.commands]
+build = "dojo build"
+install = "npm install"
+dev = "dojo build -m dev -w -s -p $PORT"
+
+[[frameworks]]
+name = "Ember.js"
+slug = "ember"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+every = []
+
+[[frameworks.detectors.some]]
+path = "package.json"
+match_package = "ember-source"
+
+[[frameworks.detectors.some]]
+path = "package.json"
+match_package = "ember-cli"
+
+[frameworks.commands]
+build = "ember build"
+install = "npm install"
+dev = "ember serve --port $PORT"
+
+[[frameworks]]
+name = "Vue.js"
+slug = "vue"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = []
+detection_confidence = "strong"
+output_directory = "dist"
+env_prefix = "VUE_APP_"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "@vue/cli-service"
+
+[frameworks.commands]
+build = "vue-cli-service build"
+install = "npm install"
+dev = "vue-cli-service serve --port $PORT"
+
+[[frameworks]]
+name = "Scully"
+slug = "scully"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "@scullyio/init"
+
+[frameworks.commands]
+build = "ng build && scully"
+install = "npm install"
+dev = "ng serve --port $PORT"
+
+[[frameworks]]
+name = "Ionic Angular"
+slug = "ionic-angular"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "@ionic/angular"
+
+[frameworks.commands]
+build = "ng build"
+install = "npm install"
+dev = "ng serve --port $PORT"
+
+[[frameworks]]
+name = "Angular"
+slug = "angular"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = []
+detection_confidence = "strong"
+output_directory = "dist"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "@angular/cli"
+
+[frameworks.commands]
+build = "ng build"
+install = "npm install"
+dev = "ng serve --port $PORT"
+
+[[frameworks]]
+name = "Polymer"
+slug = "polymer"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "polymer-cli"
+
+[frameworks.commands]
+build = "polymer build"
+install = "npm install"
+dev = "polymer serve --port $PORT"
+
+[[frameworks]]
+name = "Svelte"
+slug = "svelte"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = []
+detection_confidence = "strong"
+output_directory = "public"
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "svelte"
+
+[[frameworks.detectors.some]]
+path = "package.json"
+match_package = "sirv-cli"
+
+[frameworks.commands]
+build = "rollup -c"
+install = "npm install"
+dev = "rollup -c -w"
+
+[[frameworks]]
+name = "SvelteKit (v0)"
+slug = "sveltekit"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = ["vite"]
+detection_confidence = "strong"
+output_directory = "public"
+env_prefix = "VITE_"
+
+[frameworks.detectors]
+every = []
+
+[[frameworks.detectors.some]]
+path = "package.json"
+match_package = "@sveltejs/kit@1.0.0-next"
+
+[frameworks.commands]
+build = "svelte-kit build"
+install = "npm install"
+dev = "svelte-kit dev --port $PORT"
+
+[[frameworks]]
+name = "SvelteKit"
+slug = "sveltekit-1"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = ["vite"]
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "@sveltejs/kit"
+
+[frameworks.commands]
+build = "vite build"
+install = "npm install"
+dev = "vite dev --port $PORT"
+
+[[frameworks]]
+name = "Ionic React"
+slug = "ionic-react"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = []
+detection_confidence = "strong"
+output_directory = "build"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "@ionic/react"
+
+[frameworks.commands]
+build = "react-scripts build"
+install = "npm install"
+dev = "react-scripts start"
+
+[[frameworks]]
+name = "Create React App"
+slug = "create-react-app"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = []
+detection_confidence = "strong"
+output_directory = "build"
+env_prefix = "REACT_APP_"
+
+[frameworks.detectors]
+every = []
+
+[[frameworks.detectors.some]]
+path = "package.json"
+match_package = "react-scripts"
+
+[[frameworks.detectors.some]]
+path = "package.json"
+match_package = "react-dev-utils"
+
+[frameworks.commands]
+build = "react-scripts build"
+install = "npm install"
+dev = "react-scripts start"
+
+[[frameworks]]
+name = "Gridsome"
+slug = "gridsome"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "gridsome"
+
+[frameworks.commands]
+build = "gridsome build"
+install = "npm install"
+dev = "gridsome develop -p $PORT"
+
+[[frameworks]]
+name = "UmiJS"
+slug = "umijs"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "umi"
+
+[frameworks.commands]
+build = "umi build"
+install = "npm install"
+dev = "umi dev --port $PORT"
+
+[[frameworks]]
+name = "Sapper"
+slug = "sapper"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "sapper"
+
+[frameworks.commands]
+build = "sapper export"
+install = "npm install"
+dev = "sapper dev --port $PORT"
+
+[[frameworks]]
+name = "Saber"
+slug = "saber"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "saber"
+
+[frameworks.commands]
+build = "saber build"
+install = "npm install"
+dev = "saber --port $PORT"
+
+[[frameworks]]
+name = "Stencil"
+slug = "stencil"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "@stencil/core"
+
+[frameworks.commands]
+build = "stencil build"
+install = "npm install"
+dev = "stencil build --dev --watch --serve --port $PORT"
+
+[[frameworks]]
+name = "Nuxt"
+slug = "nuxtjs"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = ["nitro"]
+detection_confidence = "strong"
+output_directory = "dist"
+env_prefix = "NUXT_ENV_"
+
+[frameworks.detectors]
+every = []
+
+[[frameworks.detectors.some]]
+path = "package.json"
+match_package = "nuxt"
+
+[[frameworks.detectors.some]]
+path = "package.json"
+match_package = "nuxt3"
+
+[[frameworks.detectors.some]]
+path = "package.json"
+match_package = "nuxt-edge"
+
+[[frameworks.detectors.some]]
+path = "package.json"
+match_package = "nuxt-nightly"
+
+[frameworks.commands]
+build = "nuxt build"
+install = "npm install"
+dev = "nuxt dev"
+
+[[frameworks]]
+name = "RedwoodJS"
+slug = "redwoodjs"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = []
+detection_confidence = "strong"
+env_prefix = "REDWOOD_ENV_"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "@redwoodjs/core"
+
+[frameworks.commands]
+build = "yarn rw deploy vercel"
+install = "yarn install"
+dev = "yarn rw dev"
+
+[[frameworks]]
+name = "Hugo"
+slug = "hugo"
+mise_plugin = "go"
+version_files = []
+default_version = "latest"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+every = []
+
+[[frameworks.detectors.some]]
+path = "config.yaml"
+match_content = "baseURL"
+
+[[frameworks.detectors.some]]
+path = "config.toml"
+match_content = "baseURL"
+
+[[frameworks.detectors.some]]
+path = "config.json"
+match_content = "baseURL"
+
+[frameworks.commands]
+build = "hugo --gc"
+dev = "hugo server -D -w -p $PORT"
+
+[[frameworks]]
+name = "Jekyll"
+slug = "jekyll"
+mise_plugin = "ruby"
+version_files = []
+default_version = "latest"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "_config.yml"
+
+[frameworks.commands]
+build = "jekyll build"
+install = "bundle install"
+dev = "bundle exec jekyll serve --watch --port $PORT"
+
+[[frameworks]]
+name = "Brunch"
+slug = "brunch"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+every = []
+
+[[frameworks.detectors.some]]
+path = "package.json"
+match_package = "brunch"
+
+[[frameworks.detectors.some]]
+path = "brunch-config.js"
+
+[frameworks.commands]
+build = "brunch build --production"
+install = "npm install"
+dev = "brunch watch --server --port $PORT"
+
+[[frameworks]]
+name = "Middleman"
+slug = "middleman"
+mise_plugin = "ruby"
+version_files = []
+default_version = "latest"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "config.rb"
+
+[frameworks.commands]
+build = "bundle exec middleman build"
+install = "bundle install"
+dev = "bundle exec middleman server -p $PORT"
+
+[[frameworks]]
+name = "Zola"
+slug = "zola"
+mise_plugin = "zola"
+version_files = []
+default_version = "latest"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "config.toml"
+
+[frameworks.commands]
+build = "zola build"
+dev = "zola serve --port $PORT"
+
+[[frameworks]]
+name = "Hydrogen (v1)"
+slug = "hydrogen"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = ["vite"]
+detection_confidence = "strong"
+output_directory = "dist"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "@shopify/hydrogen"
+
+[frameworks.commands]
+build = "npm run build"
+install = "npm install"
+dev = "npm run dev"
+
+[[frameworks]]
+name = "Vite"
+slug = "vite"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = ["ionic-react"]
+detection_confidence = "strong"
+output_directory = "dist"
+env_prefix = "VITE_"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "vite"
+
+[frameworks.commands]
+build = "vite build"
+install = "npm install"
+dev = "vite dev --port $PORT"
+
+[[frameworks]]
+name = "TanStack Start"
+slug = "tanstack-start"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "@tanstack/start"
+
+[frameworks.commands]
+build = "npm run build"
+install = "npm install"
+dev = "npm run dev"
+
+[[frameworks]]
+name = "VitePress"
+slug = "vitepress"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "vitepress"
+
+[frameworks.commands]
+build = "vitepress build"
+install = "npm install"
+dev = "vitepress dev --port $PORT"
+
+[[frameworks]]
+name = "VuePress"
+slug = "vuepress"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "vuepress"
+
+[frameworks.commands]
+build = "vuepress build"
+install = "npm install"
+dev = "vuepress dev --port $PORT"
+
+[[frameworks]]
+name = "Parcel"
+slug = "parcel"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "parcel"
+
+[frameworks.commands]
+build = "parcel build"
+install = "npm install"
+dev = "parcel serve --port $PORT"
+
+[[frameworks]]
+name = "FastAPI"
+slug = "fastapi"
+mise_plugin = "python"
+version_files = []
+default_version = "latest"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "fastapi"
+
+[frameworks.commands]
+install = "pip install -r requirements.txt"
+dev = "uvicorn main:app"
+
+[[frameworks]]
+name = "Flask"
+slug = "flask"
+mise_plugin = "python"
+version_files = []
+default_version = "latest"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "flask"
+
+[frameworks.commands]
+install = "pip install -r requirements.txt"
+dev = "flask run"
+
+[[frameworks]]
+name = "FastHTML"
+slug = "fasthtml"
+mise_plugin = "python"
+version_files = []
+default_version = "latest"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "fasthtml"
+
+[frameworks.commands]
+install = "pip install -r requirements.txt"
+dev = "python main.py"
+
+[[frameworks]]
+name = "Django"
+slug = "django"
+mise_plugin = "python"
+version_files = []
+default_version = "latest"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "django"
+
+[frameworks.commands]
+build = "python manage.py collectstatic"
+install = "pip install -r requirements.txt"
+dev = "python manage.py runserver"
+
+[[frameworks]]
+name = "Ash"
+slug = "ash"
+mise_plugin = "elixir"
+version_files = []
+default_version = "latest"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "mix.exs"
+match_content = "ash"
+
+[frameworks.commands]
+build = "mix compile"
+install = "mix deps.get"
+dev = "mix phx.server"
+
+[[frameworks]]
+name = "eve"
+slug = "eve"
+mise_plugin = "python"
+version_files = []
+default_version = "latest"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "eve"
+
+[frameworks.commands]
+install = "pip install -r requirements.txt"
+
+[[frameworks]]
+name = "Nitro"
+slug = "nitro"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = ["vite"]
+detection_confidence = "strong"
+output_directory = "dist"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "nitropack"
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "nitro"
+
+[frameworks.commands]
+build = "nitro build"
+install = "npm install"
+dev = "nitro dev"
+
+[[frameworks]]
+name = "Hono"
+slug = "hono"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = ["node"]
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "hono"
+
+[frameworks.commands]
+install = "npm install"
+
+[[frameworks]]
+name = "Express"
+slug = "express"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = ["node"]
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "express"
+
+[frameworks.commands]
+install = "npm install"
+
+[[frameworks]]
+name = "H3"
+slug = "h3"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = ["node"]
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "h3"
+
+[frameworks.commands]
+install = "npm install"
+
+[[frameworks]]
+name = "Koa"
+slug = "koa"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = ["node"]
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "koa"
+
+[frameworks.commands]
+install = "npm install"
+
+[[frameworks]]
+name = "NestJS"
+slug = "nestjs"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = ["node"]
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "@nestjs/core"
+
+[frameworks.commands]
+build = "nest build"
+install = "npm install"
+dev = "nest start"
+
+[[frameworks]]
+name = "Elysia"
+slug = "elysia"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = ["node"]
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "elysia"
+
+[frameworks.commands]
+install = "npm install"
+
+[[frameworks]]
+name = "Fastify"
+slug = "fastify"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = ["node"]
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "fastify"
+
+[frameworks.commands]
+install = "npm install"
+
+[[frameworks]]
+name = "Sanity"
+slug = "sanity"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = []
+detection_confidence = "strong"
+env_prefix = "SANITY_STUDIO_"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "sanity"
+
+[frameworks.commands]
+build = "npm run build"
+install = "npm install"
+dev = "npm run dev"
+
+[[frameworks]]
+name = "Sanity (v2 - legacy)"
+slug = "sanity-v2-legacy"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = []
+detection_confidence = "strong"
+env_prefix = "SANITY_STUDIO_"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "@sanity/core"
+
+[frameworks.commands]
+build = "sanity build"
+install = "npm install"
+dev = "sanity start --port $PORT"
+
+[[frameworks]]
+name = "Storybook"
+slug = "storybook"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = []
+detection_confidence = "weak"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "@storybook/react"
+
+[frameworks.commands]
+build = "build-storybook"
+install = "npm install"
+dev = "storybook dev --port $PORT"
+
+[[frameworks]]
+name = "xmcp"
+slug = "xmcp"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+every = []
+
+[[frameworks.detectors.some]]
+path = "mcp.json"
+
+[frameworks.commands]
+install = "npm install"
+
+[[frameworks]]
+name = "Axum"
+slug = "axum"
+mise_plugin = "rust"
+version_files = []
+default_version = "latest"
+supersedes = ["rust"]
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "axum"
+
+[frameworks.commands]
+build = "cargo build"
+dev = "cargo run"
+
+[[frameworks]]
+name = "Actix Web"
+slug = "actix-web"
+mise_plugin = "rust"
+version_files = []
+default_version = "latest"
+supersedes = ["rust"]
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "actix-web"
+
+[frameworks.commands]
+build = "cargo build"
+dev = "cargo run"
+
+[[frameworks]]
+name = "Gin"
+slug = "gin"
+mise_plugin = "go"
+version_files = []
+default_version = "latest"
+supersedes = ["go"]
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "go.mod"
+match_content = "gin-gonic/gin"
+
+[frameworks.commands]
+build = "go build -o ./bin/main ."
+dev = "go run ."
+
+[[frameworks]]
+name = "Echo"
+slug = "echo"
+mise_plugin = "go"
+version_files = []
+default_version = "latest"
+supersedes = ["go"]
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "go.mod"
+match_content = "labstack/echo"
+
+[frameworks.commands]
+build = "go build -o ./bin/main ."
+dev = "go run ."
+
+[[frameworks]]
+name = "Chi"
+slug = "chi"
+mise_plugin = "go"
+version_files = []
+default_version = "latest"
+supersedes = ["go"]
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "go.mod"
+match_content = "go-chi/chi"
+
+[frameworks.commands]
+build = "go build -o ./bin/main ."
+dev = "go run ."
+
+[[frameworks]]
+name = "Fiber"
+slug = "fiber"
+mise_plugin = "go"
+version_files = []
+default_version = "latest"
+supersedes = ["go"]
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "go.mod"
+match_content = "gofiber/fiber"
+
+[frameworks.commands]
+build = "go build -o ./bin/main ."
+dev = "go run ."
+
+[[frameworks]]
+name = "Buffalo"
+slug = "buffalo"
+mise_plugin = "go"
+version_files = []
+default_version = "latest"
+supersedes = ["go"]
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "go.mod"
+match_content = "gobuffalo/buffalo"
+
+[frameworks.commands]
+build = "buffalo build"
+dev = "buffalo dev"
+
+[[frameworks]]
+name = "Templ"
+slug = "templ"
+mise_plugin = "go"
+version_files = []
+default_version = "latest"
+supersedes = ["go"]
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "go.mod"
+match_content = "a-h/templ"
+
+[frameworks.commands]
+build = "go build -o ./bin/main ."
+dev = "templ generate && go run ."
+
+[[frameworks]]
+name = "Ruby on Rails"
+slug = "rails"
+mise_plugin = "ruby"
+version_files = []
+default_version = "latest"
+supersedes = ["ruby"]
+detection_confidence = "strong"
+output_directory = "public"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "Gemfile"
+match_content = "rails"
+
+[frameworks.commands]
+build = "rails assets:precompile"
+install = "bundle install"
+dev = "rails server -p $PORT"
+
+[[frameworks]]
+name = "Sinatra"
+slug = "sinatra"
+mise_plugin = "ruby"
+version_files = []
+default_version = "latest"
+supersedes = ["ruby"]
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "Gemfile"
+match_content = "sinatra"
+
+[frameworks.commands]
+install = "bundle install"
+dev = "ruby app.rb"
+
+[[frameworks]]
+name = "Hanami"
+slug = "hanami"
+mise_plugin = "ruby"
+version_files = []
+default_version = "latest"
+supersedes = ["ruby"]
+detection_confidence = "strong"
+output_directory = "public"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "Gemfile"
+match_content = "hanami"
+
+[frameworks.commands]
+build = "bundle exec hanami assets precompile"
+install = "bundle install"
+dev = "bundle exec hanami server"
+
+[[frameworks]]
+name = "Spring Boot"
+slug = "spring-boot"
+mise_plugin = "java"
+version_files = []
+default_version = "latest"
+supersedes = ["java"]
+detection_confidence = "strong"
+output_directory = "target"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "pom.xml"
+match_content = "spring-boot"
+
+[[frameworks.detectors.every]]
+path = "build.gradle"
+match_content = "spring-boot"
+
+[frameworks.commands]
+build = "mvn package"
+install = "mvn install"
+dev = "mvn spring-boot:run"
+
+[[frameworks]]
+name = "Quarkus"
+slug = "quarkus"
+mise_plugin = "java"
+version_files = []
+default_version = "latest"
+supersedes = ["java"]
+detection_confidence = "strong"
+output_directory = "target"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "pom.xml"
+match_content = "quarkus"
+
+[[frameworks.detectors.every]]
+path = "build.gradle"
+match_content = "quarkus"
+
+[frameworks.commands]
+build = "mvn package"
+install = "mvn install"
+dev = "mvn quarkus:dev"
+
+[[frameworks]]
+name = "Micronaut"
+slug = "micronaut"
+mise_plugin = "java"
+version_files = []
+default_version = "latest"
+supersedes = ["java"]
+detection_confidence = "strong"
+output_directory = "target"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "pom.xml"
+match_content = "micronaut"
+
+[[frameworks.detectors.every]]
+path = "build.gradle"
+match_content = "micronaut"
+
+[frameworks.commands]
+build = "mvn package"
+install = "mvn install"
+dev = "mvn mn:run"
+
+[[frameworks]]
+name = "Phoenix"
+slug = "phoenix"
+mise_plugin = "elixir"
+version_files = []
+default_version = "latest"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "mix.exs"
+match_content = "phoenix"
+
+[frameworks.commands]
+build = "mix release"
+install = "mix deps.get"
+dev = "mix phx.server"
+
+[[frameworks]]
+name = "Turborepo"
+slug = "turbo"
+mise_plugin = "turbo"
+version_files = []
+default_version = "latest"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+every = []
+
+[[frameworks.detectors.some]]
+path = "turbo.json"
+
+[[frameworks.detectors.some]]
+path = "turbo.jsonc"
+
+[frameworks.commands]
+build = "turbo run build"
+install = "npm install"
+dev = "turbo run dev"
+
+[[frameworks]]
+name = "Nx"
+slug = "nx"
+mise_plugin = "nx"
+version_files = []
+default_version = "latest"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "nx.json"
+
+[frameworks.commands]
+build = "npx nx build"
+install = "npm install"
+dev = "npx nx serve"
+
+[[frameworks]]
+name = "Rush"
+slug = "rush"
+mise_plugin = "rush"
+version_files = []
+default_version = "latest"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "rush.json"
+
+[frameworks.commands]
+build = "rush build"
+install = "rush install"
+dev = "rush start"
+
+[[frameworks]]
+name = "Docker"
+slug = "docker"
+mise_plugin = "docker"
+version_files = []
+default_version = "latest"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+every = []
+
+[[frameworks.detectors.some]]
+path = "Dockerfile"
+
+[[frameworks.detectors.some]]
+path = "docker-compose.yml"
+
+[frameworks.commands]
+build = "docker build ."
+
+[[frameworks]]
+name = "Terraform"
+slug = "terraform"
+mise_plugin = "terraform"
+version_files = [".terraform-version"]
+default_version = "latest"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+every = []
+
+[[frameworks.detectors.some]]
+path = "*.tf"
+is_glob = true
+
+[frameworks.commands]
+build = "terraform apply"
+
+[[frameworks]]
+name = "PostgreSQL"
+slug = "postgres"
+mise_plugin = "postgres"
+version_files = []
+default_version = "latest"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+every = []
+
+[[frameworks.detectors.some]]
+path = "pg_hba.conf"
+
+[[frameworks.detectors.some]]
+path = "postgresql.conf"
+
+[frameworks.commands]
+
+[[frameworks]]
+name = "Redis"
+slug = "redis"
+mise_plugin = "redis"
+version_files = []
+default_version = "latest"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+every = []
+
+[[frameworks.detectors.some]]
+path = "redis.conf"
+
+[[frameworks.detectors.some]]
+path = "sentinel.conf"
+
+[frameworks.commands]
+
+[[frameworks]]
+name = "Mastra"
+slug = "mastra"
+mise_plugin = "node"
+version_files = []
+default_version = "lts"
+supersedes = ["node"]
+detection_confidence = "strong"
+
+[frameworks.detectors]
+some = []
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "mastra"
+
+[frameworks.commands]
+build = "npm run build"
+install = "npm install"
+dev = "npm run dev"

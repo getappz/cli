@@ -2,6 +2,7 @@ mod claude;
 mod detect;
 mod diagnostics;
 mod doctor;
+mod format_defaults;
 mod frameworks;
 mod fs;
 mod generator;

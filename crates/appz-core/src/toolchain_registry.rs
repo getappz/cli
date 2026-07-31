@@ -14,10 +14,7 @@ const CACHE_TTL_SECONDS: u64 = 24 * 3600;
 const CACHE_FILE: &str = "toolchains-registry.json";
 
 pub fn cache_path() -> PathBuf {
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home).join(".appz").join(CACHE_FILE)
+    crate::format_defaults::appz_home_dir().join(CACHE_FILE)
 }
 
 static FRAMEWORKS_CACHE: OnceLock<Vec<Framework>> = OnceLock::new();

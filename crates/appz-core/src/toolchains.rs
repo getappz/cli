@@ -189,7 +189,14 @@ pub static RUST_RUNTIME: Framework = fw!(
     "latest",
     &[],
     &[d!("Cargo.toml")],
-    cmds!(C!("cargo build"), NONE!(), NONE!())
+    cmds!(
+        C!("cargo build"),
+        NONE!(),
+        NONE!(),
+        NONE!(),
+        NONE!(),
+        C!("cargo fmt")
+    )
 );
 pub static BUN_RUNTIME: Framework = fw!(
     "Bun",
@@ -219,7 +226,14 @@ pub static GO_RUNTIME: Framework = fw!(
     "latest",
     &[],
     &[d!("go.mod")],
-    cmds!(NONE!(), NONE!(), NONE!())
+    cmds!(
+        NONE!(),
+        NONE!(),
+        NONE!(),
+        NONE!(),
+        NONE!(),
+        C!("go fmt ./...")
+    )
 );
 // ── Java/JVM frameworks (mise_plugin: "java") ───────────
 pub static JAVA_RUNTIME: Framework = fw!(

@@ -355,7 +355,30 @@ pub fn detect_toolchains(root: &Path) -> Result<Vec<DetectedToolchain>, String> 
                 .or_else(|| tc.commands.dev.map(String::from));
             let test_cmd = tc.commands.test.map(String::from);
             let lint_cmd = tc.commands.lint.map(String::from);
-            let format_cmd = tc.commands.format.map(String::from);
+            // JS/TS package managers get a computed default (prefer the
+            // project's own Prettier/Biome config; fall back to Biome with
+            // appz's shared config) instead of a static table entry — see
+            // `format_defaults`.
+            let appz_home = crate::format_defaults::appz_home_dir();
+            // `slug` alone can't distinguish BUN_PM from BUN_RUNTIME — both are
+            // "bun" (see toolchain_registry's duplicate-slug dedup test) and a
+            // bun project detects both, so match `name` too or the command
+            // would run twice.
+            let format_cmd = match (tc.slug, tc.name) {
+                ("npm", _) => {
+                    crate::format_defaults::resolve_js_format_command(&fs, "npx", &appz_home)
+                }
+                ("pnpm", _) => {
+                    crate::format_defaults::resolve_js_format_command(&fs, "pnpm dlx", &appz_home)
+                }
+                ("bun", "bun") => {
+                    crate::format_defaults::resolve_js_format_command(&fs, "bunx", &appz_home)
+                }
+                ("yarn", _) => {
+                    crate::format_defaults::resolve_js_format_command(&fs, "yarn dlx", &appz_home)
+                }
+                _ => tc.commands.format.map(String::from),
+            };
 
             detected.push(DetectedToolchain {
                 name: tc.name,

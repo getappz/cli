@@ -122,6 +122,16 @@ fn build_groups<'a>(toolchains: &'a [DetectedToolchain]) -> BTreeMap<&'a str, Gr
         entry
             .frameworks
             .extend(tc.frameworks.iter().map(|f| f.name));
+
+        // A format fallback (e.g. Biome, Ruff) needs its own mise tool —
+        // distinct from this toolchain's own `mise_plugin` — so `mise
+        // install` provisions it before `appz format` tries to run it.
+        if let Some((tool, tool_version)) = tc.format_tool {
+            groups.entry(tool).or_insert_with(|| GroupedEntry {
+                version: tool_version.to_string(),
+                frameworks: Vec::new(),
+            });
+        }
     }
     groups
 }
@@ -315,6 +325,7 @@ mod tests {
             test_command: None,
             lint_command: None,
             format_command: None,
+            format_tool: None,
             output_directory: None,
             env_prefix: None,
         }
@@ -326,6 +337,19 @@ mod tests {
         let out = generate(&tcs);
         assert!(out.contains("[tools]"));
         assert!(out.contains("node = \"lts\""));
+    }
+
+    #[test]
+    fn test_generate_adds_format_fallback_tool() {
+        let mut tc = make_tc("python", "latest", None);
+        tc.format_command = Some("ruff format .".to_string());
+        tc.format_tool = Some(("ruff", "latest"));
+        let out = generate(&[tc]);
+        assert!(out.contains("python = \"latest\""), "runtime tool: {out}");
+        assert!(
+            out.contains("ruff = \"latest\""),
+            "format fallback tool present: {out}"
+        );
     }
 
     #[test]

@@ -1,9 +1,13 @@
-//! Default formatter resolution for the JS/TS ecosystem (npm/pnpm/bun/yarn).
+//! Default formatter resolution for ecosystems where more than one formatter
+//! is in common use (JS/TS: Prettier vs. Biome; Python: Black vs. Ruff).
 //!
-//! Prefers whatever formatter the project already uses (Prettier, then an
-//! existing Biome config); only falls back to Biome with appz's own shared
-//! config when the project has neither, so `appz format` never drops an
-//! unrequested config file into the user's repo.
+//! Always prefers whatever the project already uses — its own Prettier/Biome
+//! config, or its own Black/Ruff config — and only falls back to appz's
+//! default when the project has neither. The fallback is provisioned through
+//! mise (appz's own tool manager: added to the project's `[tools]` so
+//! `mise install` ensures it, same as every other detected toolchain) rather
+//! than a per-ecosystem zero-install runner, and invoked directly once mise
+//! has put it on PATH.
 
 use std::path::{Path, PathBuf};
 
@@ -16,6 +20,30 @@ const DEFAULT_BIOME_CONFIG: &str = r#"{
   }
 }
 "#;
+
+/// A resolved `appz format` command, plus the mise tool (name, version) that
+/// must be in `[tools]` for it to work — set only when the command relies on
+/// appz's fallback rather than something the project already provides.
+pub struct FormatResolution {
+    pub command: String,
+    pub mise_tool: Option<(&'static str, &'static str)>,
+}
+
+impl FormatResolution {
+    fn project_owned(command: String) -> Self {
+        Self {
+            command,
+            mise_tool: None,
+        }
+    }
+
+    fn via_mise(command: String, tool: &'static str) -> Self {
+        Self {
+            command,
+            mise_tool: Some((tool, "latest")),
+        }
+    }
+}
 
 /// `~/.appz` — appz's own state dir, distinct from the per-project `.appz/`
 /// written into a repo (see `storage::state_path`).
@@ -61,28 +89,55 @@ fn has_biome_config(fs: &DetectorFilesystem) -> bool {
 }
 
 /// Resolve the `appz format` command for a JS/TS package manager toolchain.
-/// `runner` is that package manager's zero-install exec prefix, e.g. `"npx"`,
-/// `"pnpm dlx"`, `"bunx"`, `"yarn dlx"`. `appz_home` is appz's own state dir
-/// (pass [`appz_home_dir`]; a parameter rather than read internally so tests
-/// don't touch the real `~/.appz`).
+/// `runner` is that package manager's own exec prefix (e.g. `"npx"`,
+/// `"pnpm dlx"`, `"bunx"`, `"yarn dlx"`) — used only when the project already
+/// has its own Prettier/Biome config, so the project's own pinned
+/// `devDependencies` version is what actually runs. The no-config fallback
+/// instead provisions Biome through mise and invokes it directly.
+/// `appz_home` is appz's own state dir (pass [`appz_home_dir`]; a parameter
+/// rather than read internally so tests don't touch the real `~/.appz`).
 pub fn resolve_js_format_command(
     fs: &DetectorFilesystem,
     runner: &str,
     appz_home: &Path,
-) -> Option<String> {
+) -> FormatResolution {
     if has_prettier_config(fs) {
-        return Some(format!("{runner} prettier --write ."));
+        return FormatResolution::project_owned(format!("{runner} prettier --write ."));
     }
     if has_biome_config(fs) {
-        return Some(format!("{runner} @biomejs/biome format --write ."));
+        return FormatResolution::project_owned(format!(
+            "{runner} @biomejs/biome format --write ."
+        ));
     }
-    match ensure_default_biome_config_at(appz_home) {
-        Some(dir) => Some(format!(
-            "{runner} @biomejs/biome format --config-path {} --write .",
-            dir.display()
-        )),
-        None => Some(format!("{runner} @biomejs/biome format --write .")),
+    let cmd = match ensure_default_biome_config_at(appz_home) {
+        Some(dir) => format!("biome format --config-path {} --write .", dir.display()),
+        None => "biome format --write .".to_string(),
+    };
+    FormatResolution::via_mise(cmd, "biome")
+}
+
+fn has_ruff_config(fs: &DetectorFilesystem) -> bool {
+    fs.is_file("ruff.toml")
+        || fs.is_file(".ruff.toml")
+        || fs.check_detector("pyproject.toml", false, Some(r"(?m)^\[tool\.ruff"), None)
+}
+
+fn has_black_config(fs: &DetectorFilesystem) -> bool {
+    fs.check_detector("pyproject.toml", false, Some(r"(?m)^\[tool\.black\]"), None)
+}
+
+/// Resolve the `appz format` command for the Python toolchain: prefer the
+/// project's own Ruff or Black config (assumed already installed — same
+/// project-owns-its-tool reasoning as JS's own-config case); fall back to
+/// Ruff provisioned through mise when neither is configured.
+pub fn resolve_python_format_command(fs: &DetectorFilesystem) -> FormatResolution {
+    if has_ruff_config(fs) {
+        return FormatResolution::project_owned("ruff format .".to_string());
     }
+    if has_black_config(fs) {
+        return FormatResolution::project_owned("black .".to_string());
+    }
+    FormatResolution::via_mise("ruff format .".to_string(), "ruff")
 }
 
 #[cfg(test)]
@@ -103,10 +158,9 @@ mod tests {
         let home = test_dir("prettier-home");
         let fs_probe = DetectorFilesystem::new(dir.clone());
         fs::write(dir.join(".prettierrc"), "{}").unwrap();
-        assert_eq!(
-            resolve_js_format_command(&fs_probe, "npx", &home),
-            Some("npx prettier --write .".to_string())
-        );
+        let res = resolve_js_format_command(&fs_probe, "npx", &home);
+        assert_eq!(res.command, "npx prettier --write .");
+        assert!(res.mise_tool.is_none());
     }
 
     #[test]
@@ -119,10 +173,9 @@ mod tests {
             r#"{"devDependencies":{"prettier":"^3.0.0"}}"#,
         )
         .unwrap();
-        assert_eq!(
-            resolve_js_format_command(&fs_probe, "pnpm dlx", &home),
-            Some("pnpm dlx prettier --write .".to_string())
-        );
+        let res = resolve_js_format_command(&fs_probe, "pnpm dlx", &home);
+        assert_eq!(res.command, "pnpm dlx prettier --write .");
+        assert!(res.mise_tool.is_none());
     }
 
     #[test]
@@ -131,20 +184,63 @@ mod tests {
         let home = test_dir("own-biome-home");
         let fs_probe = DetectorFilesystem::new(dir.clone());
         fs::write(dir.join("biome.jsonc"), "{}").unwrap();
-        assert_eq!(
-            resolve_js_format_command(&fs_probe, "bunx", &home),
-            Some("bunx @biomejs/biome format --write .".to_string())
-        );
+        let res = resolve_js_format_command(&fs_probe, "bunx", &home);
+        assert_eq!(res.command, "bunx @biomejs/biome format --write .");
+        assert!(res.mise_tool.is_none());
     }
 
     #[test]
-    fn falls_back_to_biome_with_appz_home_config_path() {
+    fn falls_back_to_mise_provisioned_biome_with_appz_home_config_path() {
         let dir = test_dir("fallback-project");
         let home = test_dir("fallback-home");
         let fs_probe = DetectorFilesystem::new(dir.clone());
-        let cmd = resolve_js_format_command(&fs_probe, "yarn dlx", &home).unwrap();
-        assert!(cmd.starts_with("yarn dlx @biomejs/biome format --config-path "));
-        assert!(cmd.ends_with(" --write ."));
+        let res = resolve_js_format_command(&fs_probe, "yarn dlx", &home);
+        assert!(res.command.starts_with("biome format --config-path "));
+        assert!(res.command.ends_with(" --write ."));
+        assert_eq!(res.mise_tool, Some(("biome", "latest")));
         assert!(home.join("biome.jsonc").exists());
+    }
+
+    #[test]
+    fn prefers_ruff_when_ruff_toml_present() {
+        let dir = test_dir("ruff-project");
+        fs::write(dir.join("ruff.toml"), "").unwrap();
+        let res = resolve_python_format_command(&DetectorFilesystem::new(dir));
+        assert_eq!(res.command, "ruff format .");
+        assert!(res.mise_tool.is_none());
+    }
+
+    #[test]
+    fn prefers_ruff_when_tool_ruff_section_in_pyproject() {
+        let dir = test_dir("ruff-pyproject");
+        fs::write(
+            dir.join("pyproject.toml"),
+            "[tool.ruff]\nline-length = 100\n",
+        )
+        .unwrap();
+        let res = resolve_python_format_command(&DetectorFilesystem::new(dir));
+        assert_eq!(res.command, "ruff format .");
+        assert!(res.mise_tool.is_none());
+    }
+
+    #[test]
+    fn prefers_black_when_tool_black_section_in_pyproject() {
+        let dir = test_dir("black-pyproject");
+        fs::write(
+            dir.join("pyproject.toml"),
+            "[tool.black]\nline-length = 88\n",
+        )
+        .unwrap();
+        let res = resolve_python_format_command(&DetectorFilesystem::new(dir));
+        assert_eq!(res.command, "black .");
+        assert!(res.mise_tool.is_none());
+    }
+
+    #[test]
+    fn falls_back_to_mise_provisioned_ruff_with_no_config() {
+        let dir = test_dir("python-fallback");
+        let res = resolve_python_format_command(&DetectorFilesystem::new(dir));
+        assert_eq!(res.command, "ruff format .");
+        assert_eq!(res.mise_tool, Some(("ruff", "latest")));
     }
 }

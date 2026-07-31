@@ -260,6 +260,7 @@ mod tests {
             test_command: None,
             lint_command: None,
             format_command: None,
+            format_tool: None,
             output_directory: None,
             env_prefix: None,
         }

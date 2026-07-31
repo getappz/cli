@@ -1,30 +1,22 @@
-//! `appz agents {list,doctor,install,uninstall,update,refresh}` —
-//! registry-driven AI CLI agent manager backed by the `skill` crate.
+//! `appz agents {list,doctor}` — detects which AI CLI agents are installed
+//! on this system and diagnoses their config. Skill install/uninstall lives
+//! in `appz skills` (see skills.rs), not here — this module doesn't touch
+//! the skill registry at all.
 
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use skill::manager::SkillManager;
-use skill::types::{
-    AgentId, InstallMode, InstallOptions, InstallScope, ListOptions, RemoveOptions,
-};
 
 pub struct AgentCommand {
     pub kind: AgentSubcommand,
     pub dir: PathBuf,
-    pub agent: Option<String>,
-    pub skill_name: Option<String>,
-    pub yes: bool,
     pub json: bool,
 }
 
 pub enum AgentSubcommand {
     List,
     Doctor,
-    Install,
-    Uninstall,
-    Update,
-    Refresh,
 }
 
 fn manager(root: &Path) -> SkillManager {
@@ -54,10 +46,6 @@ pub fn run(cmd: &AgentCommand) {
     match cmd.kind {
         AgentSubcommand::List => run_list(&root, cmd.json),
         AgentSubcommand::Doctor => run_doctor(&root, cmd.json),
-        AgentSubcommand::Install => run_install(&root, cmd),
-        AgentSubcommand::Uninstall => run_uninstall(&root, cmd),
-        AgentSubcommand::Update => refresh_impl(&root, cmd.json, "update"),
-        AgentSubcommand::Refresh => run_refresh(&root, cmd.json),
     }
 }
 
@@ -262,266 +250,4 @@ async fn count_skills(dir: &Path) -> usize {
         }
     }
     count
-}
-
-#[derive(Serialize)]
-struct InstallReport {
-    agent: String,
-    skill: String,
-    path: String,
-}
-
-fn run_install(root: &Path, cmd: &AgentCommand) {
-    let json = cmd.json;
-    if !json {
-        super::intro("appz agents install");
-    }
-    let mgr = manager(root);
-
-    let agent_id = match &cmd.agent {
-        Some(a) => AgentId::new(a.clone()),
-        None => {
-            let installed = run_task(json, "detecting agents...", "", || {
-                block_on(mgr.detect_installed_agents())
-            });
-            if installed.is_empty() {
-                super::error("no agents detected — use --agent <name> to target a specific agent");
-            }
-            if !json {
-                super::info(&format!(
-                    "installing for {} detected agent(s)",
-                    installed.len()
-                ));
-            }
-            if installed.len() == 1 {
-                installed[0].clone()
-            } else if json {
-                super::error("multiple agents detected — specify --agent");
-            } else {
-                super::step("use --agent <name> to pick one");
-                super::outro("cancelled");
-                return;
-            }
-        }
-    };
-
-    let display = mgr
-        .agents()
-        .get(&agent_id)
-        .map(|c| c.display_name.clone())
-        .unwrap_or_else(|| agent_id.as_str().to_string());
-    if !json {
-        super::step(&format!("target agent: {display} ({agent_id})"));
-    }
-
-    let skill_name = cmd.skill_name.as_deref().unwrap_or("");
-    if skill_name.is_empty() {
-        super::error("specify a skill name to install");
-    }
-
-    let skills = run_task(
-        json,
-        &format!("discovering skill '{skill_name}'..."),
-        "",
-        || {
-            block_on(mgr.discover_skills(
-                root,
-                &skill::types::DiscoverOptions {
-                    ..Default::default()
-                },
-            ))
-        },
-    );
-
-    let skills = match skills {
-        Ok(s) => s,
-        Err(e) => super::error(&format!("discovery failed: {e}")),
-    };
-    let mut matches: Vec<_> = skills
-        .into_iter()
-        .filter(|s| s.name.contains(skill_name) || s.name == skill_name)
-        .collect();
-
-    if matches.is_empty() {
-        super::error(&format!("no skill found matching '{skill_name}'"));
-    }
-
-    if matches.len() > 1 && !cmd.yes {
-        if json {
-            super::error(&format!(
-                "{} skills match '{skill_name}' — specify a more specific name or pass --yes",
-                matches.len()
-            ));
-        }
-        super::info(&format!("{} skills match '{skill_name}'", matches.len()));
-        super::step("use a more specific name or pass --yes to install the first match");
-        super::outro("cancelled");
-        return;
-    }
-
-    let skill = matches.swap_remove(0);
-
-    let result = run_task(
-        json,
-        &format!("installing '{}' for {display}...", skill.name),
-        "installation complete",
-        || {
-            block_on(mgr.install_skill(
-                &skill,
-                &agent_id,
-                &InstallOptions {
-                    scope: InstallScope::Project,
-                    mode: InstallMode::Symlink,
-                    cwd: None,
-                },
-            ))
-        },
-    );
-
-    match result {
-        Ok(r) => {
-            if json {
-                let report = InstallReport {
-                    agent: agent_id.as_str().to_string(),
-                    skill: skill.name.clone(),
-                    path: r.path.display().to_string(),
-                };
-                println!("{}", serde_json::to_string_pretty(&report).unwrap());
-            } else {
-                super::success(&format!("installed → {}", r.path.display()));
-                super::outro("done — review before use");
-            }
-        }
-        Err(e) => super::error(&format!("installation failed: {e}")),
-    }
-}
-
-#[derive(Serialize)]
-struct UninstallReport {
-    skill: String,
-    status: &'static str,
-}
-
-fn run_uninstall(root: &Path, cmd: &AgentCommand) {
-    let json = cmd.json;
-    if !json {
-        super::intro("appz agents uninstall");
-    }
-    let mgr = manager(root);
-
-    let skill_name = cmd.skill_name.as_deref().unwrap_or("");
-    if skill_name.is_empty() {
-        super::error("specify a skill name to uninstall");
-    }
-
-    let result = run_task(
-        json,
-        &format!("removing '{skill_name}'..."),
-        "removal complete",
-        || {
-            block_on(mgr.remove_skills(
-                &[skill_name.to_string()],
-                &RemoveOptions {
-                    scope: InstallScope::Project,
-                    agents: Vec::new(),
-                    cwd: None,
-                },
-            ))
-        },
-    );
-    if let Err(e) = result {
-        super::error(&format!("removal failed: {e}"));
-    }
-
-    if json {
-        let report = UninstallReport {
-            skill: skill_name.to_string(),
-            status: "removed",
-        };
-        println!("{}", serde_json::to_string_pretty(&report).unwrap());
-    } else {
-        super::success(&format!("removed '{skill_name}'"));
-        super::outro("uninstall complete");
-    }
-}
-
-fn run_refresh(root: &Path, json: bool) {
-    refresh_impl(root, json, "refresh");
-}
-
-#[derive(Serialize)]
-struct SkillEntry {
-    name: String,
-    agents: Vec<String>,
-}
-
-#[derive(Serialize)]
-struct RefreshReport {
-    installed_agents: Vec<String>,
-    skills: Vec<SkillEntry>,
-}
-
-fn refresh_impl(root: &Path, json: bool, verb: &str) {
-    let mgr = manager(root);
-
-    if !json {
-        super::intro(&format!("appz agents {verb}"));
-    }
-    let installed = run_task(json, "re-detecting agents...", "detection complete", || {
-        block_on(mgr.detect_installed_agents())
-    });
-
-    if !json {
-        if installed.is_empty() {
-            super::info("no agents detected");
-        } else {
-            super::step("detected agents:");
-            for id in &installed {
-                let display = mgr
-                    .agents()
-                    .get(id)
-                    .map(|c| c.display_name.as_str())
-                    .unwrap_or(id.as_str());
-                super::info(&format!("  {display} ({id})"));
-            }
-        }
-    }
-
-    let skills = run_task(json, "listing installed skills...", "", || {
-        block_on(mgr.list_installed(&ListOptions::default()))
-    });
-
-    match skills {
-        Ok(list) => {
-            if json {
-                let report = RefreshReport {
-                    installed_agents: installed.iter().map(|a| a.as_str().to_string()).collect(),
-                    skills: list
-                        .iter()
-                        .map(|s| SkillEntry {
-                            name: s.name.clone(),
-                            agents: s.agents.iter().map(|a| a.as_str().to_string()).collect(),
-                        })
-                        .collect(),
-                };
-                println!("{}", serde_json::to_string_pretty(&report).unwrap());
-                return;
-            }
-            if list.is_empty() {
-                super::info("no skills installed");
-            } else {
-                super::step("installed skills:");
-                for s in &list {
-                    let agents: Vec<&str> = s.agents.iter().map(|a| a.as_str()).collect();
-                    super::info(&format!("  {} — for {}", s.name, agents.join(", ")));
-                }
-            }
-            super::outro(&format!(
-                "{} agent(s), {} skill(s)",
-                installed.len(),
-                list.len()
-            ));
-        }
-        Err(e) => super::error(&format!("failed to list skills: {e}")),
-    }
 }

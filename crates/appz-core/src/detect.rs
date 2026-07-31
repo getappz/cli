@@ -371,30 +371,24 @@ pub fn detect_toolchains(root: &Path) -> Result<Vec<DetectedToolchain>, String> 
             // would run twice.
             let (format_cmd, format_tool) = match (tc.slug, tc.name) {
                 ("npm", _) => {
-                    let r = crate::format_defaults::resolve_js_format_command(
-                        &fs, "npx", &appz_home,
-                    );
+                    let r =
+                        crate::format_defaults::resolve_js_format_command(&fs, "npx", &appz_home);
                     (Some(r.command), r.mise_tool)
                 }
                 ("pnpm", _) => {
                     let r = crate::format_defaults::resolve_js_format_command(
-                        &fs,
-                        "pnpm dlx",
-                        &appz_home,
+                        &fs, "pnpm dlx", &appz_home,
                     );
                     (Some(r.command), r.mise_tool)
                 }
                 ("bun", "bun") => {
-                    let r = crate::format_defaults::resolve_js_format_command(
-                        &fs, "bunx", &appz_home,
-                    );
+                    let r =
+                        crate::format_defaults::resolve_js_format_command(&fs, "bunx", &appz_home);
                     (Some(r.command), r.mise_tool)
                 }
                 ("yarn", _) => {
                     let r = crate::format_defaults::resolve_js_format_command(
-                        &fs,
-                        "yarn dlx",
-                        &appz_home,
+                        &fs, "yarn dlx", &appz_home,
                     );
                     (Some(r.command), r.mise_tool)
                 }

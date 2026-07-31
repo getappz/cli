@@ -213,7 +213,11 @@ mod tests {
     #[test]
     fn prefers_ruff_when_tool_ruff_section_in_pyproject() {
         let dir = test_dir("ruff-pyproject");
-        fs::write(dir.join("pyproject.toml"), "[tool.ruff]\nline-length = 100\n").unwrap();
+        fs::write(
+            dir.join("pyproject.toml"),
+            "[tool.ruff]\nline-length = 100\n",
+        )
+        .unwrap();
         let res = resolve_python_format_command(&DetectorFilesystem::new(dir));
         assert_eq!(res.command, "ruff format .");
         assert!(res.mise_tool.is_none());
@@ -222,7 +226,11 @@ mod tests {
     #[test]
     fn prefers_black_when_tool_black_section_in_pyproject() {
         let dir = test_dir("black-pyproject");
-        fs::write(dir.join("pyproject.toml"), "[tool.black]\nline-length = 88\n").unwrap();
+        fs::write(
+            dir.join("pyproject.toml"),
+            "[tool.black]\nline-length = 88\n",
+        )
+        .unwrap();
         let res = resolve_python_format_command(&DetectorFilesystem::new(dir));
         assert_eq!(res.command, "black .");
         assert!(res.mise_tool.is_none());

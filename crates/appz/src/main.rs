@@ -40,6 +40,8 @@ enum AppzCmd {
     Lint(LintArgs),
     /// Run code formatter
     Format(FormatArgs),
+    /// Remove build/cache output for this project (dry-run unless --force)
+    Clean(CleanArgs),
     /// Diagnose project stack, config, and suggestions
     Doctor(DoctorArgs),
     /// Build the checkout and install it over the running `appz` binary
@@ -203,6 +205,18 @@ struct FormatArgs {
     command: Option<String>,
     #[arg(long, help = "Skip auto-install before format")]
     skip_install: bool,
+}
+
+#[derive(Args)]
+struct CleanArgs {
+    #[arg(default_value = ".")]
+    dir: PathBuf,
+    /// Also remove dependency dirs (node_modules, .venv) — expensive to regenerate
+    #[arg(long)]
+    deps: bool,
+    /// Actually delete (default is a dry-run listing)
+    #[arg(long)]
+    force: bool,
 }
 
 #[derive(Args)]
@@ -836,6 +850,78 @@ fn run_doctor_cmd(args: DoctorArgs, json: bool) {
     outro("diagnosis complete");
 }
 
+fn run_clean(args: CleanArgs, json: bool) {
+    let canonical = resolve_root(&args.dir);
+    let targets = appz_core::plan_clean(&canonical, args.deps);
+
+    if !args.force {
+        if json {
+            println!("{}", serde_json::to_string_pretty(&targets).unwrap());
+            return;
+        }
+        intro("appz clean");
+        if targets.is_empty() {
+            success("nothing to clean");
+            outro("done");
+            return;
+        }
+        step("would remove");
+        let lines: Vec<String> = targets
+            .iter()
+            .map(|t| {
+                format!(
+                    "{:>8}  {}  ({})",
+                    appz_core::format_size(t.size_bytes),
+                    t.path.display(),
+                    t.toolchain
+                )
+            })
+            .collect();
+        info(&lines.join("\n"));
+        let total: u64 = targets.iter().map(|t| t.size_bytes).sum();
+        outro(&format!(
+            "{} to free — re-run with --force to delete",
+            appz_core::format_size(total)
+        ));
+        return;
+    }
+
+    let report = appz_core::delete_targets(&targets);
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report).unwrap());
+        if !report.failed.is_empty() {
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    intro("appz clean");
+    if report.deleted.is_empty() && report.failed.is_empty() {
+        success("nothing to clean");
+        outro("done");
+        return;
+    }
+    for t in &report.deleted {
+        success(&format!(
+            "removed {} ({})",
+            t.path.display(),
+            appz_core::format_size(t.size_bytes)
+        ));
+    }
+    for (path, err) in &report.failed {
+        warning(&format!("failed to remove {}: {err}", path.display()));
+    }
+    if report.failed.is_empty() {
+        outro(&format!(
+            "freed {}",
+            appz_core::format_size(report.freed_bytes)
+        ));
+    } else {
+        error("some paths could not be removed");
+    }
+}
+
 fn main() {
     let cli = AppzCli::parse();
     let json = cli.json;
@@ -847,6 +933,7 @@ fn main() {
         AppzCmd::Test(a) => run_test(a, json),
         AppzCmd::Lint(a) => run_lint(a, json),
         AppzCmd::Format(a) => run_format(a, json),
+        AppzCmd::Clean(a) => run_clean(a, json),
         AppzCmd::Doctor(a) => run_doctor_cmd(a, json),
         AppzCmd::DevInstall(a) => dev_install::run(!a.debug, a.dry_run),
         AppzCmd::Mcp => {

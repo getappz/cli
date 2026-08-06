@@ -1,4 +1,5 @@
 mod claude;
+mod clean;
 mod detect;
 mod diagnostics;
 mod doctor;
@@ -16,6 +17,9 @@ mod toolchain_registry;
 mod toolchains;
 
 pub use claude::generate_claude_md;
+pub use clean::{
+    CleanReport, CleanTarget, CleanTargetKind, delete_targets, format_size, plan_clean,
+};
 pub use detect::{
     DetectedToolchain, MonorepoConfig, detect_monorepo, detect_toolchains, pm_install_cmd,
     strip_jsonc,

@@ -517,6 +517,20 @@ mod tests {
     }
 
     #[test]
+    fn test_detect_rust_output_directory_is_target() {
+        let dir = test_dir("rust-output-dir");
+        fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"test\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+
+        let result = detect_toolchains(&dir).unwrap();
+        let rust = result.iter().find(|t| t.slug == "rust").unwrap();
+        assert_eq!(rust.output_directory, Some("target"));
+    }
+
+    #[test]
     fn test_detect_go_from_go_mod() {
         let dir = test_dir("go");
         fs::write(dir.join("go.mod"), "module test\ngo 1.21").unwrap();

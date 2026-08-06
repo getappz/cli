@@ -181,7 +181,7 @@ pub static RUBY_RUNTIME: Framework = fw!(
     &[d!("Gemfile"), d!("Gemfile.lock")],
     cmds!(NONE!(), NONE!(), NONE!())
 );
-pub static RUST_RUNTIME: Framework = fw!(
+pub static RUST_RUNTIME: Framework = fw_ext!(
     "Rust",
     "rust",
     "rust",
@@ -196,7 +196,11 @@ pub static RUST_RUNTIME: Framework = fw!(
         NONE!(),
         NONE!(),
         C!("cargo fmt")
-    )
+    ),
+    &[],
+    DetectionConfidence::Strong,
+    Some("target"),
+    None
 );
 pub static BUN_RUNTIME: Framework = fw!(
     "Bun",

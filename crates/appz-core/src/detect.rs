@@ -205,6 +205,11 @@ pub struct DetectedToolchain {
     pub test_command: Option<String>,
     pub lint_command: Option<String>,
     pub format_command: Option<String>,
+    /// A mise tool (name, version) needed for `format_command` to work,
+    /// beyond what this toolchain's own `mise_plugin` already provides — set
+    /// only when `format_command` falls back to an appz default rather than
+    /// something the project already provides.
+    pub format_tool: Option<(&'static str, &'static str)>,
     pub output_directory: Option<&'static str>,
     pub env_prefix: Option<&'static str>,
 }
@@ -355,29 +360,43 @@ pub fn detect_toolchains(root: &Path) -> Result<Vec<DetectedToolchain>, String> 
                 .or_else(|| tc.commands.dev.map(String::from));
             let test_cmd = tc.commands.test.map(String::from);
             let lint_cmd = tc.commands.lint.map(String::from);
-            // JS/TS package managers get a computed default (prefer the
-            // project's own Prettier/Biome config; fall back to Biome with
-            // appz's shared config) instead of a static table entry — see
+            // JS/TS package managers and Python get a computed default
+            // (prefer the project's own formatter config; fall back to a
+            // mise-provisioned tool) instead of a static table entry — see
             // `format_defaults`.
             let appz_home = crate::format_defaults::appz_home_dir();
             // `slug` alone can't distinguish BUN_PM from BUN_RUNTIME — both are
             // "bun" (see toolchain_registry's duplicate-slug dedup test) and a
             // bun project detects both, so match `name` too or the command
             // would run twice.
-            let format_cmd = match (tc.slug, tc.name) {
+            let (format_cmd, format_tool) = match (tc.slug, tc.name) {
                 ("npm", _) => {
-                    crate::format_defaults::resolve_js_format_command(&fs, "npx", &appz_home)
+                    let r =
+                        crate::format_defaults::resolve_js_format_command(&fs, "npx", &appz_home);
+                    (Some(r.command), r.mise_tool)
                 }
                 ("pnpm", _) => {
-                    crate::format_defaults::resolve_js_format_command(&fs, "pnpm dlx", &appz_home)
+                    let r = crate::format_defaults::resolve_js_format_command(
+                        &fs, "pnpm dlx", &appz_home,
+                    );
+                    (Some(r.command), r.mise_tool)
                 }
                 ("bun", "bun") => {
-                    crate::format_defaults::resolve_js_format_command(&fs, "bunx", &appz_home)
+                    let r =
+                        crate::format_defaults::resolve_js_format_command(&fs, "bunx", &appz_home);
+                    (Some(r.command), r.mise_tool)
                 }
                 ("yarn", _) => {
-                    crate::format_defaults::resolve_js_format_command(&fs, "yarn dlx", &appz_home)
+                    let r = crate::format_defaults::resolve_js_format_command(
+                        &fs, "yarn dlx", &appz_home,
+                    );
+                    (Some(r.command), r.mise_tool)
                 }
-                _ => tc.commands.format.map(String::from),
+                ("python", _) => {
+                    let r = crate::format_defaults::resolve_python_format_command(&fs);
+                    (Some(r.command), r.mise_tool)
+                }
+                _ => (tc.commands.format.map(String::from), None),
             };
 
             detected.push(DetectedToolchain {
@@ -393,6 +412,7 @@ pub fn detect_toolchains(root: &Path) -> Result<Vec<DetectedToolchain>, String> 
                 test_command: test_cmd,
                 lint_command: lint_cmd,
                 format_command: format_cmd,
+                format_tool,
                 output_directory: tc.output_directory,
                 env_prefix: tc.env_prefix,
             });

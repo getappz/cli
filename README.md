@@ -28,7 +28,7 @@ through one command — no config to write by hand.
   with `sources`/`outputs`, so mise's own cache — not a second one — decides
   what to skip.
 - **Unified deploy** — `appz deploy` drives each platform's own CLI (Vercel,
-  Netlify, ...) instead of competing with them.
+  Netlify, Cloudflare, ...) instead of competing with them.
 - **Built for agents too** — `appz mcp` exposes detect/build/deploy as MCP
   tools, so an AI agent can drive the same pipeline a human does.
 
@@ -167,9 +167,9 @@ Point an MCP client at `appz mcp` (e.g. `{"command": "appz", "args": ["mcp"]}`).
 ```
 
 `appz deploy` shells out to each target platform's own CLI (Vercel, Netlify,
-...), so set that platform's native env vars/secrets (e.g. `VERCEL_TOKEN`)
-directly on the step or job — the action doesn't take platform-specific
-inputs.
+Cloudflare, ...), so set that platform's native env vars/secrets (e.g.
+`VERCEL_TOKEN`, `CLOUDFLARE_API_TOKEN`) directly on the step or job — the
+action doesn't take platform-specific inputs.
 
 ## devcontainer Feature
 

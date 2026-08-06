@@ -107,7 +107,7 @@ enum AgentAction {
 struct DeployArgs {
     #[arg(default_value = ".")]
     dir: PathBuf,
-    /// Provider slug (e.g. vercel, netlify). Uses appz.jsonc's deploy.default if omitted.
+    /// Provider slug (e.g. vercel, netlify, cloudflare). Uses appz.jsonc's deploy.default if omitted.
     #[arg(long)]
     target: Option<String>,
     /// Production deploy (default: preview)

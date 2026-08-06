@@ -56,6 +56,7 @@ pub fn create_provider_registry() -> Vec<Box<dyn DeployProvider>> {
     vec![
         Box::new(crate::providers::vercel::VercelProvider),
         Box::new(crate::providers::netlify::NetlifyProvider),
+        Box::new(crate::providers::cloudflare::CloudflareProvider),
     ]
 }
 

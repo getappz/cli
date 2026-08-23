@@ -26,6 +26,8 @@ fn install_ctrlc_handler() {
                 if let Some(pid) = *CURRENT_CHILD_PID.lock().unwrap() {
                     let _ = StdCommand::new("taskkill")
                         .args(["/F", "/T", "/PID", &pid.to_string()])
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
                         .status();
                 }
             }

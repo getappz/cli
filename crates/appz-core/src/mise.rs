@@ -25,6 +25,9 @@ pub fn install_mise() -> Result<(), String> {
         {
             return Ok(());
         }
+        if command::interrupted() {
+            return Err("mise install cancelled".to_string());
+        }
         if command::Command::new("powershell")
             .args([
                 "-NoProfile",

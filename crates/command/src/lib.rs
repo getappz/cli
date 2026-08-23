@@ -5,4 +5,4 @@ pub mod exec;
 pub mod shell;
 
 pub use error::*;
-pub use exec::Command;
+pub use exec::{interrupted, Command};

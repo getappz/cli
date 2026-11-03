@@ -251,7 +251,11 @@ fn site_id(ctx: &DeployContext) -> DeployResult<String> {
             state
                 .get("siteId")
                 .and_then(|v| v.as_str())
-                .unwrap_or("")
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| DeployError::DeployFailed {
+                    provider: "Netlify",
+                    reason: "no siteId in .netlify/state.json: set NETLIFY_SITE_ID or run netlify link first".into(),
+                })?
                 .to_string()
         }
     };

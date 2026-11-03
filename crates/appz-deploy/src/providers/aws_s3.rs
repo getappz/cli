@@ -31,14 +31,32 @@ impl AwsS3Provider {
         let (bucket, region, prefix) = target_config(ctx)?;
 
         let output = ctx.project_dir.join(&ctx.output_dir);
-        if !has_files(&output).unwrap_or(false) {
-            return Err(DeployError::DeployFailed {
-                provider: self.name(),
-                reason: format!(
-                    "build output '{}' is missing or empty: build the project first (appz build)",
-                    ctx.output_dir
-                ),
-            });
+        match has_files(&output) {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(DeployError::DeployFailed {
+                    provider: self.name(),
+                    reason: format!(
+                        "build output '{}' is missing or empty: build the project first (appz build)",
+                        ctx.output_dir
+                    ),
+                });
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(DeployError::DeployFailed {
+                    provider: self.name(),
+                    reason: format!(
+                        "build output '{}' is missing or empty: build the project first (appz build)",
+                        ctx.output_dir
+                    ),
+                });
+            }
+            Err(e) => {
+                return Err(DeployError::DeployFailed {
+                    provider: self.name(),
+                    reason: format!("cannot read build output '{}': {e}", ctx.output_dir),
+                });
+            }
         }
 
         if ctx.dry_run {
@@ -49,21 +67,15 @@ impl AwsS3Provider {
         } else {
             format!("s3://{bucket}/{prefix}/")
         };
+        let output_arg = output.display().to_string();
+        let mut args = vec!["s3", "sync", &output_arg, &dest];
+        // No configured region: let the aws CLI use its profile / AWS_REGION.
+        if !region.is_empty() {
+            args.extend(["--region", &region]);
+        }
+        args.extend(["--delete", "--no-follow-symlinks"]);
         let out = ctx
-            .exec_live(
-                "aws",
-                &[
-                    "s3",
-                    "sync",
-                    &output.display().to_string(),
-                    &dest,
-                    "--region",
-                    &region,
-                    "--delete",
-                    "--no-follow-symlinks",
-                ],
-                DEPLOY_TIMEOUT,
-            )
+            .exec_live("aws", &args, DEPLOY_TIMEOUT)
             .map_err(|reason| DeployError::DeployFailed {
                 provider: self.name(),
                 reason,
@@ -259,7 +271,7 @@ fn target_config(ctx: &DeployContext) -> DeployResult<(String, String, String)> 
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .unwrap_or("us-east-1");
+        .unwrap_or("");
     if region.starts_with('-')
         || !region
             .bytes()
@@ -272,8 +284,17 @@ fn target_config(ctx: &DeployContext) -> DeployResult<(String, String, String)> 
             ),
         });
     }
-    let prefix = obj.get("prefix").and_then(|v| v.as_str()).unwrap_or("");
-    if prefix.starts_with('-') || prefix.chars().any(char::is_control) {
+    let prefix = obj
+        .get("prefix")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().trim_matches('/'))
+        .unwrap_or("");
+    if prefix.starts_with('-')
+        || prefix.chars().any(char::is_control)
+        || prefix
+            .split('/')
+            .any(|seg| seg == ".." || seg.is_empty() && !prefix.is_empty())
+    {
         return Err(DeployError::DeployFailed {
             provider: "AWS S3",
             reason: format!(
@@ -287,6 +308,11 @@ fn target_config(ctx: &DeployContext) -> DeployResult<(String, String, String)> 
 /// The bucket's real REST endpoint, with an optional path prefix.
 fn s3_url(bucket: &str, region: &str, prefix: &str) -> String {
     use std::fmt::Write as _;
+    let region = if region.is_empty() {
+        "us-east-1"
+    } else {
+        region
+    };
     let domain = if region.starts_with("cn-") {
         "amazonaws.com.cn"
     } else {
@@ -339,7 +365,7 @@ mod tests {
     fn target_config_defaults_region_and_prefix() {
         let ctx = ctx_with("my-bucket", "", "");
         let (_, r, p) = target_config(&ctx).unwrap();
-        assert_eq!(r, "us-east-1");
+        assert_eq!(r, "");
         assert_eq!(p, "");
     }
 

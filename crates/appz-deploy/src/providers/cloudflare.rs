@@ -226,6 +226,7 @@ impl DeployProvider for CloudflareProvider {
                     &version.version_id,
                     "--message",
                     "appz rollback",
+                    "--yes",
                 ],
                 DEPLOY_TIMEOUT,
             )

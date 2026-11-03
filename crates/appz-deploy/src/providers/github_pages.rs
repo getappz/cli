@@ -41,7 +41,13 @@ impl GithubPagesProvider {
         let out = ctx
             .exec_live(
                 "gh-pages",
-                &["-d", &ctx.output_path().to_string_lossy()],
+                // --nojekyll: keep _next/_astro/_nuxt; --dotfiles: publish .well-known etc.
+                &[
+                    "-d",
+                    &ctx.output_path().to_string_lossy(),
+                    "--nojekyll",
+                    "--dotfiles",
+                ],
                 DEPLOY_TIMEOUT,
             )
             .map_err(|reason| DeployError::DeployFailed {

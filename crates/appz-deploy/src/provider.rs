@@ -28,6 +28,13 @@ pub trait DeployProvider: Send + Sync {
     /// package is `netlify-cli`).
     fn install_package(&self) -> &'static str;
     fn auth_env_var(&self) -> &'static str;
+    /// Whether appz should run its cached install+build before deploying a
+    /// project with these detected `frameworks`. A provider that always does
+    /// its own build for some projects (Vercel for server frameworks) says
+    /// no, so they are not built twice.
+    fn needs_prebuild(&self, _frameworks: &[String]) -> bool {
+        true
+    }
     /// mise tool spec used to install this provider's CLI (`appz deploy --yes`).
     /// Empty means mise cannot install it: appz shows [`Self::install_hint`].
     fn mise_tool(&self) -> String {

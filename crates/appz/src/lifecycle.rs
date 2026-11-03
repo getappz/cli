@@ -61,3 +61,30 @@ pub fn rollback(
         .rollback(&ctx, deployment_id)
         .map_err(|e| e.to_string())
 }
+
+pub fn logs(project_dir: &Path, target: Option<&str>, deployment: &str) -> Result<String, String> {
+    let (provider, ctx) = resolve(project_dir, target)?;
+    provider.logs(&ctx, deployment).map_err(|e| e.to_string())
+}
+
+pub fn inspect(
+    project_dir: &Path,
+    target: Option<&str>,
+    deployment: &str,
+) -> Result<String, String> {
+    let (provider, ctx) = resolve(project_dir, target)?;
+    provider
+        .inspect(&ctx, deployment)
+        .map_err(|e| e.to_string())
+}
+
+pub fn promote(
+    project_dir: &Path,
+    target: Option<&str>,
+    deployment: &str,
+) -> Result<DeployOutput, String> {
+    let (provider, ctx) = resolve(project_dir, target)?;
+    provider
+        .promote(&ctx, deployment)
+        .map_err(|e| e.to_string())
+}

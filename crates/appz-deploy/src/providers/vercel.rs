@@ -351,6 +351,66 @@ impl DeployProvider for VercelProvider {
             unchanged: false,
         })
     }
+
+    fn logs(&self, ctx: &DeployContext, deployment: &str) -> DeployResult<String> {
+        let out = ctx
+            .exec("vercel", &["logs", deployment], DEPLOY_TIMEOUT)
+            .map_err(|reason| DeployError::DeployFailed {
+                provider: self.name(),
+                reason,
+            })?;
+        if !out.success {
+            return Err(DeployError::DeployFailed {
+                provider: self.name(),
+                reason: format!("vercel logs failed:\n{}\n{}", out.stdout, out.stderr),
+            });
+        }
+        Ok(out.stdout)
+    }
+
+    fn inspect(&self, ctx: &DeployContext, deployment: &str) -> DeployResult<String> {
+        let out = ctx
+            .exec("vercel", &["inspect", deployment, "--json"], QUERY_TIMEOUT)
+            .map_err(|reason| DeployError::DeployFailed {
+                provider: self.name(),
+                reason,
+            })?;
+        if !out.success {
+            return Err(DeployError::DeployFailed {
+                provider: self.name(),
+                reason: format!("vercel inspect failed:\n{}\n{}", out.stdout, out.stderr),
+            });
+        }
+        Ok(out.stdout)
+    }
+
+    fn promote(&self, ctx: &DeployContext, deployment: &str) -> DeployResult<DeployOutput> {
+        let out = ctx
+            .exec_live("vercel", &["promote", deployment, "--yes"], DEPLOY_TIMEOUT)
+            .map_err(|reason| DeployError::DeployFailed {
+                provider: self.name(),
+                reason,
+            })?;
+        if !out.success {
+            return Err(DeployError::DeployFailed {
+                provider: self.name(),
+                reason: format!("vercel promote failed:\n{}\n{}", out.stdout, out.stderr),
+            });
+        }
+        Ok(DeployOutput {
+            provider: self.slug().to_string(),
+            url: extract_deploy_url(&out.stdout),
+            is_preview: false,
+            status: DeployStatus::Ready,
+            created_at: Some(chrono::Utc::now()),
+            duration_ms: None,
+            auth: None,
+            setup_files: Vec::new(),
+            cli_missing: false,
+            link_needed: false,
+            unchanged: false,
+        })
+    }
 }
 
 /// Extract the real deployment URL from `vercel deploy`'s stdout. Vercel's

@@ -231,6 +231,29 @@ impl DeployProvider for CloudflareProvider {
             unchanged: false,
         })
     }
+
+    fn inspect(&self, ctx: &DeployContext, deployment: &str) -> DeployResult<String> {
+        let out = ctx
+            .exec(
+                "wrangler",
+                &["deployments", "view", deployment],
+                QUERY_TIMEOUT,
+            )
+            .map_err(|reason| DeployError::DeployFailed {
+                provider: self.name(),
+                reason,
+            })?;
+        if !out.success {
+            return Err(DeployError::DeployFailed {
+                provider: self.name(),
+                reason: format!(
+                    "wrangler deployments view failed:\n{}\n{}",
+                    out.stdout, out.stderr
+                ),
+            });
+        }
+        Ok(out.stdout)
+    }
 }
 
 /// Extract the real deployment URL from `wrangler`'s output. Scans for the

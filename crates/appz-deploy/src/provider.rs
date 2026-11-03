@@ -175,6 +175,35 @@ pub trait DeployProvider: Send + Sync {
             operation: "rollback",
         })
     }
+
+    /// Log output for one deployment, returned as raw text (the platform's own
+    /// format). Default: unsupported.
+    fn logs(&self, ctx: &DeployContext, deployment: &str) -> DeployResult<String> {
+        let _ = (ctx, deployment);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "logs",
+        })
+    }
+
+    /// Details for one deployment, returned as raw text (typically the CLI's
+    /// `--json`). Default: unsupported.
+    fn inspect(&self, ctx: &DeployContext, deployment: &str) -> DeployResult<String> {
+        let _ = (ctx, deployment);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "inspect",
+        })
+    }
+
+    /// Promote a deployment to production. Default: unsupported.
+    fn promote(&self, ctx: &DeployContext, deployment: &str) -> DeployResult<DeployOutput> {
+        let _ = (ctx, deployment);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "promote",
+        })
+    }
 }
 
 pub fn create_provider_registry() -> Vec<Box<dyn DeployProvider>> {

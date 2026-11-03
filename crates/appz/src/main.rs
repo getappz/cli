@@ -58,6 +58,12 @@ enum AppzCmd {
     Ls(LsArgs),
     /// Roll a target back to a previous deployment
     Rollback(RollbackArgs),
+    /// Show logs for a deployment
+    Logs(LogsArgs),
+    /// Inspect a single deployment
+    Inspect(InspectArgs),
+    /// Promote a deployment to production
+    Promote(PromoteArgs),
     /// Store credentials in an encrypted vault used by `appz deploy`
     Env(EnvArgs),
     /// Discover and install agent skills relevant to this project
@@ -198,6 +204,36 @@ struct RollbackArgs {
     #[arg(default_value = ".")]
     dir: PathBuf,
     /// Provider slug; uses appz.jsonc's deploy.default if omitted, else detects it
+    #[arg(long)]
+    target: Option<String>,
+}
+
+#[derive(Args)]
+struct LogsArgs {
+    /// Deployment id or URL to show logs for (from `appz ls`)
+    deployment: String,
+    #[arg(default_value = ".")]
+    dir: PathBuf,
+    #[arg(long)]
+    target: Option<String>,
+}
+
+#[derive(Args)]
+struct InspectArgs {
+    /// Deployment id or URL to inspect (from `appz ls`)
+    deployment: String,
+    #[arg(default_value = ".")]
+    dir: PathBuf,
+    #[arg(long)]
+    target: Option<String>,
+}
+
+#[derive(Args)]
+struct PromoteArgs {
+    /// Deployment id or URL to promote (from `appz ls`)
+    deployment: String,
+    #[arg(default_value = ".")]
+    dir: PathBuf,
     #[arg(long)]
     target: Option<String>,
 }
@@ -1030,6 +1066,9 @@ fn main() {
         AppzCmd::Deploy(a) => run_deploy(a, json),
         AppzCmd::Ls(a) => run_ls(a, json),
         AppzCmd::Rollback(a) => run_rollback(a, json),
+        AppzCmd::Logs(a) => run_logs(a, json),
+        AppzCmd::Inspect(a) => run_inspect(a, json),
+        AppzCmd::Promote(a) => run_promote(a, json),
         AppzCmd::Env(a) => run_env(a, json),
         AppzCmd::Skills(a) => run_skills(a, json),
         AppzCmd::Agents(a) => run_agents(a, json),
@@ -1343,6 +1382,41 @@ fn run_rollback(args: RollbackArgs, json: bool) {
             match &output.url {
                 Some(url) => success(&format!("rolled back — live at {url}")),
                 None => success("rolled back"),
+            }
+            outro("done");
+        }
+        Err(e) => error(&e),
+    }
+}
+
+fn run_logs(args: LogsArgs, _json: bool) {
+    let canonical = resolve_root(&args.dir);
+    match lifecycle::logs(&canonical, args.target.as_deref(), &args.deployment) {
+        Ok(text) => print!("{text}"),
+        Err(e) => error(&e),
+    }
+}
+
+fn run_inspect(args: InspectArgs, _json: bool) {
+    let canonical = resolve_root(&args.dir);
+    match lifecycle::inspect(&canonical, args.target.as_deref(), &args.deployment) {
+        Ok(text) => println!("{text}"),
+        Err(e) => error(&e),
+    }
+}
+
+fn run_promote(args: PromoteArgs, json: bool) {
+    let canonical = resolve_root(&args.dir);
+    match lifecycle::promote(&canonical, args.target.as_deref(), &args.deployment) {
+        Ok(output) => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&output).unwrap());
+                return;
+            }
+            intro("appz promote");
+            match &output.url {
+                Some(url) => success(&format!("promoted — live at {url}")),
+                None => success("promoted"),
             }
             outro("done");
         }

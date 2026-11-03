@@ -100,6 +100,50 @@ pub fn ensure_mise(_root: &Path) -> Result<(), String> {
     }
 }
 
+/// Install `spec` (e.g. `npm:wrangler`) as a global mise tool. Output is
+/// captured so `--json` stdout stays clean; mise's stderr is the error text.
+pub fn install_global_tool(spec: &str) -> Result<(), String> {
+    let out = command::Command::new("mise")
+        .args(["use", "-g", spec])
+        .without_shell()
+        .set_error_on_nonzero(false)
+        .exec()
+        .map_err(|e| format!("failed to run 'mise use -g {spec}': {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "'mise use -g {spec}' failed:\n{}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ))
+    }
+}
+
+/// Bin directories of every tool mise has active for `dir` (global config plus
+/// the project's `mise.toml`), via `mise bin-paths`. Lets callers find mise
+/// installed CLIs even when mise's shims/activation are not on `PATH`. Empty
+/// when mise is missing or the command fails.
+pub fn mise_bin_paths(dir: &Path) -> Vec<std::path::PathBuf> {
+    let Ok(out) = command::Command::new("mise")
+        .arg("bin-paths")
+        .cwd(dir)
+        .without_shell()
+        .set_error_on_nonzero(false)
+        .exec()
+    else {
+        return Vec::new();
+    };
+    if !out.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(std::path::PathBuf::from)
+        .collect()
+}
+
 /// Mark a project's mise.toml as trusted so mise will auto-activate its
 /// tool versions. Best-effort — appz generated the file itself, so a
 /// failure here is a warning for the caller to surface, not a hard error.

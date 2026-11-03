@@ -107,7 +107,7 @@ enum AgentAction {
 struct DeployArgs {
     #[arg(default_value = ".")]
     dir: PathBuf,
-    /// Provider slug (e.g. vercel, netlify, cloudflare). Uses appz.jsonc's deploy.default if omitted.
+    /// Provider slug (e.g. vercel, netlify, cloudflare). Uses appz.jsonc's deploy.default if omitted, else detects it from project files.
     #[arg(long)]
     target: Option<String>,
     /// Production deploy (default: preview)
@@ -122,6 +122,9 @@ struct DeployArgs {
     /// Show what would be deployed without deploying
     #[arg(long)]
     dry_run: bool,
+    /// Install a missing platform CLI through mise without asking
+    #[arg(short = 'y', long)]
+    yes: bool,
 }
 
 #[derive(Args)]
@@ -1076,11 +1079,30 @@ fn run_deploy(args: DeployArgs, json: bool) {
             build_env: args.build_env,
             dry_run: args.dry_run,
             json,
+            install: if args.yes {
+                deploy::InstallPolicy::Yes
+            } else if !json && is_tty() {
+                deploy::InstallPolicy::Ask
+            } else {
+                deploy::InstallPolicy::Never
+            },
         },
     ) {
         Ok(output) => {
             if json {
                 println!("{}", serde_json::to_string_pretty(&output).unwrap());
+            } else if args.dry_run {
+                intro("appz deploy");
+                success(&format!(
+                    "dry run: would deploy to {} ({})",
+                    output.provider,
+                    if output.is_preview {
+                        "preview"
+                    } else {
+                        "production"
+                    }
+                ));
+                outro("nothing was deployed");
             } else {
                 intro("appz deploy");
                 success(&format!("deployed to {}", output.provider));

@@ -200,7 +200,7 @@ impl AppzServer {
     }
 
     #[tool(
-        description = "Deploy a project to a hosting platform (vercel|netlify) by driving that platform's own CLI. Returns JSON with the deployment URL — `null` if it couldn't be confirmed from the CLI's output, never a guessed URL."
+        description = "Deploy a project to a hosting platform (vercel|netlify|cloudflare) by driving that platform's own CLI; the target is detected from project files when not given. Returns JSON with the deployment URL — `null` if it couldn't be confirmed from the CLI's output, never a guessed URL."
     )]
     fn deploy(&self, Parameters(arg): Parameters<DeployArg>) -> Result<CallToolResult, McpError> {
         let root = Self::resolve(&arg.dir);
@@ -211,6 +211,8 @@ impl AppzServer {
             build_env: vec![],
             dry_run: arg.dry_run,
             json: true,
+            // An agent must not trigger software installs; it gets the install command.
+            install: crate::deploy::InstallPolicy::Never,
         };
         match crate::deploy::run(&root, req) {
             Ok(output) => {

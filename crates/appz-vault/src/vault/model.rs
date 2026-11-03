@@ -8,6 +8,11 @@ pub struct VaultFile {
     #[serde(with = "serde_bytes")]
     pub encrypted_dek: Vec<u8>,
     pub salt: Vec<u8>,
+    /// A known constant encrypted under the DEK. Lets a cached session key be
+    /// checked against this file (a recreated or restored vault has a new DEK).
+    /// Empty in vaults created before this field existed: those cannot be checked.
+    #[serde(default, with = "serde_bytes")]
+    pub key_check: Vec<u8>,
     #[serde(default)]
     pub body: VaultBody,
 }
@@ -57,6 +62,7 @@ impl VaultFile {
             version: 1,
             encrypted_dek,
             salt,
+            key_check: Vec::new(),
             body: VaultBody::default(),
         }
     }

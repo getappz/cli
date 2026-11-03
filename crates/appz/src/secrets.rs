@@ -13,8 +13,14 @@ use appz_vault::{
 const APP: &str = "appz";
 const PASSPHRASE_VAR: &str = "APPZ_VAULT_PASSPHRASE";
 
+/// Vault locations for the project containing `dir`. `dir` is canonicalized
+/// first so `appz env` (run from `.` or a subfolder) and `appz deploy` (which
+/// has the canonical project dir) land on the SAME vault path. The keyring
+/// session is keyed by a hash of that path, so any difference would make an
+/// unlock invisible to deploy.
 fn paths(dir: &Path) -> VaultPaths {
-    VaultPaths::project(APP, dir, |p| {
+    let dir = appz_core::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    VaultPaths::project(APP, &dir, |p| {
         p.join(".appz").exists() || p.join(".git").exists() || p.join("appz.jsonc").exists()
     })
 }
@@ -54,8 +60,10 @@ fn gitignore_project_vault(vault: &Path) {
     }
 }
 
-/// Unlock `path` (creating it on first use) and cache the key in the OS keyring.
-pub fn unlock(path: &Path) -> Result<[u8; 32], String> {
+/// Unlock `path` (creating it on first use) and cache the key in the OS
+/// keyring. The `bool` is whether the key was actually cached: `false` means
+/// the keyring is unavailable and only this process is unlocked.
+pub fn unlock(path: &Path) -> Result<([u8; 32], bool), String> {
     let e = |e: VaultError| e.to_string();
     if !path.exists() {
         let pw = passphrase("New vault passphrase")?;
@@ -67,14 +75,18 @@ pub fn unlock(path: &Path) -> Result<[u8; 32], String> {
         }
         std::fs::create_dir_all(path.parent().unwrap_or(Path::new(".")))
             .map_err(|e| e.to_string())?;
-        create_vault(path, &pw).map_err(e)?;
-        gitignore_project_vault(path);
+        match create_vault(path, &pw) {
+            Ok(()) => gitignore_project_vault(path),
+            // Another process created it between our check and now: use theirs.
+            Err(VaultError::AlreadyInitialized(_)) => {}
+            Err(err) => return Err(err.to_string()),
+        }
     }
     let dek = open_vault(path, &passphrase("Vault passphrase")?)
         .map_err(e)?
         .dek;
-    appz_vault::session::store_session(APP, path, &dek);
-    Ok(dek)
+    let cached = appz_vault::session::store_session(APP, path, &dek);
+    Ok((dek, cached))
 }
 
 pub fn lock(path: &Path) {
@@ -84,7 +96,7 @@ pub fn lock(path: &Path) {
 fn dek_for(path: &Path) -> Result<[u8; 32], String> {
     match open_vault_with_dek(path, APP) {
         Ok(d) if path.exists() => Ok(d.dek),
-        _ => unlock(path),
+        _ => unlock(path).map(|(dek, _)| dek),
     }
 }
 
@@ -171,6 +183,28 @@ pub fn deploy_env(project_dir: &Path, allowed: &[String]) -> Result<VaultEnv, St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `appz env` (run from the root, a subfolder, or via `..`) and `appz
+    /// deploy` must resolve the same vault path: the keyring session is keyed
+    /// by it, so any difference makes an unlock invisible to deploy.
+    #[test]
+    fn every_entry_point_resolves_the_same_project_vault() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir(root.join(".git")).unwrap();
+        std::fs::create_dir_all(root.join("src/deep")).unwrap();
+
+        let from_root = vault_path(root, false).unwrap();
+        assert_eq!(
+            vault_path(&root.join("src/deep"), false).unwrap(),
+            from_root
+        );
+        assert_eq!(
+            vault_path(&root.join("src/deep/../.."), false).unwrap(),
+            from_root
+        );
+        assert!(from_root.ends_with(Path::new(".appz").join("vault.json")));
+    }
 
     #[test]
     fn names_are_validated() {

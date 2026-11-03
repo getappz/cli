@@ -25,6 +25,7 @@ pub enum Consent {
 /// Link ids the platform CLIs read from the environment instead of `link`.
 const LINK_VARS: [&str; 3] = ["VERCEL_ORG_ID", "VERCEL_PROJECT_ID", "NETLIFY_SITE_ID"];
 
+#[derive(Clone)]
 pub struct DeployRequest {
     pub target: Option<String>,
     pub prod: bool,
@@ -218,6 +219,31 @@ fn fingerprint_extra(slug: &str, req: &DeployRequest, config: &DeployConfig) -> 
     )
 }
 
+/// Run a deploy lifecycle hook as an arg vector (no shell), in the project
+/// directory, with the terminal inherited so its output shows live. `extra_path`
+/// (mise tool bin dirs) is on `PATH` so a hook's own tools resolve. An empty
+/// argv is a no-op.
+fn run_hook(ctx: &DeployContext, name: &str, argv: &[String]) -> Result<(), String> {
+    if argv.is_empty() {
+        return Ok(());
+    }
+    let (bin, args) = argv.split_first().expect("non-empty argv");
+    eprintln!("running {name} hook: {}", argv.join(" "));
+    let mut cmd = command::Command::new(bin);
+    cmd.args(args.iter().map(String::as_str))
+        .cwd(&ctx.project_dir)
+        .without_shell()
+        .append_paths(&ctx.extra_path);
+    let status = cmd
+        .exec_interactive()
+        .map_err(|e| format!("{name} hook: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("{name} hook '{bin}' failed"))
+    }
+}
+
 pub fn run(project_dir: &Path, req: DeployRequest) -> Result<DeployOutput, String> {
     let config = read_deploy_config(project_dir)
         .map_err(|e| e.to_string())?
@@ -297,13 +323,22 @@ pub fn run(project_dir: &Path, req: DeployRequest) -> Result<DeployOutput, Strin
             serde_json::Value::String(project.clone());
     }
     ctx.extra_path = extra_path;
-    ctx.run_env = vault
-        .vars
+    // Runtime env for the provider CLI. Precedence (lowest → highest):
+    // `deploy.environments.<env>` < vault secrets < real process env < `-e`.
+    // Config and vault values never override the user's real environment.
+    let mut run_env: HashMap<String, String> = ctx
+        .deploy_config
+        .env_for(ctx.environment_name())
         .into_iter()
         .filter(|(k, _)| std::env::var_os(k).is_none())
         .collect();
-    ctx.run_env
-        .extend(req.env.iter().filter_map(|s| parse_kv(s)));
+    for (k, v) in vault.vars {
+        if std::env::var_os(&k).is_none() {
+            run_env.insert(k, v);
+        }
+    }
+    run_env.extend(req.env.iter().filter_map(|s| parse_kv(s)));
+    ctx.run_env = run_env;
     ctx.build_env = req
         .build_env
         .iter()
@@ -332,6 +367,14 @@ pub fn run(project_dir: &Path, req: DeployRequest) -> Result<DeployOutput, Strin
         ctx.prebuilt = crate::build_stage::run(&ctx)?;
     }
 
+    if !req.dry_run {
+        run_hook(
+            &ctx,
+            "before_deploy",
+            &ctx.deploy_config.hooks.before_deploy,
+        )?;
+    }
+
     let mut output = if ctx.is_preview {
         provider.deploy_preview(&ctx)
     } else {
@@ -351,6 +394,9 @@ pub fn run(project_dir: &Path, req: DeployRequest) -> Result<DeployOutput, Strin
         // config (wrangler.jsonc, a .gitignore line) that is part of the project now.
         crate::deploy_state::record(project_dir, &slug, req.prod, &fp, url);
     }
+    if !req.dry_run {
+        run_hook(&ctx, "after_deploy", &ctx.deploy_config.hooks.after_deploy)?;
+    }
     output.link_needed = req.dry_run && !provider.is_linked(&ctx);
 
     // A dry run is a readiness report: probe sign-in when the CLI is present
@@ -363,6 +409,45 @@ pub fn run(project_dir: &Path, req: DeployRequest) -> Result<DeployOutput, Strin
         }
     }
     Ok(output)
+}
+
+/// Deploy every configured target (`deploy.targets` keys in appz.jsonc),
+/// collecting one `DeployOutput` per target. Deploys in sorted slug order and
+/// fails with a combined error when any target fails.
+pub fn run_all(project_dir: &Path, req: DeployRequest) -> Result<Vec<DeployOutput>, String> {
+    let config = read_deploy_config(project_dir)
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+    let mut slugs: Vec<String> = config.targets.keys().cloned().collect();
+    slugs.sort();
+    if slugs.is_empty() {
+        return Err(
+            "no deploy targets configured — add targets under \"deploy\": { \"targets\": { ... } } in appz.jsonc"
+                .to_string(),
+        );
+    }
+
+    let mut outputs = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+    for slug in slugs {
+        let mut one = req.clone();
+        one.target = Some(slug.clone());
+        match run(project_dir, one) {
+            Ok(output) => outputs.push(output),
+            Err(e) => errors.push(format!("{slug}: {e}")),
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(outputs)
+    } else {
+        Err(format!(
+            "{} of {} target(s) failed:\n{}",
+            errors.len(),
+            outputs.len() + errors.len(),
+            errors.join("\n")
+        ))
+    }
 }
 
 #[cfg(test)]

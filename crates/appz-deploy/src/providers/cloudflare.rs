@@ -48,12 +48,12 @@ impl CloudflareProvider {
         } else {
             &["deploy"]
         };
-        let deploy =
-            ctx.exec(bin, args, DEPLOY_TIMEOUT)
-                .map_err(|reason| DeployError::DeployFailed {
-                    provider: self.name(),
-                    reason,
-                })?;
+        let deploy = ctx.exec_live(bin, args, DEPLOY_TIMEOUT).map_err(|reason| {
+            DeployError::DeployFailed {
+                provider: self.name(),
+                reason,
+            }
+        })?;
         if !deploy.success {
             return Err(DeployError::DeployFailed {
                 provider: self.name(),

@@ -29,6 +29,51 @@ pub fn exec_captured(
     env: &[(&str, &str)],
     timeout: Duration,
 ) -> Result<ExecOutput, String> {
+    exec_inner(bin, args, cwd, env, timeout, false)
+}
+
+/// Like [`exec_captured`], but also copies the child's output to our stderr
+/// as it arrives, so a long build or upload shows progress instead of silence.
+/// The full output is still captured (URL parsing, error reports).
+pub fn exec_live(
+    bin: &str,
+    args: &[&str],
+    cwd: &Path,
+    env: &[(&str, &str)],
+    timeout: Duration,
+) -> Result<ExecOutput, String> {
+    exec_inner(bin, args, cwd, env, timeout, true)
+}
+
+/// Drain `pipe` to the end, optionally echoing each chunk to stderr.
+fn drain(pipe: Option<impl Read>, echo: bool) -> Vec<u8> {
+    use std::io::Write;
+    let mut buf = Vec::new();
+    if let Some(mut pipe) = pipe {
+        let mut chunk = [0u8; 4096];
+        while let Ok(n) = pipe.read(&mut chunk) {
+            if n == 0 {
+                break;
+            }
+            buf.extend_from_slice(&chunk[..n]);
+            if echo {
+                let mut err = std::io::stderr().lock();
+                let _ = err.write_all(&chunk[..n]);
+                let _ = err.flush();
+            }
+        }
+    }
+    buf
+}
+
+fn exec_inner(
+    bin: &str,
+    args: &[&str],
+    cwd: &Path,
+    env: &[(&str, &str)],
+    timeout: Duration,
+    echo: bool,
+) -> Result<ExecOutput, String> {
     let mut cmd = Command::new(bin);
     cmd.without_shell();
     cmd.args(args.iter().copied());
@@ -43,20 +88,8 @@ pub fn exec_captured(
     let stdout_pipe = child.stdout.take();
     let stderr_pipe = child.stderr.take();
 
-    let stdout_handle = thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(mut pipe) = stdout_pipe {
-            let _ = pipe.read_to_end(&mut buf);
-        }
-        buf
-    });
-    let stderr_handle = thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(mut pipe) = stderr_pipe {
-            let _ = pipe.read_to_end(&mut buf);
-        }
-        buf
-    });
+    let stdout_handle = thread::spawn(move || drain(stdout_pipe, echo));
+    let stderr_handle = thread::spawn(move || drain(stderr_pipe, echo));
 
     let start = Instant::now();
     let status = loop {

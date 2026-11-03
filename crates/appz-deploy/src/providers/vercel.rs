@@ -37,7 +37,7 @@ impl VercelProvider {
         // Pull the linked project's settings; `vercel build` needs them locally.
         let env_name = if is_preview { "preview" } else { "production" };
         let pull = ctx
-            .exec(
+            .exec_live(
                 "vercel",
                 &["pull", "--yes", "--environment", env_name],
                 DEPLOY_TIMEOUT,
@@ -63,7 +63,7 @@ impl VercelProvider {
             build_args.push("--prod");
         }
         let build = ctx
-            .exec("vercel", &build_args, DEPLOY_TIMEOUT)
+            .exec_live("vercel", &build_args, DEPLOY_TIMEOUT)
             .map_err(|reason| DeployError::DeployFailed {
                 provider: self.name(),
                 reason,
@@ -80,7 +80,7 @@ impl VercelProvider {
             deploy_args.push("--prod");
         }
         let deploy = ctx
-            .exec("vercel", &deploy_args, DEPLOY_TIMEOUT)
+            .exec_live("vercel", &deploy_args, DEPLOY_TIMEOUT)
             .map_err(|reason| DeployError::DeployFailed {
                 provider: self.name(),
                 reason,

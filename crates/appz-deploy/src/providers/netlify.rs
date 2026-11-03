@@ -34,7 +34,7 @@ impl NetlifyProvider {
             args.push("--prod");
         }
         let deploy = ctx
-            .exec("netlify", &args, DEPLOY_TIMEOUT)
+            .exec_live("netlify", &args, DEPLOY_TIMEOUT)
             .map_err(|reason| DeployError::DeployFailed {
                 provider: self.name(),
                 reason,

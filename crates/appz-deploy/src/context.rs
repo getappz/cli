@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::error::DeployResult;
-use crate::exec::{ExecOutput, exec_captured};
+use crate::exec::{ExecOutput, exec_captured, exec_live};
 
 /// Deploy-time settings read from `appz.jsonc`'s `deploy` key — reuses the
 /// same JSONC-with-comments convention as command overrides
@@ -163,6 +163,28 @@ impl DeployContext {
     /// shell-less spawn cannot find by bare name) still runs; `extra_path` is
     /// also appended to the child's `PATH` (the user's own tools keep priority).
     pub fn exec(&self, bin: &str, args: &[&str], timeout: Duration) -> Result<ExecOutput, String> {
+        self.run(bin, args, timeout, false)
+    }
+
+    /// [`Self::exec`] for the long steps (build, upload): the CLI's output is
+    /// also shown live on stderr, except with `--json` where stdout/stderr
+    /// stay clean for the caller.
+    pub fn exec_live(
+        &self,
+        bin: &str,
+        args: &[&str],
+        timeout: Duration,
+    ) -> Result<ExecOutput, String> {
+        self.run(bin, args, timeout, !self.json_output)
+    }
+
+    fn run(
+        &self,
+        bin: &str,
+        args: &[&str],
+        timeout: Duration,
+        live: bool,
+    ) -> Result<ExecOutput, String> {
         let base_path = self.run_env.get("PATH").map(std::ffi::OsString::from);
         let program = self.resolve(bin);
 
@@ -183,7 +205,8 @@ impl DeployContext {
         }
         let env_refs: Vec<(&str, &str)> =
             env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
-        exec_captured(&program, args, &self.project_dir, &env_refs, timeout)
+        let run = if live { exec_live } else { exec_captured };
+        run(&program, args, &self.project_dir, &env_refs, timeout)
     }
 
     /// Run a provider CLI with the terminal inherited (login flows). Same

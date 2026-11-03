@@ -5,8 +5,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use appz_deploy::{
-    AuthState, DeployContext, DeployError, DeployOutput, DeployProvider, detect_providers,
-    ensure_cli_available, get_provider, install_cli_with_mise, parse_kv, read_deploy_config,
+    AuthState, DeployConfig, DeployContext, DeployError, DeployOutput, DeployProvider,
+    detect_providers, ensure_cli_available, get_provider, install_cli_with_mise, parse_kv,
+    read_deploy_config,
 };
 
 /// Whether appz may take a side-effecting step (install a CLI, run a login)
@@ -27,6 +28,10 @@ const LINK_VARS: [&str; 3] = ["VERCEL_ORG_ID", "VERCEL_PROJECT_ID", "NETLIFY_SIT
 pub struct DeployRequest {
     pub target: Option<String>,
     pub prod: bool,
+    /// Platform project name (skips the prompt when linking).
+    pub project: Option<String>,
+    /// Deploy even when nothing changed since the last deploy of the target.
+    pub force: bool,
     pub env: Vec<String>,
     pub build_env: Vec<String>,
     pub dry_run: bool,
@@ -36,6 +41,45 @@ pub struct DeployRequest {
     /// Running the CLI's login. Only ever `Ask`/`Yes` with a real terminal:
     /// login waits on a browser and would hang CI.
     pub login: Consent,
+    /// Creating/linking a platform project on the user's account.
+    pub link: Consent,
+}
+
+/// The project is not linked to a platform project: link it if the policy
+/// (or the user, when asked) allows, else fail with the way out. In a
+/// terminal with no `--project`, the platform CLI runs its own link flow
+/// (scope, project name, ...) so appz follows what that CLI does.
+fn ensure_linked(
+    p: &dyn DeployProvider,
+    ctx: &DeployContext,
+    consent: Consent,
+    named: bool,
+) -> Result<(), String> {
+    if p.is_linked(ctx) {
+        return Ok(());
+    }
+    let name = ctx.project_name(p.slug());
+    let interactive = match consent {
+        Consent::Never => {
+            return Err(format!(
+                "{}: no project linked. Re-run with --yes to create/link '{name}' (or --project <name>), or set the platform's project id variables",
+                p.name()
+            ));
+        }
+        Consent::Ask => !named,
+        Consent::Yes => false,
+    };
+    if interactive {
+        eprintln!("linking with `{} link`...", p.cli_tool());
+    } else {
+        eprintln!("linking {} project '{name}'...", p.name());
+    }
+    p.link(ctx, interactive).map_err(|e| e.to_string())?;
+    if p.is_linked(ctx) {
+        Ok(())
+    } else {
+        Err(format!("{}: project was not linked", p.name()))
+    }
 }
 
 /// The CLI was not found on `PATH` or in mise's bin dirs: install it through
@@ -133,6 +177,36 @@ fn autodetect_target(project_dir: &Path) -> Result<String, String> {
     }
 }
 
+/// Everything besides the source files that changes what gets deployed: the
+/// target, the project name, and the `-e` / `-b` values. Only hashed into the
+/// fingerprint, never stored.
+fn fingerprint_extra(slug: &str, req: &DeployRequest, config: &DeployConfig) -> String {
+    let mut env = req.env.clone();
+    env.sort();
+    let mut build = req.build_env.clone();
+    build.sort();
+    let project = req
+        .project
+        .clone()
+        .or_else(|| {
+            config
+                .targets
+                .get(slug)?
+                .get("project")?
+                .as_str()
+                .map(String::from)
+        })
+        .unwrap_or_default();
+    format!(
+        "{slug}
+{project}
+{}
+{}",
+        env.join("\u{1f}"),
+        build.join("\u{1f}")
+    )
+}
+
 pub fn run(project_dir: &Path, req: DeployRequest) -> Result<DeployOutput, String> {
     let config = read_deploy_config(project_dir)
         .map_err(|e| e.to_string())?
@@ -144,6 +218,22 @@ pub fn run(project_dir: &Path, req: DeployRequest) -> Result<DeployOutput, Strin
     };
 
     let provider = get_provider(&slug).map_err(|e| e.to_string())?;
+
+    // Nothing changed since the last deploy of this target: do not install,
+    // build and upload it all again.
+    // The check is only an optimization: if the project cannot be fingerprinted
+    // the deploy goes ahead.
+    if !req.force
+        && let Ok(fp) =
+            crate::deploy_state::fingerprint(project_dir, &fingerprint_extra(&slug, &req, &config))
+        && let Some(last) = crate::deploy_state::unchanged(project_dir, &slug, req.prod, &fp)
+    {
+        let mut out = DeployOutput::dry_run(provider.slug(), !req.prod);
+        out.url = Some(last.url);
+        out.status = appz_deploy::DeployStatus::Ready;
+        out.unchanged = true;
+        return Ok(out);
+    }
 
     // mise-installed CLIs (global config or this project's mise.toml) are
     // discovered via `mise bin-paths` and appended after the user's own PATH.
@@ -188,6 +278,13 @@ pub fn run(project_dir: &Path, req: DeployRequest) -> Result<DeployOutput, Strin
     ctx.json_output = req.json;
     ctx.framework = framework;
     ctx.deploy_config = config;
+    if let Some(project) = &req.project {
+        ctx.deploy_config
+            .targets
+            .entry(slug.clone())
+            .or_insert_with(|| serde_json::json!({}))["project"] =
+            serde_json::Value::String(project.clone());
+    }
     ctx.extra_path = extra_path;
     ctx.run_env = vault
         .vars
@@ -204,6 +301,18 @@ pub fn run(project_dir: &Path, req: DeployRequest) -> Result<DeployOutput, Strin
 
     if !req.dry_run {
         ensure_authenticated(provider.as_ref(), &ctx, req.login)?;
+        ensure_linked(provider.as_ref(), &ctx, req.link, req.project.is_some())?;
+    }
+
+    // Platform config the project lacks (e.g. wrangler.jsonc, netlify.toml):
+    // appz writes it; a dry run only reports it.
+    let setup = provider.setup_files(&ctx).map_err(|e| e.to_string())?;
+    let setup_names: Vec<String> = setup.iter().map(|(n, _)| n.clone()).collect();
+    if !req.dry_run {
+        for (name, content) in &setup {
+            std::fs::write(ctx.project_dir.join(name), content)
+                .map_err(|e| format!("cannot write {name}: {e}"))?;
+        }
     }
 
     let mut output = if ctx.is_preview {
@@ -213,10 +322,81 @@ pub fn run(project_dir: &Path, req: DeployRequest) -> Result<DeployOutput, Strin
     }
     .map_err(|e| e.to_string())?;
 
+    output.setup_files = setup_names;
+    if !req.dry_run
+        && let Some(url) = &output.url
+        && let Ok(fp) = crate::deploy_state::fingerprint(
+            project_dir,
+            &fingerprint_extra(&slug, &req, &ctx.deploy_config),
+        )
+    {
+        // Fingerprint after the deploy: the run itself may have written
+        // config (wrangler.jsonc, a .gitignore line) that is part of the project now.
+        crate::deploy_state::record(project_dir, &slug, req.prod, &fp, url);
+    }
+    output.link_needed = req.dry_run && !provider.is_linked(&ctx);
+
     // A dry run is a readiness report: probe sign-in when the CLI is present
     // (read-only; never installs or logs in).
-    if req.dry_run && ensure_cli_available(provider.as_ref(), &ctx.extra_path).is_ok() {
-        output.auth = Some(provider.auth_status(&ctx));
+    if req.dry_run {
+        if ensure_cli_available(provider.as_ref(), &ctx.extra_path).is_ok() {
+            output.auth = Some(provider.auth_status(&ctx));
+        } else {
+            output.cli_missing = true;
+        }
     }
     Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn req(env: &[&str], build: &[&str], project: Option<&str>) -> DeployRequest {
+        DeployRequest {
+            target: None,
+            project: project.map(String::from),
+            force: false,
+            prod: false,
+            env: env.iter().map(|s| s.to_string()).collect(),
+            build_env: build.iter().map(|s| s.to_string()).collect(),
+            dry_run: false,
+            json: false,
+            install: Consent::Never,
+            login: Consent::Never,
+            link: Consent::Never,
+        }
+    }
+
+    #[test]
+    fn the_fingerprint_input_tracks_what_changes_the_deployment() {
+        let cfg = DeployConfig::default();
+        let base = fingerprint_extra("vercel", &req(&["A=1", "B=2"], &["X=1"], None), &cfg);
+        // Order of the flags does not matter.
+        assert_eq!(
+            base,
+            fingerprint_extra("vercel", &req(&["B=2", "A=1"], &["X=1"], None), &cfg)
+        );
+        // A changed -e, -b, project or target does.
+        assert_ne!(
+            base,
+            fingerprint_extra("vercel", &req(&["A=9", "B=2"], &["X=1"], None), &cfg)
+        );
+        assert_ne!(
+            base,
+            fingerprint_extra("vercel", &req(&["A=1", "B=2"], &["X=2"], None), &cfg)
+        );
+        assert_ne!(
+            base,
+            fingerprint_extra(
+                "vercel",
+                &req(&["A=1", "B=2"], &["X=1"], Some("other")),
+                &cfg
+            )
+        );
+        assert_ne!(
+            base,
+            fingerprint_extra("netlify", &req(&["A=1", "B=2"], &["X=1"], None), &cfg)
+        );
+    }
 }

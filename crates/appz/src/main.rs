@@ -6,6 +6,7 @@ use appz_core::{detect_toolchains, generate_claude_md, run_doctor};
 
 mod agents;
 mod deploy;
+mod deploy_state;
 mod dev_install;
 mod init_source;
 mod mcp;
@@ -152,6 +153,9 @@ struct DeployArgs {
     /// Provider slug (e.g. vercel, netlify, cloudflare). Uses appz.jsonc's deploy.default if omitted, else detects it from project files.
     #[arg(long)]
     target: Option<String>,
+    /// Platform project name to create or link (default: asked, suggesting one)
+    #[arg(long)]
+    project: Option<String>,
     /// Production deploy (default: preview)
     #[arg(long)]
     prod: bool,
@@ -164,6 +168,9 @@ struct DeployArgs {
     /// Show what would be deployed without deploying
     #[arg(long)]
     dry_run: bool,
+    /// Deploy even if nothing changed since the last deploy of this target
+    #[arg(long)]
+    force: bool,
     /// Install a missing platform CLI through mise without asking
     #[arg(short = 'y', long)]
     yes: bool,
@@ -1159,12 +1166,21 @@ fn run_deploy(args: DeployArgs, json: bool) {
         &canonical,
         deploy::DeployRequest {
             target: args.target,
+            project: args.project,
+            force: args.force,
             prod: args.prod,
             env: args.env,
             build_env: args.build_env,
             dry_run: args.dry_run,
             json,
             install: if args.yes {
+                deploy::Consent::Yes
+            } else if !json && is_tty() {
+                deploy::Consent::Ask
+            } else {
+                deploy::Consent::Never
+            },
+            link: if args.yes {
                 deploy::Consent::Yes
             } else if !json && is_tty() {
                 deploy::Consent::Ask
@@ -1195,6 +1211,20 @@ fn run_deploy(args: DeployArgs, json: bool) {
                         "production"
                     }
                 ));
+                if output.unchanged {
+                    info(
+                        "unchanged since the last deploy: nothing would be redeployed (--force to deploy anyway)",
+                    );
+                }
+                if output.cli_missing {
+                    info("cli: not installed (a real deploy installs it with mise)");
+                }
+                if output.link_needed {
+                    info("project: not linked (a real deploy asks to create/link one)");
+                }
+                for f in &output.setup_files {
+                    info(&format!("would create {f} (the project has none)"));
+                }
                 if let Some(auth) = output.auth {
                     info(match auth {
                         appz_deploy::AuthState::Authenticated => "auth: signed in",
@@ -1207,6 +1237,20 @@ fn run_deploy(args: DeployArgs, json: bool) {
                 outro("nothing was deployed");
             } else {
                 intro("appz deploy");
+                if output.unchanged {
+                    success(&format!(
+                        "unchanged since the last deploy to {}; nothing was redeployed (--force to deploy anyway)",
+                        output.provider
+                    ));
+                    if let Some(url) = &output.url {
+                        info(url);
+                    }
+                    outro("done");
+                    return;
+                }
+                for f in &output.setup_files {
+                    info(&format!("created {f} (the project had none)"));
+                }
                 success(&format!("deployed to {}", output.provider));
                 if let Some(url) = &output.url {
                     info(url);

@@ -80,6 +80,70 @@ pub trait DeployProvider: Send + Sync {
     fn check_prerequisites(&self) -> DeployResult<PrerequisiteStatus>;
     fn detect_config(&self, project_dir: &Path) -> DeployResult<Option<DetectedConfig>>;
 
+    /// Whether the project dir is tied to a platform project (a state file or
+    /// the platform's id variables). Platforms without a link step are
+    /// always "linked".
+    fn is_linked(&self, ctx: &DeployContext) -> bool {
+        let _ = ctx;
+        true
+    }
+
+    /// Args for the platform CLI that link the project dir to a project,
+    /// creating it when it does not exist. `interactive`: let the CLI ask
+    /// its own questions (scope, project name) in the terminal; otherwise
+    /// answer them from appz's config. `None`: no link step.
+    fn link_args(&self, ctx: &DeployContext, interactive: bool) -> Option<Vec<String>> {
+        let _ = (ctx, interactive);
+        None
+    }
+
+    /// Run [`Self::link_args`] through the platform CLI.
+    fn link(&self, ctx: &DeployContext, interactive: bool) -> DeployResult<()> {
+        let Some(args) = self.link_args(ctx, interactive) else {
+            return Ok(());
+        };
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let fail = |reason: String| DeployError::DeployFailed {
+            provider: self.name(),
+            reason,
+        };
+        if interactive {
+            return match ctx.exec_interactive(self.cli_tool(), &refs) {
+                Ok(true) => Ok(()),
+                Ok(false) => Err(fail(format!(
+                    "{} {} did not complete",
+                    self.cli_tool(),
+                    args.join(" ")
+                ))),
+                Err(e) => Err(fail(e)),
+            };
+        }
+        let out = ctx
+            .exec(self.cli_tool(), &refs, QUERY_TIMEOUT)
+            .map_err(fail)?;
+        if out.success {
+            Ok(())
+        } else {
+            Err(fail(format!(
+                "{} {} failed:
+{}
+{}",
+                self.cli_tool(),
+                args.join(" "),
+                out.stdout,
+                out.stderr
+            )))
+        }
+    }
+
+    /// Config files this platform needs that the project does not have yet,
+    /// as `(file name, contents)`. Pure: `deploy` writes them (or, on
+    /// `--dry-run`, only reports them). Default: none needed.
+    fn setup_files(&self, ctx: &DeployContext) -> DeployResult<Vec<(String, String)>> {
+        let _ = ctx;
+        Ok(Vec::new())
+    }
+
     fn deploy(&self, ctx: &DeployContext) -> DeployResult<DeployOutput>;
     fn deploy_preview(&self, ctx: &DeployContext) -> DeployResult<DeployOutput>;
 

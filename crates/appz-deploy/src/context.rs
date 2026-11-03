@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::error::DeployResult;
-use crate::exec::{ExecOutput, exec_captured};
+use crate::exec::{ExecOutput, exec_captured, exec_live};
 
 /// Deploy-time settings read from `appz.jsonc`'s `deploy` key — reuses the
 /// same JSONC-with-comments convention as command overrides
@@ -98,6 +98,53 @@ impl DeployContext {
         }
     }
 
+    /// Name to give a new platform project: `project` from this target's
+    /// config in `appz.jsonc`, else `package.json`'s name, else the folder
+    /// name; lowercased to `[a-z0-9-]`.
+    pub fn project_name(&self, slug: &str) -> String {
+        let configured = self
+            .deploy_config
+            .targets
+            .get(slug)
+            .and_then(|t| t.get("project"))
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let from_package = || {
+            let text = std::fs::read_to_string(self.project_dir.join("package.json")).ok()?;
+            let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+            v.get("name")?.as_str().map(String::from)
+        };
+        let dir_name = |p: &Path| {
+            p.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        };
+        let explicit = configured.is_some();
+        let mut raw = configured
+            .or_else(from_package)
+            .unwrap_or_else(|| dir_name(&self.project_dir));
+        // "site", "app", ... say nothing; the parent folder usually does.
+        const GENERIC: [&str; 6] = ["site", "app", "web", "website", "frontend", "client"];
+        if !explicit
+            && GENERIC.contains(&raw.to_lowercase().as_str())
+            && let Some(parent) = self.project_dir.parent()
+            && !dir_name(parent).is_empty()
+        {
+            raw = dir_name(parent);
+        }
+        let slugged: String = raw
+            .to_lowercase()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect();
+        let trimmed = slugged.trim_matches('-');
+        if trimmed.is_empty() {
+            "site".to_string()
+        } else {
+            trimmed.to_string()
+        }
+    }
+
     /// Full path of `bin`, looked up in the same `PATH` the child will get: a
     /// `PATH` the caller put in `run_env`, else the process `PATH`, then
     /// `extra_path`. Falls back to the bare name.
@@ -118,6 +165,28 @@ impl DeployContext {
     /// shell-less spawn cannot find by bare name) still runs; `extra_path` is
     /// also appended to the child's `PATH` (the user's own tools keep priority).
     pub fn exec(&self, bin: &str, args: &[&str], timeout: Duration) -> Result<ExecOutput, String> {
+        self.run(bin, args, timeout, false)
+    }
+
+    /// [`Self::exec`] for the long steps (build, upload): the CLI's output is
+    /// also shown live on stderr, except with `--json` where stdout/stderr
+    /// stay clean for the caller.
+    pub fn exec_live(
+        &self,
+        bin: &str,
+        args: &[&str],
+        timeout: Duration,
+    ) -> Result<ExecOutput, String> {
+        self.run(bin, args, timeout, !self.json_output)
+    }
+
+    fn run(
+        &self,
+        bin: &str,
+        args: &[&str],
+        timeout: Duration,
+        live: bool,
+    ) -> Result<ExecOutput, String> {
         let base_path = self.run_env.get("PATH").map(std::ffi::OsString::from);
         let program = self.resolve(bin);
 
@@ -138,7 +207,8 @@ impl DeployContext {
         }
         let env_refs: Vec<(&str, &str)> =
             env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
-        exec_captured(&program, args, &self.project_dir, &env_refs, timeout)
+        let run = if live { exec_live } else { exec_captured };
+        run(&program, args, &self.project_dir, &env_refs, timeout)
     }
 
     /// Run a provider CLI with the terminal inherited (login flows). Same
@@ -236,6 +306,22 @@ mod tests {
             .expect("should resolve via run_env PATH");
         assert!(out.stdout.contains("ok2"), "{out:?}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_generic_name_is_replaced_only_when_derived_not_when_chosen() {
+        let root = std::env::temp_dir().join(format!("appz-pname-{}", std::process::id()));
+        let dir = root.join("My Site").join("app");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut ctx = DeployContext::new(dir, "dist".into());
+        // Derived from the folder: "app" says nothing, so the parent folder is used.
+        assert_eq!(ctx.project_name("vercel"), "my-site");
+        // Chosen by the user: kept as is.
+        ctx.deploy_config
+            .targets
+            .insert("vercel".into(), serde_json::json!({ "project": "app" }));
+        assert_eq!(ctx.project_name("vercel"), "app");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

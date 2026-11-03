@@ -34,12 +34,36 @@ impl VercelProvider {
             return Ok(DeployOutput::dry_run(self.slug(), is_preview));
         }
 
+        // Pull the linked project's settings; `vercel build` needs them locally.
+        let env_name = if is_preview { "preview" } else { "production" };
+        let pull = ctx
+            .exec_live(
+                "vercel",
+                &["pull", "--yes", "--environment", env_name],
+                DEPLOY_TIMEOUT,
+            )
+            .map_err(|reason| DeployError::DeployFailed {
+                provider: self.name(),
+                reason,
+            })?;
+        if !pull.success {
+            return Err(DeployError::DeployFailed {
+                provider: self.name(),
+                reason: format!(
+                    "vercel pull failed:
+{}
+{}",
+                    pull.stdout, pull.stderr
+                ),
+            });
+        }
+
         let mut build_args = vec!["build"];
         if !is_preview {
             build_args.push("--prod");
         }
         let build = ctx
-            .exec("vercel", &build_args, DEPLOY_TIMEOUT)
+            .exec_live("vercel", &build_args, DEPLOY_TIMEOUT)
             .map_err(|reason| DeployError::DeployFailed {
                 provider: self.name(),
                 reason,
@@ -56,7 +80,7 @@ impl VercelProvider {
             deploy_args.push("--prod");
         }
         let deploy = ctx
-            .exec("vercel", &deploy_args, DEPLOY_TIMEOUT)
+            .exec_live("vercel", &deploy_args, DEPLOY_TIMEOUT)
             .map_err(|reason| DeployError::DeployFailed {
                 provider: self.name(),
                 reason,
@@ -79,6 +103,10 @@ impl VercelProvider {
             created_at: Some(chrono::Utc::now()),
             duration_ms: Some(start.elapsed().as_millis() as u64),
             auth: None,
+            setup_files: Vec::new(),
+            cli_missing: false,
+            link_needed: false,
+            unchanged: false,
         })
     }
 }
@@ -117,6 +145,45 @@ impl DeployProvider for VercelProvider {
             });
         }
         Ok(PrerequisiteStatus::Ready)
+    }
+
+    fn is_linked(&self, ctx: &DeployContext) -> bool {
+        let has = |k: &str| ctx.run_env.contains_key(k) || std::env::var_os(k).is_some();
+        // The id variables pin the project outright.
+        if has("VERCEL_ORG_ID") && has("VERCEL_PROJECT_ID") {
+            return true;
+        }
+        let Ok(text) = std::fs::read_to_string(ctx.project_dir.join(".vercel/project.json")) else {
+            return false;
+        };
+        // A project the user named explicitly (--project / appz.jsonc) must be
+        // the linked one: pull, build and deploy all use the link, so a link
+        // to another project would publish there (even with --prod).
+        let wanted = ctx
+            .deploy_config
+            .targets
+            .get(self.slug())
+            .and_then(|t| t.get("project"))
+            .and_then(|v| v.as_str());
+        match wanted {
+            None => true,
+            Some(name) => serde_json::from_str::<serde_json::Value>(&text)
+                .ok()
+                .and_then(|v| v.get("projectName")?.as_str().map(str::to_lowercase))
+                .is_some_and(|linked| linked == name.to_lowercase()),
+        }
+    }
+
+    fn link_args(&self, ctx: &DeployContext, interactive: bool) -> Option<Vec<String>> {
+        if interactive {
+            return Some(vec!["link".into()]);
+        }
+        Some(vec![
+            "link".into(),
+            "--yes".into(),
+            "--project".into(),
+            ctx.project_name(self.slug()),
+        ])
     }
 
     fn detect_config(&self, project_dir: &Path) -> DeployResult<Option<DetectedConfig>> {
@@ -207,11 +274,18 @@ impl DeployProvider for VercelProvider {
 /// inspect/status URL before the deploy URL) and returns `None` — never a
 /// guessed URL like `https://{dirname}.vercel.app` — if nothing matches.
 fn extract_deploy_url(stdout: &str) -> Option<String> {
-    stdout
-        .lines()
-        .map(str::trim)
-        .rfind(|line| line.starts_with("https://"))
-        .map(str::to_string)
+    // Find `https://...` tokens anywhere (bare line, or inside the JSON the
+    // CLI prints when it has no terminal). Dashboard/inspect links on
+    // vercel.com are not the deployment, so they only count as a last resort.
+    let urls: Vec<&str> = stdout
+        .split(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | ',' | '<' | '>' | '(' | ')'))
+        .filter(|t| t.starts_with("https://"))
+        .collect();
+    let is_dashboard = |u: &&str| u.starts_with("https://vercel.com/");
+    urls.iter()
+        .rfind(|u| !is_dashboard(u))
+        .or_else(|| urls.last())
+        .map(|u| u.trim_end_matches(['.', ';']).to_string())
 }
 
 #[cfg(test)]
@@ -230,8 +304,64 @@ mod tests {
     }
 
     #[test]
+    fn finds_the_url_inside_json_output() {
+        let stdout = r#"{"status":"ok","deployment":{"url":"https://site-abc.vercel.app","inspectorUrl":"https://vercel.com/acme/site/abc"}}"#;
+        assert_eq!(
+            extract_deploy_url(stdout),
+            Some("https://site-abc.vercel.app".to_string())
+        );
+    }
+
+    #[test]
     fn returns_none_instead_of_fabricating_a_url() {
         let stdout = "Deploying...\nDone.\n";
         assert_eq!(extract_deploy_url(stdout), None);
+    }
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::*;
+
+    fn linked_dir(name: &str) -> (std::path::PathBuf, DeployContext) {
+        let dir =
+            std::env::temp_dir().join(format!("appz-vercel-link-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".vercel")).unwrap();
+        std::fs::write(
+            dir.join(".vercel/project.json"),
+            r#"{"projectId":"prj_1","orgId":"team_1","projectName":"Alpha"}"#,
+        )
+        .unwrap();
+        let ctx = DeployContext::new(dir.clone(), "dist".into());
+        (dir, ctx)
+    }
+
+    #[test]
+    fn an_existing_link_counts_when_no_project_was_named() {
+        let (dir, ctx) = linked_dir("any");
+        assert!(VercelProvider.is_linked(&ctx));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_named_project_must_be_the_linked_one() {
+        let (dir, mut ctx) = linked_dir("named");
+        let set = |ctx: &mut DeployContext, p: &str| {
+            ctx.deploy_config
+                .targets
+                .insert("vercel".into(), serde_json::json!({ "project": p }));
+        };
+        set(&mut ctx, "alpha");
+        assert!(
+            VercelProvider.is_linked(&ctx),
+            "same project, case-insensitive"
+        );
+        set(&mut ctx, "beta");
+        assert!(
+            !VercelProvider.is_linked(&ctx),
+            "a link to another project must not satisfy --project beta"
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

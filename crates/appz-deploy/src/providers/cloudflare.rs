@@ -48,12 +48,12 @@ impl CloudflareProvider {
         } else {
             &["deploy"]
         };
-        let deploy =
-            ctx.exec(bin, args, DEPLOY_TIMEOUT)
-                .map_err(|reason| DeployError::DeployFailed {
-                    provider: self.name(),
-                    reason,
-                })?;
+        let deploy = ctx.exec_live(bin, args, DEPLOY_TIMEOUT).map_err(|reason| {
+            DeployError::DeployFailed {
+                provider: self.name(),
+                reason,
+            }
+        })?;
         if !deploy.success {
             return Err(DeployError::DeployFailed {
                 provider: self.name(),
@@ -74,6 +74,10 @@ impl CloudflareProvider {
             created_at: Some(chrono::Utc::now()),
             duration_ms: Some(start.elapsed().as_millis() as u64),
             auth: None,
+            setup_files: Vec::new(),
+            cli_missing: false,
+            link_needed: false,
+            unchanged: false,
         })
     }
 }
@@ -141,6 +145,25 @@ impl DeployProvider for CloudflareProvider {
             }));
         }
         Ok(None)
+    }
+
+    /// A static-assets Worker config over the build output, so a plain static
+    /// site deploys without the user writing wrangler config first.
+    fn setup_files(&self, ctx: &DeployContext) -> DeployResult<Vec<(String, String)>> {
+        if self.detect_config(&ctx.project_dir)?.is_some() {
+            return Ok(Vec::new());
+        }
+        let config = serde_json::json!({
+            "name": ctx.project_name(self.slug()),
+            "compatibility_date": chrono::Utc::now().format("%Y-%m-%d").to_string(),
+            "assets": { "directory": format!("./{}", ctx.output_dir) },
+        });
+        Ok(vec![(
+            "wrangler.jsonc".to_string(),
+            serde_json::to_string_pretty(&config)?
+                + "
+",
+        )])
     }
 
     fn deploy(&self, ctx: &DeployContext) -> DeployResult<DeployOutput> {
@@ -215,6 +238,31 @@ mod tests {
 
         assert!(CloudflareProvider.detect_config(&dir).unwrap().is_none());
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod setup_tests {
+    use super::*;
+
+    #[test]
+    fn writes_a_static_assets_config_only_when_none_exists() {
+        let dir = std::env::temp_dir().join(format!("appz-cf-setup-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("package.json"), r#"{"name":"My Site"}"#).unwrap();
+        let ctx = DeployContext::new(dir.clone(), "dist".into());
+
+        let files = CloudflareProvider.setup_files(&ctx).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].0, "wrangler.jsonc");
+        let v: serde_json::Value = serde_json::from_str(&files[0].1).unwrap();
+        assert_eq!(v["name"], "my-site");
+        assert_eq!(v["assets"]["directory"], "./dist");
+
+        std::fs::write(dir.join("wrangler.jsonc"), "{}").unwrap();
+        assert!(CloudflareProvider.setup_files(&ctx).unwrap().is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -64,6 +64,18 @@ pub struct DeployArg {
     /// Show what would be deployed without deploying.
     #[serde(default)]
     pub dry_run: bool,
+    /// Platform project name to create or link (otherwise derived from the
+    /// project). Only used when the project is not linked yet.
+    #[serde(default)]
+    pub project: Option<String>,
+    /// Permit installing the missing platform CLI (through mise) and
+    /// creating/linking the platform project. Set only after the user has
+    /// agreed; the default fails with the step that is needed.
+    #[serde(default)]
+    pub allow_setup: bool,
+    /// Deploy even if nothing changed since the last deploy of this target.
+    #[serde(default)]
+    pub force: bool,
 }
 
 #[derive(Clone)]
@@ -200,20 +212,31 @@ impl AppzServer {
     }
 
     #[tool(
-        description = "Deploy a project to a hosting platform (vercel|netlify|cloudflare) by driving that platform's own CLI; the target is detected from project files when not given. Returns JSON with the deployment URL — `null` if it couldn't be confirmed from the CLI's output, never a guessed URL."
+        description = "Deploy a project to a hosting platform (vercel|netlify|cloudflare) by driving that platform's own CLI; the target is detected from project files when not given. If nothing changed since the last deploy it skips (unchanged=true, previous url) unless force=true. Returns JSON with the deployment URL — `null` if it couldn't be confirmed from the CLI's output, never a guessed URL. On a fresh project it can fail naming a missing step (CLI not installed, project not linked): retry with allow_setup=true once the user agrees (optionally project=<name>). Sign-in needs the platform token in the environment or stored with `appz env set`; the tool cannot log in."
     )]
     fn deploy(&self, Parameters(arg): Parameters<DeployArg>) -> Result<CallToolResult, McpError> {
         let root = Self::resolve(&arg.dir);
+        let setup = if arg.allow_setup {
+            crate::deploy::Consent::Yes
+        } else {
+            crate::deploy::Consent::Never
+        };
         let req = crate::deploy::DeployRequest {
             target: arg.target,
+            project: arg.project,
+            force: arg.force,
             prod: arg.prod,
             env: vec![],
             build_env: vec![],
             dry_run: arg.dry_run,
             json: true,
-            // An agent must not trigger software installs; it gets the install command.
-            install: crate::deploy::Consent::Never,
+            // An agent installs software / creates platform projects only when
+            // told to (`allow_setup`); otherwise it gets the step that is needed.
+            // Login needs a browser, so an agent supplies a token instead
+            // (`appz env set VERCEL_TOKEN`, or the variable in the environment).
+            install: setup,
             login: crate::deploy::Consent::Never,
+            link: setup,
         };
         match crate::deploy::run(&root, req) {
             Ok(output) => {

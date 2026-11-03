@@ -1,0 +1,151 @@
+# Data-driven deploy providers: platforms appz drives through their own CLI,
+# described here instead of one Rust struct each. Vercel, Netlify and Cloudflare
+# are native providers (they need link/pull/config logic) and are not listed.
+#
+# Ported from the old appz deployer blueprints, but only what could be
+# checked, and with these rules:
+#   * `preview` and `production` are explicit lists of steps. A platform with
+#     no `preview` has no preview deploys: `appz deploy` (preview by default)
+#     fails and says to pass --prod. It is never turned into a production deploy.
+#   * A step is an argv list. Nothing goes through a shell, so no quoting,
+#     chaining or injection. `{{key}}` is replaced inside an argument from
+#     `deploy.targets.<slug>` in appz.jsonc, then `config` defaults below, plus
+#     the built-in `{{output_dir}}`. The process environment is never used.
+#   * `required` keys must be set (non-empty) or the deploy stops and names the
+#     appz.jsonc key to set.
+#   * Tokens are never config: they come from `token_env` (environment or
+#     `appz env set`).
+#   * `mise` is the mise tool spec used to install the CLI. Empty means appz
+#     cannot install it for you and shows `install_hint` instead.
+#   * `detect` lists only files that clearly mean "this project deploys here".
+#
+# Not ported (see the PR): aws-amplify, gitlab-pages, google-cloud, heroku,
+# render, zeabur, zerops.
+
+[[provider]]
+slug = "fly"
+name = "Fly.io"
+cli = "flyctl"
+mise = "flyctl"
+install_hint = "curl -L https://fly.io/install.sh | sh"
+token_env = "FLY_API_TOKEN"
+login = ["auth", "login"]
+login_hint = "flyctl auth login"
+whoami = ["auth", "whoami"]
+detect = ["fly.toml"]
+required = ["app"]
+production = [["flyctl", "deploy", "--app", "{{app}}"]]
+
+[[provider]]
+slug = "firebase"
+name = "Firebase Hosting"
+cli = "firebase"
+mise = "npm:firebase-tools"
+install_hint = "npm install -g firebase-tools"
+token_env = "FIREBASE_TOKEN"
+login = ["login"]
+login_hint = "firebase login"
+detect = ["firebase.json"]
+required = ["project"]
+preview = [["firebase", "hosting:channel:deploy", "preview", "--project", "{{project}}"]]
+production = [["firebase", "deploy", "--only", "hosting", "--project", "{{project}}"]]
+
+[[provider]]
+slug = "deno-deploy"
+name = "Deno Deploy"
+cli = "deployctl"
+mise = ""
+install_hint = "deno install -gArf jsr:@deno/deployctl"
+token_env = "DENO_DEPLOY_TOKEN"
+login_hint = "set DENO_DEPLOY_TOKEN (https://dash.deno.com/account#access-tokens)"
+required = ["project"]
+preview = [["deployctl", "deploy", "--project={{project}}", "{{entry_point}}"]]
+production = [["deployctl", "deploy", "--project={{project}}", "--prod", "{{entry_point}}"]]
+[provider.config]
+entry_point = "main.ts"
+
+[[provider]]
+slug = "azure-static"
+name = "Azure Static Web Apps"
+cli = "swa"
+mise = "npm:@azure/static-web-apps-cli"
+install_hint = "npm install -g @azure/static-web-apps-cli"
+token_env = "SWA_CLI_DEPLOYMENT_TOKEN"
+login = ["login"]
+login_hint = "swa login (or set SWA_CLI_DEPLOYMENT_TOKEN)"
+detect = ["staticwebapp.config.json", "swa-cli.config.json"]
+preview = [["swa", "deploy", "{{output_dir}}", "--env", "preview"]]
+production = [["swa", "deploy", "{{output_dir}}", "--env", "production"]]
+
+[[provider]]
+slug = "aws-s3"
+name = "AWS S3"
+cli = "aws"
+mise = "aws-cli"
+install_hint = "https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html"
+token_env = "AWS_ACCESS_KEY_ID"
+login = ["configure"]
+login_hint = "aws configure (or set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY)"
+whoami = ["sts", "get-caller-identity"]
+required = ["bucket"]
+# `--delete` removes bucket objects that are not in the build output, which is
+# what a site sync means. appz refuses to run it when the output is missing or
+# empty. No cache-control is set (the old blueprint marked every file,
+# index.html included, immutable for a year).
+production = [["aws", "s3", "sync", "{{output_dir}}", "s3://{{bucket}}/{{prefix}}", "--region", "{{region}}", "--delete"]]
+[provider.config]
+region = "us-east-1"
+prefix = ""
+
+[[provider]]
+slug = "aws-sst"
+name = "SST (AWS)"
+cli = "sst"
+mise = "sst"
+install_hint = "https://sst.dev/docs/reference/cli"
+token_env = "AWS_ACCESS_KEY_ID"
+login_hint = "aws configure (or set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY)"
+detect = ["sst.config.ts", "sst.config.mjs"]
+preview = [["sst", "deploy", "--stage", "{{preview_stage}}"]]
+production = [["sst", "deploy", "--stage", "{{stage}}"]]
+[provider.config]
+preview_stage = "preview"
+stage = "production"
+
+[[provider]]
+slug = "railway"
+name = "Railway"
+cli = "railway"
+mise = "railway"
+install_hint = "npm install -g @railway/cli"
+token_env = "RAILWAY_TOKEN"
+login = ["login"]
+login_hint = "railway login"
+detect = ["railway.toml", "railway.json"]
+required = ["service"]
+production = [["railway", "up", "--service", "{{service}}"]]
+
+[[provider]]
+slug = "surge"
+name = "Surge"
+cli = "surge"
+mise = "npm:surge"
+install_hint = "npm install -g surge"
+token_env = "SURGE_TOKEN"
+login = ["login"]
+login_hint = "surge login"
+whoami = ["whoami"]
+required = ["domain"]
+production = [["surge", "{{output_dir}}", "{{domain}}"]]
+
+[[provider]]
+slug = "github-pages"
+name = "GitHub Pages"
+cli = "gh-pages"
+mise = "npm:gh-pages"
+install_hint = "npm install -g gh-pages"
+# gh-pages pushes the build output to the gh-pages branch of `origin` with your
+# git credentials, so there is no token variable to check.
+token_env = ""
+login_hint = "make sure `git push` to origin works"
+production = [["gh-pages", "-d", "{{output_dir}}"]]

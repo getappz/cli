@@ -98,6 +98,15 @@ impl DeployContext {
         }
     }
 
+    /// Full path of `bin`, looked up in the same `PATH` the child will get: a
+    /// `PATH` the caller put in `run_env`, else the process `PATH`, then
+    /// `extra_path`. Falls back to the bare name.
+    fn resolve(&self, bin: &str) -> String {
+        let base = self.run_env.get("PATH").map(std::ffi::OsString::from);
+        command::shell::find_command_with_paths(bin, base.as_deref(), &self.extra_path)
+            .map_or_else(|| bin.to_string(), |p| p.to_string_lossy().into_owned())
+    }
+
     /// Run a provider CLI non-interactively, arg-vector (no shell), capturing
     /// output with a timeout. `run_env` is always injected on top of the
     /// inherited process environment (auth tokens flow through env, never as
@@ -109,8 +118,8 @@ impl DeployContext {
     /// shell-less spawn cannot find by bare name) still runs; `extra_path` is
     /// also appended to the child's `PATH` (the user's own tools keep priority).
     pub fn exec(&self, bin: &str, args: &[&str], timeout: Duration) -> Result<ExecOutput, String> {
-        let program = command::shell::find_command_with_paths(bin, &self.extra_path)
-            .map_or_else(|| bin.to_string(), |p| p.to_string_lossy().into_owned());
+        let base_path = self.run_env.get("PATH").map(std::ffi::OsString::from);
+        let program = self.resolve(bin);
 
         let mut env: Vec<(String, String)> = self
             .run_env
@@ -118,7 +127,10 @@ impl DeployContext {
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         if !self.extra_path.is_empty() {
-            let current = std::env::var_os("PATH").unwrap_or_default();
+            let current = base_path
+                .clone()
+                .or_else(|| std::env::var_os("PATH"))
+                .unwrap_or_default();
             let all = std::env::split_paths(&current).chain(self.extra_path.iter().cloned());
             if let Ok(joined) = std::env::join_paths(all) {
                 env.push(("PATH".into(), joined.to_string_lossy().into_owned()));
@@ -133,8 +145,7 @@ impl DeployContext {
     /// binary resolution and `PATH` handling as [`Self::exec`]. `Ok(true)` when
     /// it exited successfully.
     pub fn exec_interactive(&self, bin: &str, args: &[&str]) -> Result<bool, String> {
-        let program = command::shell::find_command_with_paths(bin, &self.extra_path)
-            .map_or_else(|| bin.to_string(), |p| p.to_string_lossy().into_owned());
+        let program = self.resolve(bin);
         let mut cmd = command::Command::new(&program);
         cmd.args(args.iter().copied())
             .cwd(&self.project_dir)
@@ -192,6 +203,38 @@ mod tests {
         assert!(out.success, "{out:?}");
         assert!(out.stdout.contains("shim-ok"), "{out:?}");
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A `PATH` the caller sets in `run_env` is the lookup base too, not just
+    /// the child's environment.
+    #[test]
+    fn exec_resolves_against_a_path_set_in_run_env() {
+        let dir = std::env::temp_dir().join(format!("appz-deploy-runenv-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        #[cfg(windows)]
+        std::fs::write(dir.join("appz-test-shim2.cmd"), "@echo off\r\necho ok2\r\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let p = dir.join("appz-test-shim2");
+            std::fs::write(&p, "#!/bin/sh\necho ok2\n").unwrap();
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let mut ctx = DeployContext::new(dir.clone(), "dist".into());
+        let base = std::env::var_os("PATH").unwrap_or_default();
+        let joined =
+            std::env::join_paths(std::iter::once(dir.clone()).chain(std::env::split_paths(&base)))
+                .unwrap();
+        ctx.run_env
+            .insert("PATH".into(), joined.to_string_lossy().into_owned());
+        ctx.extra_path = vec![std::env::temp_dir()];
+        let out = ctx
+            .exec("appz-test-shim2", &[], Duration::from_secs(10))
+            .expect("should resolve via run_env PATH");
+        assert!(out.stdout.contains("ok2"), "{out:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

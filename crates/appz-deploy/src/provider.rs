@@ -142,7 +142,7 @@ pub fn detect_providers(project_dir: &Path) -> Vec<&'static str> {
 /// CLI also accepts interactive login state (`vercel login`, `wrangler login`)
 /// that we cannot see, so the CLI itself reports an auth failure.
 pub fn ensure_cli_available(p: &dyn DeployProvider, extra: &[PathBuf]) -> DeployResult<()> {
-    match command::shell::find_command_with_paths(p.cli_tool(), extra) {
+    match command::shell::find_command_with_paths(p.cli_tool(), None, extra) {
         Some(_) => Ok(()),
         None => Err(missing_cli(p)),
     }
@@ -171,15 +171,19 @@ pub fn install_cli_with_mise(
     // (through mise too) when it is on neither PATH nor mise's bin dirs.
     let tool = p.mise_tool();
     if tool.starts_with("npm:")
-        && command::shell::find_command_with_paths("node", &appz_core::mise_bin_paths(project_dir))
-            .is_none()
+        && command::shell::find_command_with_paths(
+            "node",
+            None,
+            &appz_core::mise_bin_paths(project_dir),
+        )
+        .is_none()
     {
         eprintln!("installing node (required by {tool}) with mise...");
         appz_core::install_global_tool("node@lts").map_err(fail)?;
     }
     appz_core::install_global_tool(&tool).map_err(fail)?;
     let paths = appz_core::mise_bin_paths(project_dir);
-    if command::shell::find_command_with_paths(p.cli_tool(), &paths).is_none() {
+    if command::shell::find_command_with_paths(p.cli_tool(), None, &paths).is_none() {
         return Err(fail(format!(
             "installed {} but '{}' is not in mise's bin paths",
             p.mise_tool(),

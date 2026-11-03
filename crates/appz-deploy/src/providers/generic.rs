@@ -51,6 +51,8 @@ struct Spec {
     #[serde(default)]
     detect: Vec<String>,
     #[serde(default)]
+    url_hosts: Vec<String>,
+    #[serde(default)]
     required: Vec<String>,
     #[serde(default)]
     config: BTreeMap<String, String>,
@@ -167,6 +169,20 @@ fn render(
         .collect()
 }
 
+/// The deployment URL from the CLI's output: the last `https://` link whose
+/// host ends with one of `hosts`. No hosts, or no match, is `None`; appz never
+/// reports a console, log or docs link as the deployment.
+fn deployment_url(output: &str, hosts: &[String]) -> Option<String> {
+    output
+        .split(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | ',' | '<' | '>' | '(' | ')'))
+        .filter_map(|t| t.strip_prefix("https://").map(|rest| (t, rest)))
+        .rfind(|(_, rest)| {
+            let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+            hosts.iter().any(|h| host.ends_with(h.as_str()))
+        })
+        .map(|(t, _)| t.trim_end_matches(['.', ';']).to_string())
+}
+
 fn uses_output_dir(steps: &[Vec<String>]) -> bool {
     steps.iter().flatten().any(|a| a.contains("{{output_dir}}"))
 }
@@ -253,7 +269,7 @@ impl GenericProvider {
             stdout.push('\n');
         }
 
-        let url = crate::providers::vercel::extract_deploy_url(&stdout);
+        let url = deployment_url(&stdout, &spec.url_hosts);
         Ok(DeployOutput {
             provider: spec.slug.clone(),
             status: if url.is_some() {
@@ -525,6 +541,27 @@ mod tests {
     }
 
     #[test]
+    fn only_a_link_on_the_platforms_own_host_is_the_deployment_url() {
+        let hosts = vec![".web.app".to_string(), ".firebaseapp.com".to_string()];
+        let out = "Hosting URL: https://my-site.web.app
+Project Console: https://console.firebase.google.com/project/x/overview
+";
+        // The console link is last, but it is not the deployment.
+        assert_eq!(
+            deployment_url(out, &hosts).as_deref(),
+            Some("https://my-site.web.app")
+        );
+        // Nothing on a known host, or no hosts configured: no URL, never a guess.
+        assert_eq!(
+            deployment_url("see https://docs.example.com/x", &hosts),
+            None
+        );
+        assert_eq!(deployment_url(out, &[]), None);
+        // A look-alike host does not count.
+        assert_eq!(deployment_url("https://web.app.evil.com/", &hosts), None);
+    }
+
+    #[test]
     fn a_dry_run_validates_config_but_runs_nothing() {
         let dir = temp("dry");
         let mut ctx = configured(&dir, "fly", serde_json::json!({ "app": "my-app" }));
@@ -577,7 +614,15 @@ mod tests {
             std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
         let mut ctx = configured(&dir, "fly", serde_json::json!({ "app": "my-app" }));
-        ctx.extra_path = vec![bin];
+        // First on the PATH used for both lookup and spawn, so a real `flyctl`
+        // on this machine can never be run instead of the fake.
+        let system = std::env::var_os("PATH").unwrap_or_default();
+        let path = std::env::join_paths(
+            std::iter::once(bin.clone()).chain(std::env::split_paths(&system)),
+        )
+        .unwrap();
+        ctx.run_env
+            .insert("PATH".into(), path.to_string_lossy().into_owned());
         let out = provider("fly").deploy(&ctx).expect("deploy runs");
         assert_eq!(out.url.as_deref(), Some("https://my-app.fly.dev"));
         assert_eq!(out.status, DeployStatus::Ready);

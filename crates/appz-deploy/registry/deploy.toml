@@ -17,6 +17,10 @@
 #     `appz env set`).
 #   * `mise` is the mise tool spec used to install the CLI. Empty means appz
 #     cannot install it for you and shows `install_hint` instead.
+#   * `url_hosts` lists host suffixes that mark a printed link as the
+#     deployment URL (the last matching https link in the output). Empty means
+#     the CLI does not print a trustworthy URL and none is reported: other links
+#     in the output (consoles, logs, docs) are never mistaken for the deployment.
 #   * `detect` lists only files that clearly mean "this project deploys here".
 #
 # Not ported (see the PR): aws-amplify, gitlab-pages, google-cloud, heroku,
@@ -33,6 +37,7 @@ login = ["auth", "login"]
 login_hint = "flyctl auth login"
 whoami = ["auth", "whoami"]
 detect = ["fly.toml"]
+url_hosts = [".fly.dev"]
 required = ["app"]
 production = [["flyctl", "deploy", "--app", "{{app}}"]]
 
@@ -46,6 +51,7 @@ token_env = "FIREBASE_TOKEN"
 login = ["login"]
 login_hint = "firebase login"
 detect = ["firebase.json"]
+url_hosts = [".web.app", ".firebaseapp.com"]
 required = ["project"]
 preview = [["firebase", "hosting:channel:deploy", "preview", "--project", "{{project}}"]]
 production = [["firebase", "deploy", "--only", "hosting", "--project", "{{project}}"]]
@@ -58,6 +64,7 @@ mise = ""
 install_hint = "deno install -gArf jsr:@deno/deployctl"
 token_env = "DENO_DEPLOY_TOKEN"
 login_hint = "set DENO_DEPLOY_TOKEN (https://dash.deno.com/account#access-tokens)"
+url_hosts = [".deno.dev", ".deno.net"]
 required = ["project"]
 preview = [["deployctl", "deploy", "--project={{project}}", "{{entry_point}}"]]
 production = [["deployctl", "deploy", "--project={{project}}", "--prod", "{{entry_point}}"]]
@@ -74,6 +81,7 @@ token_env = "SWA_CLI_DEPLOYMENT_TOKEN"
 login = ["login"]
 login_hint = "swa login (or set SWA_CLI_DEPLOYMENT_TOKEN)"
 detect = ["staticwebapp.config.json", "swa-cli.config.json"]
+url_hosts = [".azurestaticapps.net"]
 preview = [["swa", "deploy", "{{output_dir}}", "--env", "preview"]]
 production = [["swa", "deploy", "{{output_dir}}", "--env", "production"]]
 
@@ -135,6 +143,7 @@ token_env = "SURGE_TOKEN"
 login = ["login"]
 login_hint = "surge login"
 whoami = ["whoami"]
+url_hosts = [".surge.sh"]
 required = ["domain"]
 production = [["surge", "{{output_dir}}", "{{domain}}"]]
 

@@ -273,7 +273,7 @@ impl DeployProvider for VercelProvider {
 /// rather than the first (the upstream bug this fixes: some flows print an
 /// inspect/status URL before the deploy URL) and returns `None` — never a
 /// guessed URL like `https://{dirname}.vercel.app` — if nothing matches.
-pub(crate) fn extract_deploy_url(stdout: &str) -> Option<String> {
+fn extract_deploy_url(stdout: &str) -> Option<String> {
     // Find `https://...` tokens anywhere (bare line, or inside the JSON the
     // CLI prints when it has no terminal). Dashboard/inspect links on
     // vercel.com are not the deployment, so they only count as a last resort.

@@ -52,16 +52,18 @@ pub fn load_session(app_name: &str, vault_path: &Path) -> Option<[u8; 32]> {
     keyring_cache::load_from_keyring(app_name, &entry_key)
 }
 
-pub fn store_session(app_name: &str, vault_path: &Path, dek: &[u8; 32]) {
+/// Returns whether the key is now cached (and readable back). `false` means
+/// the OS keyring is unavailable: the vault stays unlocked for this process only.
+pub fn store_session(app_name: &str, vault_path: &Path, dek: &[u8; 32]) -> bool {
     let entry_key = vault_path_hash(vault_path);
 
     // Make sure no weak legacy file lingers, regardless of whether the
     // keyring store below succeeds or fails closed.
     remove_legacy_file_cache(app_name, &entry_key);
 
-    // Result ignored by design: on failure we fail closed (memory-only for
-    // this process). No file fallback — see the module doc comment above.
-    let _ = keyring_cache::store_in_keyring(app_name, &entry_key, dek);
+    // On failure we fail closed (memory-only for this process). No file
+    // fallback — see the module doc comment above.
+    keyring_cache::store_in_keyring(app_name, &entry_key, dek)
 }
 
 pub fn clear_session(app_name: &str, vault_path: &Path) {

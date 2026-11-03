@@ -2,7 +2,7 @@ use crate::crypto::aead::{decrypt_dek, decrypt_value, encrypt_dek, encrypt_value
 use crate::crypto::kdf::{derive_kek, KdfParams};
 use crate::error::{VaultError, VaultResult};
 use crate::session;
-use crate::vault::file::{read_vault_file, vault_file_exists, write_vault_file};
+use crate::vault::file::{create_vault_file, read_vault_file, vault_file_exists, write_vault_file};
 use crate::vault::model::{SecretEntry, VaultBody, VaultFile};
 use chrono::Utc;
 use rand::Rng;
@@ -11,6 +11,8 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 const SALT_SIZE: usize = 32;
 const DEK_SIZE: usize = 32;
+/// Plaintext of `VaultFile::key_check`.
+const KEY_CHECK: &[u8] = b"appz-vault key check v1";
 
 #[derive(ZeroizeOnDrop)]
 pub struct VaultDek {
@@ -87,14 +89,15 @@ pub fn create_vault(path: &Path, passphrase: &str) -> VaultResult<()> {
     let dek = rand::rngs::OsRng.r#gen::<[u8; DEK_SIZE]>();
 
     let blob = encrypt_dek(&dek, &kek.key).map_err(VaultError::Crypto)?;
-    let vault = VaultFile::new(blob.to_bytes(), salt);
+    let mut vault = VaultFile::new(blob.to_bytes(), salt);
+    vault.key_check = encrypt_value(KEY_CHECK, &dek).map_err(VaultError::Crypto)?;
 
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
 
     let json = serde_json::to_string_pretty(&vault)?;
-    write_vault_file(path, json.as_bytes())
+    create_vault_file(path, json.as_bytes())
 }
 
 pub fn open_vault(path: &Path, passphrase: &str) -> VaultResult<VaultDek> {
@@ -120,11 +123,25 @@ pub fn open_vault(path: &Path, passphrase: &str) -> VaultResult<VaultDek> {
     Ok(VaultDek { dek })
 }
 
+/// The cached session key for `path`, if there is one AND it is this file's
+/// key. A vault that was deleted and recreated, or restored from a backup,
+/// has a different DEK than the one the keyring remembers; using the stale
+/// one would write secrets that can never be read back.
 pub fn open_vault_with_dek(path: &Path, app_name: &str) -> VaultResult<VaultDek> {
-    if let Some(dek) = session::load_session(app_name, path) {
-        return Ok(VaultDek { dek });
+    let Some(dek) = session::load_session(app_name, path) else {
+        return Err(VaultError::Locked);
+    };
+    let dek = VaultDek { dek };
+    let vault: VaultFile = serde_json::from_slice(&read_vault_file(path)?)?;
+    // Empty key_check: a vault from before the check existed; nothing to compare.
+    let matches = vault.key_check.is_empty()
+        || decrypt_value(&vault.key_check, &dek.dek).is_ok_and(|p| p == KEY_CHECK);
+    if matches {
+        Ok(dek)
+    } else {
+        session::clear_session(app_name, path);
+        Err(VaultError::Locked)
     }
-    Err(VaultError::Locked)
 }
 
 pub fn read_vault_body(path: &Path) -> VaultResult<VaultBody> {
@@ -207,6 +224,79 @@ pub fn list_secret_names(body: &VaultBody) -> Vec<String> {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    use crate::paths::test_support::with_temp_home;
+
+    /// Runs `f` with an isolated home, the shared in-memory keyring, and a
+    /// vault at a temp path unlocked and cached (`dek` returned for the test).
+    fn with_cached_vault(f: impl FnOnce(&Path, [u8; 32])) {
+        crate::session::with_keyring_env(|| {
+            crate::session::test_support::use_shared_mock_keyring();
+            with_temp_home(|| {
+                let dir = TempDir::new().unwrap();
+                let path = dir.path().join("vault.json");
+                create_vault(&path, "pw").unwrap();
+                let dek = open_vault(&path, "pw").unwrap().dek;
+                assert!(session::store_session("appz-vault-test", &path, &dek));
+                f(&path, dek);
+                session::clear_session("appz-vault-test", &path);
+            });
+        });
+    }
+
+    #[test]
+    fn a_session_key_for_this_vault_is_accepted() {
+        with_cached_vault(|path, dek| {
+            let got = open_vault_with_dek(path, "appz-vault-test").unwrap();
+            assert_eq!(got.dek, dek);
+        });
+    }
+
+    #[test]
+    fn a_stale_session_key_is_rejected_after_the_vault_is_recreated() {
+        with_cached_vault(|path, _| {
+            // Same path, brand-new vault (new DEK): what a delete+recreate or a
+            // restore from backup looks like to the keyring's cached key.
+            std::fs::remove_file(path).unwrap();
+            create_vault(path, "pw").unwrap();
+            assert!(matches!(
+                open_vault_with_dek(path, "appz-vault-test"),
+                Err(VaultError::Locked)
+            ));
+            // ...and the stale entry was dropped, so it is not retried.
+            assert!(session::load_session("appz-vault-test", path).is_none());
+        });
+    }
+
+    #[test]
+    fn a_vault_without_a_key_check_still_accepts_its_session() {
+        with_cached_vault(|path, dek| {
+            let mut vault: VaultFile =
+                serde_json::from_slice(&read_vault_file(path).unwrap()).unwrap();
+            vault.key_check.clear();
+            write_vault_file(path, serde_json::to_string(&vault).unwrap().as_bytes()).unwrap();
+            assert_eq!(
+                open_vault_with_dek(path, "appz-vault-test").unwrap().dek,
+                dek
+            );
+        });
+    }
+
+    #[test]
+    fn creating_over_an_existing_vault_never_replaces_it() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("vault.json");
+        create_vault(&path, "first").unwrap();
+        let before = std::fs::read(&path).unwrap();
+        // The check-then-write race: bypass the existence check and write.
+        let err = crate::vault::file::create_vault_file(&path, b"{}").unwrap_err();
+        assert!(matches!(err, VaultError::AlreadyInitialized(_)));
+        assert!(matches!(
+            create_vault(&path, "second"),
+            Err(VaultError::AlreadyInitialized(_))
+        ));
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
 
     #[test]
     fn create_and_open_vault() {

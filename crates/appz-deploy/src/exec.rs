@@ -29,7 +29,21 @@ pub fn exec_captured(
     env: &[(&str, &str)],
     timeout: Duration,
 ) -> Result<ExecOutput, String> {
-    exec_inner(bin, args, cwd, env, timeout, false)
+    exec_inner(bin, args, cwd, env, "", timeout, false)
+}
+
+/// Like [`exec_captured`], but the child does not inherit any parent
+/// environment variable whose name starts with `scrub_prefix` (e.g. ambient
+/// `RUSTIC_*` settings); only `env` supplies those.
+pub fn exec_captured_scrubbed(
+    bin: &str,
+    args: &[&str],
+    cwd: &Path,
+    env: &[(&str, &str)],
+    scrub_prefix: &str,
+    timeout: Duration,
+) -> Result<ExecOutput, String> {
+    exec_inner(bin, args, cwd, env, scrub_prefix, timeout, false)
 }
 
 /// Like [`exec_captured`], but also copies the child's output to our stderr
@@ -42,7 +56,7 @@ pub fn exec_live(
     env: &[(&str, &str)],
     timeout: Duration,
 ) -> Result<ExecOutput, String> {
-    exec_inner(bin, args, cwd, env, timeout, true)
+    exec_inner(bin, args, cwd, env, "", timeout, true)
 }
 
 /// Drain `pipe` to the end, optionally echoing each chunk to stderr.
@@ -71,6 +85,7 @@ fn exec_inner(
     args: &[&str],
     cwd: &Path,
     env: &[(&str, &str)],
+    scrub_prefix: &str,
     timeout: Duration,
     echo: bool,
 ) -> Result<ExecOutput, String> {
@@ -78,6 +93,13 @@ fn exec_inner(
     cmd.without_shell();
     cmd.args(args.iter().copied());
     cmd.cwd(cwd);
+    if !scrub_prefix.is_empty() {
+        for (k, _) in std::env::vars_os() {
+            if k.to_string_lossy().starts_with(scrub_prefix) {
+                cmd.env_remove(k);
+            }
+        }
+    }
     for (k, v) in env.iter() {
         cmd.env(*k, *v);
     }

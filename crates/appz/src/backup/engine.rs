@@ -34,9 +34,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use appz_core::{ensure_mise, install_global_tool, mise_bin_paths};
-use appz_deploy::exec_captured;
+use appz_deploy::exec_captured_scrubbed;
 
-use crate::deploy::Consent;
+use crate::deploy::{Consent, confirm_mise_install};
 
 /// mise tool spec that provides the `rustic` binary.
 pub const MISE_TOOL: &str = "aqua:rustic-rs/rustic";
@@ -52,9 +52,16 @@ pub fn env_repository() -> Option<PathBuf> {
     non_empty(std::env::var_os(ENV_REPOSITORY)?).map(PathBuf::from)
 }
 
-/// `APPZ_BACKUP_PASSWORD`, when set and non-empty.
-pub fn env_password() -> Option<String> {
-    non_empty(std::env::var_os(ENV_PASSWORD)?).map(|v| v.to_string_lossy().into_owned())
+/// `APPZ_BACKUP_PASSWORD`, when set and non-empty. A value that is not valid
+/// UTF-8 is an error rather than being silently altered into a wrong password.
+pub fn env_password() -> Result<Option<String>, String> {
+    let Some(value) = std::env::var_os(ENV_PASSWORD).and_then(non_empty) else {
+        return Ok(None);
+    };
+    value
+        .into_string()
+        .map(Some)
+        .map_err(|_| format!("{ENV_PASSWORD} is not valid UTF-8"))
 }
 
 fn non_empty(value: std::ffi::OsString) -> Option<std::ffi::OsString> {
@@ -63,9 +70,20 @@ fn non_empty(value: std::ffi::OsString) -> Option<std::ffi::OsString> {
 
 /// Timeout for read-only queries (snapshots/repoinfo).
 const QUERY_TIMEOUT: Duration = Duration::from_secs(30);
-/// Timeout for an actual backup/prune/restore (uploads can legitimately take
-/// minutes).
-const BACKUP_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+/// Default timeout for an actual backup/prune/restore. Generous because a
+/// first backup or a prune of a large repository legitimately runs for hours;
+/// override with [`ENV_TIMEOUT_SECS`] or [`RusticCli::with_timeout`].
+const BACKUP_TIMEOUT: Duration = Duration::from_secs(12 * 60 * 60);
+/// Timeout override (seconds) for backup/prune/restore runs.
+pub const ENV_TIMEOUT_SECS: &str = "APPZ_BACKUP_TIMEOUT_SECS";
+
+fn default_timeout() -> Duration {
+    std::env::var(ENV_TIMEOUT_SECS)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|s| *s > 0)
+        .map_or(BACKUP_TIMEOUT, Duration::from_secs)
+}
 
 /// Output of one rustic invocation.
 #[derive(Debug, Clone)]
@@ -116,40 +134,45 @@ pub trait Rustic {
 }
 
 /// One repository, one password, one working directory.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RusticCli {
-    bin: Option<PathBuf>,
+    bin: PathBuf,
     repo: PathBuf,
     password: String,
     cwd: PathBuf,
     timeout: Duration,
 }
 
+// The password must never reach logs: print everything else.
+impl std::fmt::Debug for RusticCli {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RusticCli")
+            .field("bin", &self.bin)
+            .field("repo", &self.repo)
+            .field("password", &"<redacted>")
+            .field("cwd", &self.cwd)
+            .field("timeout", &self.timeout)
+            .finish()
+    }
+}
+
 impl RusticCli {
-    /// Build a client, resolving the binary now. A missing binary is not an
-    /// error here: [`Rustic::run`] reports [`EngineError::Missing`], so
-    /// callers that only read `--help`-less metadata can still be constructed.
+    /// Build a client around an already-resolved binary (see
+    /// [`ensure_installed`]). A binary that turns out not to exist is
+    /// reported by [`Rustic::run`] as [`EngineError::Missing`].
     pub fn new(
+        bin: impl Into<PathBuf>,
         repo: impl Into<PathBuf>,
         password: impl Into<String>,
         cwd: impl Into<PathBuf>,
     ) -> Self {
-        let cwd = cwd.into();
-        let bin = find_rustic(&cwd);
         Self {
-            bin,
+            bin: bin.into(),
             repo: repo.into(),
             password: password.into(),
-            cwd,
-            timeout: BACKUP_TIMEOUT,
+            cwd: cwd.into(),
+            timeout: default_timeout(),
         }
-    }
-
-    /// Override the resolved binary (tests, and callers that already know
-    /// where mise put rustic).
-    pub fn with_bin(mut self, bin: impl Into<PathBuf>) -> Self {
-        self.bin = Some(bin.into());
-        self
     }
 
     /// Use the short timeout reserved for read-only queries.
@@ -167,11 +190,12 @@ impl RusticCli {
     /// The executable, repository and environment for one invocation.
     /// Exposed so tests can prove the password never becomes an argument.
     ///
-    /// The child only sees `RUSTIC_*`: those are the names rustic reads. The
-    /// appz-facing names ([`ENV_REPOSITORY`], [`ENV_PASSWORD`]) are resolved
-    /// before construction.
+    /// rustic reads `RUSTIC_*`. The appz-facing names ([`ENV_REPOSITORY`],
+    /// [`ENV_PASSWORD`]) are resolved before construction, and any ambient
+    /// `RUSTIC_*` variable is scrubbed from the child (see [`SCRUB_PREFIX`]),
+    /// so only the repository and password set here reach rustic.
     fn invocation(&self, args: &[&str]) -> (PathBuf, Vec<String>, Vec<(&'static str, String)>) {
-        let bin = self.bin.clone().unwrap_or_else(|| PathBuf::from("rustic"));
+        let bin = self.bin.clone();
         let mut all = Vec::with_capacity(args.len() + 1);
         all.push("--no-progress".to_string());
         all.extend(args.iter().map(|a| (*a).to_string()));
@@ -186,15 +210,22 @@ impl RusticCli {
     }
 
     fn run_inner(&self, args: &[&str]) -> Result<RunOut, EngineError> {
+        if !self.cwd.is_dir() {
+            return Err(EngineError::Failed(format!(
+                "working directory {} does not exist",
+                self.cwd.display()
+            )));
+        }
         let (bin, all, env) = self.invocation(args);
         let borrowed: Vec<(&str, &str)> = env.iter().map(|(k, v)| (*k, v.as_str())).collect();
         let arg_refs: Vec<&str> = all.iter().map(String::as_str).collect();
 
-        let out = exec_captured(
+        let out = exec_captured_scrubbed(
             &bin.to_string_lossy(),
             &arg_refs,
             &self.cwd,
             &borrowed,
+            SCRUB_PREFIX,
             self.timeout,
         )
         .map_err(|e| {
@@ -222,6 +253,9 @@ impl Rustic for RusticCli {
     }
 }
 
+/// Ambient variables with this prefix are removed from the child's environment.
+const SCRUB_PREFIX: &str = "RUSTIC_";
+
 /// Classify a non-zero exit from rustic's own output.
 fn classify(stderr: &str, stdout: &str, code: Option<i32>) -> EngineError {
     let combined = format!("{stderr}\n{stdout}");
@@ -233,7 +267,13 @@ fn classify(stderr: &str, stdout: &str, code: Option<i32>) -> EngineError {
     {
         return EngineError::WrongPassword;
     }
-    if lower.contains("locked") || lower.contains("repository is in use") {
+    // stderr only, and anchored to rustic's wording: a bare "locked" would
+    // also match "blocked by firewall" or a path/tag that contains it.
+    let stderr_lower = stderr.to_lowercase();
+    if stderr_lower.contains(" is locked")
+        || stderr_lower.contains(" locked by ")
+        || stderr_lower.contains("repository is in use")
+    {
         return EngineError::Locked;
     }
 
@@ -252,31 +292,19 @@ fn classify(stderr: &str, stdout: &str, code: Option<i32>) -> EngineError {
 fn looks_like_missing_binary(message: &str) -> bool {
     let lower = message.to_lowercase();
     lower.contains("os error 2")
-        || lower.contains("cannot find the file")
+        // Windows reports ERROR_PATH_NOT_FOUND (3) when the directory part of
+        // the path does not exist, and ERROR_FILE_NOT_FOUND (2) only for a
+        // missing leaf — a "rustic not installed" case hits either.
+        || lower.contains("os error 3")
+        || lower.contains("cannot find the")
         || lower.contains("no such file")
         || lower.contains("not found")
 }
 
-/// Whether `rustic` can be spawned from `dir`: either it is on PATH, or mise
-/// installed it into one of its bin dirs (shims are not always activated).
+/// Locate `rustic` on PATH or in mise's bin dirs (shims are not always
+/// activated), with the same lookup `appz deploy` uses for platform CLIs.
 pub fn find_rustic(dir: &Path) -> Option<PathBuf> {
-    let on_path = command::Command::new("rustic")
-        .arg("--version")
-        .without_shell()
-        .set_error_on_nonzero(false)
-        .cwd(dir)
-        .exec()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-    if on_path {
-        return Some(PathBuf::from("rustic"));
-    }
-
-    let exe = format!("rustic{}", std::env::consts::EXE_SUFFIX);
-    mise_bin_paths(dir).into_iter().find_map(|bin_dir| {
-        let candidate = bin_dir.join(&exe);
-        candidate.is_file().then_some(candidate)
-    })
+    command::shell::find_command_with_paths("rustic", None, &mise_bin_paths(dir))
 }
 
 /// Return a usable `rustic` path, installing it through mise first when it is
@@ -288,29 +316,13 @@ pub fn ensure_installed(project_dir: &Path, install: Consent) -> Result<PathBuf,
         return Ok(bin);
     }
 
-    match install {
-        Consent::Never => {
-            return Err(format!(
-                "rustic is not installed. Install it with `mise use -g {MISE_TOOL}`, or re-run with --yes to install it"
-            ));
-        }
-        Consent::Ask => {
-            let prompt = format!("rustic is not installed. Install {MISE_TOOL} with mise?");
-            if !cliclack::confirm(prompt)
-                .initial_value(true)
-                .interact()
-                .unwrap_or(false)
-            {
-                return Err(format!(
-                    "rustic is not installed. Install it with `mise use -g {MISE_TOOL}`"
-                ));
-            }
-        }
-        Consent::Yes => {}
-    }
-
+    confirm_mise_install(
+        install,
+        "rustic",
+        MISE_TOOL,
+        &format!("rustic is not installed. Install it with `mise use -g {MISE_TOOL}`"),
+    )?;
     ensure_mise(project_dir)?;
-    eprintln!("installing {MISE_TOOL} with mise...");
     install_global_tool(MISE_TOOL)?;
 
     find_rustic(project_dir).ok_or_else(|| {
@@ -324,7 +336,12 @@ mod tests {
     use super::*;
 
     fn cli() -> RusticCli {
-        RusticCli::new("C:/repos/abc", "hunter2", "C:/project").with_bin("C:/fake/rustic.exe")
+        RusticCli::new(
+            "C:/fake/rustic.exe",
+            "C:/repos/abc",
+            "hunter2",
+            "C:/project",
+        )
     }
 
     #[test]
@@ -390,8 +407,44 @@ mod tests {
 
     #[test]
     fn missing_binary_is_missing_not_a_generic_failure() {
-        let cli = RusticCli::new("C:/repos/abc", "pw", "C:/project")
-            .with_bin("C:/definitely/not/here/rustic-xyz.exe");
+        let cwd = std::env::current_dir().unwrap();
+        let cli = RusticCli::new(
+            "C:/definitely/not/here/rustic-xyz.exe",
+            "C:/repos/abc",
+            "pw",
+            cwd,
+        );
         assert!(matches!(cli.run(&["snapshots"]), Err(EngineError::Missing)));
+    }
+
+    #[test]
+    fn a_missing_working_directory_is_not_reported_as_a_missing_binary() {
+        let cli = RusticCli::new("rustic", "C:/repos/abc", "pw", "C:/no/such/project/dir");
+        match cli.run(&["snapshots"]) {
+            Err(EngineError::Failed(msg)) => assert!(msg.contains("does not exist"), "{msg}"),
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lock_detection_ignores_look_alike_words() {
+        for stderr in ["access blocked by firewall", "tag unlocked-release failed"] {
+            assert!(
+                matches!(classify(stderr, "", Some(1)), EngineError::Failed(_)),
+                "{stderr}"
+            );
+        }
+        // stdout (snapshot tags, paths) is never scanned for locks.
+        assert!(matches!(
+            classify("boom", "tag: repository is locked by me", Some(1)),
+            EngineError::Failed(_)
+        ));
+    }
+
+    #[test]
+    fn debug_output_redacts_the_password() {
+        let shown = format!("{:?}", cli());
+        assert!(!shown.contains("hunter2"), "{shown}");
+        assert!(shown.contains("<redacted>"));
     }
 }

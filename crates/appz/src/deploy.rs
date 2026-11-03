@@ -42,48 +42,41 @@ pub struct DeployRequest {
     pub link: Consent,
 }
 
-/// The project is not linked to a platform project: create/link one if the
-/// policy (or the user, when asked) allows, else fail with the way out.
+/// The project is not linked to a platform project: link it if the policy
+/// (or the user, when asked) allows, else fail with the way out. In a
+/// terminal with no `--project`, the platform CLI runs its own link flow
+/// (scope, project name, ...) so appz follows what that CLI does.
 fn ensure_linked(
     p: &dyn DeployProvider,
-    ctx: &mut DeployContext,
+    ctx: &DeployContext,
     consent: Consent,
+    named: bool,
 ) -> Result<(), String> {
     if p.is_linked(ctx) {
         return Ok(());
     }
-    let mut name = ctx.project_name(p.slug());
-    match consent {
+    let name = ctx.project_name(p.slug());
+    let interactive = match consent {
         Consent::Never => {
             return Err(format!(
-                "{}: no project linked. Re-run with --yes to create/link '{name}', or set the platform's project id variables",
+                "{}: no project linked. Re-run with --yes to create/link '{name}' (or --project <name>), or set the platform's project id variables",
                 p.name()
             ));
         }
-        Consent::Ask => {
-            // The derived name is only a suggestion; the user picks.
-            name = cliclack::input(format!(
-                "No {} project is linked. Name of the project to create or link?",
-                p.name()
-            ))
-            .default_input(&name)
-            .interact::<String>()
-            .map_err(|e| e.to_string())?;
-            if name.trim().is_empty() {
-                return Err(format!("{}: no project linked", p.name()));
-            }
-        }
-        Consent::Yes => {}
+        Consent::Ask => !named,
+        Consent::Yes => false,
+    };
+    if interactive {
+        eprintln!("linking with `{} link`...", p.cli_tool());
+    } else {
+        eprintln!("linking {} project '{name}'...", p.name());
     }
-    // Remember the choice for this run (link_args reads it back).
-    let target = ctx
-        .deploy_config
-        .targets
-        .entry(p.slug().to_string())
-        .or_insert_with(|| serde_json::json!({}));
-    target["project"] = serde_json::Value::String(name.trim().to_string());
-    eprintln!("linking {} project '{}'...", p.name(), name.trim());
-    p.link(ctx).map_err(|e| e.to_string())
+    p.link(ctx, interactive).map_err(|e| e.to_string())?;
+    if p.is_linked(ctx) {
+        Ok(())
+    } else {
+        Err(format!("{}: project was not linked", p.name()))
+    }
 }
 
 /// The CLI was not found on `PATH` or in mise's bin dirs: install it through
@@ -259,7 +252,7 @@ pub fn run(project_dir: &Path, req: DeployRequest) -> Result<DeployOutput, Strin
 
     if !req.dry_run {
         ensure_authenticated(provider.as_ref(), &ctx, req.login)?;
-        ensure_linked(provider.as_ref(), &mut ctx, req.link)?;
+        ensure_linked(provider.as_ref(), &ctx, req.link, req.project.is_some())?;
     }
 
     // Platform config the project lacks (e.g. wrangler.jsonc, netlify.toml):

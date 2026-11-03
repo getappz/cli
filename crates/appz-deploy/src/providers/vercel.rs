@@ -152,7 +152,10 @@ impl DeployProvider for VercelProvider {
             || ctx.project_dir.join(".vercel/project.json").exists()
     }
 
-    fn link_args(&self, ctx: &DeployContext) -> Option<Vec<String>> {
+    fn link_args(&self, ctx: &DeployContext, interactive: bool) -> Option<Vec<String>> {
+        if interactive {
+            return Some(vec!["link".into()]);
+        }
         Some(vec![
             "link".into(),
             "--yes".into(),

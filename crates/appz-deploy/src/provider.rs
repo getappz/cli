@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use crate::context::DeployContext;
 use crate::error::{DeployError, DeployResult};
-use crate::output::{DeployOutput, DeploymentInfo, DetectedConfig, PrerequisiteStatus};
+use crate::output::{AuthState, DeployOutput, DeploymentInfo, DetectedConfig, PrerequisiteStatus};
 
 /// Timeout for the actual deploy invocation (platform CLIs can legitimately
 /// take minutes to build+upload).
@@ -31,6 +31,50 @@ pub trait DeployProvider: Send + Sync {
     /// mise tool spec used to install this provider's CLI (`appz deploy --yes`).
     fn mise_tool(&self) -> String {
         format!("npm:{}", self.install_package())
+    }
+    /// Args for a read-only "am I signed in" probe. Only its exit code is
+    /// used: its output can contain the account email and is never logged.
+    fn whoami_args(&self) -> &'static [&'static str];
+    /// Args for the CLI's interactive login.
+    fn login_args(&self) -> &'static [&'static str] {
+        &["login"]
+    }
+    /// The login command as a user would type it, for messages and prompts.
+    fn login_hint(&self) -> String {
+        format!("{} {}", self.cli_tool(), self.login_args().join(" "))
+    }
+
+    /// Whether the CLI is signed in. A token env var counts as signed in
+    /// without a network call. A non-zero probe means not signed in, and a
+    /// probe that cannot run or times out is `Unknown` (proceed; the CLI
+    /// reports its own error).
+    fn auth_status(&self, ctx: &DeployContext) -> AuthState {
+        let var = self.auth_env_var();
+        let in_ctx = ctx.run_env.get(var).is_some_and(|v| !v.is_empty());
+        if in_ctx || std::env::var(var).is_ok_and(|v| !v.is_empty()) {
+            return AuthState::Authenticated;
+        }
+        match ctx.exec(self.cli_tool(), self.whoami_args(), QUERY_TIMEOUT) {
+            Ok(out) if out.success => AuthState::Authenticated,
+            Ok(_) => AuthState::NotAuthenticated,
+            Err(_) => AuthState::Unknown,
+        }
+    }
+
+    /// Run the CLI's interactive login with the terminal inherited. Callers
+    /// must only do this with a real terminal: login waits on a browser.
+    fn login(&self, ctx: &DeployContext) -> DeployResult<()> {
+        match ctx.exec_interactive(self.cli_tool(), self.login_args()) {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(DeployError::DeployFailed {
+                provider: self.name(),
+                reason: format!("`{}` did not complete", self.login_hint()),
+            }),
+            Err(reason) => Err(DeployError::DeployFailed {
+                provider: self.name(),
+                reason,
+            }),
+        }
     }
 
     fn check_prerequisites(&self) -> DeployResult<PrerequisiteStatus>;
@@ -201,5 +245,136 @@ mod tests {
         assert!(ensure_cli_available(&CloudflareProvider, std::slice::from_ref(&dir)).is_ok());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+    /// Provider with a unique CLI name and token variable, so results never
+    /// depend on what is installed or set on the machine running the tests.
+    struct Stub {
+        cli: &'static str,
+    }
+
+    impl DeployProvider for Stub {
+        fn name(&self) -> &'static str {
+            "Stub"
+        }
+        fn slug(&self) -> &'static str {
+            "stub"
+        }
+        fn cli_tool(&self) -> &'static str {
+            self.cli
+        }
+        fn install_package(&self) -> &'static str {
+            "stub"
+        }
+        fn auth_env_var(&self) -> &'static str {
+            "APPZ_TEST_NO_SUCH_TOKEN_VAR"
+        }
+        fn whoami_args(&self) -> &'static [&'static str] {
+            &["whoami"]
+        }
+        fn check_prerequisites(&self) -> DeployResult<PrerequisiteStatus> {
+            Ok(PrerequisiteStatus::Ready)
+        }
+        fn detect_config(&self, _: &Path) -> DeployResult<Option<DetectedConfig>> {
+            Ok(None)
+        }
+        fn deploy(&self, _: &DeployContext) -> DeployResult<DeployOutput> {
+            unreachable!()
+        }
+        fn deploy_preview(&self, _: &DeployContext) -> DeployResult<DeployOutput> {
+            unreachable!()
+        }
+    }
+
+    /// Put a CLI named `name` into a fresh temp dir that exits with `code`,
+    /// and return a context whose `extra_path` is that dir.
+    fn ctx_with_cli(label: &str, name: &str, code: i32) -> (DeployContext, std::path::PathBuf) {
+        let dir = temp_project(label);
+        #[cfg(windows)]
+        std::fs::write(
+            dir.join(format!("{name}.cmd")),
+            format!(
+                "@echo off
+exit /b {code}
+"
+            ),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let p = dir.join(name);
+            std::fs::write(
+                &p,
+                format!(
+                    "#!/bin/sh
+exit {code}
+"
+                ),
+            )
+            .unwrap();
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let mut ctx = DeployContext::new(dir.clone(), "dist".into());
+        ctx.extra_path = vec![dir.clone()];
+        (ctx, dir)
+    }
+
+    #[test]
+    fn whoami_success_means_authenticated() {
+        let (ctx, dir) = ctx_with_cli("auth-ok", "appz-auth-ok", 0);
+        assert_eq!(
+            Stub {
+                cli: "appz-auth-ok"
+            }
+            .auth_status(&ctx),
+            AuthState::Authenticated
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn whoami_failure_means_not_authenticated() {
+        let (ctx, dir) = ctx_with_cli("auth-no", "appz-auth-no", 1);
+        assert_eq!(
+            Stub {
+                cli: "appz-auth-no"
+            }
+            .auth_status(&ctx),
+            AuthState::NotAuthenticated
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn token_in_env_skips_the_probe() {
+        // The CLI would report "not signed in", but a token means we never ask it.
+        let (mut ctx, dir) = ctx_with_cli("auth-token", "appz-auth-token", 1);
+        ctx.run_env
+            .insert("APPZ_TEST_NO_SUCH_TOKEN_VAR".into(), "tok".into());
+        assert_eq!(
+            Stub {
+                cli: "appz-auth-token"
+            }
+            .auth_status(&ctx),
+            AuthState::Authenticated
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn probe_that_cannot_run_is_unknown_not_a_failure() {
+        let ctx = DeployContext::new(std::env::temp_dir(), "dist".into());
+        assert_eq!(
+            Stub {
+                cli: "appz-no-such-cli-xyz"
+            }
+            .auth_status(&ctx),
+            AuthState::Unknown
+        );
+    }
+
+    #[test]
+    fn login_hint_is_the_command_a_user_would_type() {
+        assert_eq!(Stub { cli: "stubcli" }.login_hint(), "stubcli login");
     }
 }

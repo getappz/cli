@@ -212,7 +212,8 @@ impl AppzServer {
             dry_run: arg.dry_run,
             json: true,
             // An agent must not trigger software installs; it gets the install command.
-            install: crate::deploy::InstallPolicy::Never,
+            install: crate::deploy::Consent::Never,
+            login: crate::deploy::Consent::Never,
         };
         match crate::deploy::run(&root, req) {
             Ok(output) => {

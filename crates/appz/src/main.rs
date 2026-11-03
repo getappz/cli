@@ -1080,11 +1080,19 @@ fn run_deploy(args: DeployArgs, json: bool) {
             dry_run: args.dry_run,
             json,
             install: if args.yes {
-                deploy::InstallPolicy::Yes
+                deploy::Consent::Yes
             } else if !json && is_tty() {
-                deploy::InstallPolicy::Ask
+                deploy::Consent::Ask
             } else {
-                deploy::InstallPolicy::Never
+                deploy::Consent::Never
+            },
+            // Login needs a browser, so it requires a real terminal even with --yes.
+            login: if json || !is_tty() {
+                deploy::Consent::Never
+            } else if args.yes {
+                deploy::Consent::Yes
+            } else {
+                deploy::Consent::Ask
             },
         },
     ) {
@@ -1102,6 +1110,15 @@ fn run_deploy(args: DeployArgs, json: bool) {
                         "production"
                     }
                 ));
+                if let Some(auth) = output.auth {
+                    info(match auth {
+                        appz_deploy::AuthState::Authenticated => "auth: signed in",
+                        appz_deploy::AuthState::NotAuthenticated => {
+                            "auth: not signed in (a real deploy would offer to log in)"
+                        }
+                        appz_deploy::AuthState::Unknown => "auth: could not be checked",
+                    });
+                }
                 outro("nothing was deployed");
             } else {
                 intro("appz deploy");

@@ -60,6 +60,9 @@ pub struct DeployContext {
     pub json_output: bool,
     pub framework: Option<String>,
     pub deploy_config: DeployConfig,
+    /// Extra directories searched (and appended to `PATH`) when running the
+    /// provider CLI, e.g. mise's tool bin dirs (`mise bin-paths`).
+    pub extra_path: Vec<PathBuf>,
 }
 
 impl DeployContext {
@@ -75,6 +78,7 @@ impl DeployContext {
             json_output: false,
             framework: None,
             deploy_config: DeployConfig::default(),
+            extra_path: Vec::new(),
         }
     }
 
@@ -95,13 +99,30 @@ impl DeployContext {
     /// inherited process environment (auth tokens flow through env, never as
     /// CLI flags — the upstream version passed tokens as `--token <value>`,
     /// visible in process listings and shell history).
+    ///
+    /// `bin` is resolved against `PATH` then `extra_path`, so a CLI that mise
+    /// installed off-PATH (or an npm `.cmd` shim on Windows, which a
+    /// shell-less spawn cannot find by bare name) still runs; `extra_path` is
+    /// also appended to the child's `PATH` (the user's own tools keep priority).
     pub fn exec(&self, bin: &str, args: &[&str], timeout: Duration) -> Result<ExecOutput, String> {
-        let env: Vec<(&str, &str)> = self
+        let program = command::shell::find_command_with_paths(bin, &self.extra_path)
+            .map_or_else(|| bin.to_string(), |p| p.to_string_lossy().into_owned());
+
+        let mut env: Vec<(String, String)> = self
             .run_env
             .iter()
-            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        exec_captured(bin, args, &self.project_dir, &env, timeout)
+        if !self.extra_path.is_empty() {
+            let current = std::env::var_os("PATH").unwrap_or_default();
+            let all = std::env::split_paths(&current).chain(self.extra_path.iter().cloned());
+            if let Ok(joined) = std::env::join_paths(all) {
+                env.push(("PATH".into(), joined.to_string_lossy().into_owned()));
+            }
+        }
+        let env_refs: Vec<(&str, &str)> =
+            env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        exec_captured(&program, args, &self.project_dir, &env_refs, timeout)
     }
 }
 
@@ -112,4 +133,51 @@ pub fn parse_kv(s: &str) -> Option<(String, String)> {
         return None;
     }
     Some((k.to_string(), v.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A CLI that lives only in `extra_path` (like a mise-installed tool, or an
+    /// npm `.cmd` shim on Windows) must run by its bare name.
+    #[test]
+    fn exec_runs_a_shim_found_only_via_extra_path() {
+        let dir = std::env::temp_dir().join(format!("appz-deploy-shim-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        #[cfg(windows)]
+        std::fs::write(
+            dir.join("appz-test-shim.cmd"),
+            "@echo off\r\necho shim-ok\r\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let p = dir.join("appz-test-shim");
+            std::fs::write(&p, "#!/bin/sh\necho shim-ok\n").unwrap();
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let mut ctx = DeployContext::new(dir.clone(), "dist".into());
+        ctx.extra_path = vec![dir.clone()];
+        let out = ctx
+            .exec("appz-test-shim", &[], Duration::from_secs(10))
+            .expect("shim should resolve via extra_path");
+        assert!(out.success, "{out:?}");
+        assert!(out.stdout.contains("shim-ok"), "{out:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn exec_fails_when_the_cli_is_in_neither_path() {
+        let ctx = DeployContext::new(std::env::temp_dir(), "dist".into());
+        assert!(
+            ctx.exec("appz-no-such-cli-xyz", &[], Duration::from_secs(5))
+                .is_err()
+        );
+    }
 }

@@ -4,11 +4,19 @@ pub type DeployResult<T> = Result<T, DeployError>;
 
 #[derive(Debug, Error)]
 pub enum DeployError {
-    #[error("{provider}: CLI tool '{tool}' not found on PATH. Install with: {install_hint}")]
+    #[error(
+        "{provider}: CLI tool '{tool}' not found on PATH or in mise. Install with: {install_hint}"
+    )]
     CliMissing {
         provider: &'static str,
         tool: &'static str,
         install_hint: String,
+    },
+
+    #[error("{provider}: could not install the CLI through mise: {reason}")]
+    CliInstallFailed {
+        provider: &'static str,
+        reason: String,
     },
 
     #[error("{provider}: not authenticated. Set {env_var} or run: {login_hint}")]

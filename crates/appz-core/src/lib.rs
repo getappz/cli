@@ -28,7 +28,7 @@ pub use diagnostics::{Diagnostic, parse_cargo_diagnostics};
 pub use doctor::{DoctorReport, run_doctor};
 pub use fs::DetectorFilesystem;
 pub use generator::{generate, generate_merged};
-pub use mise::{ensure_mise, mise_on_path, trust};
+pub use mise::{ensure_mise, install_global_tool, mise_bin_paths, mise_on_path, trust};
 pub use paths::{canonicalize, find_node_modules_bin_paths};
 pub use registry_cache::{CachedPayload, load_cached};
 pub use source::{Host, InitSource, RemoteSource, archive_url, classify, parse_remote};

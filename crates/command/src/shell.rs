@@ -66,6 +66,16 @@ pub fn find_command_on_path(name: &str) -> Option<PathBuf> {
     which::which(name).ok()
 }
 
+/// Like [`find_command_on_path`], but falls back to the `extra` directories
+/// (searched AFTER `PATH`, so a tool the user installed themselves wins) —
+/// e.g. mise tool bin dirs that are not on the user's `PATH`. Honors
+/// `PATHEXT` on Windows, so a `.cmd` shim resolves to its full path.
+pub fn find_command_with_paths(name: &str, extra: &[PathBuf]) -> Option<PathBuf> {
+    let current = env::var_os("PATH").unwrap_or_default();
+    let paths = env::join_paths(env::split_paths(&current).chain(extra.iter().cloned())).ok()?;
+    which::which_in(name, Some(paths), env::current_dir().ok()?).ok()
+}
+
 pub fn get_default_shell() -> ShellType {
     ShellType::detect()
 }

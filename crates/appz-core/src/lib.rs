@@ -34,7 +34,8 @@ pub use registry_cache::{CachedPayload, load_cached};
 pub use source::{Host, InitSource, RemoteSource, archive_url, classify, parse_remote};
 pub use storage::{
     StateSnapshot, StoredToolchain, compute_input_hash, ensure_gitignored, inputs_unchanged,
-    mise_config_path, read_latest_snapshot, read_latest_state, state_path, write_state,
+    mise_config_path, read_latest_snapshot, read_latest_state, state_path, try_write_state,
+    write_state,
 };
 pub use toolchain_registry::{
     RegistryDetectionCriteria, RegistryDetector, RegistryFrameworkSpec, RegistryLifecycleCommands,

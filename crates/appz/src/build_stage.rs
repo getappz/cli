@@ -20,7 +20,7 @@ pub fn run(ctx: &DeployContext) -> Result<bool, String> {
     if !toolchains.iter().any(|tc| tc.build_command.is_some()) {
         return Ok(false);
     }
-    appz_core::write_state(&root, &toolchains);
+    appz_core::try_write_state(&root, &toolchains)?;
     appz_core::ensure_mise(&root)?;
     if let Err(e) = appz_core::trust(&root) {
         eprintln!("warning: mise trust: {e}");

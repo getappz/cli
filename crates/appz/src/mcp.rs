@@ -164,7 +164,9 @@ impl AppzServer {
             }
             // Writes mise.toml's [tools]/[tasks] (with sources/outputs) so
             // `mise run` has an up-to-date task to skip or execute.
-            appz_core::write_state(&root, &toolchains);
+            if let Err(e) = appz_core::try_write_state(&root, &toolchains) {
+                return Ok(Self::err(e));
+            }
             return Ok(exec_one(&root, "mise", &["run", mise_task]));
         }
 

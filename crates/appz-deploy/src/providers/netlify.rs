@@ -57,6 +57,8 @@ impl NetlifyProvider {
             created_at: Some(chrono::Utc::now()),
             duration_ms: Some(start.elapsed().as_millis() as u64),
             auth: None,
+            setup_files: Vec::new(),
+            cli_missing: false,
         })
     }
 }
@@ -126,6 +128,34 @@ impl DeployProvider for NetlifyProvider {
         Ok(None)
     }
 
+    /// `netlify.toml` with the build command and publish directory, so the
+    /// build output is what gets published.
+    fn setup_files(&self, ctx: &DeployContext) -> DeployResult<Vec<(String, String)>> {
+        if ctx.project_dir.join("netlify.toml").exists() {
+            return Ok(Vec::new());
+        }
+        let has_build_script = std::fs::read_to_string(ctx.project_dir.join("package.json"))
+            .ok()
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+            .is_some_and(|v| v.pointer("/scripts/build").is_some());
+        let mut toml = String::from(
+            "[build]
+",
+        );
+        if has_build_script {
+            toml.push_str(
+                "  command = \"npm run build\"
+",
+            );
+        }
+        toml.push_str(&format!(
+            "  publish = \"{}\"
+",
+            ctx.output_dir
+        ));
+        Ok(vec![("netlify.toml".to_string(), toml)])
+    }
+
     fn deploy(&self, ctx: &DeployContext) -> DeployResult<DeployOutput> {
         self.deploy_internal(ctx, false)
     }
@@ -183,5 +213,32 @@ mod tests {
     #[test]
     fn returns_none_instead_of_fabricating_a_url() {
         assert_eq!(extract_deploy_url("no url here"), None);
+    }
+}
+
+#[cfg(test)]
+mod setup_tests {
+    use super::*;
+
+    #[test]
+    fn writes_netlify_toml_only_when_none_exists() {
+        let dir = std::env::temp_dir().join(format!("appz-nl-setup-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("package.json"),
+            r#"{"scripts":{"build":"astro build"}}"#,
+        )
+        .unwrap();
+        let ctx = DeployContext::new(dir.clone(), "dist".into());
+
+        let files = NetlifyProvider.setup_files(&ctx).unwrap();
+        assert_eq!(files[0].0, "netlify.toml");
+        assert!(files[0].1.contains("command = \"npm run build\""));
+        assert!(files[0].1.contains("publish = \"dist\""));
+
+        std::fs::write(dir.join("netlify.toml"), "").unwrap();
+        assert!(NetlifyProvider.setup_files(&ctx).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

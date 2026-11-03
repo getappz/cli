@@ -206,6 +206,17 @@ pub fn run(project_dir: &Path, req: DeployRequest) -> Result<DeployOutput, Strin
         ensure_authenticated(provider.as_ref(), &ctx, req.login)?;
     }
 
+    // Platform config the project lacks (e.g. wrangler.jsonc, netlify.toml):
+    // appz writes it; a dry run only reports it.
+    let setup = provider.setup_files(&ctx).map_err(|e| e.to_string())?;
+    let setup_names: Vec<String> = setup.iter().map(|(n, _)| n.clone()).collect();
+    if !req.dry_run {
+        for (name, content) in &setup {
+            std::fs::write(ctx.project_dir.join(name), content)
+                .map_err(|e| format!("cannot write {name}: {e}"))?;
+        }
+    }
+
     let mut output = if ctx.is_preview {
         provider.deploy_preview(&ctx)
     } else {
@@ -213,10 +224,16 @@ pub fn run(project_dir: &Path, req: DeployRequest) -> Result<DeployOutput, Strin
     }
     .map_err(|e| e.to_string())?;
 
+    output.setup_files = setup_names;
+
     // A dry run is a readiness report: probe sign-in when the CLI is present
     // (read-only; never installs or logs in).
-    if req.dry_run && ensure_cli_available(provider.as_ref(), &ctx.extra_path).is_ok() {
-        output.auth = Some(provider.auth_status(&ctx));
+    if req.dry_run {
+        if ensure_cli_available(provider.as_ref(), &ctx.extra_path).is_ok() {
+            output.auth = Some(provider.auth_status(&ctx));
+        } else {
+            output.cli_missing = true;
+        }
     }
     Ok(output)
 }

@@ -80,6 +80,14 @@ pub trait DeployProvider: Send + Sync {
     fn check_prerequisites(&self) -> DeployResult<PrerequisiteStatus>;
     fn detect_config(&self, project_dir: &Path) -> DeployResult<Option<DetectedConfig>>;
 
+    /// Config files this platform needs that the project does not have yet,
+    /// as `(file name, contents)`. Pure: `deploy` writes them (or, on
+    /// `--dry-run`, only reports them). Default: none needed.
+    fn setup_files(&self, ctx: &DeployContext) -> DeployResult<Vec<(String, String)>> {
+        let _ = ctx;
+        Ok(Vec::new())
+    }
+
     fn deploy(&self, ctx: &DeployContext) -> DeployResult<DeployOutput>;
     fn deploy_preview(&self, ctx: &DeployContext) -> DeployResult<DeployOutput>;
 

@@ -1190,6 +1190,12 @@ fn run_deploy(args: DeployArgs, json: bool) {
                         "production"
                     }
                 ));
+                if output.cli_missing {
+                    info("cli: not installed (a real deploy installs it with mise)");
+                }
+                for f in &output.setup_files {
+                    info(&format!("would create {f} (the project has none)"));
+                }
                 if let Some(auth) = output.auth {
                     info(match auth {
                         appz_deploy::AuthState::Authenticated => "auth: signed in",
@@ -1202,6 +1208,9 @@ fn run_deploy(args: DeployArgs, json: bool) {
                 outro("nothing was deployed");
             } else {
                 intro("appz deploy");
+                for f in &output.setup_files {
+                    info(&format!("created {f} (the project had none)"));
+                }
                 success(&format!("deployed to {}", output.provider));
                 if let Some(url) = &output.url {
                     info(url);

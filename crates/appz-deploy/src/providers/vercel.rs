@@ -79,6 +79,8 @@ impl VercelProvider {
             created_at: Some(chrono::Utc::now()),
             duration_ms: Some(start.elapsed().as_millis() as u64),
             auth: None,
+            setup_files: Vec::new(),
+            cli_missing: false,
         })
     }
 }

@@ -98,6 +98,41 @@ impl DeployContext {
         }
     }
 
+    /// Name to give a new platform project: `project` from this target's
+    /// config in `appz.jsonc`, else `package.json`'s name, else the folder
+    /// name; lowercased to `[a-z0-9-]`.
+    pub fn project_name(&self, slug: &str) -> String {
+        let configured = self
+            .deploy_config
+            .targets
+            .get(slug)
+            .and_then(|t| t.get("project"))
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let from_package = || {
+            let text = std::fs::read_to_string(self.project_dir.join("package.json")).ok()?;
+            let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+            v.get("name")?.as_str().map(String::from)
+        };
+        let raw = configured.or_else(from_package).unwrap_or_else(|| {
+            self.project_dir
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        });
+        let slugged: String = raw
+            .to_lowercase()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect();
+        let trimmed = slugged.trim_matches('-');
+        if trimmed.is_empty() {
+            "site".to_string()
+        } else {
+            trimmed.to_string()
+        }
+    }
+
     /// Full path of `bin`, looked up in the same `PATH` the child will get: a
     /// `PATH` the caller put in `run_env`, else the process `PATH`, then
     /// `extra_path`. Falls back to the bare name.

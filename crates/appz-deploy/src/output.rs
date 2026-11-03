@@ -35,6 +35,14 @@ pub struct DeployOutput {
     /// Sign-in state; only filled by `--dry-run`, as a readiness report.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth: Option<AuthState>,
+    /// Platform config files appz created (or, on `--dry-run`, would create)
+    /// because the project had none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub setup_files: Vec<String>,
+    /// `--dry-run` only: the platform CLI is not installed yet (a real run
+    /// installs it through mise).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cli_missing: bool,
 }
 
 impl DeployOutput {
@@ -47,6 +55,8 @@ impl DeployOutput {
             created_at: None,
             duration_ms: None,
             auth: None,
+            setup_files: Vec::new(),
+            cli_missing: false,
         }
     }
 }

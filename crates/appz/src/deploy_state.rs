@@ -9,7 +9,17 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// Build output and tool state: not source, and they change on every build.
-const SKIP_DIRS: [&str; 12] = [
+const SKIP_DIRS: [&str; 22] = [
+    ".cache",
+    ".turbo",
+    ".parcel-cache",
+    ".react-router",
+    ".idea",
+    ".vscode",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "target",
     ".git",
     "node_modules",
     ".appz",

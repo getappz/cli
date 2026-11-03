@@ -252,11 +252,18 @@ impl DeployProvider for VercelProvider {
 /// inspect/status URL before the deploy URL) and returns `None` — never a
 /// guessed URL like `https://{dirname}.vercel.app` — if nothing matches.
 fn extract_deploy_url(stdout: &str) -> Option<String> {
-    stdout
-        .lines()
-        .map(str::trim)
-        .rfind(|line| line.starts_with("https://"))
-        .map(str::to_string)
+    // Find `https://...` tokens anywhere (bare line, or inside the JSON the
+    // CLI prints when it has no terminal). Dashboard/inspect links on
+    // vercel.com are not the deployment, so they only count as a last resort.
+    let urls: Vec<&str> = stdout
+        .split(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | ',' | '<' | '>' | '(' | ')'))
+        .filter(|t| t.starts_with("https://"))
+        .collect();
+    let is_dashboard = |u: &&str| u.starts_with("https://vercel.com/");
+    urls.iter()
+        .rfind(|u| !is_dashboard(u))
+        .or_else(|| urls.last())
+        .map(|u| u.trim_end_matches(['.', ';']).to_string())
 }
 
 #[cfg(test)]
@@ -271,6 +278,15 @@ mod tests {
         assert_eq!(
             extract_deploy_url(stdout),
             Some("https://app-abc123.vercel.app".to_string())
+        );
+    }
+
+    #[test]
+    fn finds_the_url_inside_json_output() {
+        let stdout = r#"{"status":"ok","deployment":{"url":"https://site-abc.vercel.app","inspectorUrl":"https://vercel.com/acme/site/abc"}}"#;
+        assert_eq!(
+            extract_deploy_url(stdout),
+            Some("https://site-abc.vercel.app".to_string())
         );
     }
 

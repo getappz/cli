@@ -149,8 +149,29 @@ impl DeployProvider for VercelProvider {
 
     fn is_linked(&self, ctx: &DeployContext) -> bool {
         let has = |k: &str| ctx.run_env.contains_key(k) || std::env::var_os(k).is_some();
-        (has("VERCEL_ORG_ID") && has("VERCEL_PROJECT_ID"))
-            || ctx.project_dir.join(".vercel/project.json").exists()
+        // The id variables pin the project outright.
+        if has("VERCEL_ORG_ID") && has("VERCEL_PROJECT_ID") {
+            return true;
+        }
+        let Ok(text) = std::fs::read_to_string(ctx.project_dir.join(".vercel/project.json")) else {
+            return false;
+        };
+        // A project the user named explicitly (--project / appz.jsonc) must be
+        // the linked one: pull, build and deploy all use the link, so a link
+        // to another project would publish there (even with --prod).
+        let wanted = ctx
+            .deploy_config
+            .targets
+            .get(self.slug())
+            .and_then(|t| t.get("project"))
+            .and_then(|v| v.as_str());
+        match wanted {
+            None => true,
+            Some(name) => serde_json::from_str::<serde_json::Value>(&text)
+                .ok()
+                .and_then(|v| v.get("projectName")?.as_str().map(str::to_lowercase))
+                .is_some_and(|linked| linked == name.to_lowercase()),
+        }
     }
 
     fn link_args(&self, ctx: &DeployContext, interactive: bool) -> Option<Vec<String>> {
@@ -295,5 +316,52 @@ mod tests {
     fn returns_none_instead_of_fabricating_a_url() {
         let stdout = "Deploying...\nDone.\n";
         assert_eq!(extract_deploy_url(stdout), None);
+    }
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::*;
+
+    fn linked_dir(name: &str) -> (std::path::PathBuf, DeployContext) {
+        let dir =
+            std::env::temp_dir().join(format!("appz-vercel-link-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".vercel")).unwrap();
+        std::fs::write(
+            dir.join(".vercel/project.json"),
+            r#"{"projectId":"prj_1","orgId":"team_1","projectName":"Alpha"}"#,
+        )
+        .unwrap();
+        let ctx = DeployContext::new(dir.clone(), "dist".into());
+        (dir, ctx)
+    }
+
+    #[test]
+    fn an_existing_link_counts_when_no_project_was_named() {
+        let (dir, ctx) = linked_dir("any");
+        assert!(VercelProvider.is_linked(&ctx));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_named_project_must_be_the_linked_one() {
+        let (dir, mut ctx) = linked_dir("named");
+        let set = |ctx: &mut DeployContext, p: &str| {
+            ctx.deploy_config
+                .targets
+                .insert("vercel".into(), serde_json::json!({ "project": p }));
+        };
+        set(&mut ctx, "alpha");
+        assert!(
+            VercelProvider.is_linked(&ctx),
+            "same project, case-insensitive"
+        );
+        set(&mut ctx, "beta");
+        assert!(
+            !VercelProvider.is_linked(&ctx),
+            "a link to another project must not satisfy --project beta"
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

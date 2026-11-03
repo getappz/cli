@@ -50,7 +50,13 @@ fn collect(dir: &Path, root: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<(
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().into_owned();
         let path = entry.path();
-        if entry.file_type()?.is_dir() {
+        let kind = entry.file_type()?;
+        // Symlinks are not followed: a dangling or directory link would make
+        // the read fail, and what they point at is not this project's source.
+        if kind.is_symlink() {
+            continue;
+        }
+        if kind.is_dir() {
             if !SKIP_DIRS.contains(&name.as_str()) {
                 collect(&path, root, out)?;
             }
@@ -117,8 +123,13 @@ pub fn record(root: &Path, slug: &str, prod: bool, fingerprint: &str, url: &str)
         appz_core::ensure_gitignored(root);
     }
     // Best effort: failing to remember only costs a redundant deploy later.
+    // Write a sibling file, then rename over: a concurrent reader never sees
+    // a half-written file (which would parse as empty and drop other targets).
     if let Ok(json) = serde_json::to_string_pretty(&all) {
-        let _ = std::fs::write(path, json);
+        let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
+        if std::fs::write(&tmp, json).is_ok() && std::fs::rename(&tmp, &path).is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
     }
 }
 

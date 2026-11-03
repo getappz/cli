@@ -119,12 +119,14 @@ impl DeployContext {
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default()
         };
+        let explicit = configured.is_some();
         let mut raw = configured
             .or_else(from_package)
             .unwrap_or_else(|| dir_name(&self.project_dir));
         // "site", "app", ... say nothing; the parent folder usually does.
         const GENERIC: [&str; 6] = ["site", "app", "web", "website", "frontend", "client"];
-        if GENERIC.contains(&raw.to_lowercase().as_str())
+        if !explicit
+            && GENERIC.contains(&raw.to_lowercase().as_str())
             && let Some(parent) = self.project_dir.parent()
             && !dir_name(parent).is_empty()
         {
@@ -304,6 +306,22 @@ mod tests {
             .expect("should resolve via run_env PATH");
         assert!(out.stdout.contains("ok2"), "{out:?}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_generic_name_is_replaced_only_when_derived_not_when_chosen() {
+        let root = std::env::temp_dir().join(format!("appz-pname-{}", std::process::id()));
+        let dir = root.join("My Site").join("app");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut ctx = DeployContext::new(dir, "dist".into());
+        // Derived from the folder: "app" says nothing, so the parent folder is used.
+        assert_eq!(ctx.project_name("vercel"), "my-site");
+        // Chosen by the user: kept as is.
+        ctx.deploy_config
+            .targets
+            .insert("vercel".into(), serde_json::json!({ "project": "app" }));
+        assert_eq!(ctx.project_name("vercel"), "app");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

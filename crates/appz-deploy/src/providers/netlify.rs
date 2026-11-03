@@ -29,7 +29,12 @@ impl NetlifyProvider {
             return Ok(DeployOutput::dry_run(self.slug(), is_preview));
         }
 
-        let mut args = vec!["deploy", "--build"];
+        // appz's cached build already produced the output: upload it as is.
+        let mut args = if ctx.prebuilt {
+            vec!["deploy", "--dir", ctx.output_dir.as_str()]
+        } else {
+            vec!["deploy", "--build"]
+        };
         if !is_preview {
             args.push("--prod");
         }

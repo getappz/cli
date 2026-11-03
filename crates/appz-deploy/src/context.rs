@@ -67,6 +67,9 @@ pub struct DeployContext {
     /// Extra directories searched (and appended to `PATH`) when running the
     /// provider CLI, e.g. mise's tool bin dirs (`mise bin-paths`).
     pub extra_path: Vec<PathBuf>,
+    /// appz already installed and built the project (`output_dir` is fresh),
+    /// so providers deploy that output instead of building again.
+    pub prebuilt: bool,
 }
 
 impl DeployContext {
@@ -83,6 +86,7 @@ impl DeployContext {
             framework: None,
             deploy_config: DeployConfig::default(),
             extra_path: Vec::new(),
+            prebuilt: false,
         }
     }
 

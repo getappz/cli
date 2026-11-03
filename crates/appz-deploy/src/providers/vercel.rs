@@ -27,6 +27,44 @@ use crate::provider::{DEPLOY_TIMEOUT, DeployProvider, QUERY_TIMEOUT};
 
 pub struct VercelProvider;
 
+/// Output dirs/files that mean the build produced something to run, not just
+/// files to serve.
+const SERVER_MARKERS: [&str; 4] = ["server", "functions", "_worker.js", "_worker"];
+
+/// Turn a static build (`index.html` at the output root, nothing to run) into
+/// the Build Output API layout `vercel deploy --prebuilt` takes:
+/// `.vercel/output/{config.json, static/}`. `Ok(false)` when the output is not
+/// a plain static site (the caller falls back to `vercel pull` + `vercel build`).
+fn assemble_static_output(ctx: &DeployContext) -> Result<bool, String> {
+    let src = ctx.output_path();
+    if !src.join("index.html").is_file() || SERVER_MARKERS.iter().any(|m| src.join(m).exists()) {
+        return Ok(false);
+    }
+    let out = ctx.project_dir.join(".vercel").join("output");
+    if out.exists() {
+        std::fs::remove_dir_all(&out).map_err(|e| format!("cannot clear .vercel/output: {e}"))?;
+    }
+    copy_dir(&src, &out.join("static"))
+        .map_err(|e| format!("cannot assemble .vercel/output: {e}"))?;
+    std::fs::write(out.join("config.json"), r#"{"version":3}"#)
+        .map_err(|e| format!("cannot write .vercel/output/config.json: {e}"))?;
+    Ok(true)
+}
+
+fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), &target)?;
+        }
+    }
+    Ok(())
+}
+
 impl VercelProvider {
     fn deploy_internal(&self, ctx: &DeployContext, is_preview: bool) -> DeployResult<DeployOutput> {
         let start = Instant::now();
@@ -34,45 +72,55 @@ impl VercelProvider {
             return Ok(DeployOutput::dry_run(self.slug(), is_preview));
         }
 
-        // Pull the linked project's settings; `vercel build` needs them locally.
-        let env_name = if is_preview { "preview" } else { "production" };
-        let pull = ctx
-            .exec_live(
-                "vercel",
-                &["pull", "--yes", "--environment", env_name],
-                DEPLOY_TIMEOUT,
-            )
-            .map_err(|reason| DeployError::DeployFailed {
+        // A static site appz already built: hand Vercel that output directly
+        // (no `vercel pull` / `vercel build`, which start from scratch).
+        let static_site = ctx.prebuilt
+            && assemble_static_output(ctx).map_err(|reason| DeployError::DeployFailed {
                 provider: self.name(),
                 reason,
             })?;
-        if !pull.success {
-            return Err(DeployError::DeployFailed {
-                provider: self.name(),
-                reason: format!(
-                    "vercel pull failed:
+
+        if !static_site {
+            // Pull the linked project's settings; `vercel build` needs them locally.
+            let env_name = if is_preview { "preview" } else { "production" };
+            let pull = ctx
+                .exec_live(
+                    "vercel",
+                    &["pull", "--yes", "--environment", env_name],
+                    DEPLOY_TIMEOUT,
+                )
+                .map_err(|reason| DeployError::DeployFailed {
+                    provider: self.name(),
+                    reason,
+                })?;
+            if !pull.success {
+                return Err(DeployError::DeployFailed {
+                    provider: self.name(),
+                    reason: format!(
+                        "vercel pull failed:
 {}
 {}",
-                    pull.stdout, pull.stderr
-                ),
-            });
-        }
+                        pull.stdout, pull.stderr
+                    ),
+                });
+            }
 
-        let mut build_args = vec!["build"];
-        if !is_preview {
-            build_args.push("--prod");
-        }
-        let build = ctx
-            .exec_live("vercel", &build_args, DEPLOY_TIMEOUT)
-            .map_err(|reason| DeployError::DeployFailed {
-                provider: self.name(),
-                reason,
-            })?;
-        if !build.success {
-            return Err(DeployError::DeployFailed {
-                provider: self.name(),
-                reason: format!("vercel build failed:\n{}\n{}", build.stdout, build.stderr),
-            });
+            let mut build_args = vec!["build"];
+            if !is_preview {
+                build_args.push("--prod");
+            }
+            let build = ctx
+                .exec_live("vercel", &build_args, DEPLOY_TIMEOUT)
+                .map_err(|reason| DeployError::DeployFailed {
+                    provider: self.name(),
+                    reason,
+                })?;
+            if !build.success {
+                return Err(DeployError::DeployFailed {
+                    provider: self.name(),
+                    reason: format!("vercel build failed:\n{}\n{}", build.stdout, build.stderr),
+                });
+            }
         }
 
         let mut deploy_args = vec!["deploy", "--prebuilt", "--yes"];
@@ -290,6 +338,23 @@ fn extract_deploy_url(stdout: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_static_build_is_assembled_into_the_build_output_layout() {
+        let dir = std::env::temp_dir().join(format!("appz-vercel-static-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("dist/assets")).unwrap();
+        std::fs::write(dir.join("dist/index.html"), "hi").unwrap();
+        std::fs::write(dir.join("dist/assets/a.js"), "x").unwrap();
+        let ctx = DeployContext::new(dir.clone(), "dist".into());
+        assert!(assemble_static_output(&ctx).unwrap());
+        assert!(dir.join(".vercel/output/static/assets/a.js").is_file());
+        assert!(dir.join(".vercel/output/config.json").is_file());
+        // A server dir means it is not a plain static site.
+        std::fs::create_dir_all(dir.join("dist/server")).unwrap();
+        assert!(!assemble_static_output(&ctx).unwrap());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     use super::*;
 
     #[test]

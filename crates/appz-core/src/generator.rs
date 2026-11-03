@@ -23,6 +23,17 @@ fn universal_source_excludes() -> Vec<String> {
         "target/**",
         ".mise/**",
         ".appz/**",
+        // Written by `appz deploy` / the platform CLIs on every run: counting
+        // them as inputs would rebuild after each deploy.
+        ".vercel/**",
+        ".netlify/**",
+        ".wrangler/**",
+        // Framework caches the build itself writes.
+        ".astro/**",
+        ".next/**",
+        ".nuxt/**",
+        ".output/**",
+        ".svelte-kit/**",
     ]
     .iter()
     .map(|s| format!("!{s}"))
@@ -86,8 +97,11 @@ fn build_tasks(toolchains: &[DetectedToolchain]) -> BTreeMap<&'static str, Gener
         if run.is_empty() {
             continue;
         }
-        sources.sort();
-        sources.dedup();
+        // Order matters: mise applies `sources` patterns in order, so the `!`
+        // excludes only take effect AFTER the `**/*` they carve out of. Sorting
+        // would put every `!` first and silently disable them. Dedup keeps order.
+        let mut seen = std::collections::HashSet::new();
+        sources.retain(|s| seen.insert(s.clone()));
         tasks.insert(
             *name,
             GeneratedTask {
@@ -533,6 +547,17 @@ mod tests {
             !out.contains("npm run build"),
             "appz must not inject into a user-owned task:\n{out}"
         );
+    }
+
+    #[test]
+    fn test_sources_excludes_come_after_the_catch_all_glob() {
+        // mise applies `sources` in order: a `!` before `**/*` is re-included.
+        let tc = make_tc_with_build("node", "20", "npm run build", Some("dist"));
+        let tasks = build_tasks(&[tc]);
+        let sources = tasks["build"].sources.as_ref().unwrap();
+        let all = sources.iter().position(|s| s == "**/*").unwrap();
+        let first_exclude = sources.iter().position(|s| s.starts_with('!')).unwrap();
+        assert!(all < first_exclude, "{sources:?}");
     }
 
     #[test]

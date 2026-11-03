@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use appz_core::{detect_toolchains, generate_claude_md, run_doctor};
 
 mod agents;
+mod build_stage;
 mod deploy;
 mod deploy_state;
 mod dev_install;
@@ -525,6 +526,16 @@ fn do_pm_install(root: &Path, toolchains: &[appz_core::DetectedToolchain]) {
     }
 }
 
+/// Like `do_pm_install` but through mise's cached `install` task, so an
+/// unchanged lockfile/manifest is not reinstalled on every run.
+fn do_cached_pm_install(root: &Path, toolchains: &[appz_core::DetectedToolchain]) {
+    if toolchains.iter().any(|t| t.install_command.is_some()) {
+        run_cmd("mise", &["run", "install"], root);
+    } else {
+        do_pm_install(root, toolchains);
+    }
+}
+
 fn do_full_install(root: &Path) -> Vec<appz_core::DetectedToolchain> {
     let toolchains = do_detect_and_write(root);
     do_mise_install(root);
@@ -608,7 +619,7 @@ fn run_build(args: BuildArgs, json: bool) {
         let toolchains = do_detect_and_write(&canonical);
         if !args.skip_install {
             do_mise_install(&canonical);
-            do_pm_install(&canonical, &toolchains);
+            do_cached_pm_install(&canonical, &toolchains);
         }
         json_out(&toolchains, "ok");
         return;
@@ -620,13 +631,11 @@ fn run_build(args: BuildArgs, json: bool) {
     // `mise run build` below has an up-to-date task to skip or run. mise's
     // own task cache decides "inputs unchanged" now — appz doesn't hand-roll
     // that anymore (see `appz_core::generator::generate_merged`).
-    let toolchains = {
-        if !args.skip_install {
-            do_full_install(&canonical)
-        } else {
-            do_detect_and_write(&canonical)
-        }
-    };
+    let toolchains = do_detect_and_write(&canonical);
+    if !args.skip_install {
+        do_mise_install(&canonical);
+        do_cached_pm_install(&canonical, &toolchains);
+    }
 
     match args.command {
         Some(cmd) => {

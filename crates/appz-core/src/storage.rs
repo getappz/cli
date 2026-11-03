@@ -55,23 +55,30 @@ pub fn mise_config_path(root: &Path) -> PathBuf {
 
 /// Ensure `<root>/.gitignore` contains a `.appz/` entry. Idempotent.
 pub fn ensure_gitignored(root: &Path) {
+    try_ensure_gitignored(root).unwrap_or_else(|e| {
+        eprintln!("error: {e}");
+        std::process::exit(1);
+    });
+}
+
+/// [`ensure_gitignored`] that returns the error instead of exiting.
+pub fn try_ensure_gitignored(root: &Path) -> Result<(), String> {
     let gitignore = root.join(".gitignore");
     let existing = fs::read_to_string(&gitignore).unwrap_or_default();
     if existing.lines().any(|l| l.trim() == ".appz/") {
-        return;
+        return Ok(());
     }
     let mut content = existing;
     if !content.is_empty() && !content.ends_with('\n') {
         content.push('\n');
     }
     content.push_str("# appz local state (not shared)\n.appz/\n");
-    fs::write(&gitignore, content).unwrap_or_else(|e| {
-        eprintln!(
-            "error: cannot write '.gitignore' at '{}': {e}",
+    fs::write(&gitignore, content).map_err(|e| {
+        format!(
+            "cannot write '.gitignore' at '{}': {e}",
             gitignore.display()
-        );
-        std::process::exit(1);
-    });
+        )
+    })
 }
 
 /// Files whose content changes should trigger re-detection + re-install.
@@ -175,15 +182,19 @@ impl From<&DetectedToolchain> for StoredToolchain {
 /// write (or merge into) `mise.toml` at the project root.
 /// Returns the path to `mise.toml`.
 pub fn write_state(root: &Path, toolchains: &[DetectedToolchain]) -> PathBuf {
-    let appz_dir = root.join(".appz");
-    fs::create_dir_all(&appz_dir).unwrap_or_else(|e| {
-        eprintln!(
-            "error: cannot create '.appz' dir '{}': {e}",
-            appz_dir.display()
-        );
+    try_write_state(root, toolchains).unwrap_or_else(|e| {
+        eprintln!("error: {e}");
         std::process::exit(1);
-    });
-    ensure_gitignored(root);
+    })
+}
+
+/// [`write_state`] that returns the error instead of exiting the process, for
+/// callers that must survive it (the MCP server, `deploy`).
+pub fn try_write_state(root: &Path, toolchains: &[DetectedToolchain]) -> Result<PathBuf, String> {
+    let appz_dir = root.join(".appz");
+    fs::create_dir_all(&appz_dir)
+        .map_err(|e| format!("cannot create '.appz' dir '{}': {e}", appz_dir.display()))?;
+    try_ensure_gitignored(root)?;
 
     let sp = state_path(root);
     let mp = mise_config_path(root);
@@ -199,23 +210,20 @@ pub fn write_state(root: &Path, toolchains: &[DetectedToolchain]) -> PathBuf {
     let mut content = fs::read_to_string(&sp).unwrap_or_default();
     content.push_str(&line);
     content.push('\n');
-    fs::write(&sp, &content).unwrap_or_else(|e| {
-        eprintln!("error: cannot write state '{}': {e}", sp.display());
-        std::process::exit(1);
-    });
+    fs::write(&sp, &content).map_err(|e| format!("cannot write state '{}': {e}", sp.display()))?;
 
     // Write or merge mise.toml
     let existing = fs::read_to_string(&mp).ok();
-    let toml = generator::generate_merged(existing.as_deref(), toolchains).unwrap_or_else(|e| {
-        eprintln!("error: cannot parse existing '{}': {e}", mp.display());
-        std::process::exit(1);
-    });
-    fs::write(&mp, &toml).unwrap_or_else(|e| {
-        eprintln!("error: cannot write mise config '{}': {e}", mp.display());
-        std::process::exit(1);
-    });
+    let toml = generator::generate_merged(existing.as_deref(), toolchains)
+        .map_err(|e| format!("cannot parse existing '{}': {e}", mp.display()))?;
+    // Leave an identical file alone: rewriting bumps its mtime, which makes
+    // mise treat every cached task (it is one of their sources) as stale.
+    if existing.as_deref() != Some(toml.as_str()) {
+        fs::write(&mp, &toml)
+            .map_err(|e| format!("cannot write mise config '{}': {e}", mp.display()))?;
+    }
 
-    mp
+    Ok(mp)
 }
 
 /// Read the latest full snapshot (toolchains + hash) from JSONL.

@@ -201,11 +201,18 @@ fn fingerprint_extra(slug: &str, req: &DeployRequest, config: &DeployConfig) -> 
                 .map(String::from)
         })
         .unwrap_or_default();
+    // The whole target config (site, output settings, ...) also changes the deploy.
+    let target = config
+        .targets
+        .get(slug)
+        .map(|v| v.to_string())
+        .unwrap_or_default();
     format!(
         "{slug}
 {project}
 {}
-{}",
+{}
+{target}",
         env.join("\u{1f}"),
         build.join("\u{1f}")
     )
@@ -317,6 +324,12 @@ pub fn run(project_dir: &Path, req: DeployRequest) -> Result<DeployOutput, Strin
             std::fs::write(ctx.project_dir.join(name), content)
                 .map_err(|e| format!("cannot write {name}: {e}"))?;
         }
+    }
+
+    // Install + build through mise's cached tasks (skipped when unchanged);
+    // providers then deploy the built output instead of building from scratch.
+    if !req.dry_run {
+        ctx.prebuilt = crate::build_stage::run(&ctx)?;
     }
 
     let mut output = if ctx.is_preview {

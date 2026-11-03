@@ -29,8 +29,14 @@ pub trait DeployProvider: Send + Sync {
     fn install_package(&self) -> &'static str;
     fn auth_env_var(&self) -> &'static str;
     /// mise tool spec used to install this provider's CLI (`appz deploy --yes`).
+    /// Empty means mise cannot install it: appz shows [`Self::install_hint`].
     fn mise_tool(&self) -> String {
         format!("npm:{}", self.install_package())
+    }
+    /// How the user installs the CLI themselves, for providers whose CLI mise
+    /// cannot install (empty [`Self::mise_tool`]).
+    fn install_hint(&self) -> Option<String> {
+        None
     }
     /// Args for a read-only "am I signed in" probe. Only its exit code is
     /// used: its output can contain the account email and is never logged.
@@ -165,11 +171,14 @@ pub trait DeployProvider: Send + Sync {
 }
 
 pub fn create_provider_registry() -> Vec<Box<dyn DeployProvider>> {
-    vec![
+    let mut all: Vec<Box<dyn DeployProvider>> = vec![
         Box::new(crate::providers::vercel::VercelProvider),
         Box::new(crate::providers::netlify::NetlifyProvider),
         Box::new(crate::providers::cloudflare::CloudflareProvider),
-    ]
+    ];
+    // The rest are described by the embedded registry (registry/deploy.toml).
+    all.extend(crate::providers::generic::providers());
+    all
 }
 
 pub fn get_provider(slug: &str) -> DeployResult<Box<dyn DeployProvider>> {
@@ -213,10 +222,14 @@ pub fn ensure_cli_available(p: &dyn DeployProvider, extra: &[PathBuf]) -> Deploy
 }
 
 fn missing_cli(p: &dyn DeployProvider) -> DeployError {
+    let hint = match p.mise_tool() {
+        tool if tool.is_empty() => p.install_hint().unwrap_or_default(),
+        tool => format!("mise use -g {tool}"),
+    };
     DeployError::CliMissing {
         provider: p.name(),
         tool: p.cli_tool(),
-        install_hint: format!("mise use -g {}", p.mise_tool()),
+        install_hint: hint,
     }
 }
 
@@ -230,6 +243,13 @@ pub fn install_cli_with_mise(
         provider: p.name(),
         reason,
     };
+    if p.mise_tool().is_empty() {
+        return Err(fail(format!(
+            "{} cannot be installed through mise: {}",
+            p.cli_tool(),
+            p.install_hint().unwrap_or_default()
+        )));
+    }
     appz_core::ensure_mise(project_dir).map_err(fail)?;
     // npm-backed CLIs need Node to install and to run; provision it first
     // (through mise too) when it is on neither PATH nor mise's bin dirs.

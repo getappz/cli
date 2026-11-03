@@ -91,6 +91,10 @@ fn provision_cli(
     project_dir: &Path,
     missing: &str,
 ) -> Result<Vec<PathBuf>, String> {
+    if p.mise_tool().is_empty() {
+        // Nothing appz can install: `missing` already carries the install hint.
+        return Err(missing.to_string());
+    }
     match policy {
         Consent::Never => {
             return Err(format!("{missing}\n(or re-run with --yes to install it)"));

@@ -80,6 +80,51 @@ pub trait DeployProvider: Send + Sync {
     fn check_prerequisites(&self) -> DeployResult<PrerequisiteStatus>;
     fn detect_config(&self, project_dir: &Path) -> DeployResult<Option<DetectedConfig>>;
 
+    /// Whether the project dir is tied to a platform project (a state file or
+    /// the platform's id variables). Platforms without a link step are
+    /// always "linked".
+    fn is_linked(&self, ctx: &DeployContext) -> bool {
+        let _ = ctx;
+        true
+    }
+
+    /// Args for the platform CLI that link the project dir to a project,
+    /// creating it when it does not exist. `None`: no link step.
+    fn link_args(&self, ctx: &DeployContext) -> Option<Vec<String>> {
+        let _ = ctx;
+        None
+    }
+
+    /// Run [`Self::link_args`] through the platform CLI.
+    fn link(&self, ctx: &DeployContext) -> DeployResult<()> {
+        let Some(args) = self.link_args(ctx) else {
+            return Ok(());
+        };
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let out = ctx
+            .exec(self.cli_tool(), &refs, QUERY_TIMEOUT)
+            .map_err(|reason| DeployError::DeployFailed {
+                provider: self.name(),
+                reason,
+            })?;
+        if out.success {
+            Ok(())
+        } else {
+            Err(DeployError::DeployFailed {
+                provider: self.name(),
+                reason: format!(
+                    "{} {} failed:
+{}
+{}",
+                    self.cli_tool(),
+                    args.join(" "),
+                    out.stdout,
+                    out.stderr
+                ),
+            })
+        }
+    }
+
     /// Config files this platform needs that the project does not have yet,
     /// as `(file name, contents)`. Pure: `deploy` writes them (or, on
     /// `--dry-run`, only reports them). Default: none needed.

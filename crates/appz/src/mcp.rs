@@ -206,6 +206,7 @@ impl AppzServer {
         let root = Self::resolve(&arg.dir);
         let req = crate::deploy::DeployRequest {
             target: arg.target,
+            project: None,
             prod: arg.prod,
             env: vec![],
             build_env: vec![],
@@ -214,6 +215,7 @@ impl AppzServer {
             // An agent must not trigger software installs; it gets the install command.
             install: crate::deploy::Consent::Never,
             login: crate::deploy::Consent::Never,
+            link: crate::deploy::Consent::Never,
         };
         match crate::deploy::run(&root, req) {
             Ok(output) => {

@@ -43,6 +43,10 @@ pub struct DeployOutput {
     /// installs it through mise).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub cli_missing: bool,
+    /// `--dry-run` only: no platform project is linked yet (a real run
+    /// creates or links one, with consent).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub link_needed: bool,
 }
 
 impl DeployOutput {
@@ -57,6 +61,7 @@ impl DeployOutput {
             auth: None,
             setup_files: Vec::new(),
             cli_missing: false,
+            link_needed: false,
         }
     }
 }

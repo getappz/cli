@@ -34,6 +34,30 @@ impl VercelProvider {
             return Ok(DeployOutput::dry_run(self.slug(), is_preview));
         }
 
+        // Pull the linked project's settings; `vercel build` needs them locally.
+        let env_name = if is_preview { "preview" } else { "production" };
+        let pull = ctx
+            .exec(
+                "vercel",
+                &["pull", "--yes", "--environment", env_name],
+                DEPLOY_TIMEOUT,
+            )
+            .map_err(|reason| DeployError::DeployFailed {
+                provider: self.name(),
+                reason,
+            })?;
+        if !pull.success {
+            return Err(DeployError::DeployFailed {
+                provider: self.name(),
+                reason: format!(
+                    "vercel pull failed:
+{}
+{}",
+                    pull.stdout, pull.stderr
+                ),
+            });
+        }
+
         let mut build_args = vec!["build"];
         if !is_preview {
             build_args.push("--prod");
@@ -81,6 +105,7 @@ impl VercelProvider {
             auth: None,
             setup_files: Vec::new(),
             cli_missing: false,
+            link_needed: false,
         })
     }
 }
@@ -119,6 +144,21 @@ impl DeployProvider for VercelProvider {
             });
         }
         Ok(PrerequisiteStatus::Ready)
+    }
+
+    fn is_linked(&self, ctx: &DeployContext) -> bool {
+        let has = |k: &str| ctx.run_env.contains_key(k) || std::env::var_os(k).is_some();
+        (has("VERCEL_ORG_ID") && has("VERCEL_PROJECT_ID"))
+            || ctx.project_dir.join(".vercel/project.json").exists()
+    }
+
+    fn link_args(&self, ctx: &DeployContext) -> Option<Vec<String>> {
+        Some(vec![
+            "link".into(),
+            "--yes".into(),
+            "--project".into(),
+            ctx.project_name(self.slug()),
+        ])
     }
 
     fn detect_config(&self, project_dir: &Path) -> DeployResult<Option<DetectedConfig>> {

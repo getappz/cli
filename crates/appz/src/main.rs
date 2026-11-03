@@ -152,6 +152,9 @@ struct DeployArgs {
     /// Provider slug (e.g. vercel, netlify, cloudflare). Uses appz.jsonc's deploy.default if omitted, else detects it from project files.
     #[arg(long)]
     target: Option<String>,
+    /// Platform project name to create or link (default: asked, suggesting one)
+    #[arg(long)]
+    project: Option<String>,
     /// Production deploy (default: preview)
     #[arg(long)]
     prod: bool,
@@ -1154,12 +1157,20 @@ fn run_deploy(args: DeployArgs, json: bool) {
         &canonical,
         deploy::DeployRequest {
             target: args.target,
+            project: args.project,
             prod: args.prod,
             env: args.env,
             build_env: args.build_env,
             dry_run: args.dry_run,
             json,
             install: if args.yes {
+                deploy::Consent::Yes
+            } else if !json && is_tty() {
+                deploy::Consent::Ask
+            } else {
+                deploy::Consent::Never
+            },
+            link: if args.yes {
                 deploy::Consent::Yes
             } else if !json && is_tty() {
                 deploy::Consent::Ask
@@ -1192,6 +1203,9 @@ fn run_deploy(args: DeployArgs, json: bool) {
                 ));
                 if output.cli_missing {
                     info("cli: not installed (a real deploy installs it with mise)");
+                }
+                if output.link_needed {
+                    info("project: not linked (a real deploy asks to create/link one)");
                 }
                 for f in &output.setup_files {
                     info(&format!("would create {f} (the project has none)"));

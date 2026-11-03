@@ -27,6 +27,8 @@ const LINK_VARS: [&str; 3] = ["VERCEL_ORG_ID", "VERCEL_PROJECT_ID", "NETLIFY_SIT
 pub struct DeployRequest {
     pub target: Option<String>,
     pub prod: bool,
+    /// Platform project name (skips the prompt when linking).
+    pub project: Option<String>,
     pub env: Vec<String>,
     pub build_env: Vec<String>,
     pub dry_run: bool,
@@ -36,6 +38,52 @@ pub struct DeployRequest {
     /// Running the CLI's login. Only ever `Ask`/`Yes` with a real terminal:
     /// login waits on a browser and would hang CI.
     pub login: Consent,
+    /// Creating/linking a platform project on the user's account.
+    pub link: Consent,
+}
+
+/// The project is not linked to a platform project: create/link one if the
+/// policy (or the user, when asked) allows, else fail with the way out.
+fn ensure_linked(
+    p: &dyn DeployProvider,
+    ctx: &mut DeployContext,
+    consent: Consent,
+) -> Result<(), String> {
+    if p.is_linked(ctx) {
+        return Ok(());
+    }
+    let mut name = ctx.project_name(p.slug());
+    match consent {
+        Consent::Never => {
+            return Err(format!(
+                "{}: no project linked. Re-run with --yes to create/link '{name}', or set the platform's project id variables",
+                p.name()
+            ));
+        }
+        Consent::Ask => {
+            // The derived name is only a suggestion; the user picks.
+            name = cliclack::input(format!(
+                "No {} project is linked. Name of the project to create or link?",
+                p.name()
+            ))
+            .default_input(&name)
+            .interact::<String>()
+            .map_err(|e| e.to_string())?;
+            if name.trim().is_empty() {
+                return Err(format!("{}: no project linked", p.name()));
+            }
+        }
+        Consent::Yes => {}
+    }
+    // Remember the choice for this run (link_args reads it back).
+    let target = ctx
+        .deploy_config
+        .targets
+        .entry(p.slug().to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    target["project"] = serde_json::Value::String(name.trim().to_string());
+    eprintln!("linking {} project '{}'...", p.name(), name.trim());
+    p.link(ctx).map_err(|e| e.to_string())
 }
 
 /// The CLI was not found on `PATH` or in mise's bin dirs: install it through
@@ -188,6 +236,13 @@ pub fn run(project_dir: &Path, req: DeployRequest) -> Result<DeployOutput, Strin
     ctx.json_output = req.json;
     ctx.framework = framework;
     ctx.deploy_config = config;
+    if let Some(project) = &req.project {
+        ctx.deploy_config
+            .targets
+            .entry(slug.clone())
+            .or_insert_with(|| serde_json::json!({}))["project"] =
+            serde_json::Value::String(project.clone());
+    }
     ctx.extra_path = extra_path;
     ctx.run_env = vault
         .vars
@@ -204,6 +259,7 @@ pub fn run(project_dir: &Path, req: DeployRequest) -> Result<DeployOutput, Strin
 
     if !req.dry_run {
         ensure_authenticated(provider.as_ref(), &ctx, req.login)?;
+        ensure_linked(provider.as_ref(), &mut ctx, req.link)?;
     }
 
     // Platform config the project lacks (e.g. wrangler.jsonc, netlify.toml):
@@ -225,6 +281,7 @@ pub fn run(project_dir: &Path, req: DeployRequest) -> Result<DeployOutput, Strin
     .map_err(|e| e.to_string())?;
 
     output.setup_files = setup_names;
+    output.link_needed = req.dry_run && !provider.is_linked(&ctx);
 
     // A dry run is a readiness report: probe sign-in when the CLI is present
     // (read-only; never installs or logs in).

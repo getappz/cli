@@ -114,12 +114,22 @@ impl DeployContext {
             let v: serde_json::Value = serde_json::from_str(&text).ok()?;
             v.get("name")?.as_str().map(String::from)
         };
-        let raw = configured.or_else(from_package).unwrap_or_else(|| {
-            self.project_dir
-                .file_name()
+        let dir_name = |p: &Path| {
+            p.file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default()
-        });
+        };
+        let mut raw = configured
+            .or_else(from_package)
+            .unwrap_or_else(|| dir_name(&self.project_dir));
+        // "site", "app", ... say nothing; the parent folder usually does.
+        const GENERIC: [&str; 6] = ["site", "app", "web", "website", "frontend", "client"];
+        if GENERIC.contains(&raw.to_lowercase().as_str())
+            && let Some(parent) = self.project_dir.parent()
+            && !dir_name(parent).is_empty()
+        {
+            raw = dir_name(parent);
+        }
         let slugged: String = raw
             .to_lowercase()
             .chars()

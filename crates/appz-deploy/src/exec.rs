@@ -5,6 +5,14 @@ use std::time::{Duration, Instant};
 
 use command::Command;
 
+/// Env var appz reads to unlock the vault non-interactively.
+pub const VAULT_PASSPHRASE_ENV: &str = "APPZ_VAULT_PASSPHRASE";
+
+/// Env vars never forwarded to a child process appz spawns. The vault
+/// passphrase must stay inside the appz process: forwarding it would leak it
+/// into every provider CLI, build tool, and postinstall script a deploy runs.
+pub const DENIED_CHILD_ENV: &[&str] = &[VAULT_PASSPHRASE_ENV];
+
 #[derive(Debug, Clone)]
 pub struct ExecOutput {
     pub success: bool,
@@ -80,6 +88,9 @@ fn exec_inner(
     cmd.cwd(cwd);
     for (k, v) in env.iter() {
         cmd.env(*k, *v);
+    }
+    for k in DENIED_CHILD_ENV {
+        cmd.env_remove(*k);
     }
     let _ = cmd.inherit_path();
 

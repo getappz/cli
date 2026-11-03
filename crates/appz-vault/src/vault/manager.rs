@@ -1,4 +1,4 @@
-use crate::crypto::aead::{decrypt_dek, decrypt_value, encrypt_dek, encrypt_value};
+use crate::crypto::aead::{decrypt_dek, decrypt_value, encrypt_dek, encrypt_value, KEY_CHECK_AAD};
 use crate::crypto::kdf::{derive_kek, KdfParams};
 use crate::error::{VaultError, VaultResult};
 use crate::session;
@@ -90,7 +90,8 @@ pub fn create_vault(path: &Path, passphrase: &str) -> VaultResult<()> {
 
     let blob = encrypt_dek(&dek, &kek.key).map_err(VaultError::Crypto)?;
     let mut vault = VaultFile::new(blob.to_bytes(), salt);
-    vault.key_check = encrypt_value(KEY_CHECK, &dek).map_err(VaultError::Crypto)?;
+    vault.kdf = Some(params);
+    vault.key_check = encrypt_value(KEY_CHECK, &dek, KEY_CHECK_AAD).map_err(VaultError::Crypto)?;
 
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -104,10 +105,10 @@ pub fn open_vault(path: &Path, passphrase: &str) -> VaultResult<VaultDek> {
     let data = read_vault_file(path)?;
     let vault: VaultFile = serde_json::from_slice(&data)?;
 
-    let params = KdfParams {
-        salt: vault.salt,
+    let params = vault.kdf.clone().unwrap_or_else(|| KdfParams {
+        salt: vault.salt.clone(),
         ..Default::default()
-    };
+    });
 
     let kek = derive_kek(passphrase, &params).map_err(VaultError::Crypto)?;
 
@@ -135,7 +136,7 @@ pub fn open_vault_with_dek(path: &Path, app_name: &str) -> VaultResult<VaultDek>
     let vault: VaultFile = serde_json::from_slice(&read_vault_file(path)?)?;
     // Empty key_check: a vault from before the check existed; nothing to compare.
     let matches = vault.key_check.is_empty()
-        || decrypt_value(&vault.key_check, &dek.dek).is_ok_and(|p| p == KEY_CHECK);
+        || decrypt_value(&vault.key_check, &dek.dek, KEY_CHECK_AAD).is_ok_and(|p| p == KEY_CHECK);
     if matches {
         Ok(dek)
     } else {
@@ -188,7 +189,8 @@ pub fn get_secret_value(
         Some(e) => e,
         None => return Ok(None),
     };
-    let plaintext = decrypt_value(&entry.value, dek).map_err(|_| VaultError::WrongPassphrase)?;
+    let aad: &[u8] = if entry.aad { name.as_bytes() } else { &[] };
+    let plaintext = decrypt_value(&entry.value, dek, aad).map_err(|_| VaultError::Decrypt)?;
     let s = String::from_utf8(plaintext)
         .map_err(|_| VaultError::Crypto("invalid UTF-8 in secret".into()))?;
     Ok(Some(Zeroizing::new(s)))
@@ -200,13 +202,15 @@ pub fn set_secret_value(
     name: &str,
     value: &str,
 ) -> VaultResult<()> {
-    let encrypted = encrypt_value(value.as_bytes(), dek).map_err(VaultError::Crypto)?;
+    let encrypted =
+        encrypt_value(value.as_bytes(), dek, name.as_bytes()).map_err(VaultError::Crypto)?;
     body.insert(
         name.to_string(),
         SecretEntry {
             value: encrypted,
             added_at: Utc::now(),
             rotated_at: None,
+            aad: true,
         },
     );
     Ok(())
@@ -365,5 +369,89 @@ mod tests {
         let body2 = read_vault_body(&path).unwrap();
         let val = get_secret_value(&body2, &dek.dek, "key").unwrap();
         assert_eq!(val.unwrap().as_str(), "value");
+    }
+
+    #[test]
+    fn swapping_secret_values_is_detected() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("vault.json");
+        create_vault(&path, "pw").unwrap();
+        let dek = open_vault(&path, "pw").unwrap();
+        let mut body = VaultBody::default();
+        set_secret_value(&mut body, &dek.dek, "A", "value-a").unwrap();
+        set_secret_value(&mut body, &dek.dek, "B", "value-b").unwrap();
+
+        // Swap the ciphertexts: what an attacker with write access to
+        // vault.json can do. Each is bound to its own name as AAD, so
+        // decryption must fail rather than silently serve the wrong value.
+        let a = body.get("A").unwrap().value.clone();
+        let b = body.get("B").unwrap().value.clone();
+        body.get_mut("A").unwrap().value = b;
+        body.get_mut("B").unwrap().value = a;
+
+        assert!(matches!(
+            get_secret_value(&body, &dek.dek, "A"),
+            Err(VaultError::Decrypt)
+        ));
+        assert!(matches!(
+            get_secret_value(&body, &dek.dek, "B"),
+            Err(VaultError::Decrypt)
+        ));
+    }
+
+    #[test]
+    fn a_legacy_entry_without_aad_still_decrypts() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("vault.json");
+        create_vault(&path, "pw").unwrap();
+        let dek = open_vault(&path, "pw").unwrap();
+
+        // A v1 entry: encrypted with empty AAD, `aad` flag false. Must still
+        // read correctly so existing vaults keep working after the upgrade.
+        let value = encrypt_value(b"legacy", &dek.dek, &[]).unwrap();
+        let mut body = VaultBody::default();
+        body.insert(
+            "K".to_string(),
+            SecretEntry {
+                value,
+                added_at: Utc::now(),
+                rotated_at: None,
+                aad: false,
+            },
+        );
+        assert_eq!(
+            get_secret_value(&body, &dek.dek, "K")
+                .unwrap()
+                .unwrap()
+                .as_str(),
+            "legacy"
+        );
+    }
+
+    #[test]
+    fn kdf_params_are_recorded_in_the_vault_file() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("vault.json");
+        create_vault(&path, "pw").unwrap();
+        let vault: VaultFile = serde_json::from_slice(&read_vault_file(&path).unwrap()).unwrap();
+        let kdf = vault.kdf.expect("kdf params recorded at creation");
+        let defaults = KdfParams::default();
+        assert_eq!(kdf.time_cost, defaults.time_cost);
+        assert_eq!(kdf.memory_cost, defaults.memory_cost);
+        assert_eq!(kdf.parallelism, defaults.parallelism);
+        assert_eq!(kdf.salt, vault.salt);
+    }
+
+    #[test]
+    fn a_legacy_vault_without_recorded_kdf_params_still_opens() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("vault.json");
+        create_vault(&path, "pw").unwrap();
+        // v1 vaults predate the `kdf` field; strip it to simulate one.
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&read_vault_file(&path).unwrap()).unwrap();
+        json.as_object_mut().unwrap().remove("kdf");
+        write_vault_file(&path, serde_json::to_string(&json).unwrap().as_bytes()).unwrap();
+        assert!(open_vault(&path, "pw").is_ok());
     }
 }

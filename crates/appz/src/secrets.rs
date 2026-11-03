@@ -11,7 +11,7 @@ use appz_vault::{
 };
 
 const APP: &str = "appz";
-const PASSPHRASE_VAR: &str = "APPZ_VAULT_PASSPHRASE";
+const PASSPHRASE_VAR: &str = appz_deploy::VAULT_PASSPHRASE_ENV;
 
 /// Vault locations for the project containing `dir`. `dir` is canonicalized
 /// first so `appz env` (run from `.` or a subfolder) and `appz deploy` (which

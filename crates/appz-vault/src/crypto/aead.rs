@@ -1,8 +1,10 @@
-use aes_gcm::aead::{Aead, KeyInit, OsRng};
+use aes_gcm::aead::{Aead, KeyInit, OsRng, Payload};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
 use rand::Rng;
 pub const MAGIC: &[u8] = b"FLVT";
 pub const NONCE_SIZE: usize = 12;
+/// AAD for the `key_check` blob, so it cannot be confused with a body value.
+pub const KEY_CHECK_AAD: &[u8] = b"appz-vault:key-check";
 
 pub struct EncryptedBlob {
     pub magic: [u8; 4],
@@ -62,12 +64,18 @@ pub fn decrypt_dek(blob: &EncryptedBlob, kek: &[u8; 32]) -> Result<Vec<u8>, Stri
         .map_err(|_| "AES-GCM decrypt failed (wrong key or corrupt)".into())
 }
 
-pub fn encrypt_value(plaintext: &[u8], dek: &[u8; 32]) -> Result<Vec<u8>, String> {
+pub fn encrypt_value(plaintext: &[u8], dek: &[u8; 32], aad: &[u8]) -> Result<Vec<u8>, String> {
     let nonce_bytes: [u8; NONCE_SIZE] = OsRng.r#gen();
     let nonce = Nonce::from_slice(&nonce_bytes);
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(dek));
     let ciphertext = cipher
-        .encrypt(nonce, plaintext)
+        .encrypt(
+            nonce,
+            Payload {
+                msg: plaintext,
+                aad,
+            },
+        )
         .map_err(|e| format!("AES-GCM encrypt value: {e}"))?;
     Ok(EncryptedBlob {
         magic: *b"FLVT",
@@ -77,7 +85,7 @@ pub fn encrypt_value(plaintext: &[u8], dek: &[u8; 32]) -> Result<Vec<u8>, String
     .to_bytes())
 }
 
-pub fn decrypt_value(data: &[u8], dek: &[u8; 32]) -> Result<Vec<u8>, String> {
+pub fn decrypt_value(data: &[u8], dek: &[u8; 32], aad: &[u8]) -> Result<Vec<u8>, String> {
     let blob = EncryptedBlob::from_bytes(data)?;
     if blob.magic != MAGIC {
         return Err("invalid magic".into());
@@ -85,7 +93,13 @@ pub fn decrypt_value(data: &[u8], dek: &[u8; 32]) -> Result<Vec<u8>, String> {
     let nonce = Nonce::from_slice(&blob.nonce);
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(dek));
     cipher
-        .decrypt(nonce, blob.ciphertext.as_slice())
+        .decrypt(
+            nonce,
+            Payload {
+                msg: blob.ciphertext.as_slice(),
+                aad,
+            },
+        )
         .map_err(|_| "AES-GCM decrypt failed".into())
 }
 
@@ -118,17 +132,24 @@ mod tests {
     fn value_roundtrip() {
         let dek = random_key();
         let plaintext = b"my-secret-api-key-12345";
-        let encrypted = encrypt_value(plaintext, &dek).unwrap();
-        let decrypted = decrypt_value(&encrypted, &dek).unwrap();
+        let encrypted = encrypt_value(plaintext, &dek, b"name").unwrap();
+        let decrypted = decrypt_value(&encrypted, &dek, b"name").unwrap();
         assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn value_wrong_aad_fails() {
+        let dek = random_key();
+        let encrypted = encrypt_value(b"secret", &dek, b"name-a").unwrap();
+        assert!(decrypt_value(&encrypted, &dek, b"name-b").is_err());
     }
 
     #[test]
     fn unique_nonces() {
         let dek = random_key();
         let plaintext = b"same-data";
-        let c1 = encrypt_value(plaintext, &dek).unwrap();
-        let c2 = encrypt_value(plaintext, &dek).unwrap();
+        let c1 = encrypt_value(plaintext, &dek, b"n").unwrap();
+        let c2 = encrypt_value(plaintext, &dek, b"n").unwrap();
         assert_ne!(c1, c2);
     }
 
@@ -136,7 +157,7 @@ mod tests {
     fn wrong_dek_fails() {
         let dek1 = random_key();
         let dek2 = random_key();
-        let encrypted = encrypt_value(b"secret", &dek1).unwrap();
-        assert!(decrypt_value(&encrypted, &dek2).is_err());
+        let encrypted = encrypt_value(b"secret", &dek1, b"n").unwrap();
+        assert!(decrypt_value(&encrypted, &dek2, b"n").is_err());
     }
 }

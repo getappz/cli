@@ -44,7 +44,9 @@ fn write_inner(path: &Path, data: &[u8], exclusive: bool) -> VaultResult<()> {
         .map_err(|e| crate::error::VaultError::Other(format!("lock vault temp: {e}")))?;
     let mut file = file;
     file.write_all(data)?;
-    file.flush()?;
+    // Sync data and metadata to disk before the rename publishes the file, so
+    // a crash can't leave a truncated (or zero-length) vault in place.
+    file.sync_all()?;
 
     #[cfg(unix)]
     {

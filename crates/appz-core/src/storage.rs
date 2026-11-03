@@ -210,10 +210,14 @@ pub fn write_state(root: &Path, toolchains: &[DetectedToolchain]) -> PathBuf {
         eprintln!("error: cannot parse existing '{}': {e}", mp.display());
         std::process::exit(1);
     });
-    fs::write(&mp, &toml).unwrap_or_else(|e| {
-        eprintln!("error: cannot write mise config '{}': {e}", mp.display());
-        std::process::exit(1);
-    });
+    // Leave an identical file alone: rewriting bumps its mtime, which makes
+    // mise treat every cached task (it is one of their sources) as stale.
+    if existing.as_deref() != Some(toml.as_str()) {
+        fs::write(&mp, &toml).unwrap_or_else(|e| {
+            eprintln!("error: cannot write mise config '{}': {e}", mp.display());
+            std::process::exit(1);
+        });
+    }
 
     mp
 }

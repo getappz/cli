@@ -54,7 +54,7 @@ pub fn mise_config_path(root: &Path) -> PathBuf {
 }
 
 /// Ensure `<root>/.gitignore` contains a `.appz/` entry. Idempotent.
-fn ensure_gitignored(root: &Path) {
+pub fn ensure_gitignored(root: &Path) {
     let gitignore = root.join(".gitignore");
     let existing = fs::read_to_string(&gitignore).unwrap_or_default();
     if existing.lines().any(|l| l.trim() == ".appz/") {

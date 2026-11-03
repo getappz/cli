@@ -45,6 +45,15 @@ fn passphrase(prompt: &str) -> Result<String, String> {
     ))
 }
 
+/// A project vault lives in `<root>/.appz/`, which appz keeps git-ignored.
+fn gitignore_project_vault(vault: &Path) {
+    if let Some(root) = vault.parent().and_then(Path::parent)
+        && root.join(".git").exists()
+    {
+        appz_core::ensure_gitignored(root);
+    }
+}
+
 /// Unlock `path` (creating it on first use) and cache the key in the OS keyring.
 pub fn unlock(path: &Path) -> Result<[u8; 32], String> {
     let e = |e: VaultError| e.to_string();
@@ -59,6 +68,7 @@ pub fn unlock(path: &Path) -> Result<[u8; 32], String> {
         std::fs::create_dir_all(path.parent().unwrap_or(Path::new(".")))
             .map_err(|e| e.to_string())?;
         create_vault(path, &pw).map_err(e)?;
+        gitignore_project_vault(path);
     }
     let dek = open_vault(path, &passphrase("Vault passphrase")?)
         .map_err(e)?
@@ -187,5 +197,14 @@ mod tests {
         assert!(remove(&path, "OTHER").unwrap());
         assert!(!remove(&path, "OTHER").unwrap());
         assert_eq!(names(&path).unwrap(), vec!["VERCEL_TOKEN"]);
+
+        // Inside a git repo the vault dir gets ignored, once.
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        std::fs::write(dir.path().join(".gitignore"), "target").unwrap();
+        let path2 = dir.path().join(".appz").join("v2.json");
+        set(&path2, "A", Some("1".into())).unwrap();
+        gitignore_project_vault(&path2);
+        let gi = std::fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+        assert_eq!(gi, "target\n.appz/\n");
     }
 }

@@ -24,6 +24,17 @@ pub fn read_vault_file(path: &Path) -> VaultResult<Vec<u8>> {
 }
 
 pub fn write_vault_file(path: &Path, data: &[u8]) -> VaultResult<()> {
+    write_inner(path, data, false)
+}
+
+/// Like [`write_vault_file`], but fails with `AlreadyInitialized` instead of
+/// replacing a file that already exists (including one a racing process
+/// created after our own existence check).
+pub fn create_vault_file(path: &Path, data: &[u8]) -> VaultResult<()> {
+    write_inner(path, data, true)
+}
+
+fn write_inner(path: &Path, data: &[u8], exclusive: bool) -> VaultResult<()> {
     let tmp = tempfile::NamedTempFile::new_in(path.parent().unwrap_or_else(|| Path::new(".")))
         .map_err(|e| crate::error::VaultError::Other(format!("create temp file: {e}")))?;
 
@@ -41,8 +52,18 @@ pub fn write_vault_file(path: &Path, data: &[u8]) -> VaultResult<()> {
         std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o600))?;
     }
 
-    tmp.persist(path)
-        .map_err(|e| crate::error::VaultError::Other(format!("rename temp to vault: {e}")))?;
+    if exclusive {
+        tmp.persist_noclobber(path).map_err(|e| {
+            if e.error.kind() == std::io::ErrorKind::AlreadyExists {
+                crate::error::VaultError::AlreadyInitialized(path.display().to_string())
+            } else {
+                crate::error::VaultError::Other(format!("create vault: {e}"))
+            }
+        })?;
+    } else {
+        tmp.persist(path)
+            .map_err(|e| crate::error::VaultError::Other(format!("rename temp to vault: {e}")))?;
+    }
 
     Ok(())
 }

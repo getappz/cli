@@ -1138,7 +1138,12 @@ fn run_env(args: EnvArgs, json: bool) {
             Err(e) => error(&e),
         },
         EnvCmd::Unlock { global } => match secrets::unlock(&path(global)) {
-            Ok(_) => success("vault unlocked"),
+            Ok((_, true)) => success("vault unlocked"),
+            Ok((_, false)) => warning(concat!(
+                "vault unlocked for this command only: the OS keyring is unavailable, ",
+                "so it will ask again. Set APPZ_VAULT_PASSPHRASE, or pass the platform ",
+                "token as an environment variable instead"
+            )),
             Err(e) => error(&e),
         },
         EnvCmd::Lock { global } => {

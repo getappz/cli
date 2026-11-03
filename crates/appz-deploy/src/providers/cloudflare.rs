@@ -30,8 +30,10 @@ use std::time::Instant;
 
 use crate::context::DeployContext;
 use crate::error::{DeployError, DeployResult};
-use crate::output::{DeployOutput, DeployStatus, DetectedConfig, PrerequisiteStatus};
-use crate::provider::{DEPLOY_TIMEOUT, DeployProvider};
+use crate::output::{
+    DeployOutput, DeployStatus, DeploymentInfo, DetectedConfig, PrerequisiteStatus,
+};
+use crate::provider::{DEPLOY_TIMEOUT, DeployProvider, QUERY_TIMEOUT};
 
 pub struct CloudflareProvider;
 
@@ -173,6 +175,118 @@ impl DeployProvider for CloudflareProvider {
     fn deploy_preview(&self, ctx: &DeployContext) -> DeployResult<DeployOutput> {
         self.deploy_internal(ctx, true)
     }
+
+    fn list_deployments(&self, ctx: &DeployContext) -> DeployResult<Vec<DeploymentInfo>> {
+        Ok(worker_deployments(ctx)?
+            .into_iter()
+            .enumerate()
+            .map(|(index, d)| DeploymentInfo {
+                id: d.id,
+                url: None,
+                status: DeployStatus::Ready,
+                created_at: Some(d.created_on),
+                is_current: index == 0,
+            })
+            .collect())
+    }
+
+    fn rollback(&self, ctx: &DeployContext, deployment_id: &str) -> DeployResult<DeployOutput> {
+        crate::provider::validate_deployment_id(self.name(), deployment_id)?;
+        if ctx.dry_run {
+            return Ok(DeployOutput::dry_run(self.slug(), false));
+        }
+        let deployment = worker_deployments(ctx)?
+            .into_iter()
+            .find(|d| d.id == deployment_id)
+            .ok_or_else(|| DeployError::DeployFailed {
+                provider: self.name(),
+                reason: "deployment ID not found in Wrangler's recent deployment history".into(),
+            })?;
+        // Wrangler rollback takes a version ID, not a deployment ID. Never
+        // silently turn a gradual, multi-version deployment into 100% traffic.
+        let [version] = deployment.versions.as_slice() else {
+            return Err(DeployError::Unsupported {
+                provider: self.name(),
+                operation: "rollback of a multi-version deployment",
+            });
+        };
+        if version.percentage != 100.0 {
+            return Err(DeployError::Unsupported {
+                provider: self.name(),
+                operation: "rollback of a partial deployment",
+            });
+        }
+        crate::provider::validate_deployment_id(self.name(), &version.version_id)?;
+        let start = Instant::now();
+        let out = ctx
+            .exec_live(
+                "wrangler",
+                &[
+                    "rollback",
+                    &version.version_id,
+                    "--message",
+                    "appz rollback",
+                ],
+                DEPLOY_TIMEOUT,
+            )
+            .map_err(|reason| DeployError::DeployFailed {
+                provider: self.name(),
+                reason,
+            })?;
+        if !out.success {
+            return Err(DeployError::DeployFailed {
+                provider: self.name(),
+                reason: format!("wrangler rollback failed:\n{}\n{}", out.stdout, out.stderr),
+            });
+        }
+        let mut result = DeployOutput::dry_run(self.slug(), false);
+        result.url = extract_deploy_url(&out.stdout);
+        result.status = if result.url.is_some() {
+            DeployStatus::Ready
+        } else {
+            DeployStatus::Unknown
+        };
+        result.created_at = Some(chrono::Utc::now());
+        result.duration_ms = Some(start.elapsed().as_millis() as u64);
+        Ok(result)
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct WorkerDeployment {
+    id: String,
+    created_on: chrono::DateTime<chrono::Utc>,
+    versions: Vec<WorkerVersion>,
+}
+#[derive(serde::Deserialize)]
+struct WorkerVersion {
+    version_id: String,
+    percentage: f64,
+}
+
+fn worker_deployments(ctx: &DeployContext) -> DeployResult<Vec<WorkerDeployment>> {
+    let out = ctx
+        .exec(
+            "wrangler",
+            &["deployments", "list", "--json"],
+            QUERY_TIMEOUT,
+        )
+        .map_err(|reason| DeployError::DeployFailed {
+            provider: "Cloudflare",
+            reason,
+        })?;
+    if !out.success {
+        return Err(DeployError::DeployFailed {
+            provider: "Cloudflare",
+            reason: format!(
+                "wrangler deployments list failed:\n{}\n{}",
+                out.stdout, out.stderr
+            ),
+        });
+    }
+    let mut deployments: Vec<WorkerDeployment> = serde_json::from_str(&out.stdout)?;
+    deployments.sort_by_key(|d| std::cmp::Reverse(d.created_on));
+    Ok(deployments)
 }
 
 /// Extract the real deployment URL from `wrangler`'s output. Scans for the

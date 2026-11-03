@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/appz", "crates/appz-core", "crates/appz-deploy", "crates/command"]
+members = ["crates/appz", "crates/appz-vault", "crates/appz-core", "crates/appz-deploy", "crates/command"]
 resolver = "2"
 
 [profile.release]

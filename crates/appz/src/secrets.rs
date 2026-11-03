@@ -205,6 +205,6 @@ mod tests {
         set(&path2, "A", Some("1".into())).unwrap();
         gitignore_project_vault(&path2);
         let gi = std::fs::read_to_string(dir.path().join(".gitignore")).unwrap();
-        assert_eq!(gi, "target\n.appz/\n");
+        assert_eq!(gi, "target\n# appz local state (not shared)\n.appz/\n");
     }
 }

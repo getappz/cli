@@ -23,7 +23,7 @@ pub enum Consent {
 }
 
 /// Link ids the platform CLIs read from the environment instead of `link`.
-const LINK_VARS: [&str; 3] = ["VERCEL_ORG_ID", "VERCEL_PROJECT_ID", "NETLIFY_SITE_ID"];
+pub(crate) const LINK_VARS: [&str; 3] = ["VERCEL_ORG_ID", "VERCEL_PROJECT_ID", "NETLIFY_SITE_ID"];
 
 pub struct DeployRequest {
     pub target: Option<String>,
@@ -168,7 +168,7 @@ fn ensure_authenticated(
 /// `vercel.json`/`.vercel`, `netlify.toml`/`.netlify`) when neither `--target`
 /// nor `deploy.default` is set. Exactly one match is used; several is
 /// ambiguous, so the user must choose rather than appz guessing.
-fn autodetect_target(project_dir: &Path) -> Result<String, String> {
+pub(crate) fn autodetect_target(project_dir: &Path) -> Result<String, String> {
     let mut found = detect_providers(project_dir);
     match found.len() {
         1 => Ok(found.remove(0).to_string()),

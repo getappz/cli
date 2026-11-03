@@ -17,8 +17,10 @@ use std::time::Instant;
 
 use crate::context::DeployContext;
 use crate::error::{DeployError, DeployResult};
-use crate::output::{DeployOutput, DeployStatus, DetectedConfig, PrerequisiteStatus};
-use crate::provider::{DEPLOY_TIMEOUT, DeployProvider};
+use crate::output::{
+    DeployOutput, DeployStatus, DeploymentInfo, DetectedConfig, PrerequisiteStatus,
+};
+use crate::provider::{DEPLOY_TIMEOUT, DeployProvider, QUERY_TIMEOUT};
 
 pub struct NetlifyProvider;
 
@@ -135,6 +137,69 @@ impl DeployProvider for NetlifyProvider {
         Ok(None)
     }
 
+    fn list_deployments(&self, ctx: &DeployContext) -> DeployResult<Vec<DeploymentInfo>> {
+        let site_id = site_id(ctx)?;
+        let data = serde_json::json!({ "site_id": site_id, "per_page": 50 }).to_string();
+        let out = ctx
+            .exec(
+                "netlify",
+                &["api", "listSiteDeploys", "--data", data.as_str()],
+                QUERY_TIMEOUT,
+            )
+            .map_err(|reason| DeployError::DeployFailed {
+                provider: self.name(),
+                reason,
+            })?;
+        if !out.success {
+            return Err(DeployError::DeployFailed {
+                provider: self.name(),
+                reason: format!(
+                    "netlify api listSiteDeploys failed:\n{}\n{}",
+                    out.stdout, out.stderr
+                ),
+            });
+        }
+        Ok(parse_deployments(&out.stdout))
+    }
+
+    fn rollback(&self, ctx: &DeployContext, deployment_id: &str) -> DeployResult<DeployOutput> {
+        let site_id = site_id(ctx)?;
+        let data =
+            serde_json::json!({ "site_id": site_id, "deploy_id": deployment_id }).to_string();
+        let out = ctx
+            .exec(
+                "netlify",
+                &["api", "restoreSiteDeploy", "--data", data.as_str()],
+                DEPLOY_TIMEOUT,
+            )
+            .map_err(|reason| DeployError::DeployFailed {
+                provider: self.name(),
+                reason,
+            })?;
+        if !out.success {
+            return Err(DeployError::DeployFailed {
+                provider: self.name(),
+                reason: format!(
+                    "netlify api restoreSiteDeploy failed:\n{}\n{}",
+                    out.stdout, out.stderr
+                ),
+            });
+        }
+        Ok(DeployOutput {
+            provider: self.slug().to_string(),
+            url: extract_deploy_url(&out.stdout),
+            is_preview: false,
+            status: DeployStatus::Ready,
+            created_at: Some(chrono::Utc::now()),
+            duration_ms: None,
+            auth: None,
+            setup_files: Vec::new(),
+            cli_missing: false,
+            link_needed: false,
+            unchanged: false,
+        })
+    }
+
     /// `netlify.toml` with the build command and publish directory, so the
     /// build output is what gets published.
     fn setup_files(&self, ctx: &DeployContext) -> DeployResult<Vec<(String, String)>> {
@@ -170,6 +235,75 @@ impl DeployProvider for NetlifyProvider {
     fn deploy_preview(&self, ctx: &DeployContext) -> DeployResult<DeployOutput> {
         self.deploy_internal(ctx, true)
     }
+}
+
+/// The linked site id: `NETLIFY_SITE_ID` (env or vault), else the `siteId` in
+/// `.netlify/state.json`. List/rollback are API calls keyed by site id, so
+/// neither works before the project is linked.
+fn site_id(ctx: &DeployContext) -> DeployResult<String> {
+    let fail = || DeployError::DeployFailed {
+        provider: "Netlify",
+        reason: "project not linked — run `appz deploy netlify --yes` first".into(),
+    };
+    if let Some(id) = ctx.run_env.get("NETLIFY_SITE_ID").filter(|v| !v.is_empty()) {
+        return Ok(id.clone());
+    }
+    if let Ok(id) = std::env::var("NETLIFY_SITE_ID")
+        && !id.is_empty()
+    {
+        return Ok(id);
+    }
+    let text =
+        std::fs::read_to_string(ctx.project_dir.join(".netlify/state.json")).map_err(|_| {
+            DeployError::DeployFailed {
+                provider: "Netlify",
+                reason: "project not linked — run `appz deploy netlify --yes` first".into(),
+            }
+        })?;
+    serde_json::from_str::<serde_json::Value>(&text)
+        .ok()
+        .and_then(|v| v.get("siteId")?.as_str().map(String::from))
+        .filter(|id| !id.is_empty())
+        .ok_or_else(fail)
+}
+
+/// Parse `netlify api listSiteDeploys`'s JSON array into deployment rows.
+/// Best-effort: returns an empty list rather than asserting a schema, so a
+/// future CLI change degrades to "no deployments" instead of a hard error.
+fn parse_deployments(stdout: &str) -> Vec<DeploymentInfo> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(stdout.trim()) else {
+        return Vec::new();
+    };
+    let Some(arr) = value.as_array() else {
+        return Vec::new();
+    };
+    arr.iter()
+        .filter_map(|d| {
+            let id = d.get("id")?.as_str()?.to_string();
+            let url = d
+                .get("deploy_ssl_url")
+                .or_else(|| d.get("url"))
+                .and_then(|u| u.as_str())
+                .map(String::from);
+            let status = match d.get("state").and_then(|s| s.as_str()).unwrap_or("") {
+                "ready" | "processed" => DeployStatus::Ready,
+                "error" => DeployStatus::Error,
+                _ => DeployStatus::Unknown,
+            };
+            let created_at = d
+                .get("created_at")
+                .and_then(|t| t.as_str())
+                .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+                .map(|dt| dt.with_timezone(&chrono::Utc));
+            Some(DeploymentInfo {
+                id,
+                url,
+                status,
+                created_at,
+                is_current: false,
+            })
+        })
+        .collect()
 }
 
 /// Extract the real deployment URL from `netlify deploy`'s output.
@@ -220,6 +354,28 @@ mod tests {
     #[test]
     fn returns_none_instead_of_fabricating_a_url() {
         assert_eq!(extract_deploy_url("no url here"), None);
+    }
+
+    #[test]
+    fn parses_list_deployments_json() {
+        let stdout = r#"[
+            {"id":"d_1","deploy_ssl_url":"https://a--site.netlify.app","state":"ready","created_at":"2024-01-02T00:00:00Z"},
+            {"id":"d_2","state":"error","created_at":"2024-01-01T00:00:00Z"}
+        ]"#;
+        let rows = parse_deployments(stdout);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].id, "d_1");
+        assert_eq!(rows[0].url.as_deref(), Some("https://a--site.netlify.app"));
+        assert_eq!(rows[0].status, DeployStatus::Ready);
+        assert!(rows[0].created_at.is_some());
+        assert_eq!(rows[1].status, DeployStatus::Error);
+        assert_eq!(rows[1].url, None);
+    }
+
+    #[test]
+    fn parse_deployments_returns_empty_on_unrecognized_output() {
+        assert!(parse_deployments("not json").is_empty());
+        assert!(parse_deployments("{\"not\":\"an array\"}").is_empty());
     }
 }
 

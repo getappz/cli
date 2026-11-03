@@ -318,6 +318,39 @@ impl DeployProvider for VercelProvider {
             .collect();
         Ok(deployments)
     }
+
+    fn rollback(&self, ctx: &DeployContext, deployment_id: &str) -> DeployResult<DeployOutput> {
+        // `vercel rollback` accepts either a deployment id or its URL.
+        let out = ctx
+            .exec_live(
+                "vercel",
+                &["rollback", deployment_id, "--yes"],
+                DEPLOY_TIMEOUT,
+            )
+            .map_err(|reason| DeployError::DeployFailed {
+                provider: self.name(),
+                reason,
+            })?;
+        if !out.success {
+            return Err(DeployError::DeployFailed {
+                provider: self.name(),
+                reason: format!("vercel rollback failed:\n{}\n{}", out.stdout, out.stderr),
+            });
+        }
+        Ok(DeployOutput {
+            provider: self.slug().to_string(),
+            url: extract_deploy_url(&out.stdout),
+            is_preview: false,
+            status: DeployStatus::Ready,
+            created_at: Some(chrono::Utc::now()),
+            duration_ms: None,
+            auth: None,
+            setup_files: Vec::new(),
+            cli_missing: false,
+            link_needed: false,
+            unchanged: false,
+        })
+    }
 }
 
 /// Extract the real deployment URL from `vercel deploy`'s stdout. Vercel's

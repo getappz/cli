@@ -10,6 +10,7 @@ mod deploy;
 mod deploy_state;
 mod dev_install;
 mod init_source;
+mod lifecycle;
 mod mcp;
 mod secrets;
 mod skills;
@@ -53,6 +54,10 @@ enum AppzCmd {
     Mcp,
     /// Deploy to a hosting platform (drives that platform's own CLI)
     Deploy(DeployArgs),
+    /// List deployments of the (or a) target
+    Ls(LsArgs),
+    /// Roll a target back to a previous deployment
+    Rollback(RollbackArgs),
     /// Store credentials in an encrypted vault used by `appz deploy`
     Env(EnvArgs),
     /// Discover and install agent skills relevant to this project
@@ -175,6 +180,26 @@ struct DeployArgs {
     /// Install a missing platform CLI through mise without asking
     #[arg(short = 'y', long)]
     yes: bool,
+}
+
+#[derive(Args)]
+struct LsArgs {
+    #[arg(default_value = ".")]
+    dir: PathBuf,
+    /// Provider slug; uses appz.jsonc's deploy.default if omitted, else detects it
+    #[arg(long)]
+    target: Option<String>,
+}
+
+#[derive(Args)]
+struct RollbackArgs {
+    /// Deployment id or URL to roll back to (from `appz ls`)
+    deployment: String,
+    #[arg(default_value = ".")]
+    dir: PathBuf,
+    /// Provider slug; uses appz.jsonc's deploy.default if omitted, else detects it
+    #[arg(long)]
+    target: Option<String>,
 }
 
 #[derive(Args)]
@@ -1003,6 +1028,8 @@ fn main() {
             }
         }
         AppzCmd::Deploy(a) => run_deploy(a, json),
+        AppzCmd::Ls(a) => run_ls(a, json),
+        AppzCmd::Rollback(a) => run_rollback(a, json),
         AppzCmd::Env(a) => run_env(a, json),
         AppzCmd::Skills(a) => run_skills(a, json),
         AppzCmd::Agents(a) => run_agents(a, json),
@@ -1270,6 +1297,54 @@ fn run_deploy(args: DeployArgs, json: bool) {
                 }
                 outro("deploy complete");
             }
+        }
+        Err(e) => error(&e),
+    }
+}
+
+fn run_ls(args: LsArgs, json: bool) {
+    let canonical = resolve_root(&args.dir);
+    match lifecycle::list(&canonical, args.target.as_deref()) {
+        Ok(deployments) => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&deployments).unwrap());
+                return;
+            }
+            intro("appz ls");
+            if deployments.is_empty() {
+                info("no deployments found");
+            }
+            for d in &deployments {
+                let current = if d.is_current { " (current)" } else { "" };
+                match (&d.url, d.id.is_empty()) {
+                    (Some(url), _) if *url != d.id => {
+                        info(&format!("{}  {}{}", d.id, url, current))
+                    }
+                    (Some(url), _) => info(&format!("{}{}", url, current)),
+                    (None, false) => info(&format!("{}{}", d.id, current)),
+                    (None, true) => info("(no id)"),
+                }
+            }
+            outro("done");
+        }
+        Err(e) => error(&e),
+    }
+}
+
+fn run_rollback(args: RollbackArgs, json: bool) {
+    let canonical = resolve_root(&args.dir);
+    match lifecycle::rollback(&canonical, args.target.as_deref(), &args.deployment) {
+        Ok(output) => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&output).unwrap());
+                return;
+            }
+            intro("appz rollback");
+            match &output.url {
+                Some(url) => success(&format!("rolled back — live at {url}")),
+                None => success("rolled back"),
+            }
+            outro("done");
         }
         Err(e) => error(&e),
     }

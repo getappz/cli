@@ -30,8 +30,10 @@ use std::time::Instant;
 
 use crate::context::DeployContext;
 use crate::error::{DeployError, DeployResult};
-use crate::output::{DeployOutput, DeployStatus, DetectedConfig, PrerequisiteStatus};
-use crate::provider::{DEPLOY_TIMEOUT, DeployProvider};
+use crate::output::{
+    DeployOutput, DeployStatus, DeploymentInfo, DetectedConfig, PrerequisiteStatus,
+};
+use crate::provider::{DEPLOY_TIMEOUT, DeployProvider, QUERY_TIMEOUT};
 
 pub struct CloudflareProvider;
 
@@ -173,6 +175,62 @@ impl DeployProvider for CloudflareProvider {
     fn deploy_preview(&self, ctx: &DeployContext) -> DeployResult<DeployOutput> {
         self.deploy_internal(ctx, true)
     }
+
+    fn list_deployments(&self, ctx: &DeployContext) -> DeployResult<Vec<DeploymentInfo>> {
+        let out = ctx
+            .exec(
+                "wrangler",
+                &["deployments", "list", "--json"],
+                QUERY_TIMEOUT,
+            )
+            .map_err(|reason| DeployError::DeployFailed {
+                provider: self.name(),
+                reason,
+            })?;
+        if !out.success {
+            return Err(DeployError::DeployFailed {
+                provider: self.name(),
+                reason: format!(
+                    "wrangler deployments list failed:\n{}\n{}",
+                    out.stdout, out.stderr
+                ),
+            });
+        }
+        Ok(parse_deployments(&out.stdout))
+    }
+
+    fn rollback(&self, ctx: &DeployContext, deployment_id: &str) -> DeployResult<DeployOutput> {
+        // `--message` skips the interactive rollback-reason prompt.
+        let out = ctx
+            .exec_live(
+                "wrangler",
+                &["rollback", deployment_id, "--message", "rollback via appz"],
+                DEPLOY_TIMEOUT,
+            )
+            .map_err(|reason| DeployError::DeployFailed {
+                provider: self.name(),
+                reason,
+            })?;
+        if !out.success {
+            return Err(DeployError::DeployFailed {
+                provider: self.name(),
+                reason: format!("wrangler rollback failed:\n{}\n{}", out.stdout, out.stderr),
+            });
+        }
+        Ok(DeployOutput {
+            provider: self.slug().to_string(),
+            url: extract_deploy_url(&out.stdout),
+            is_preview: false,
+            status: DeployStatus::Ready,
+            created_at: Some(chrono::Utc::now()),
+            duration_ms: None,
+            auth: None,
+            setup_files: Vec::new(),
+            cli_missing: false,
+            link_needed: false,
+            unchanged: false,
+        })
+    }
 }
 
 /// Extract the real deployment URL from `wrangler`'s output. Scans for the
@@ -186,6 +244,47 @@ fn extract_deploy_url(stdout: &str) -> Option<String> {
         .map(str::trim)
         .rfind(|line| line.starts_with("https://"))
         .map(str::to_string)
+}
+
+/// Parse `wrangler deployments list --json` into version rows. Wrangler's JSON
+/// has one entry per deployment with its `versions` (each a `version_id` +
+/// traffic `percentage`); a version serving 100% of traffic is "current".
+/// Best-effort: returns an empty list rather than asserting a schema.
+fn parse_deployments(stdout: &str) -> Vec<DeploymentInfo> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(stdout.trim()) else {
+        return Vec::new();
+    };
+    let Some(deployments) = value.as_array() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for deployment in deployments {
+        let created_at = deployment
+            .get("created_on")
+            .and_then(|t| t.as_str())
+            .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc));
+        let Some(versions) = deployment.get("versions").and_then(|v| v.as_array()) else {
+            continue;
+        };
+        for version in versions {
+            let Some(id) = version.get("version_id").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let percentage = version
+                .get("percentage")
+                .and_then(|p| p.as_u64())
+                .unwrap_or(0);
+            out.push(DeploymentInfo {
+                id: id.to_string(),
+                url: None,
+                status: DeployStatus::Ready,
+                created_at,
+                is_current: percentage == 100,
+            });
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -205,6 +304,28 @@ mod tests {
     fn returns_none_instead_of_fabricating_a_url() {
         let stdout = "Uploaded my-worker (1.23 sec)\nDeployed my-worker triggers (custom domain)\n";
         assert_eq!(extract_deploy_url(stdout), None);
+    }
+
+    #[test]
+    fn parses_deployments_list_json() {
+        let stdout = r#"[
+            {"created_on":"2024-01-02T00:00:00Z","versions":[{"version_id":"v1","percentage":100},{"version_id":"v2","percentage":50}]},
+            {"created_on":"2024-01-01T00:00:00Z","versions":[{"version_id":"v3","percentage":50}]}
+        ]"#;
+        let rows = parse_deployments(stdout);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].id, "v1");
+        assert!(rows[0].is_current, "100% traffic is current");
+        assert_eq!(rows[1].id, "v2");
+        assert!(!rows[1].is_current);
+        assert_eq!(rows[2].id, "v3");
+        assert!(rows[0].created_at.is_some());
+    }
+
+    #[test]
+    fn parse_deployments_returns_empty_on_unrecognized_output() {
+        assert!(parse_deployments("not json").is_empty());
+        assert!(parse_deployments("{\"x\":1}").is_empty());
     }
 
     #[test]

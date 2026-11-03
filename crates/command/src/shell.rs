@@ -70,8 +70,18 @@ pub fn find_command_on_path(name: &str) -> Option<PathBuf> {
 /// (searched AFTER `PATH`, so a tool the user installed themselves wins) —
 /// e.g. mise tool bin dirs that are not on the user's `PATH`. Honors
 /// `PATHEXT` on Windows, so a `.cmd` shim resolves to its full path.
-pub fn find_command_with_paths(name: &str, extra: &[PathBuf]) -> Option<PathBuf> {
-    let current = env::var_os("PATH").unwrap_or_default();
+///
+/// `base_path` replaces the process `PATH` as the search base (e.g. a `PATH`
+/// the caller set for the child), so lookup and spawn use the same value.
+pub fn find_command_with_paths(
+    name: &str,
+    base_path: Option<&std::ffi::OsStr>,
+    extra: &[PathBuf],
+) -> Option<PathBuf> {
+    let current = base_path
+        .map(std::ffi::OsStr::to_os_string)
+        .or_else(|| env::var_os("PATH"))
+        .unwrap_or_default();
     let paths = env::join_paths(env::split_paths(&current).chain(extra.iter().cloned())).ok()?;
     which::which_in(name, Some(paths), env::current_dir().ok()?).ok()
 }

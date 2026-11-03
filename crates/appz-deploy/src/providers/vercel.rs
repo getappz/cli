@@ -159,15 +159,11 @@ impl VercelProvider {
     }
 }
 
-/// Frameworks Vercel builds into functions with its own `vercel build`: a
-/// prebuild by appz would only be thrown away.
-const SERVER_FRAMEWORKS: [&str; 3] = ["Next.js", "Nuxt", "Remix"];
-
 impl DeployProvider for VercelProvider {
     fn needs_prebuild(&self, frameworks: &[String]) -> bool {
         !frameworks
             .iter()
-            .any(|f| SERVER_FRAMEWORKS.contains(&f.as_str()))
+            .any(|f| appz_core::SERVER_RENDERED_FRAMEWORKS.contains(&f.as_str()))
     }
     fn name(&self) -> &'static str {
         "Vercel"

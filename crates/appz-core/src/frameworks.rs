@@ -28,6 +28,12 @@ const NPM_FRAMEWORKS: &[(&[&str], &str)] = &[
     (&["drizzle-orm"], "Drizzle"),
 ];
 
+/// Detected frameworks that render on the server: a platform builds these into
+/// functions with its own build, so a separate static build would be wasted.
+/// Detection is by dependency name, so frameworks that are only sometimes
+/// server-rendered (Astro, SvelteKit) are deliberately not listed.
+pub const SERVER_RENDERED_FRAMEWORKS: &[&str] = &["Next.js", "Nuxt", "Remix"];
+
 const CARGO_FRAMEWORKS: &[(&[&str], &str)] = &[
     (&["axum"], "Axum"),
     (&["actix-web"], "Actix"),
@@ -239,4 +245,19 @@ pub fn scan_elixir(content: &str) -> Vec<DetectedFramework> {
     }
 
     found
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn server_rendered_names_match_the_detector() {
+        for name in SERVER_RENDERED_FRAMEWORKS {
+            assert!(
+                NPM_FRAMEWORKS.iter().any(|(_, n)| n == name),
+                "{name} is not a detected framework name"
+            );
+        }
+    }
 }

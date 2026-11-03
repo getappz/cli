@@ -329,8 +329,15 @@ pub fn run(project_dir: &Path, req: DeployRequest) -> Result<DeployOutput, Strin
 
     // Install + build through mise's cached tasks (skipped when unchanged);
     // providers then deploy the built output instead of building from scratch.
-    if !req.dry_run && provider.needs_prebuild(&frameworks) {
-        ctx.prebuilt = crate::build_stage::run(&ctx)?;
+    if !req.dry_run {
+        if provider.needs_prebuild(&frameworks) {
+            ctx.prebuilt = crate::build_stage::run(&ctx)?;
+        } else if !req.json {
+            eprintln!(
+                "note: {} builds this project itself; skipping appz's build stage",
+                provider.name()
+            );
+        }
     }
 
     let mut output = if ctx.is_preview {

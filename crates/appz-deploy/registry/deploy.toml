@@ -23,8 +23,9 @@
 #     in the output (consoles, logs, docs) are never mistaken for the deployment.
 #   * `detect` lists only files that clearly mean "this project deploys here".
 #
-# Not ported (see the PR): aws-amplify, gitlab-pages, google-cloud, heroku,
-# render, zeabur, zerops.
+# Not ported (see the PR): gitlab-pages, heroku, render. These deploy by
+# `git push` (Heroku, GitLab Pages) or Infrastructure-as-Code + git (Render),
+# not by running a CLI over the built output, so they do not fit this model.
 
 [[provider]]
 slug = "fly"
@@ -158,3 +159,62 @@ install_hint = "npm install -g gh-pages"
 token_env = ""
 login_hint = "make sure `git push` to origin works"
 production = [["gh-pages", "-d", "{{output_dir}}"]]
+
+# The following were ported from the old blueprints but their CLI commands were
+# not exercised end to end: verify before trusting them in CI.
+
+[[provider]]
+slug = "aws-amplify"
+name = "AWS Amplify"
+cli = "amplify"
+# @aws-amplify/cli is deprecated (Amplify Gen 2 moved to the ampx toolchain);
+# kept for existing Gen 1 projects.
+mise = "npm:@aws-amplify/cli"
+install_hint = "npm install -g @aws-amplify/cli"
+token_env = "AWS_ACCESS_KEY_ID"
+login = ["configure"]
+login_hint = "amplify configure"
+detect = ["amplify.yml", "amplify/backend"]
+production = [["amplify", "publish", "--yes"]]
+
+[[provider]]
+slug = "google-cloud"
+name = "Google Cloud Run"
+cli = "gcloud"
+mise = ""
+install_hint = "https://cloud.google.com/sdk/docs/install"
+token_env = "GOOGLE_APPLICATION_CREDENTIALS"
+login = ["auth", "login"]
+login_hint = "gcloud auth login"
+detect = ["app.yaml", "cloudbuild.yaml"]
+url_hosts = [".run.app"]
+required = ["service", "project"]
+# `--source .` builds the container from source in Cloud Build, so the deploy
+# does not read the local build output.
+production = [["gcloud", "run", "deploy", "{{service}}", "--source", ".", "--region", "{{region}}", "--project", "{{project}}", "--quiet"]]
+[provider.config]
+region = "us-central1"
+
+[[provider]]
+slug = "zeabur"
+name = "Zeabur"
+cli = "zeabur"
+mise = "npm:zeabur"
+install_hint = "npm install -g zeabur"
+token_env = "ZEABUR_TOKEN"
+login = ["auth", "login"]
+login_hint = "zeabur auth login"
+detect = ["zeabur.json"]
+production = [["zeabur", "deploy"]]
+
+[[provider]]
+slug = "zerops"
+name = "Zerops"
+cli = "zcli"
+mise = "npm:@zerops/zcli"
+install_hint = "npm install -g @zerops/zcli"
+token_env = "ZEROPS_TOKEN"
+login = ["login"]
+login_hint = "zcli login (paste your access token)"
+detect = ["zerops.yml"]
+production = [["zcli", "push"]]

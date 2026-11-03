@@ -56,7 +56,7 @@ fn gitignore_project_vault(vault: &Path) {
     if let Some(root) = vault.parent().and_then(Path::parent)
         && root.ancestors().any(|a| a.join(".git").exists())
     {
-        appz_core::ensure_gitignored(root);
+        let _ = appz_core::ensure_gitignored(root);
     }
 }
 

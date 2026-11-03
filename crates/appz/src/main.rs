@@ -476,9 +476,11 @@ fn do_detect_and_write(root: &Path) -> Vec<appz_core::DetectedToolchain> {
         tc
     });
 
-    with_spinner("writing project state...", "state written", || {
-        appz_core::write_state(root, &toolchains);
-    });
+    if let Err(e) = with_spinner("writing project state...", "state written", || {
+        appz_core::write_state(root, &toolchains)
+    }) {
+        error(&format!("cannot write project state: {e}"));
+    }
 
     for tc in &toolchains {
         let fw = if tc.frameworks.is_empty() {

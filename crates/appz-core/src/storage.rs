@@ -54,15 +54,7 @@ pub fn mise_config_path(root: &Path) -> PathBuf {
 }
 
 /// Ensure `<root>/.gitignore` contains a `.appz/` entry. Idempotent.
-pub fn ensure_gitignored(root: &Path) {
-    try_ensure_gitignored(root).unwrap_or_else(|e| {
-        eprintln!("error: {e}");
-        std::process::exit(1);
-    });
-}
-
-/// [`ensure_gitignored`] that returns the error instead of exiting.
-pub fn try_ensure_gitignored(root: &Path) -> Result<(), String> {
+pub fn ensure_gitignored(root: &Path) -> Result<(), String> {
     let gitignore = root.join(".gitignore");
     let existing = fs::read_to_string(&gitignore).unwrap_or_default();
     if existing.lines().any(|l| l.trim() == ".appz/") {
@@ -107,6 +99,9 @@ const INPUT_FILES: &[&str] = &[
     "Gemfile",
     "Gemfile.lock",
     "setup.py",
+    "composer.json",
+    "composer.lock",
+    ".php-version",
     "turbo.json",
     "rush.json",
     "nx.json",
@@ -181,20 +176,11 @@ impl From<&DetectedToolchain> for StoredToolchain {
 /// Write current state + input hash as one JSONL line under `.appz/`, and
 /// write (or merge into) `mise.toml` at the project root.
 /// Returns the path to `mise.toml`.
-pub fn write_state(root: &Path, toolchains: &[DetectedToolchain]) -> PathBuf {
-    try_write_state(root, toolchains).unwrap_or_else(|e| {
-        eprintln!("error: {e}");
-        std::process::exit(1);
-    })
-}
-
-/// [`write_state`] that returns the error instead of exiting the process, for
-/// callers that must survive it (the MCP server, `deploy`).
-pub fn try_write_state(root: &Path, toolchains: &[DetectedToolchain]) -> Result<PathBuf, String> {
+pub fn write_state(root: &Path, toolchains: &[DetectedToolchain]) -> Result<PathBuf, String> {
     let appz_dir = root.join(".appz");
     fs::create_dir_all(&appz_dir)
         .map_err(|e| format!("cannot create '.appz' dir '{}': {e}", appz_dir.display()))?;
-    try_ensure_gitignored(root)?;
+    ensure_gitignored(root)?;
 
     let sp = state_path(root);
     let mp = mise_config_path(root);
@@ -311,7 +297,7 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
 
-        write_state(&dir, &[sample_toolchain()]);
+        write_state(&dir, &[sample_toolchain()]).unwrap();
 
         assert!(
             dir.join("mise.toml").exists(),
@@ -338,7 +324,7 @@ mod tests {
         )
         .unwrap();
 
-        write_state(&dir, &[sample_toolchain()]);
+        write_state(&dir, &[sample_toolchain()]).unwrap();
 
         let toml = fs::read_to_string(dir.join("mise.toml")).unwrap();
         assert!(
@@ -386,7 +372,7 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(".mise.toml"), "[tools]\njava = \"17\"\n").unwrap();
 
-        write_state(&dir, &[sample_toolchain()]);
+        write_state(&dir, &[sample_toolchain()]).unwrap();
 
         assert!(
             !dir.join("mise.toml").exists(),
@@ -411,8 +397,8 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
 
-        write_state(&dir, &[sample_toolchain()]);
-        write_state(&dir, &[sample_toolchain()]);
+        write_state(&dir, &[sample_toolchain()]).unwrap();
+        write_state(&dir, &[sample_toolchain()]).unwrap();
 
         let gitignore = fs::read_to_string(dir.join(".gitignore")).unwrap();
         assert_eq!(

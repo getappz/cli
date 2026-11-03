@@ -306,6 +306,10 @@ fn scan_frameworks(fs: &DetectorFilesystem, slug: &str) -> Vec<frameworks::Detec
             }
             f
         }
+        "php" => fs
+            .read_file("composer.json")
+            .map(|c| frameworks::scan_php(&c))
+            .unwrap_or_default(),
         "elixir" => fs
             .read_file("mix.exs")
             .map(|c| frameworks::scan_elixir(&c))
@@ -528,6 +532,24 @@ mod tests {
         let result = detect_toolchains(&dir).unwrap();
         let rust = result.iter().find(|t| t.slug == "rust").unwrap();
         assert_eq!(rust.output_directory, Some("target"));
+    }
+
+    #[test]
+    fn test_detect_php_from_composer_json() {
+        let dir = test_dir("php");
+        fs::write(
+            dir.join("composer.json"),
+            r#"{"require": {"laravel/framework": "^11.0"}}"#,
+        )
+        .unwrap();
+
+        let result = detect_toolchains(&dir).unwrap();
+        let php = result.iter().find(|t| t.slug == "php");
+        assert!(php.is_some(), "php should be detected");
+        assert!(
+            php.unwrap().frameworks.iter().any(|f| f.name == "Laravel"),
+            "laravel framework should be detected"
+        );
     }
 
     #[test]

@@ -123,6 +123,7 @@ version = "0.2.0"
 dependencies = [
  "appz-core",
  "appz-deploy",
+ "appz-vault",
  "chrono",
  "clap",
  "cliclack",

@@ -9,6 +9,7 @@ mod deploy;
 mod dev_install;
 mod init_source;
 mod mcp;
+mod secrets;
 mod skills;
 mod update;
 
@@ -50,6 +51,8 @@ enum AppzCmd {
     Mcp,
     /// Deploy to a hosting platform (drives that platform's own CLI)
     Deploy(DeployArgs),
+    /// Store credentials in an encrypted vault used by `appz deploy`
+    Env(EnvArgs),
     /// Discover and install agent skills relevant to this project
     Skills(SkillsArgs),
     /// Detect installed AI agents and diagnose their config (skills: `appz skills`)
@@ -101,6 +104,45 @@ enum AgentAction {
     List,
     /// Check agent configuration and installed skills
     Doctor,
+}
+
+#[derive(Args)]
+struct EnvArgs {
+    #[command(subcommand)]
+    command: EnvCmd,
+}
+
+#[derive(Subcommand)]
+enum EnvCmd {
+    /// Store a secret (omit VALUE to be prompted, keeping it out of shell history)
+    Set {
+        name: String,
+        value: Option<String>,
+        /// Use the user-wide vault (~/.appz) instead of this project's
+        #[arg(long)]
+        global: bool,
+    },
+    /// List stored names (never values)
+    Ls {
+        #[arg(long)]
+        global: bool,
+    },
+    /// Remove a secret
+    Rm {
+        name: String,
+        #[arg(long)]
+        global: bool,
+    },
+    /// Unlock the vault (creating it on first use) for this login session
+    Unlock {
+        #[arg(long)]
+        global: bool,
+    },
+    /// Forget the cached unlock
+    Lock {
+        #[arg(long)]
+        global: bool,
+    },
 }
 
 #[derive(Args)]
@@ -945,6 +987,7 @@ fn main() {
             }
         }
         AppzCmd::Deploy(a) => run_deploy(a, json),
+        AppzCmd::Env(a) => run_env(a, json),
         AppzCmd::Skills(a) => run_skills(a, json),
         AppzCmd::Agents(a) => run_agents(a, json),
         AppzCmd::Update(a) => update::run(a.version, a.check, a.quiet),
@@ -1065,6 +1108,43 @@ fn run_skills(args: SkillsArgs, json: bool) {
             outro("done — review skills before use; they run with full agent permissions");
         }
         Err(e) => error(&e),
+    }
+}
+
+fn run_env(args: EnvArgs, json: bool) {
+    let path =
+        |global: bool| secrets::vault_path(Path::new("."), global).unwrap_or_else(|e| error(&e));
+    match args.command {
+        EnvCmd::Set {
+            name,
+            value,
+            global,
+        } => match secrets::set(&path(global), &name, value) {
+            Ok(()) => success(&format!("stored {name}")),
+            Err(e) => error(&e),
+        },
+        EnvCmd::Ls { global } => match secrets::names(&path(global)) {
+            Ok(names) if json => println!("{}", serde_json::to_string(&names).unwrap()),
+            Ok(names) if names.is_empty() => info("no secrets stored"),
+            Ok(names) => info(&names.join(
+                "
+",
+            )),
+            Err(e) => error(&e),
+        },
+        EnvCmd::Rm { name, global } => match secrets::remove(&path(global), &name) {
+            Ok(true) => success(&format!("removed {name}")),
+            Ok(false) => error(&format!("{name} is not stored")),
+            Err(e) => error(&e),
+        },
+        EnvCmd::Unlock { global } => match secrets::unlock(&path(global)) {
+            Ok(_) => success("vault unlocked"),
+            Err(e) => error(&e),
+        },
+        EnvCmd::Lock { global } => {
+            secrets::lock(&path(global));
+            success("vault locked");
+        }
     }
 }
 

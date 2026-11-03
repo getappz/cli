@@ -21,6 +21,9 @@ pub enum Consent {
     Yes,
 }
 
+/// Link ids the platform CLIs read from the environment instead of `link`.
+const LINK_VARS: [&str; 3] = ["VERCEL_ORG_ID", "VERCEL_PROJECT_ID", "NETLIFY_SITE_ID"];
+
 pub struct DeployRequest {
     pub target: Option<String>,
     pub prod: bool,
@@ -168,6 +171,17 @@ pub fn run(project_dir: &Path, req: DeployRequest) -> Result<DeployOutput, Strin
         .next()
         .map(|f| f.name.to_string());
 
+    // Vault values for this provider only (its token, link ids, `deploy.env`).
+    // Precedence: vault < real environment < `-e`.
+    let allowed: Vec<String> = std::iter::once(provider.auth_env_var().to_string())
+        .chain(LINK_VARS.map(String::from))
+        .chain(config.env.iter().cloned())
+        .collect();
+    let vault = crate::secrets::deploy_env(project_dir, &allowed)?;
+    if vault.locked && std::env::var_os(provider.auth_env_var()).is_none() {
+        eprintln!("note: vault is locked; run `appz env unlock` to use stored credentials");
+    }
+
     let mut ctx = DeployContext::new(project_dir.to_path_buf(), output_dir);
     ctx.is_preview = !req.prod;
     ctx.dry_run = req.dry_run;
@@ -175,11 +189,13 @@ pub fn run(project_dir: &Path, req: DeployRequest) -> Result<DeployOutput, Strin
     ctx.framework = framework;
     ctx.deploy_config = config;
     ctx.extra_path = extra_path;
-    ctx.run_env = req
-        .env
-        .iter()
-        .filter_map(|s| parse_kv(s))
-        .collect::<HashMap<_, _>>();
+    ctx.run_env = vault
+        .vars
+        .into_iter()
+        .filter(|(k, _)| std::env::var_os(k).is_none())
+        .collect();
+    ctx.run_env
+        .extend(req.env.iter().filter_map(|s| parse_kv(s)));
     ctx.build_env = req
         .build_env
         .iter()

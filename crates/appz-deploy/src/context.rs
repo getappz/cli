@@ -12,6 +12,10 @@ use crate::exec::{ExecOutput, exec_captured};
 pub struct DeployConfig {
     #[serde(default)]
     pub default: Option<String>,
+    /// Extra vault secret names (beyond the provider's token and link ids)
+    /// to pass to the platform CLI.
+    #[serde(default)]
+    pub env: Vec<String>,
     #[serde(default)]
     pub targets: HashMap<String, serde_json::Value>,
 }

@@ -106,6 +106,7 @@ impl VercelProvider {
             setup_files: Vec::new(),
             cli_missing: false,
             link_needed: false,
+            unchanged: false,
         })
     }
 }

@@ -47,6 +47,10 @@ pub struct DeployOutput {
     /// creates or links one, with consent).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub link_needed: bool,
+    /// Nothing changed since the last deploy of this target, so nothing was
+    /// (or, on `--dry-run`, would be) deployed; `url` is the previous one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unchanged: bool,
 }
 
 impl DeployOutput {
@@ -62,6 +66,7 @@ impl DeployOutput {
             setup_files: Vec::new(),
             cli_missing: false,
             link_needed: false,
+            unchanged: false,
         }
     }
 }

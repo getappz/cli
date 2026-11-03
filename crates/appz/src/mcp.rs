@@ -73,6 +73,9 @@ pub struct DeployArg {
     /// agreed; the default fails with the step that is needed.
     #[serde(default)]
     pub allow_setup: bool,
+    /// Deploy even if nothing changed since the last deploy of this target.
+    #[serde(default)]
+    pub force: bool,
 }
 
 #[derive(Clone)]
@@ -209,7 +212,7 @@ impl AppzServer {
     }
 
     #[tool(
-        description = "Deploy a project to a hosting platform (vercel|netlify|cloudflare) by driving that platform's own CLI; the target is detected from project files when not given. Returns JSON with the deployment URL — `null` if it couldn't be confirmed from the CLI's output, never a guessed URL. On a fresh project it can fail naming a missing step (CLI not installed, project not linked): retry with allow_setup=true once the user agrees (optionally project=<name>). Sign-in needs the platform token in the environment or stored with `appz env set`; the tool cannot log in."
+        description = "Deploy a project to a hosting platform (vercel|netlify|cloudflare) by driving that platform's own CLI; the target is detected from project files when not given. If nothing changed since the last deploy it skips (unchanged=true, previous url) unless force=true. Returns JSON with the deployment URL — `null` if it couldn't be confirmed from the CLI's output, never a guessed URL. On a fresh project it can fail naming a missing step (CLI not installed, project not linked): retry with allow_setup=true once the user agrees (optionally project=<name>). Sign-in needs the platform token in the environment or stored with `appz env set`; the tool cannot log in."
     )]
     fn deploy(&self, Parameters(arg): Parameters<DeployArg>) -> Result<CallToolResult, McpError> {
         let root = Self::resolve(&arg.dir);
@@ -221,6 +224,7 @@ impl AppzServer {
         let req = crate::deploy::DeployRequest {
             target: arg.target,
             project: arg.project,
+            force: arg.force,
             prod: arg.prod,
             env: vec![],
             build_env: vec![],

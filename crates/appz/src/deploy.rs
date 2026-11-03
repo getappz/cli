@@ -29,6 +29,8 @@ pub struct DeployRequest {
     pub prod: bool,
     /// Platform project name (skips the prompt when linking).
     pub project: Option<String>,
+    /// Deploy even when nothing changed since the last deploy of the target.
+    pub force: bool,
     pub env: Vec<String>,
     pub build_env: Vec<String>,
     pub dry_run: bool,
@@ -186,6 +188,19 @@ pub fn run(project_dir: &Path, req: DeployRequest) -> Result<DeployOutput, Strin
 
     let provider = get_provider(&slug).map_err(|e| e.to_string())?;
 
+    // Nothing changed since the last deploy of this target: do not install,
+    // build and upload it all again.
+    if !req.force {
+        let fp = crate::deploy_state::fingerprint(project_dir, &slug)?;
+        if let Some(last) = crate::deploy_state::unchanged(project_dir, &slug, req.prod, &fp) {
+            let mut out = DeployOutput::dry_run(provider.slug(), !req.prod);
+            out.url = Some(last.url);
+            out.status = appz_deploy::DeployStatus::Ready;
+            out.unchanged = true;
+            return Ok(out);
+        }
+    }
+
     // mise-installed CLIs (global config or this project's mise.toml) are
     // discovered via `mise bin-paths` and appended after the user's own PATH.
     let mut extra_path = appz_core::mise_bin_paths(project_dir);
@@ -274,6 +289,14 @@ pub fn run(project_dir: &Path, req: DeployRequest) -> Result<DeployOutput, Strin
     .map_err(|e| e.to_string())?;
 
     output.setup_files = setup_names;
+    if !req.dry_run
+        && let Some(url) = &output.url
+        && let Ok(fp) = crate::deploy_state::fingerprint(project_dir, &slug)
+    {
+        // Fingerprint after the deploy: the run itself may have written
+        // config (wrangler.jsonc, a .gitignore line) that is part of the project now.
+        crate::deploy_state::record(project_dir, &slug, req.prod, &fp, url);
+    }
     output.link_needed = req.dry_run && !provider.is_linked(&ctx);
 
     // A dry run is a readiness report: probe sign-in when the CLI is present

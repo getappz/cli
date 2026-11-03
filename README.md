@@ -41,6 +41,7 @@ appz test      # run tests
 appz lint      # run the linter
 appz format    # run the formatter
 appz deploy    # deploy via the target platform's own CLI
+appz ci        # write a GitHub Actions deploy workflow
 appz doctor    # diagnose project stack, config, and suggestions
 appz mcp       # stdio MCP server exposing detect/doctor/run to AI agents
 ```
@@ -170,6 +171,19 @@ Point an MCP client at `appz mcp` (e.g. `{"command": "appz", "args": ["mcp"]}`).
 Cloudflare, ...), so set that platform's native env vars/secrets (e.g.
 `VERCEL_TOKEN`, `CLOUDFLARE_API_TOKEN`) directly on the step or job — the
 action doesn't take platform-specific inputs.
+
+### Scaffold the workflow
+
+`appz ci init` writes `.github/workflows/appz-deploy.yml` for the target in
+`appz.jsonc` (or the one detected), pinned to the checked-out branch. With
+`--yes` (or a confirmation at a terminal) it also stores the provider token as
+a repository secret through `gh`. Values come from the environment or the appz
+vault and reach `gh` on stdin — never the command line, logs, or the workflow.
+
+```bash
+appz ci init --yes          # write workflow + set VERCEL_TOKEN (etc.)
+appz ci init --no-secrets   # workflow only; set secrets yourself
+```
 
 ## devcontainer Feature
 

@@ -88,3 +88,42 @@ pub fn promote(
         .promote(&ctx, deployment)
         .map_err(|e| e.to_string())
 }
+
+/// Push every name in the project vault to the target. The vault must be
+/// unlocked (its values are read, then handed to the platform CLI).
+pub fn env_push(project_dir: &Path, target: Option<&str>) -> Result<Vec<String>, String> {
+    let (provider, ctx) = resolve(project_dir, target)?;
+    let path = crate::secrets::vault_path(project_dir, false).map_err(|e| e.to_string())?;
+    let names = crate::secrets::names(&path).map_err(|e| e.to_string())?;
+    if names.is_empty() {
+        return Ok(Vec::new());
+    }
+    let vault = crate::secrets::deploy_env(project_dir, &names)?;
+    if vault.locked {
+        return Err("vault is locked — run `appz env unlock` first".to_string());
+    }
+    let mut pushed = Vec::new();
+    for name in &names {
+        let Some(value) = vault.vars.get(name) else {
+            continue;
+        };
+        provider
+            .push_env(&ctx, name, value)
+            .map_err(|e| e.to_string())?;
+        pushed.push(name.clone());
+    }
+    Ok(pushed)
+}
+
+/// Pull the target's env vars into the project vault.
+pub fn env_pull(project_dir: &Path, target: Option<&str>) -> Result<Vec<String>, String> {
+    let (provider, ctx) = resolve(project_dir, target)?;
+    let pairs = provider.pull_env(&ctx).map_err(|e| e.to_string())?;
+    let path = crate::secrets::vault_path(project_dir, false).map_err(|e| e.to_string())?;
+    let mut pulled = Vec::new();
+    for (name, value) in pairs {
+        crate::secrets::set(&path, &name, Some(value)).map_err(|e| e.to_string())?;
+        pulled.push(name);
+    }
+    Ok(pulled)
+}

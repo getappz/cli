@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::error::DeployResult;
-use crate::exec::{ExecOutput, exec_captured, exec_live};
+use crate::exec::{ExecOutput, exec_captured, exec_captured_input, exec_live};
 
 /// Deploy-time settings read from `appz.jsonc`'s `deploy` key — reuses the
 /// same JSONC-with-comments convention as command overrides
@@ -169,7 +169,19 @@ impl DeployContext {
     /// shell-less spawn cannot find by bare name) still runs; `extra_path` is
     /// also appended to the child's `PATH` (the user's own tools keep priority).
     pub fn exec(&self, bin: &str, args: &[&str], timeout: Duration) -> Result<ExecOutput, String> {
-        self.run(bin, args, timeout, false)
+        self.run(bin, args, &[], timeout, false)
+    }
+
+    /// [`Self::exec`] that also feeds `input` to the child's stdin (platform
+    /// CLIs that read a secret from stdin rather than as an argument).
+    pub fn exec_with_input(
+        &self,
+        bin: &str,
+        args: &[&str],
+        input: &[&str],
+        timeout: Duration,
+    ) -> Result<ExecOutput, String> {
+        self.run(bin, args, input, timeout, false)
     }
 
     /// [`Self::exec`] for the long steps (build, upload): the CLI's output is
@@ -181,13 +193,14 @@ impl DeployContext {
         args: &[&str],
         timeout: Duration,
     ) -> Result<ExecOutput, String> {
-        self.run(bin, args, timeout, !self.json_output)
+        self.run(bin, args, &[], timeout, !self.json_output)
     }
 
     fn run(
         &self,
         bin: &str,
         args: &[&str],
+        input: &[&str],
         timeout: Duration,
         live: bool,
     ) -> Result<ExecOutput, String> {
@@ -211,6 +224,16 @@ impl DeployContext {
         }
         let env_refs: Vec<(&str, &str)> =
             env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        if !input.is_empty() {
+            return exec_captured_input(
+                &program,
+                args,
+                &self.project_dir,
+                &env_refs,
+                input,
+                timeout,
+            );
+        }
         let run = if live { exec_live } else { exec_captured };
         run(&program, args, &self.project_dir, &env_refs, timeout)
     }

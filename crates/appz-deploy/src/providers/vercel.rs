@@ -411,14 +411,75 @@ impl DeployProvider for VercelProvider {
             unchanged: false,
         })
     }
+
+    fn push_env(&self, ctx: &DeployContext, name: &str, value: &str) -> DeployResult<()> {
+        // `vercel env add` reads the value from stdin, not an argument.
+        let out = ctx
+            .exec_with_input(
+                "vercel",
+                &["env", "add", name, "production"],
+                &[value],
+                DEPLOY_TIMEOUT,
+            )
+            .map_err(|reason| DeployError::DeployFailed {
+                provider: self.name(),
+                reason,
+            })?;
+        if out.success {
+            Ok(())
+        } else {
+            Err(DeployError::DeployFailed {
+                provider: self.name(),
+                reason: format!(
+                    "vercel env add {name} failed:\n{}\n{}",
+                    out.stdout, out.stderr
+                ),
+            })
+        }
+    }
+
+    fn pull_env(&self, ctx: &DeployContext) -> DeployResult<Vec<(String, String)>> {
+        let file = std::env::temp_dir().join(format!("appz-vercel-env-{}.env", std::process::id()));
+        let file_s = file.to_string_lossy().into_owned();
+        let out = ctx
+            .exec(
+                "vercel",
+                &["env", "pull", &file_s, "--environment=production", "--yes"],
+                DEPLOY_TIMEOUT,
+            )
+            .map_err(|reason| DeployError::DeployFailed {
+                provider: self.name(),
+                reason,
+            })?;
+        if !out.success {
+            return Err(DeployError::DeployFailed {
+                provider: self.name(),
+                reason: format!("vercel env pull failed:\n{}\n{}", out.stdout, out.stderr),
+            });
+        }
+        let content = std::fs::read_to_string(&file).unwrap_or_default();
+        let _ = std::fs::remove_file(&file);
+        Ok(parse_dotenv(&content))
+    }
 }
 
-/// Extract the real deployment URL from `vercel deploy`'s stdout. Vercel's
-/// CLI contract is designed for scripting (`URL=$(vercel deploy ...)`) — its
-/// stdout is the deployment URL. Scans for the LAST bare `https://` line
-/// rather than the first (the upstream bug this fixes: some flows print an
-/// inspect/status URL before the deploy URL) and returns `None` — never a
-/// guessed URL like `https://{dirname}.vercel.app` — if nothing matches.
+/// Parse the dotenv file `vercel env pull` writes: `KEY="value"` lines,
+/// skipping comments and blank lines. Values are unquoted on read.
+fn parse_dotenv(content: &str) -> Vec<(String, String)> {
+    content
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                return None;
+            }
+            let (k, v) = line.split_once('=')?;
+            let v = v.trim().trim_matches('"');
+            Some((k.trim().to_string(), v.to_string()))
+        })
+        .collect()
+}
+
 fn extract_deploy_url(stdout: &str) -> Option<String> {
     // Find `https://...` tokens anywhere (bare line, or inside the JSON the
     // CLI prints when it has no terminal). Dashboard/inspect links on
@@ -488,6 +549,20 @@ mod tests {
     fn returns_none_instead_of_fabricating_a_url() {
         let stdout = "Deploying...\nDone.\n";
         assert_eq!(extract_deploy_url(stdout), None);
+    }
+
+    #[test]
+    fn parses_a_dotenv_file() {
+        let content = "# comment\nAPI_URL=\"https://x\"\nEMPTY=\"\"\nPLAIN=hello\n";
+        let pairs = parse_dotenv(content);
+        assert_eq!(
+            pairs,
+            vec![
+                ("API_URL".to_string(), "https://x".to_string()),
+                ("EMPTY".to_string(), "".to_string()),
+                ("PLAIN".to_string(), "hello".to_string()),
+            ]
+        );
     }
 }
 

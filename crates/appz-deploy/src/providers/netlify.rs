@@ -200,6 +200,28 @@ impl DeployProvider for NetlifyProvider {
         })
     }
 
+    fn push_env(&self, ctx: &DeployContext, name: &str, value: &str) -> DeployResult<()> {
+        // `netlify env:set` takes the value as an argument (it has no stdin
+        // mode); the value lives only in this short-lived child's arg list.
+        let out = ctx
+            .exec("netlify", &["env:set", name, value], DEPLOY_TIMEOUT)
+            .map_err(|reason| DeployError::DeployFailed {
+                provider: self.name(),
+                reason,
+            })?;
+        if out.success {
+            Ok(())
+        } else {
+            Err(DeployError::DeployFailed {
+                provider: self.name(),
+                reason: format!(
+                    "netlify env:set {name} failed:\n{}\n{}",
+                    out.stdout, out.stderr
+                ),
+            })
+        }
+    }
+
     /// `netlify.toml` with the build command and publish directory, so the
     /// build output is what gets published.
     fn setup_files(&self, ctx: &DeployContext) -> DeployResult<Vec<(String, String)>> {

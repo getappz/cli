@@ -29,7 +29,20 @@ pub fn exec_captured(
     env: &[(&str, &str)],
     timeout: Duration,
 ) -> Result<ExecOutput, String> {
-    exec_inner(bin, args, cwd, env, timeout, false)
+    exec_inner(bin, args, cwd, env, &[], timeout, false)
+}
+
+/// Like [`exec_captured`], but feeds `input` to the child's stdin (platform
+/// CLIs that read a secret from stdin, e.g. `vercel env add`, `wrangler secret put`).
+pub fn exec_captured_input(
+    bin: &str,
+    args: &[&str],
+    cwd: &Path,
+    env: &[(&str, &str)],
+    input: &[&str],
+    timeout: Duration,
+) -> Result<ExecOutput, String> {
+    exec_inner(bin, args, cwd, env, input, timeout, false)
 }
 
 /// Like [`exec_captured`], but also copies the child's output to our stderr
@@ -42,7 +55,7 @@ pub fn exec_live(
     env: &[(&str, &str)],
     timeout: Duration,
 ) -> Result<ExecOutput, String> {
-    exec_inner(bin, args, cwd, env, timeout, true)
+    exec_inner(bin, args, cwd, env, &[], timeout, true)
 }
 
 /// Drain `pipe` to the end, optionally echoing each chunk to stderr.
@@ -71,6 +84,7 @@ fn exec_inner(
     args: &[&str],
     cwd: &Path,
     env: &[(&str, &str)],
+    input: &[&str],
     timeout: Duration,
     echo: bool,
 ) -> Result<ExecOutput, String> {
@@ -82,6 +96,9 @@ fn exec_inner(
         cmd.env(*k, *v);
     }
     let _ = cmd.inherit_path();
+    if !input.is_empty() {
+        cmd.input(input.iter().copied());
+    }
 
     let mut child = cmd.spawn().map_err(|e| e.to_string())?;
 

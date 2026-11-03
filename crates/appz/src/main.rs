@@ -156,6 +156,18 @@ enum EnvCmd {
         #[arg(long)]
         global: bool,
     },
+    /// Push this project's vault secrets to the deploy target
+    Push {
+        /// Provider slug; uses appz.jsonc's deploy.default if omitted, else detects it
+        #[arg(long)]
+        target: Option<String>,
+    },
+    /// Pull the deploy target's env vars into this project's vault
+    Pull {
+        /// Provider slug; uses appz.jsonc's deploy.default if omitted, else detects it
+        #[arg(long)]
+        target: Option<String>,
+    },
 }
 
 #[derive(Args)]
@@ -1231,6 +1243,34 @@ fn run_env(args: EnvArgs, json: bool) {
         EnvCmd::Lock { global } => {
             secrets::lock(&path(global));
             success("vault locked");
+        }
+        EnvCmd::Push { target } => {
+            let canonical = resolve_root(Path::new("."));
+            match lifecycle::env_push(&canonical, target.as_deref()) {
+                Ok(names) if names.is_empty() => info("no secrets to push"),
+                Ok(names) => {
+                    success(&format!(
+                        "pushed {} secret(s): {}",
+                        names.len(),
+                        names.join(", ")
+                    ));
+                }
+                Err(e) => error(&e),
+            }
+        }
+        EnvCmd::Pull { target } => {
+            let canonical = resolve_root(Path::new("."));
+            match lifecycle::env_pull(&canonical, target.as_deref()) {
+                Ok(names) if names.is_empty() => info("no env vars pulled"),
+                Ok(names) => {
+                    success(&format!(
+                        "pulled {} env var(s): {}",
+                        names.len(),
+                        names.join(", ")
+                    ));
+                }
+                Err(e) => error(&e),
+            }
         }
     }
 }

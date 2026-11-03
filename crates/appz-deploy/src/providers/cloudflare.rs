@@ -254,6 +254,32 @@ impl DeployProvider for CloudflareProvider {
         }
         Ok(out.stdout)
     }
+
+    fn push_env(&self, ctx: &DeployContext, name: &str, value: &str) -> DeployResult<()> {
+        // `wrangler secret put` reads the value from stdin, not an argument.
+        let out = ctx
+            .exec_with_input(
+                "wrangler",
+                &["secret", "put", name],
+                &[value],
+                DEPLOY_TIMEOUT,
+            )
+            .map_err(|reason| DeployError::DeployFailed {
+                provider: self.name(),
+                reason,
+            })?;
+        if out.success {
+            Ok(())
+        } else {
+            Err(DeployError::DeployFailed {
+                provider: self.name(),
+                reason: format!(
+                    "wrangler secret put {name} failed:\n{}\n{}",
+                    out.stdout, out.stderr
+                ),
+            })
+        }
+    }
 }
 
 /// Extract the real deployment URL from `wrangler`'s output. Scans for the

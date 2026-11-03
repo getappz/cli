@@ -204,6 +204,25 @@ pub trait DeployProvider: Send + Sync {
             operation: "promote",
         })
     }
+
+    /// Set one env var / secret on the platform. Default: unsupported.
+    fn push_env(&self, ctx: &DeployContext, name: &str, value: &str) -> DeployResult<()> {
+        let _ = (ctx, name, value);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "push_env",
+        })
+    }
+
+    /// Read this platform's env vars back as `(name, value)` pairs. Default:
+    /// unsupported — several platforms keep secrets write-only.
+    fn pull_env(&self, ctx: &DeployContext) -> DeployResult<Vec<(String, String)>> {
+        let _ = ctx;
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "pull_env",
+        })
+    }
 }
 
 pub fn create_provider_registry() -> Vec<Box<dyn DeployProvider>> {

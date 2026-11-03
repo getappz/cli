@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 use appz_core::{detect_toolchains, generate_claude_md, run_doctor};
 
 mod agents;
+// Scaffolding: `appz backup` subcommands are wired up in a later task.
+#[allow(dead_code)]
+mod backup;
 mod build_stage;
 mod deploy;
 mod deploy_state;

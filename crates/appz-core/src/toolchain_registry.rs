@@ -113,8 +113,8 @@ fn merge_frameworks(mut embedded: Vec<Framework>, registry: Vec<Framework>) -> V
 
 fn embedded_frameworks() -> Vec<Framework> {
     use crate::toolchains::{
-        BUN_PM, BUN_RUNTIME, GO_RUNTIME, JAVA_RUNTIME, NODE_RUNTIME, NPM_PM, PNPM_PM, PYTHON,
-        RUBY_RUNTIME, RUST_RUNTIME, YARN_PM,
+        BUN_PM, BUN_RUNTIME, GO_RUNTIME, JAVA_RUNTIME, NODE_RUNTIME, NPM_PM, PHP_RUNTIME, PNPM_PM,
+        PYTHON, RUBY_RUNTIME, RUST_RUNTIME, YARN_PM,
     };
     vec![
         PYTHON,
@@ -124,6 +124,7 @@ fn embedded_frameworks() -> Vec<Framework> {
         NODE_RUNTIME,
         GO_RUNTIME,
         JAVA_RUNTIME,
+        PHP_RUNTIME,
         NPM_PM,
         PNPM_PM,
         BUN_PM,
@@ -550,7 +551,7 @@ dev = "node index.js"
         let registry_fw = convert_to_framework(spec);
         let merged = merge_frameworks(embedded_frameworks(), vec![registry_fw]);
 
-        assert_eq!(merged.len(), 12);
+        assert_eq!(merged.len(), 13);
         assert!(merged.iter().any(|f| f.slug == "newfw"));
         assert!(merged.iter().any(|f| f.slug == "node"));
     }
@@ -585,7 +586,7 @@ dev = "node index.js"
         let registry_fw = convert_to_framework(spec);
         let merged = merge_frameworks(embedded_frameworks(), vec![registry_fw]);
 
-        assert_eq!(merged.len(), 11, "override should replace, not append");
+        assert_eq!(merged.len(), 12, "override should replace, not append");
         let overridden = merged.iter().find(|f| f.slug == override_slug).unwrap();
         assert_eq!(overridden.name, "Override");
         assert_eq!(overridden.mise_plugin, "override");
@@ -623,7 +624,7 @@ dev = "node index.js"
         let registry_fw = convert_to_framework(spec);
         let merged = merge_frameworks(embedded_frameworks(), vec![registry_fw]);
 
-        assert_eq!(merged.len(), 11, "override should replace, not append");
+        assert_eq!(merged.len(), 12, "override should replace, not append");
         let bun_entries: Vec<_> = merged.iter().filter(|f| f.slug == "bun").collect();
         assert_eq!(bun_entries.len(), 2, "both bun entries should still exist");
 
@@ -644,7 +645,7 @@ dev = "node index.js"
     #[test]
     fn test_golden_embedded_roundtrip() {
         let embedded = embedded_frameworks();
-        assert_eq!(embedded.len(), 11, "expected 11 embedded core frameworks");
+        assert_eq!(embedded.len(), 12, "expected 12 embedded core frameworks");
 
         for orig in &embedded {
             let spec = framework_to_spec(orig);

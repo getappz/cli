@@ -143,6 +143,19 @@ const JAVA_FRAMEWORKS: &[(&[&str], &str)] = &[
     (&["dropwizard"], "Dropwizard"),
 ];
 
+// ── PHP ─────────────────────────────────────────────────
+
+const PHP_FRAMEWORKS: &[(&[&str], &str)] = &[
+    (&["laravel/framework"], "Laravel"),
+    (&["symfony/framework-bundle"], "Symfony"),
+    (&["cakephp/cakephp"], "CakePHP"),
+    (&["yiisoft/yii2"], "Yii"),
+    (&["slim/slim"], "Slim"),
+    (&["codeigniter4/framework"], "CodeIgniter"),
+    (&["swoole/swoole"], "Swoole"),
+    (&["wordpress/wp-core"], "WordPress"),
+];
+
 // ── Elixir ──────────────────────────────────────────────
 
 const ELIXIR_FRAMEWORKS: &[(&[&str], &str)] = &[
@@ -264,6 +277,32 @@ pub fn scan_java(content: &str) -> Vec<DetectedFramework> {
     found
 }
 
+/// Scan composer.json for known PHP frameworks.
+pub fn scan_php(content: &str) -> Vec<DetectedFramework> {
+    let mut found = Vec::new();
+
+    let Ok(val) = content.parse::<serde_json::Value>() else {
+        return found;
+    };
+    let mut deps: Vec<&str> = Vec::new();
+    for key in ["require", "require-dev"] {
+        if let Some(table) = val.get(key).and_then(|v| v.as_object()) {
+            deps.extend(table.keys().map(String::as_str));
+        }
+    }
+
+    for (pkgs, name) in PHP_FRAMEWORKS {
+        if pkgs.iter().any(|p| deps.contains(p)) {
+            found.push(DetectedFramework {
+                name,
+                ecosystem: "php",
+            });
+        }
+    }
+
+    found
+}
+
 /// Scan mix.exs for known Elixir frameworks.
 pub fn scan_elixir(content: &str) -> Vec<DetectedFramework> {
     let mut found = Vec::new();
@@ -312,5 +351,22 @@ mod tests {
         let kit =
             names(r#"{"devDependencies":{"@sveltejs/kit":"2","@sveltejs/adapter-auto":"3"}}"#);
         assert!(kit.contains(&"SvelteKit SSR"));
+    }
+
+    #[test]
+    fn scan_php_reads_composer_require_keys() {
+        let content = r#"{
+            "require": {"php": "^8.2", "laravel/framework": "^11.0"},
+            "require-dev": {"phpunit/phpunit": "^11.0", "symfony/framework-bundle": "^7.0"}
+        }"#;
+        let names: Vec<_> = scan_php(content).into_iter().map(|f| f.name).collect();
+        assert!(names.contains(&"Laravel"), "{names:?}");
+        assert!(names.contains(&"Symfony"), "{names:?}");
+    }
+
+    #[test]
+    fn scan_php_ignores_package_substring_matches() {
+        let content = r#"{"require": {"my/laravel-helper": "^1.0"}}"#;
+        assert!(scan_php(content).is_empty());
     }
 }

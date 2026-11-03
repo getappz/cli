@@ -94,6 +94,15 @@ impl DeployContext {
         }
     }
 
+    /// Full path of `bin`, looked up in the same `PATH` the child will get: a
+    /// `PATH` the caller put in `run_env`, else the process `PATH`, then
+    /// `extra_path`. Falls back to the bare name.
+    fn resolve(&self, bin: &str) -> String {
+        let base = self.run_env.get("PATH").map(std::ffi::OsString::from);
+        command::shell::find_command_with_paths(bin, base.as_deref(), &self.extra_path)
+            .map_or_else(|| bin.to_string(), |p| p.to_string_lossy().into_owned())
+    }
+
     /// Run a provider CLI non-interactively, arg-vector (no shell), capturing
     /// output with a timeout. `run_env` is always injected on top of the
     /// inherited process environment (auth tokens flow through env, never as
@@ -105,12 +114,8 @@ impl DeployContext {
     /// shell-less spawn cannot find by bare name) still runs; `extra_path` is
     /// also appended to the child's `PATH` (the user's own tools keep priority).
     pub fn exec(&self, bin: &str, args: &[&str], timeout: Duration) -> Result<ExecOutput, String> {
-        // A `PATH` the caller put in `run_env` is the base for both the lookup
-        // and the child, so the CLI that is found is the CLI that runs.
         let base_path = self.run_env.get("PATH").map(std::ffi::OsString::from);
-        let program =
-            command::shell::find_command_with_paths(bin, base_path.as_deref(), &self.extra_path)
-                .map_or_else(|| bin.to_string(), |p| p.to_string_lossy().into_owned());
+        let program = self.resolve(bin);
 
         let mut env: Vec<(String, String)> = self
             .run_env
@@ -136,8 +141,7 @@ impl DeployContext {
     /// binary resolution and `PATH` handling as [`Self::exec`]. `Ok(true)` when
     /// it exited successfully.
     pub fn exec_interactive(&self, bin: &str, args: &[&str]) -> Result<bool, String> {
-        let program = command::shell::find_command_with_paths(bin, &self.extra_path)
-            .map_or_else(|| bin.to_string(), |p| p.to_string_lossy().into_owned());
+        let program = self.resolve(bin);
         let mut cmd = command::Command::new(&program);
         cmd.args(args.iter().copied())
             .cwd(&self.project_dir)

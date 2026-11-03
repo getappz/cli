@@ -73,6 +73,7 @@ impl CloudflareProvider {
             status: DeployStatus::Ready,
             created_at: Some(chrono::Utc::now()),
             duration_ms: Some(start.elapsed().as_millis() as u64),
+            auth: None,
         })
     }
 }
@@ -92,6 +93,9 @@ impl DeployProvider for CloudflareProvider {
     }
     fn auth_env_var(&self) -> &'static str {
         "CLOUDFLARE_API_TOKEN"
+    }
+    fn whoami_args(&self) -> &'static [&'static str] {
+        &["whoami", "--json"]
     }
 
     fn check_prerequisites(&self) -> DeployResult<PrerequisiteStatus> {

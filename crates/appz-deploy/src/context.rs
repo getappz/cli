@@ -124,6 +124,25 @@ impl DeployContext {
             env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
         exec_captured(&program, args, &self.project_dir, &env_refs, timeout)
     }
+
+    /// Run a provider CLI with the terminal inherited (login flows). Same
+    /// binary resolution and `PATH` handling as [`Self::exec`]. `Ok(true)` when
+    /// it exited successfully.
+    pub fn exec_interactive(&self, bin: &str, args: &[&str]) -> Result<bool, String> {
+        let program = command::shell::find_command_with_paths(bin, &self.extra_path)
+            .map_or_else(|| bin.to_string(), |p| p.to_string_lossy().into_owned());
+        let mut cmd = command::Command::new(&program);
+        cmd.args(args.iter().copied())
+            .cwd(&self.project_dir)
+            .without_shell()
+            .append_paths(&self.extra_path);
+        for (k, v) in &self.run_env {
+            cmd.env(k, v);
+        }
+        cmd.exec_interactive()
+            .map(|status| status.success())
+            .map_err(|e| e.to_string())
+    }
 }
 
 /// Parse a `KEY=VALUE` string (used for `-b`/`-e` repeatable flags).

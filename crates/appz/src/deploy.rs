@@ -5,18 +5,19 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use appz_deploy::{
-    DeployContext, DeployError, DeployOutput, DeployProvider, detect_providers,
+    AuthState, DeployContext, DeployError, DeployOutput, DeployProvider, detect_providers,
     ensure_cli_available, get_provider, install_cli_with_mise, parse_kv, read_deploy_config,
 };
 
-/// What to do when the platform CLI is not installed.
+/// Whether appz may take a side-effecting step (install a CLI, run a login)
+/// on the user's behalf.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum InstallPolicy {
-    /// Fail with the install command (non-interactive runs, `--json`, MCP).
+pub enum Consent {
+    /// Fail with the command to run instead (non-interactive runs, `--json`, MCP).
     Never,
     /// Ask first (interactive terminal).
     Ask,
-    /// Install through mise without asking (`--yes`).
+    /// Go ahead without asking (`--yes`).
     Yes,
 }
 
@@ -27,7 +28,11 @@ pub struct DeployRequest {
     pub build_env: Vec<String>,
     pub dry_run: bool,
     pub json: bool,
-    pub install: InstallPolicy,
+    /// Installing a missing platform CLI (works without a terminal).
+    pub install: Consent,
+    /// Running the CLI's login. Only ever `Ask`/`Yes` with a real terminal:
+    /// login waits on a browser and would hang CI.
+    pub login: Consent,
 }
 
 /// The CLI was not found on `PATH` or in mise's bin dirs: install it through
@@ -35,15 +40,15 @@ pub struct DeployRequest {
 /// install command. Returns mise's bin dirs, which then contain the CLI.
 fn provision_cli(
     p: &dyn DeployProvider,
-    policy: InstallPolicy,
+    policy: Consent,
     project_dir: &Path,
     missing: &str,
 ) -> Result<Vec<PathBuf>, String> {
     match policy {
-        InstallPolicy::Never => {
+        Consent::Never => {
             return Err(format!("{missing}\n(or re-run with --yes to install it)"));
         }
-        InstallPolicy::Ask => {
+        Consent::Ask => {
             let prompt = format!(
                 "{} is not installed. Install {} with mise?",
                 p.cli_tool(),
@@ -57,10 +62,55 @@ fn provision_cli(
                 return Err(missing.to_string());
             }
         }
-        InstallPolicy::Yes => {}
+        Consent::Yes => {}
     }
     eprintln!("installing {} with mise...", p.mise_tool());
     install_cli_with_mise(p, project_dir).map_err(|e| e.to_string())
+}
+
+/// Make sure the CLI is signed in. Signed in or `Unknown` passes (the CLI
+/// reports its own error); not signed in logs in when `consent` allows, else
+/// fails with the token variable and the login command.
+fn ensure_authenticated(
+    p: &dyn DeployProvider,
+    ctx: &DeployContext,
+    consent: Consent,
+) -> Result<(), String> {
+    if p.auth_status(ctx) != AuthState::NotAuthenticated {
+        return Ok(());
+    }
+    let hint = format!(
+        "{}: not authenticated. Set {} or run: {}",
+        p.name(),
+        p.auth_env_var(),
+        p.login_hint()
+    );
+    match consent {
+        Consent::Never => return Err(hint),
+        Consent::Ask => {
+            let prompt = format!(
+                "Not signed in to {}. Run `{}` now?",
+                p.name(),
+                p.login_hint()
+            );
+            if !cliclack::confirm(prompt)
+                .initial_value(true)
+                .interact()
+                .unwrap_or(false)
+            {
+                return Err(hint);
+            }
+        }
+        Consent::Yes => {}
+    }
+    p.login(ctx).map_err(|e| e.to_string())?;
+    if p.auth_status(ctx) == AuthState::NotAuthenticated {
+        return Err(format!(
+            "{hint}
+(login did not complete)"
+        ));
+    }
+    Ok(())
 }
 
 /// Pick the target from provider config files in the project (`wrangler.*`,
@@ -94,9 +144,8 @@ pub fn run(project_dir: &Path, req: DeployRequest) -> Result<DeployOutput, Strin
 
     // mise-installed CLIs (global config or this project's mise.toml) are
     // discovered via `mise bin-paths` and appended after the user's own PATH.
-    let mut extra_path = Vec::new();
+    let mut extra_path = appz_core::mise_bin_paths(project_dir);
     if !req.dry_run {
-        extra_path = appz_core::mise_bin_paths(project_dir);
         match ensure_cli_available(provider.as_ref(), &extra_path) {
             Ok(()) => {}
             Err(e @ DeployError::CliMissing { .. }) => {
@@ -137,9 +186,21 @@ pub fn run(project_dir: &Path, req: DeployRequest) -> Result<DeployOutput, Strin
         .filter_map(|s| parse_kv(s))
         .collect::<HashMap<_, _>>();
 
-    if ctx.is_preview {
-        provider.deploy_preview(&ctx).map_err(|e| e.to_string())
-    } else {
-        provider.deploy(&ctx).map_err(|e| e.to_string())
+    if !req.dry_run {
+        ensure_authenticated(provider.as_ref(), &ctx, req.login)?;
     }
+
+    let mut output = if ctx.is_preview {
+        provider.deploy_preview(&ctx)
+    } else {
+        provider.deploy(&ctx)
+    }
+    .map_err(|e| e.to_string())?;
+
+    // A dry run is a readiness report: probe sign-in when the CLI is present
+    // (read-only; never installs or logs in).
+    if req.dry_run && ensure_cli_available(provider.as_ref(), &ctx.extra_path).is_ok() {
+        output.auth = Some(provider.auth_status(&ctx));
+    }
+    Ok(output)
 }

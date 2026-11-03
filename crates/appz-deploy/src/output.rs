@@ -11,6 +11,16 @@ pub enum DeployStatus {
     Unknown,
 }
 
+/// Result of the provider CLI's "am I signed in" probe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthState {
+    Authenticated,
+    NotAuthenticated,
+    /// The probe could not run or timed out; proceed and let the CLI report.
+    Unknown,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeployOutput {
     pub provider: String,
@@ -22,6 +32,9 @@ pub struct DeployOutput {
     pub status: DeployStatus,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
     pub duration_ms: Option<u64>,
+    /// Sign-in state; only filled by `--dry-run`, as a readiness report.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<AuthState>,
 }
 
 impl DeployOutput {
@@ -33,6 +46,7 @@ impl DeployOutput {
             status: DeployStatus::Unknown,
             created_at: None,
             duration_ms: None,
+            auth: None,
         }
     }
 }

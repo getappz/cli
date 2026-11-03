@@ -7,7 +7,7 @@ mod providers;
 
 pub use context::{DeployConfig, DeployContext, parse_kv, read_deploy_config};
 pub use error::{DeployError, DeployResult};
-pub use exec::{ExecOutput, VAULT_PASSPHRASE_ENV};
+pub use exec::ExecOutput;
 pub use output::{
     AuthState, DeployOutput, DeployStatus, DeploymentInfo, DetectedConfig, PrerequisiteStatus,
 };

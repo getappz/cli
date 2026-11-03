@@ -3,7 +3,7 @@ use crate::crypto::kdf::{derive_kek, KdfParams};
 use crate::error::{VaultError, VaultResult};
 use crate::session;
 use crate::vault::file::{create_vault_file, read_vault_file, vault_file_exists, write_vault_file};
-use crate::vault::model::{SecretEntry, VaultBody, VaultFile};
+use crate::vault::model::{SecretEntry, VaultBody, VaultFile, FORMAT_VERSION};
 use chrono::Utc;
 use rand::Rng;
 use std::path::{Path, PathBuf};
@@ -11,6 +11,10 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 const SALT_SIZE: usize = 32;
 const DEK_SIZE: usize = 32;
+/// Upper bounds on Argon2 parameters read from a vault file (1 GiB, 20 passes, 16 lanes).
+const MAX_KDF_MEMORY_KIB: u32 = 1 << 20;
+const MAX_KDF_TIME_COST: u32 = 20;
+const MAX_KDF_PARALLELISM: u32 = 16;
 /// Plaintext of `VaultFile::key_check`.
 const KEY_CHECK: &[u8] = b"appz-vault key check v1";
 
@@ -72,6 +76,19 @@ where
     None
 }
 
+/// Parse a vault file, refusing one written by a newer appz: rewriting it
+/// through this build's struct would silently drop the newer fields.
+fn parse_vault(data: &[u8]) -> VaultResult<VaultFile> {
+    let vault: VaultFile = serde_json::from_slice(data)?;
+    if vault.version > FORMAT_VERSION {
+        return Err(VaultError::Other(format!(
+            "vault file is format v{}, but this appz understands up to v{FORMAT_VERSION}: upgrade appz",
+            vault.version
+        )));
+    }
+    Ok(vault)
+}
+
 pub fn create_vault(path: &Path, passphrase: &str) -> VaultResult<()> {
     if vault_file_exists(path) {
         return Err(VaultError::AlreadyInitialized(path.display().to_string()));
@@ -103,12 +120,22 @@ pub fn create_vault(path: &Path, passphrase: &str) -> VaultResult<()> {
 
 pub fn open_vault(path: &Path, passphrase: &str) -> VaultResult<VaultDek> {
     let data = read_vault_file(path)?;
-    let vault: VaultFile = serde_json::from_slice(&data)?;
+    let vault = parse_vault(&data)?;
 
-    let params = vault.kdf.clone().unwrap_or_else(|| KdfParams {
-        salt: vault.salt.clone(),
-        ..Default::default()
-    });
+    // The top-level salt is the single source of truth; `kdf.salt` is only a
+    // copy, so a damaged or hand-edited file cannot make the two disagree.
+    let mut params = vault.kdf.clone().unwrap_or_default();
+    params.salt = vault.salt.clone();
+    // The params come from a file that may be untrusted (a cloned repo's
+    // project vault): refuse values that would exhaust memory or CPU.
+    if params.memory_cost > MAX_KDF_MEMORY_KIB
+        || params.time_cost > MAX_KDF_TIME_COST
+        || params.parallelism > MAX_KDF_PARALLELISM
+    {
+        return Err(VaultError::Crypto(
+            "vault KDF parameters out of range".into(),
+        ));
+    }
 
     let kek = derive_kek(passphrase, &params).map_err(VaultError::Crypto)?;
 
@@ -121,7 +148,32 @@ pub fn open_vault(path: &Path, passphrase: &str) -> VaultResult<VaultDek> {
     dek_bytes.zeroize();
     let dek = dek.map_err(|_| VaultError::Crypto("vault DEK has an invalid length".into()))?;
 
+    // Best effort: with the key in hand, bind any legacy entries to their names.
+    let _ = upgrade_legacy_entries(path, &dek);
+
     Ok(VaultDek { dek })
+}
+
+/// Re-encrypt entries written before AAD binding (`aad == false`) so they are
+/// bound to their names like new ones. Until then anyone who can edit the file
+/// could swap two such ciphertexts and have the wrong value served. Entries
+/// that fail to decrypt are left untouched.
+fn upgrade_legacy_entries(path: &Path, dek: &[u8; DEK_SIZE]) -> VaultResult<()> {
+    if read_vault_body(path)?.values().all(|e| e.aad) {
+        return Ok(());
+    }
+    update_vault_body(path, |body| {
+        for (name, entry) in body.iter_mut().filter(|(_, e)| !e.aad) {
+            let Ok(plain) = decrypt_value(&entry.value, dek, &[]).map(Zeroizing::new) else {
+                continue;
+            };
+            if let Ok(bound) = encrypt_value(&plain, dek, name.as_bytes()) {
+                entry.value = bound;
+                entry.aad = true;
+            }
+        }
+        Ok(())
+    })
 }
 
 /// The cached session key for `path`, if there is one AND it is this file's
@@ -133,10 +185,13 @@ pub fn open_vault_with_dek(path: &Path, app_name: &str) -> VaultResult<VaultDek>
         return Err(VaultError::Locked);
     };
     let dek = VaultDek { dek };
-    let vault: VaultFile = serde_json::from_slice(&read_vault_file(path)?)?;
+    let vault = parse_vault(&read_vault_file(path)?)?;
     // Empty key_check: a vault from before the check existed; nothing to compare.
-    let matches = vault.key_check.is_empty()
-        || decrypt_value(&vault.key_check, &dek.dek, KEY_CHECK_AAD).is_ok_and(|p| p == KEY_CHECK);
+    // Vaults created before AAD binding encrypted the check with empty AAD;
+    // accept those too, or every pre-existing vault's session reads as stale.
+    let check_ok =
+        |aad: &[u8]| decrypt_value(&vault.key_check, &dek.dek, aad).is_ok_and(|p| p == KEY_CHECK);
+    let matches = vault.key_check.is_empty() || check_ok(KEY_CHECK_AAD) || check_ok(&[]);
     if matches {
         Ok(dek)
     } else {
@@ -147,7 +202,7 @@ pub fn open_vault_with_dek(path: &Path, app_name: &str) -> VaultResult<VaultDek>
 
 pub fn read_vault_body(path: &Path) -> VaultResult<VaultBody> {
     let data = read_vault_file(path)?;
-    let vault: VaultFile = serde_json::from_slice(&data)?;
+    let vault = parse_vault(&data)?;
     Ok(vault.body)
 }
 
@@ -171,7 +226,7 @@ pub fn update_vault_body<T>(
 
 pub fn write_vault_body(path: &Path, body: &VaultBody) -> VaultResult<()> {
     let data = read_vault_file(path)?;
-    let mut vault: VaultFile = serde_json::from_slice(&data)?;
+    let mut vault = parse_vault(&data)?;
     vault.body = body.clone();
     let json = serde_json::to_string_pretty(&vault)?;
     write_vault_file(path, json.as_bytes())
@@ -429,6 +484,35 @@ mod tests {
     }
 
     #[test]
+    fn a_legacy_empty_aad_key_check_still_accepts_its_session() {
+        with_cached_vault(|path, dek| {
+            let mut vault: VaultFile =
+                serde_json::from_slice(&read_vault_file(path).unwrap()).unwrap();
+            vault.key_check = encrypt_value(KEY_CHECK, &dek, &[]).unwrap();
+            write_vault_file(path, serde_json::to_string(&vault).unwrap().as_bytes()).unwrap();
+            assert_eq!(
+                open_vault_with_dek(path, "appz-vault-test").unwrap().dek,
+                dek
+            );
+        });
+    }
+
+    #[test]
+    fn absurd_kdf_params_in_a_vault_file_are_rejected() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("vault.json");
+        create_vault(&path, "pw").unwrap();
+        let mut vault: VaultFile =
+            serde_json::from_slice(&read_vault_file(&path).unwrap()).unwrap();
+        vault.kdf.as_mut().unwrap().memory_cost = u32::MAX;
+        write_vault_file(&path, serde_json::to_string(&vault).unwrap().as_bytes()).unwrap();
+        assert!(matches!(
+            open_vault(&path, "pw"),
+            Err(VaultError::Crypto(_))
+        ));
+    }
+
+    #[test]
     fn kdf_params_are_recorded_in_the_vault_file() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("vault.json");
@@ -452,6 +536,99 @@ mod tests {
             serde_json::from_slice(&read_vault_file(&path).unwrap()).unwrap();
         json.as_object_mut().unwrap().remove("kdf");
         write_vault_file(&path, serde_json::to_string(&json).unwrap().as_bytes()).unwrap();
+        assert!(open_vault(&path, "pw").is_ok());
+    }
+
+    /// A vault whose `name` secret was written the old way (empty AAD).
+    fn vault_with_legacy_secret(path: &Path, name: &str, value: &str) {
+        create_vault(path, "pw").unwrap();
+        let dek = open_vault(path, "pw").unwrap().dek;
+        update_vault_body(path, |body| {
+            body.insert(
+                name.to_string(),
+                SecretEntry {
+                    value: encrypt_value(value.as_bytes(), &dek, &[]).unwrap(),
+                    added_at: Utc::now(),
+                    rotated_at: None,
+                    aad: false,
+                },
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn unlocking_binds_legacy_secrets_to_their_names() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("vault.json");
+        vault_with_legacy_secret(&path, "A", "one");
+        assert!(!read_vault_body(&path).unwrap()["A"].aad);
+
+        let dek = open_vault(&path, "pw").unwrap().dek;
+
+        let body = read_vault_body(&path).unwrap();
+        assert!(body["A"].aad, "legacy entry must be upgraded on unlock");
+        assert_eq!(
+            get_secret_value(&body, &dek, "A")
+                .unwrap()
+                .unwrap()
+                .as_str(),
+            "one"
+        );
+    }
+
+    #[test]
+    fn upgraded_secrets_cannot_be_swapped() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("vault.json");
+        vault_with_legacy_secret(&path, "A", "one");
+        let dek = open_vault(&path, "pw").unwrap().dek;
+        update_vault_body(&path, |body| set_secret_value(body, &dek, "B", "two")).unwrap();
+        // Swap the two ciphertexts, as someone editing the file could.
+        update_vault_body(&path, |body| {
+            let a = body["A"].value.clone();
+            let b = body["B"].value.clone();
+            body.get_mut("A").unwrap().value = b;
+            body.get_mut("B").unwrap().value = a;
+            Ok(())
+        })
+        .unwrap();
+
+        let body = read_vault_body(&path).unwrap();
+        assert!(matches!(
+            get_secret_value(&body, &dek, "A"),
+            Err(VaultError::Decrypt)
+        ));
+    }
+
+    #[test]
+    fn a_vault_from_a_newer_appz_is_refused_not_rewritten() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("vault.json");
+        create_vault(&path, "pw").unwrap();
+        let mut vault: VaultFile =
+            serde_json::from_slice(&read_vault_file(&path).unwrap()).unwrap();
+        vault.version = FORMAT_VERSION + 1;
+        write_vault_file(&path, serde_json::to_string(&vault).unwrap().as_bytes()).unwrap();
+        let before = std::fs::read(&path).unwrap();
+
+        assert!(open_vault(&path, "pw").is_err());
+        assert!(read_vault_body(&path).is_err());
+        assert!(update_vault_body(&path, |_| Ok(())).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), before, "file untouched");
+    }
+
+    #[test]
+    fn the_top_level_salt_wins_over_a_disagreeing_kdf_salt() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("vault.json");
+        create_vault(&path, "pw").unwrap();
+        let mut vault: VaultFile =
+            serde_json::from_slice(&read_vault_file(&path).unwrap()).unwrap();
+        vault.kdf.as_mut().unwrap().salt = vec![7; SALT_SIZE];
+        write_vault_file(&path, serde_json::to_string(&vault).unwrap().as_bytes()).unwrap();
+
         assert!(open_vault(&path, "pw").is_ok());
     }
 }

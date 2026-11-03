@@ -3,6 +3,11 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+/// Newest vault file format this build reads and writes. A newer file is
+/// refused instead of being rewritten through a struct that would drop its
+/// newer fields.
+pub const FORMAT_VERSION: u32 = 2;
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct VaultFile {
     pub version: u32,
@@ -16,7 +21,8 @@ pub struct VaultFile {
     pub key_check: Vec<u8>,
     /// Argon2id cost parameters recorded at creation, so a vault still opens if
     /// the build's defaults ever change. `None` in vaults created before this
-    /// field existed (v1): those used the build's defaults.
+    /// field existed (v1): those used the build's defaults. Its `salt` is a
+    /// copy: the top-level `salt` is the one used.
     #[serde(default)]
     pub kdf: Option<KdfParams>,
     #[serde(default)]
@@ -70,7 +76,7 @@ impl Drop for VaultBody {
 impl VaultFile {
     pub fn new(encrypted_dek: Vec<u8>, salt: Vec<u8>) -> Self {
         Self {
-            version: 2,
+            version: FORMAT_VERSION,
             encrypted_dek,
             salt,
             key_check: Vec::new(),

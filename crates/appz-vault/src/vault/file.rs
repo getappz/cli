@@ -67,6 +67,15 @@ fn write_inner(path: &Path, data: &[u8], exclusive: bool) -> VaultResult<()> {
             .map_err(|e| crate::error::VaultError::Other(format!("rename temp to vault: {e}")))?;
     }
 
+    // Make the rename itself durable: without syncing the directory, a crash
+    // right after it can bring the old file (or no file) back.
+    #[cfg(unix)]
+    {
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            std::fs::File::open(parent)?.sync_all()?;
+        }
+    }
+
     Ok(())
 }
 

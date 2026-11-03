@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::error::DeployResult;
-use crate::exec::{DENIED_CHILD_ENV, ExecOutput, exec_captured, exec_live};
+use crate::exec::{ExecOutput, exec_captured, exec_live};
+
 /// Deploy-time settings read from `appz.jsonc`'s `deploy` key — reuses the
 /// same JSONC-with-comments convention as command overrides
 /// (`appz_core::strip_jsonc`) rather than inventing a second config format.
@@ -226,9 +227,6 @@ impl DeployContext {
             .append_paths(&self.extra_path);
         for (k, v) in &self.run_env {
             cmd.env(k, v);
-        }
-        for k in DENIED_CHILD_ENV {
-            cmd.env_remove(*k);
         }
         cmd.exec_interactive()
             .map(|status| status.success())

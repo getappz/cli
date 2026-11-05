@@ -181,7 +181,7 @@ production = [["amplify", "publish", "--yes"]]
 slug = "google-cloud"
 name = "Google Cloud Run"
 cli = "gcloud"
-mise = ""
+mise = "gcloud"
 install_hint = "https://cloud.google.com/sdk/docs/install"
 # gcloud does not read GOOGLE_APPLICATION_CREDENTIALS (that is for client
 # libraries); it takes a service-account key file path from this variable.

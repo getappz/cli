@@ -160,6 +160,11 @@ impl VercelProvider {
 }
 
 impl DeployProvider for VercelProvider {
+    fn needs_prebuild(&self, frameworks: &[String]) -> bool {
+        !frameworks
+            .iter()
+            .any(|f| appz_core::SERVER_RENDERED_FRAMEWORKS.contains(&f.as_str()))
+    }
     fn name(&self) -> &'static str {
         "Vercel"
     }
@@ -338,6 +343,15 @@ fn extract_deploy_url(stdout: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn server_frameworks_are_left_to_vercels_own_build() {
+        let names = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        // Next.js also detects React: any server framework wins.
+        assert!(!VercelProvider.needs_prebuild(&names(&["React", "Next.js"])));
+        assert!(VercelProvider.needs_prebuild(&names(&["Astro"])));
+        assert!(VercelProvider.needs_prebuild(&[]));
+    }
+
     #[test]
     fn a_static_build_is_assembled_into_the_build_output_layout() {
         let dir = std::env::temp_dir().join(format!("appz-vercel-static-{}", std::process::id()));

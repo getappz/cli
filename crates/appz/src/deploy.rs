@@ -292,11 +292,12 @@ pub fn run(project_dir: &Path, req: DeployRequest) -> Result<DeployOutput, Strin
         .find_map(|tc| tc.output_directory)
         .unwrap_or("dist")
         .to_string();
-    let framework = toolchains
+    let frameworks: Vec<String> = toolchains
         .iter()
         .flat_map(|tc| tc.frameworks.iter())
-        .next()
-        .map(|f| f.name.to_string());
+        .map(|f| f.name.to_string())
+        .collect();
+    let framework = frameworks.first().cloned();
 
     // Vault values for this provider only (its token, link ids, `deploy.env`).
     // Precedence: vault < real environment < `-e`.
@@ -364,7 +365,14 @@ pub fn run(project_dir: &Path, req: DeployRequest) -> Result<DeployOutput, Strin
     // Install + build through mise's cached tasks (skipped when unchanged);
     // providers then deploy the built output instead of building from scratch.
     if !req.dry_run {
-        ctx.prebuilt = crate::build_stage::run(&ctx)?;
+        if provider.needs_prebuild(&frameworks) {
+            ctx.prebuilt = crate::build_stage::run(&ctx)?;
+        } else if !req.json {
+            eprintln!(
+                "note: {} builds this project itself; skipping appz's build stage",
+                provider.name()
+            );
+        }
     }
 
     if !req.dry_run {

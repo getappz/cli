@@ -54,6 +54,9 @@ fn write_inner(path: &Path, data: &[u8], exclusive: bool) -> VaultResult<()> {
         std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o600))?;
     }
 
+    #[cfg(windows)]
+    restrict_to_current_user(tmp.path());
+
     if exclusive {
         tmp.persist_noclobber(path).map_err(|e| {
             if e.error.kind() == std::io::ErrorKind::AlreadyExists {
@@ -77,6 +80,22 @@ fn write_inner(path: &Path, data: &[u8], exclusive: bool) -> VaultResult<()> {
     }
 
     Ok(())
+}
+
+/// Best effort: drop inherited ACEs and grant only the current user access
+/// (the Windows analogue of 0o600). A failure leaves the default ACL.
+#[cfg(windows)]
+fn restrict_to_current_user(path: &Path) {
+    let Some(user) = std::env::var_os("USERNAME") else {
+        return;
+    };
+    let mut grant = user;
+    grant.push(":(F)");
+    let _ = std::process::Command::new("icacls")
+        .arg(path)
+        .args(["/inheritance:r", "/grant:r"])
+        .arg(grant)
+        .output();
 }
 
 pub fn vault_file_exists(path: &Path) -> bool {

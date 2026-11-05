@@ -23,9 +23,9 @@
 #     in the output (consoles, logs, docs) are never mistaken for the deployment.
 #   * `detect` lists only files that clearly mean "this project deploys here".
 #
-# Not ported (see the PR): gitlab-pages, heroku, render. These deploy by
-# `git push` (Heroku, GitLab Pages) or Infrastructure-as-Code + git (Render),
-# not by running a CLI over the built output, so they do not fit this model.
+# Not ported (see the PR): gitlab-pages, heroku. They deploy by `git push` (to
+# Heroku's git remote / a GitLab CI pipeline), not by running a CLI over the
+# built output, so they do not fit this model and need a design decision.
 
 [[provider]]
 slug = "fly"
@@ -183,7 +183,9 @@ name = "Google Cloud Run"
 cli = "gcloud"
 mise = ""
 install_hint = "https://cloud.google.com/sdk/docs/install"
-token_env = "GOOGLE_APPLICATION_CREDENTIALS"
+# gcloud does not read GOOGLE_APPLICATION_CREDENTIALS (that is for client
+# libraries); it takes a service-account key file path from this variable.
+token_env = "CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE"
 login = ["auth", "login"]
 login_hint = "gcloud auth login"
 detect = ["app.yaml", "cloudbuild.yaml"]
@@ -201,11 +203,14 @@ name = "Zeabur"
 cli = "zeabur"
 mise = "npm:zeabur"
 install_hint = "npm install -g zeabur"
-token_env = "ZEABUR_TOKEN"
+# The CLI documents no token environment variable, only `auth login --token`.
+token_env = ""
 login = ["auth", "login"]
 login_hint = "zeabur auth login"
 detect = ["zeabur.json"]
-production = [["zeabur", "deploy"]]
+required = ["project_id", "service_id"]
+# `-i=false` disables prompts; with both ids the CLI needs no input.
+production = [["zeabur", "deploy", "--project-id", "{{project_id}}", "--service-id", "{{service_id}}", "-i=false"]]
 
 [[provider]]
 slug = "zerops"
@@ -215,6 +220,22 @@ mise = "npm:@zerops/zcli"
 install_hint = "npm install -g @zerops/zcli"
 token_env = "ZEROPS_TOKEN"
 login = ["login"]
-login_hint = "zcli login (paste your access token)"
-detect = ["zerops.yml"]
-production = [["zcli", "push"]]
+login_hint = "zcli login <token> (or set ZEROPS_TOKEN)"
+detect = ["zerops.yml", "zerops.yaml"]
+required = ["project_id", "service_id"]
+# Zerops builds from the project sources and zerops.yml, not the local build output.
+production = [["zcli", "push", "--project-id", "{{project_id}}", "--service-id", "{{service_id}}"]]
+
+[[provider]]
+slug = "render"
+name = "Render"
+cli = "render"
+# Not in the mise registry (Homebrew or a release binary).
+mise = ""
+install_hint = "https://render.com/docs/cli"
+token_env = "RENDER_API_KEY"
+login_hint = "set RENDER_API_KEY (Render dashboard > Account Settings > API Keys)"
+required = ["service_id"]
+# Triggers a deploy of the service as configured on Render (from its repo), and
+# waits for it. The CLI prints no trustworthy deployment URL, so none is reported.
+production = [["render", "deploys", "create", "{{service_id}}", "--wait", "--confirm"]]

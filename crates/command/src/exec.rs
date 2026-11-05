@@ -370,6 +370,34 @@ impl Command {
         Ok(child)
     }
 
+    /// Spawn the command in its own process group (Unix) or Job Object
+    /// (Windows) and return the wrapped child. `kill()` on the result kills the
+    /// entire tree — the direct child plus any grandchildren it spawned (a
+    /// `.cmd` shim -> node -> npm -> astro chain) — where a bare
+    /// `std::process::Child::kill` stops at the top-level process and leaves
+    /// the rest orphaned. Used by the deploy executor's hard timeout.
+    pub fn spawn_group(&mut self) -> Result<Box<dyn process_wrap::std::ChildWrapper>> {
+        if self.print_command {
+            self.print_command_line();
+        }
+
+        let mut cmd = self.build_std_command()?;
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let mut command = process_wrap::std::CommandWrap::from(cmd);
+        #[cfg(unix)]
+        command.wrap(process_wrap::std::ProcessGroup::leader());
+        #[cfg(windows)]
+        command.wrap(process_wrap::std::JobObject);
+
+        command
+            .spawn()
+            .map_err(|e| CommandError::SpawnFailed(e.to_string()))
+            .map_err(Into::into)
+    }
+
     pub fn exec(&mut self) -> Result<Output> {
         if self.print_command {
             self.print_command_line();

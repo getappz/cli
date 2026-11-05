@@ -6,3 +6,5 @@ pub mod shell;
 
 pub use error::*;
 pub use exec::{interrupted, Command};
+
+pub use process_wrap;

@@ -91,11 +91,15 @@ fn restrict_to_current_user(path: &Path) {
     };
     let mut grant = user;
     grant.push(":(F)");
-    let _ = std::process::Command::new("icacls")
+    let restricted = std::process::Command::new("icacls")
         .arg(path)
         .args(["/inheritance:r", "/grant:r"])
         .arg(grant)
-        .output();
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !restricted {
+        eprintln!("warning: could not restrict vault file permissions to the current user");
+    }
 }
 
 pub fn vault_file_exists(path: &Path) -> bool {

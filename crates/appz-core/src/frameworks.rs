@@ -18,6 +18,30 @@ const NPM_FRAMEWORKS: &[(&[&str], &str)] = &[
     (&["gatsby"], "Gatsby"),
     (&["remix", "@remix-run/react"], "Remix"),
     (&["astro"], "Astro"),
+    // Server-rendered variants, told apart by the adapter / SSR package they
+    // depend on: a static Astro or SvelteKit project has none of these.
+    (
+        &[
+            "@astrojs/node",
+            "@astrojs/vercel",
+            "@astrojs/netlify",
+            "@astrojs/cloudflare",
+        ],
+        "Astro SSR",
+    ),
+    (
+        &[
+            "@sveltejs/adapter-auto",
+            "@sveltejs/adapter-node",
+            "@sveltejs/adapter-vercel",
+            "@sveltejs/adapter-netlify",
+            "@sveltejs/adapter-cloudflare",
+        ],
+        "SvelteKit SSR",
+    ),
+    (&["@solidjs/start", "solid-start"], "SolidStart"),
+    (&["@builder.io/qwik-city"], "Qwik City"),
+    (&["@angular/ssr", "@angular/platform-server"], "Angular SSR"),
     (&["solid-js", "solid-start"], "SolidJS"),
     (&["@nestjs/core"], "NestJS"),
     (&["express"], "Express"),
@@ -26,6 +50,21 @@ const NPM_FRAMEWORKS: &[(&[&str], &str)] = &[
     (&["elysia"], "Elysia"),
     (&["prisma"], "Prisma"),
     (&["drizzle-orm"], "Drizzle"),
+];
+
+/// Detected frameworks that render on the server: a platform builds these into
+/// functions with its own build, so a separate static build would be wasted.
+/// Frameworks that can also be static (Astro, SvelteKit, Angular) are listed
+/// only as their "SSR" variant, detected from the adapter dependency.
+pub const SERVER_RENDERED_FRAMEWORKS: &[&str] = &[
+    "Next.js",
+    "Nuxt",
+    "Remix",
+    "Astro SSR",
+    "SvelteKit SSR",
+    "SolidStart",
+    "Qwik City",
+    "Angular SSR",
 ];
 
 const CARGO_FRAMEWORKS: &[(&[&str], &str)] = &[
@@ -239,4 +278,39 @@ pub fn scan_elixir(content: &str) -> Vec<DetectedFramework> {
     }
 
     found
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn server_rendered_names_match_the_detector() {
+        for name in SERVER_RENDERED_FRAMEWORKS {
+            assert!(
+                NPM_FRAMEWORKS.iter().any(|(_, n)| n == name),
+                "{name} is not a detected framework name"
+            );
+        }
+    }
+
+    #[test]
+    fn ssr_variants_need_their_adapter() {
+        let names = |json: &str| {
+            scan_npm(json)
+                .into_iter()
+                .map(|f| f.name)
+                .collect::<Vec<_>>()
+        };
+        let static_astro = names(r#"{"dependencies":{"astro":"4"}}"#);
+        assert!(!static_astro.contains(&"Astro SSR"));
+        let ssr_astro = names(r#"{"dependencies":{"astro":"4","@astrojs/node":"8"}}"#);
+        assert!(ssr_astro.contains(&"Astro SSR"));
+        let kit =
+            names(r#"{"devDependencies":{"@sveltejs/kit":"2","@sveltejs/adapter-static":"3"}}"#);
+        assert!(!kit.contains(&"SvelteKit SSR"));
+        let kit =
+            names(r#"{"devDependencies":{"@sveltejs/kit":"2","@sveltejs/adapter-auto":"3"}}"#);
+        assert!(kit.contains(&"SvelteKit SSR"));
+    }
 }

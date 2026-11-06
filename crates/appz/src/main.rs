@@ -1049,18 +1049,25 @@ fn run_agents(args: AgentArgs, json: bool) {
 
 fn run_skills_add(dir: PathBuf, global: bool, json: bool) {
     let root = resolve_root(&dir);
-    match skills::install_bundled(&root, global) {
-        Ok(sum) if json => println!(
+    let sum = match skills::install_bundled(&root, global) {
+        Ok(sum) => sum,
+        Err(e) => error(&e),
+    };
+    if json {
+        println!(
             "{}",
             serde_json::json!({ "installed": sum.installed, "failed": sum.failed })
-        ),
-        Ok(sum) => {
-            if !sum.failed.is_empty() {
-                error(&format!("install failed: {}", sum.failed.join(", ")));
-            }
+        );
+    } else {
+        if !sum.installed.is_empty() {
             success(&format!("installed skill: {}", sum.installed.join(", ")));
         }
-        Err(e) => error(&e),
+        for f in &sum.failed {
+            warning(&format!("failed: {f}"));
+        }
+    }
+    if !sum.failed.is_empty() || sum.installed.is_empty() {
+        std::process::exit(1);
     }
 }
 

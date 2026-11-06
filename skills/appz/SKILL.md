@@ -89,7 +89,8 @@ appz env ls                      # names only, never values
 appz env unlock | lock | rm <NAME>
 ```
 
-- Token variables: Vercel `VERCEL_TOKEN`, Netlify `NETLIFY_AUTH_TOKEN`, Cloudflare `CLOUDFLARE_API_TOKEN`, Fly `FLY_API_TOKEN`, Firebase `FIREBASE_TOKEN`, Deno Deploy `DENO_DEPLOY_TOKEN`, Railway `RAILWAY_TOKEN`, Surge `SURGE_TOKEN`, Azure `SWA_CLI_DEPLOYMENT_TOKEN`, AWS `AWS_ACCESS_KEY_ID`.
+- Token variables: Vercel `VERCEL_TOKEN`, Netlify `NETLIFY_AUTH_TOKEN`, Cloudflare `CLOUDFLARE_API_TOKEN`, Fly `FLY_API_TOKEN`, Firebase `FIREBASE_TOKEN`, Deno Deploy `DENO_DEPLOY_TOKEN`, Railway `RAILWAY_TOKEN`, Surge `SURGE_TOKEN`, Azure `SWA_CLI_DEPLOYMENT_TOKEN`, AWS (S3, SST) `AWS_ACCESS_KEY_ID` plus `AWS_SECRET_ACCESS_KEY`. GitHub Pages has no token: it pushes with the user's git credentials.
+- The vault only passes the platform's own token to its CLI. Any other secret (e.g. `AWS_SECRET_ACCESS_KEY`) must be listed in `deploy.env` in `appz.jsonc` to be passed through.
 - A real environment variable beats the vault; `-e` beats both. `note: vault is locked` means run `appz env unlock` (the user must enter the passphrase).
 - **Never** ask the user to paste a secret into chat, put one in `appz.jsonc`, or commit one. Tell them to run `appz env set <NAME>` themselves (`! appz env set VERCEL_TOKEN` in Claude Code).
 

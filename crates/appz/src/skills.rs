@@ -594,18 +594,20 @@ pub fn install_bundled(root: &Path, global: bool) -> Result<InstallSummary, Stri
             failed: Vec::new(),
         };
         for s in &found {
-            let mut last_err = None;
+            let mut errs = Vec::new();
             let mut any_ok = false;
             for a in &agents {
                 match manager.install_skill(s, a, &opts).await {
                     Ok(_) => any_ok = true,
-                    Err(e) => last_err = Some(e.to_string()),
+                    Err(e) => errs.push(format!("{a:?}: {e}")),
                 }
             }
-            match (any_ok, last_err) {
-                (true, _) => summary.installed.push(s.name.clone()),
-                (false, Some(e)) => summary.failed.push(format!("{} ({e})", s.name)),
-                (false, None) => summary.failed.push(s.name.clone()),
+            if any_ok {
+                summary.installed.push(s.name.clone());
+            }
+            // A failure on one agent is reported even when others succeeded.
+            for e in errs {
+                summary.failed.push(format!("{} ({e})", s.name));
             }
         }
         Ok(summary)

@@ -78,7 +78,10 @@ enum ToolchainCmd {
 }
 
 #[derive(Args)]
+#[command(args_conflicts_with_subcommands = true)]
 struct SkillsArgs {
+    #[command(subcommand)]
+    sub: Option<SkillsSub>,
     /// Search skills.sh directly instead of auto-detecting the project
     query: Option<String>,
     #[arg(default_value = ".")]
@@ -89,6 +92,18 @@ struct SkillsArgs {
     /// Also offer skills from large source repos (slow: full-repo download)
     #[arg(long)]
     include_large: bool,
+}
+
+#[derive(Subcommand)]
+enum SkillsSub {
+    /// Install appz's own agent skill into every detected AI agent
+    Add {
+        /// Install user-wide (home directory) instead of into this project
+        #[arg(long)]
+        global: bool,
+        #[arg(long, default_value = ".")]
+        dir: PathBuf,
+    },
 }
 
 #[derive(Args)]
@@ -1032,7 +1047,27 @@ fn run_agents(args: AgentArgs, json: bool) {
     agents::run(&cmd);
 }
 
+fn run_skills_add(dir: PathBuf, global: bool, json: bool) {
+    let root = resolve_root(&dir);
+    match skills::install_bundled(&root, global) {
+        Ok(sum) if json => println!(
+            "{}",
+            serde_json::json!({ "installed": sum.installed, "failed": sum.failed })
+        ),
+        Ok(sum) => {
+            if !sum.failed.is_empty() {
+                error(&format!("install failed: {}", sum.failed.join(", ")));
+            }
+            success(&format!("installed skill: {}", sum.installed.join(", ")));
+        }
+        Err(e) => error(&e),
+    }
+}
+
 fn run_skills(args: SkillsArgs, json: bool) {
+    if let Some(SkillsSub::Add { global, dir }) = args.sub {
+        return run_skills_add(dir, global, json);
+    }
     let root = resolve_root(&args.dir);
     let report = match skills::search(
         &root,

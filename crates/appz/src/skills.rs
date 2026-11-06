@@ -554,3 +554,60 @@ async fn resolve_source(
     let path = td.path().to_path_buf();
     Ok((path, Some(td)))
 }
+
+/// appz's own agent skill, embedded so it always matches this binary's flags.
+const BUNDLED_SKILL: &str = include_str!("../../../skills/appz/SKILL.md");
+
+/// Installs the bundled `appz` skill into every detected agent (universal
+/// agents when none is detected). Copied, not symlinked: the source is a
+/// temp directory that does not outlive this call.
+pub fn install_bundled(root: &Path, global: bool) -> Result<InstallSummary, String> {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| e.to_string())?;
+    rt.block_on(async {
+        let tmp = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let dir = tmp.path().join("appz");
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        std::fs::write(dir.join("SKILL.md"), BUNDLED_SKILL).map_err(|e| e.to_string())?;
+
+        let manager = SkillManager::builder().cwd(root.to_path_buf()).build();
+        let mut agents = manager.detect_installed_agents().await;
+        if agents.is_empty() {
+            agents = manager.agents().universal_agents();
+        }
+        let found = skill::skills::discover_skills(tmp.path(), None, &DiscoverOptions::default())
+            .await
+            .map_err(|e| e.to_string())?;
+        let opts = InstallOptions {
+            scope: if global {
+                InstallScope::Global
+            } else {
+                InstallScope::Project
+            },
+            mode: InstallMode::Copy,
+            cwd: Some(root.to_path_buf()),
+        };
+        let mut summary = InstallSummary {
+            installed: Vec::new(),
+            failed: Vec::new(),
+        };
+        for s in &found {
+            let mut last_err = None;
+            let mut any_ok = false;
+            for a in &agents {
+                match manager.install_skill(s, a, &opts).await {
+                    Ok(_) => any_ok = true,
+                    Err(e) => last_err = Some(e.to_string()),
+                }
+            }
+            match (any_ok, last_err) {
+                (true, _) => summary.installed.push(s.name.clone()),
+                (false, Some(e)) => summary.failed.push(format!("{} ({e})", s.name)),
+                (false, None) => summary.failed.push(s.name.clone()),
+            }
+        }
+        Ok(summary)
+    })
+}

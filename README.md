@@ -144,6 +144,49 @@ slsa-verifier verify-artifact \
   "$FILE"
 ```
 
+## Deploying to GitHub Pages, S3, and Render
+
+These targets publish to production; use `--prod`. A preview request fails
+without publishing.
+
+- `appz deploy --target github-pages --prod` uses the `gh-pages` CLI
+  (npm package `gh-pages`) and your Git credentials. Enable branch publishing
+  from `gh-pages` in the repository's Pages settings. URLs respect the build
+  output's `CNAME`, user/org sites, and project sites. The push does not confirm
+  completion of GitHub's asynchronous Pages build.
+- `appz deploy --target aws-s3 --prod` uses AWS CLI credentials (including
+  profiles/roles), honors the configured region, and syncs the build output
+  with `--delete`, skipping symlinks. It refuses output with no readable files,
+  including empty directory trees. The reported URL is a
+  bucket REST endpoint, not confirmation of a public website.
+- `appz deploy --target render --prod` uses the
+  [Render CLI](https://render.com/docs/cli) to deploy an existing service's
+  connected source and waits for completion. Push your source to its connected
+  repository first. Authenticate with `render login` or `RENDER_API_KEY`;
+  the service URL comes from Render metadata.
+
+Example `appz.jsonc` configuration:
+
+```json
+{
+  "deploy": {
+    "targets": {
+      "aws-s3": { "bucket": "my-site", "region": "eu-west-1", "prefix": "site" },
+      "render": { "service": "srv-your-service-id" }
+    }
+  }
+}
+```
+
+If AWS credentials are stored in the appz vault, add `AWS_SECRET_ACCESS_KEY`
+and, for temporary credentials, `AWS_SESSION_TOKEN` to `deploy.env`.
+
+The Rust `DeployProvider` API lists deployments for Vercel, Netlify, Cloudflare
+Workers, and Render, and rolls back Vercel, Netlify, and single-version
+Cloudflare deployments. Other combinations return `Unsupported`; no capability
+flags promise an operation that isn't implemented. Render's CLI supports
+redeploying commits but has no deployment-ID artifact rollback command.
+
 ## MCP server
 
 `appz mcp` speaks the [Model Context Protocol](https://modelcontextprotocol.io)

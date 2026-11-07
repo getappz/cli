@@ -1,6 +1,6 @@
 # Data-driven deploy providers: platforms appz drives through their own CLI,
-# described here instead of one Rust struct each. Vercel, Netlify and Cloudflare
-# are native providers (they need link/pull/config logic) and are not listed.
+# described here instead of one Rust struct each. Vercel, Netlify, Cloudflare,
+# GitHub Pages, AWS S3 and Render are native providers and are not listed.
 #
 # Ported from the old appz deployer blueprints, but only what could be
 # checked, and with these rules:
@@ -24,7 +24,7 @@
 #   * `detect` lists only files that clearly mean "this project deploys here".
 #
 # Not ported (see the PR): aws-amplify, gitlab-pages, google-cloud, heroku,
-# render, zeabur, zerops.
+# zeabur, zerops.
 
 [[provider]]
 slug = "fly"
@@ -86,26 +86,6 @@ preview = [["swa", "deploy", "{{output_dir}}", "--env", "preview"]]
 production = [["swa", "deploy", "{{output_dir}}", "--env", "production"]]
 
 [[provider]]
-slug = "aws-s3"
-name = "AWS S3"
-cli = "aws"
-mise = "aws-cli"
-install_hint = "https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html"
-token_env = "AWS_ACCESS_KEY_ID"
-login = ["configure"]
-login_hint = "aws configure (or set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY)"
-whoami = ["sts", "get-caller-identity"]
-required = ["bucket"]
-# `--delete` removes bucket objects that are not in the build output, which is
-# what a site sync means. appz refuses to run it when the output is missing or
-# empty. No cache-control is set (the old blueprint marked every file,
-# index.html included, immutable for a year).
-production = [["aws", "s3", "sync", "{{output_dir}}", "s3://{{bucket}}/{{prefix}}", "--region", "{{region}}", "--delete"]]
-[provider.config]
-region = "us-east-1"
-prefix = ""
-
-[[provider]]
 slug = "aws-sst"
 name = "SST (AWS)"
 cli = "sst"
@@ -146,15 +126,3 @@ whoami = ["whoami"]
 url_hosts = [".surge.sh"]
 required = ["domain"]
 production = [["surge", "{{output_dir}}", "{{domain}}"]]
-
-[[provider]]
-slug = "github-pages"
-name = "GitHub Pages"
-cli = "gh-pages"
-mise = "npm:gh-pages"
-install_hint = "npm install -g gh-pages"
-# gh-pages pushes the build output to the gh-pages branch of `origin` with your
-# git credentials, so there is no token variable to check.
-token_env = ""
-login_hint = "make sure `git push` to origin works"
-production = [["gh-pages", "-d", "{{output_dir}}"]]

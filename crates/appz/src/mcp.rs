@@ -214,7 +214,7 @@ impl AppzServer {
     }
 
     #[tool(
-        description = "Deploy a project to a hosting platform (vercel|netlify|cloudflare|fly|firebase|deno-deploy|azure-static|aws-s3|aws-sst|railway|surge|github-pages) by driving that platform's own CLI; the target is detected from project files when not given. If nothing changed since the last deploy it skips (unchanged=true, previous url) unless force=true. Returns JSON with the deployment URL — `null` if it couldn't be confirmed from the CLI's output, never a guessed URL. On a fresh project it can fail naming a missing step (CLI not installed, project not linked): retry with allow_setup=true once the user agrees (optionally project=<name>). Sign-in needs the platform token in the environment or stored with `appz env set`; the tool cannot log in."
+        description = "Deploy a project to a hosting platform (vercel|netlify|cloudflare|fly|firebase|deno-deploy|azure-static|aws-s3|aws-sst|railway|surge|github-pages|render) by driving that platform's own CLI; the target is detected from project files when not given. If nothing changed since the last deploy it skips (unchanged=true, previous url) unless force=true. Returns JSON with the deployment URL — `null` if it couldn't be confirmed from the CLI's output, never a guessed URL. On a fresh project it can fail naming a missing step (CLI not installed, project not linked): retry with allow_setup=true once the user agrees (optionally project=<name>). Sign-in needs the platform token in the environment or stored with `appz env set`; the tool cannot log in."
     )]
     fn deploy(&self, Parameters(arg): Parameters<DeployArg>) -> Result<CallToolResult, McpError> {
         let root = Self::resolve(&arg.dir);

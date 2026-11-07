@@ -5,6 +5,6 @@ pub mod exec;
 pub mod shell;
 
 pub use error::*;
-pub use exec::{interrupted, Command};
+pub use exec::{interrupted, Command, DENIED_CHILD_ENV};
 
 pub use process_wrap;

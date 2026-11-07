@@ -24,6 +24,7 @@ fn keyring_enabled() -> bool {
 /// Test-only seam: production resolves availability inline and never calls
 /// this.
 #[cfg(test)]
+#[allow(unsafe_code)] // env mutation serialized by KEYRING_ENV_LOCK
 pub fn with_keyring_env<R>(f: impl FnOnce() -> R) -> R {
     struct ResetOnDrop(Option<String>);
     impl Drop for ResetOnDrop {
@@ -50,6 +51,7 @@ pub fn with_keyring_env<R>(f: impl FnOnce() -> R) -> R {
 
 /// Runs `f` with the keyring forced unavailable. Test-only seam.
 #[cfg(test)]
+#[allow(unsafe_code)] // env mutation serialized by KEYRING_ENV_LOCK
 pub fn with_keyring_disabled<R>(f: impl FnOnce() -> R) -> R {
     struct ResetOnDrop(Option<String>);
     impl Drop for ResetOnDrop {

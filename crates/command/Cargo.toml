@@ -10,5 +10,6 @@ description = "Process execution builder: shell-aware or arg-vector, PATH/env co
 miette = "7"
 thiserror = "2"
 shell-words = "1"
-which = "6"
+which = "8"
 ctrlc = "3"
+process-wrap = { version = "10.0.1", features = ["std"] }

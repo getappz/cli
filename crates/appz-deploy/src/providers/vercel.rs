@@ -309,6 +309,7 @@ impl DeployProvider for VercelProvider {
                     .find(|tok| tok.starts_with("https://"))?;
                 Some(DeploymentInfo {
                     id: url.to_string(),
+                    version_id: None,
                     url: Some(url.to_string()),
                     status: DeployStatus::Unknown,
                     created_at: None,

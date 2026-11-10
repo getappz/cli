@@ -1,7 +1,7 @@
 use argon2::Argon2;
 use zeroize::ZeroizeOnDrop;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct KdfParams {
     pub salt: Vec<u8>,
     pub time_cost: u32,

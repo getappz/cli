@@ -29,7 +29,21 @@ pub fn exec_captured(
     env: &[(&str, &str)],
     timeout: Duration,
 ) -> Result<ExecOutput, String> {
-    exec_inner(bin, args, cwd, env, timeout, false)
+    exec_inner(bin, args, cwd, env, "", timeout, false)
+}
+
+/// Like [`exec_captured`], but the child does not inherit any parent
+/// environment variable whose name starts with `scrub_prefix` (e.g. ambient
+/// `RUSTIC_*` settings); only `env` supplies those.
+pub fn exec_captured_scrubbed(
+    bin: &str,
+    args: &[&str],
+    cwd: &Path,
+    env: &[(&str, &str)],
+    scrub_prefix: &str,
+    timeout: Duration,
+) -> Result<ExecOutput, String> {
+    exec_inner(bin, args, cwd, env, scrub_prefix, timeout, false)
 }
 
 /// Like [`exec_captured`], but also copies the child's output to our stderr
@@ -42,7 +56,7 @@ pub fn exec_live(
     env: &[(&str, &str)],
     timeout: Duration,
 ) -> Result<ExecOutput, String> {
-    exec_inner(bin, args, cwd, env, timeout, true)
+    exec_inner(bin, args, cwd, env, "", timeout, true)
 }
 
 /// Drain `pipe` to the end, optionally echoing each chunk to stderr.
@@ -71,6 +85,7 @@ fn exec_inner(
     args: &[&str],
     cwd: &Path,
     env: &[(&str, &str)],
+    scrub_prefix: &str,
     timeout: Duration,
     echo: bool,
 ) -> Result<ExecOutput, String> {
@@ -78,6 +93,31 @@ fn exec_inner(
     cmd.without_shell();
     cmd.args(args.iter().copied());
     cmd.cwd(cwd);
+    if !scrub_prefix.is_empty() {
+        for (k, _) in std::env::vars_os() {
+            // Windows env names are case-insensitive: `rustic_repo_hot` must go too.
+            let name = k.to_string_lossy();
+            let hit = if cfg!(windows) {
+                name.to_ascii_uppercase()
+                    .starts_with(&scrub_prefix.to_ascii_uppercase())
+            } else {
+                name.starts_with(scrub_prefix)
+            };
+            // Never queue a removal for a name we set explicitly: the command
+            // env is a HashMap, and on Windows a differently-cased removal
+            // could be applied after the set and delete our value.
+            let explicit = env.iter().any(|(ek, _)| {
+                if cfg!(windows) {
+                    ek.eq_ignore_ascii_case(&name)
+                } else {
+                    *ek == name
+                }
+            });
+            if hit && !explicit {
+                cmd.env_remove(k);
+            }
+        }
+    }
     for (k, v) in env.iter() {
         cmd.env(*k, *v);
     }

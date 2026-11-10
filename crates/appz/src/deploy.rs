@@ -88,6 +88,35 @@ fn ensure_linked(
     }
 }
 
+/// Apply the install `policy` before installing `tool` (providing `cli`)
+/// with mise: fail with `missing` when installing is not allowed, ask when
+/// interactive, and announce the install otherwise.
+pub(crate) fn confirm_mise_install(
+    policy: Consent,
+    cli: &str,
+    tool: &str,
+    missing: &str,
+) -> Result<(), String> {
+    match policy {
+        Consent::Never => {
+            return Err(format!("{missing}\n(or re-run with --yes to install it)"));
+        }
+        Consent::Ask => {
+            let prompt = format!("{cli} is not installed. Install {tool} with mise?");
+            if !cliclack::confirm(prompt)
+                .initial_value(true)
+                .interact()
+                .unwrap_or(false)
+            {
+                return Err(missing.to_string());
+            }
+        }
+        Consent::Yes => {}
+    }
+    eprintln!("installing {tool} with mise...");
+    Ok(())
+}
+
 /// The CLI was not found on `PATH` or in mise's bin dirs: install it through
 /// mise if the policy (or the user, when asked) allows, else fail with the
 /// install command. Returns mise's bin dirs, which then contain the CLI.
@@ -101,27 +130,7 @@ fn provision_cli(
         // Nothing appz can install: `missing` already carries the install hint.
         return Err(missing.to_string());
     }
-    match policy {
-        Consent::Never => {
-            return Err(format!("{missing}\n(or re-run with --yes to install it)"));
-        }
-        Consent::Ask => {
-            let prompt = format!(
-                "{} is not installed. Install {} with mise?",
-                p.cli_tool(),
-                p.mise_tool()
-            );
-            if !cliclack::confirm(prompt)
-                .initial_value(true)
-                .interact()
-                .unwrap_or(false)
-            {
-                return Err(missing.to_string());
-            }
-        }
-        Consent::Yes => {}
-    }
-    eprintln!("installing {} with mise...", p.mise_tool());
+    confirm_mise_install(policy, p.cli_tool(), &p.mise_tool(), missing)?;
     install_cli_with_mise(p, project_dir).map_err(|e| e.to_string())
 }
 

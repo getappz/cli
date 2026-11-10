@@ -324,7 +324,7 @@ impl Command {
             cmd.current_dir(cwd);
         }
 
-        cmd.envs(std::env::vars());
+        cmd.envs(forwarded_env(std::env::vars()));
 
         for (key, value) in &self.env {
             match value {
@@ -549,4 +549,39 @@ fn detect_color_support() -> u8 {
     }
 
     0
+}
+
+/// Env vars never forwarded to a child process. The vault passphrase must stay
+/// inside the appz process: inheriting it would hand it to every build tool,
+/// postinstall script and provider CLI appz runs. A caller that really wants a
+/// child to see one sets it explicitly with [`Command::env`].
+///
+/// Keep in step with `appz_vault::PASSPHRASE_ENV` (a test in the `appz` crate
+/// checks it).
+pub const DENIED_CHILD_ENV: &[&str] = &["APPZ_VAULT_PASSPHRASE"];
+
+/// The parent's environment minus [`DENIED_CHILD_ENV`].
+fn forwarded_env(
+    vars: impl Iterator<Item = (String, String)>,
+) -> impl Iterator<Item = (String, String)> {
+    // Case-insensitive: Windows env names are, so `appz_vault_passphrase` is
+    // read by appz yet would slip past an exact match.
+    vars.filter(|(k, _)| !DENIED_CHILD_ENV.iter().any(|d| d.eq_ignore_ascii_case(k)))
+}
+
+#[cfg(test)]
+mod denied_env_tests {
+    use super::*;
+
+    #[test]
+    fn the_vault_passphrase_is_not_inherited_by_children() {
+        let vars = vec![
+            ("PATH".to_string(), "/bin".to_string()),
+            ("APPZ_VAULT_PASSPHRASE".to_string(), "s3cret".to_string()),
+            ("Appz_Vault_Passphrase".to_string(), "s3cret".to_string()),
+            ("HOME".to_string(), "/h".to_string()),
+        ];
+        let kept: Vec<String> = forwarded_env(vars.into_iter()).map(|(k, _)| k).collect();
+        assert_eq!(kept, ["PATH", "HOME"]);
+    }
 }

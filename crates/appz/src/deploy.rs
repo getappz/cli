@@ -229,7 +229,7 @@ fn run_hook(ctx: &DeployContext, name: &str, argv: &[String]) -> Result<(), Stri
     }
     let (bin, args) = argv.split_first().expect("non-empty argv");
     eprintln!("running {name} hook: {}", argv.join(" "));
-    let mut cmd = command::Command::new(bin);
+    let mut cmd = command::Command::new(ctx.resolve(bin));
     cmd.args(args.iter().map(String::as_str))
         .cwd(&ctx.project_dir)
         .without_shell()
@@ -403,7 +403,12 @@ pub fn run(project_dir: &Path, req: DeployRequest) -> Result<DeployOutput, Strin
         crate::deploy_state::record(project_dir, &slug, req.prod, &fp, url);
     }
     if !req.dry_run {
-        run_hook(&ctx, "after_deploy", &ctx.deploy_config.hooks.after_deploy)?;
+        run_hook(&ctx, "after_deploy", &ctx.deploy_config.hooks.after_deploy).map_err(|e| {
+            format!(
+                "deployed ({}) but {e}",
+                output.url.as_deref().unwrap_or("url unknown")
+            )
+        })?;
     }
     output.link_needed = req.dry_run && !provider.is_linked(&ctx);
 

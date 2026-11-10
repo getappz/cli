@@ -191,7 +191,7 @@ struct DeployArgs {
     #[arg(short = 'y', long)]
     yes: bool,
     /// Deploy to every target configured under deploy.targets instead of one
-    #[arg(long)]
+    #[arg(long, conflicts_with = "target")]
     all: bool,
 }
 

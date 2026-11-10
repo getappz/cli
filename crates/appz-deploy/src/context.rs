@@ -185,7 +185,7 @@ impl DeployContext {
     /// Full path of `bin`, looked up in the same `PATH` the child will get: a
     /// `PATH` the caller put in `run_env`, else the process `PATH`, then
     /// `extra_path`. Falls back to the bare name.
-    fn resolve(&self, bin: &str) -> String {
+    pub fn resolve(&self, bin: &str) -> String {
         let base = self.run_env.get("PATH").map(std::ffi::OsString::from);
         command::shell::find_command_with_paths(bin, base.as_deref(), &self.extra_path)
             .map_or_else(|| bin.to_string(), |p| p.to_string_lossy().into_owned())

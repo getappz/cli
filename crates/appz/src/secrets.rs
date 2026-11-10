@@ -55,8 +55,9 @@ fn passphrase(prompt: &str) -> Result<String, String> {
 fn gitignore_project_vault(vault: &Path) {
     if let Some(root) = vault.parent().and_then(Path::parent)
         && root.ancestors().any(|a| a.join(".git").exists())
+        && let Err(e) = appz_core::ensure_gitignored(root)
     {
-        appz_core::ensure_gitignored(root);
+        eprintln!("warning: could not git-ignore the project vault: {e}");
     }
 }
 

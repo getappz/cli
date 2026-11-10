@@ -137,7 +137,7 @@ pub fn record(root: &Path, slug: &str, prod: bool, fingerprint: &str, url: &str)
         return;
     }
     if root.ancestors().any(|a| a.join(".git").exists()) {
-        appz_core::ensure_gitignored(root);
+        let _ = appz_core::ensure_gitignored(root);
     }
     // Best effort: failing to remember only costs a redundant deploy later.
     // Write a sibling file, then rename over: a concurrent reader never sees

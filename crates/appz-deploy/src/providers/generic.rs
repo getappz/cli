@@ -426,7 +426,16 @@ mod tests {
     /// slugs are unique and never shadow a native provider.
     #[test]
     fn the_embedded_registry_is_consistent() {
-        let native = ["vercel", "netlify", "cloudflare"];
+        let native = [
+            "vercel",
+            "netlify",
+            "cloudflare",
+            "firebase",
+            "azure-static",
+            "github-pages",
+            "aws-s3",
+            "render",
+        ];
         let mut slugs = BTreeSet::new();
         for l in loaded() {
             let s = &l.spec;
@@ -484,7 +493,7 @@ mod tests {
                 );
             }
         }
-        assert!(slugs.len() >= 9);
+        assert_eq!(slugs.len(), 9);
     }
 
     #[test]
@@ -531,11 +540,15 @@ mod tests {
     #[test]
     fn a_step_that_reads_the_build_output_refuses_when_it_is_missing_or_empty() {
         let dir = temp("guard");
-        let ctx = configured(&dir, "aws-s3", serde_json::json!({ "bucket": "b" }));
-        let missing = provider("aws-s3").deploy(&ctx).unwrap_err().to_string();
+        let ctx = configured(
+            &dir,
+            "surge",
+            serde_json::json!({ "domain": "test.surge.sh" }),
+        );
+        let missing = provider("surge").deploy(&ctx).unwrap_err().to_string();
         assert!(missing.contains("missing or empty"), "{missing}");
         std::fs::create_dir(dir.join("dist")).unwrap();
-        let empty = provider("aws-s3").deploy(&ctx).unwrap_err().to_string();
+        let empty = provider("surge").deploy(&ctx).unwrap_err().to_string();
         assert!(empty.contains("missing or empty"), "{empty}");
         let _ = std::fs::remove_dir_all(dir);
     }

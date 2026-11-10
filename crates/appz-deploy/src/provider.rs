@@ -5,7 +5,7 @@ use crate::context::DeployContext;
 use crate::error::{DeployError, DeployResult};
 use crate::output::{
     AuthState, DeployOutput, DeploymentInfo, DeploymentInspect, DetectedConfig, DomainVerifyResult,
-    PrerequisiteStatus, ProjectDomain,
+    PrerequisiteStatus, ProjectDomain, ProjectInfo,
 };
 
 /// Timeout for the actual deploy invocation (platform CLIs can legitimately
@@ -230,6 +230,45 @@ pub trait DeployProvider: Send + Sync {
             operation: "domains remove",
         })
     }
+
+    fn list_projects(&self, ctx: &DeployContext) -> DeployResult<Vec<ProjectInfo>> {
+        let _ = ctx;
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "projects list",
+        })
+    }
+
+    fn add_project(&self, ctx: &DeployContext, name: &str) -> DeployResult<ProjectInfo> {
+        let _ = (ctx, name);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "projects add",
+        })
+    }
+
+    fn remove_project(&self, ctx: &DeployContext, id_or_slug: &str) -> DeployResult<bool> {
+        let _ = (ctx, id_or_slug);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "projects remove",
+        })
+    }
+}
+
+/// IDs become positional CLI arguments; reject values that could be options.
+pub(crate) fn validate_deployment_id(provider: &'static str, id: &str) -> DeployResult<()> {
+    if id.is_empty()
+        || id.starts_with('-')
+        || id.chars().any(char::is_whitespace)
+        || id.chars().any(char::is_control)
+    {
+        return Err(DeployError::DeployFailed {
+            provider,
+            reason: "invalid deployment ID".into(),
+        });
+    }
+    Ok(())
 }
 
 pub fn create_provider_registry() -> Vec<Box<dyn DeployProvider>> {
@@ -238,6 +277,11 @@ pub fn create_provider_registry() -> Vec<Box<dyn DeployProvider>> {
         Box::new(crate::providers::vercel::VercelProvider),
         Box::new(crate::providers::netlify::NetlifyProvider),
         Box::new(crate::providers::cloudflare::CloudflareProvider),
+        Box::new(crate::providers::github_pages::GithubPagesProvider),
+        Box::new(crate::providers::aws_s3::AwsS3Provider),
+        Box::new(crate::providers::render::RenderProvider),
+        Box::new(crate::providers::firebase::FirebaseProvider),
+        Box::new(crate::providers::azure::AzureStaticProvider),
     ];
     // The rest are described by the embedded registry (registry/deploy.toml).
     all.extend(crate::providers::generic::providers());
@@ -361,6 +405,30 @@ mod tests {
         assert_eq!(detect_providers(&dir), vec!["netlify", "cloudflare"]);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn native_providers_have_no_duplicate_registry_entries() {
+        let slugs = available_provider_slugs();
+        let unique: std::collections::HashSet<_> = slugs.iter().collect();
+        assert_eq!(slugs.len(), unique.len(), "{slugs:?}");
+        assert_eq!(get_provider("aws-s3").unwrap().mise_tool(), "awscli");
+        assert_eq!(get_provider("render").unwrap().cli_tool(), "render");
+    }
+
+    #[test]
+    fn production_only_providers_refuse_preview_even_in_dry_run() {
+        let mut ctx = DeployContext::new(std::env::temp_dir(), "dist".into());
+        ctx.dry_run = true;
+        for slug in ["github-pages", "aws-s3", "render"] {
+            assert!(
+                matches!(
+                    get_provider(slug).unwrap().deploy_preview(&ctx),
+                    Err(DeployError::Unsupported { .. })
+                ),
+                "{slug} must not publish production as preview"
+            );
+        }
     }
 
     #[test]

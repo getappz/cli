@@ -281,11 +281,15 @@ impl DeployProvider for VercelProvider {
         if !ctx.project_dir.join(".vercel/project.json").exists() {
             return Err(DeployError::DeployFailed {
                 provider: self.name(),
-                reason: "project not linked to Vercel — run `vercel link` first".into(),
+                reason: "project not linked to Vercel — run vercel link first".into(),
             });
         }
         let out = ctx
-            .exec("vercel", &["ls", "--yes"], QUERY_TIMEOUT)
+            .exec(
+                "vercel",
+                &["ls", "--yes", "--format", "json"],
+                QUERY_TIMEOUT,
+            )
             .map_err(|reason| DeployError::DeployFailed {
                 provider: self.name(),
                 reason,
@@ -296,28 +300,82 @@ impl DeployProvider for VercelProvider {
                 reason: format!("vercel ls failed:\n{}\n{}", out.stdout, out.stderr),
             });
         }
-        // Best-effort text scan, not a schema we assert with false confidence
-        // (`vercel ls`'s plain-text table format isn't guaranteed stable
-        // across CLI versions; verify against a live run before relying on
-        // this for anything beyond a human-readable listing).
-        let deployments = out
-            .stdout
-            .lines()
-            .filter_map(|line| {
-                let url = line
-                    .split_whitespace()
-                    .find(|tok| tok.starts_with("https://"))?;
-                Some(DeploymentInfo {
-                    id: url.to_string(),
+        #[derive(serde::Deserialize)]
+        struct Page {
+            deployments: Vec<Deployment>,
+        }
+        #[derive(serde::Deserialize)]
+        struct Deployment {
+            id: String,
+            // null while an upload is incomplete (REST API contract)
+            url: Option<String>,
+            state: Option<String>,
+            #[serde(rename = "createdAt")]
+            created_at: Option<i64>,
+        }
+        let page: Page = serde_json::from_str(&out.stdout)?;
+        page.deployments
+            .into_iter()
+            .map(|d| {
+                crate::provider::validate_deployment_id(self.name(), &d.id)?;
+                Ok(DeploymentInfo {
+                    id: d.id,
                     version_id: None,
-                    url: Some(url.to_string()),
-                    status: DeployStatus::Unknown,
-                    created_at: None,
+                    url: d.url.filter(|u| !u.is_empty()).map(|u| {
+                        if u.starts_with("https://") {
+                            u
+                        } else {
+                            format!("https://{u}")
+                        }
+                    }),
+                    status: match d.state.as_deref() {
+                        Some("READY") => DeployStatus::Ready,
+                        Some("BUILDING" | "INITIALIZING" | "QUEUED") => DeployStatus::Building,
+                        Some("ERROR" | "CANCELED") => DeployStatus::Error,
+                        _ => DeployStatus::Unknown,
+                    },
+                    created_at: d
+                        .created_at
+                        .and_then(chrono::DateTime::from_timestamp_millis),
+                    // A production target isn't proof that an alias currently points to it.
                     is_current: false,
                 })
             })
-            .collect();
-        Ok(deployments)
+            .collect()
+    }
+
+    fn rollback(&self, ctx: &DeployContext, deployment_id: &str) -> DeployResult<DeployOutput> {
+        crate::provider::validate_deployment_id(self.name(), deployment_id)?;
+        if ctx.dry_run {
+            return Ok(DeployOutput::dry_run(self.slug(), false));
+        }
+        let start = Instant::now();
+        let out = ctx
+            .exec_live(
+                "vercel",
+                &["rollback", deployment_id, "--yes"],
+                DEPLOY_TIMEOUT,
+            )
+            .map_err(|reason| DeployError::DeployFailed {
+                provider: self.name(),
+                reason,
+            })?;
+        if !out.success {
+            return Err(DeployError::DeployFailed {
+                provider: self.name(),
+                reason: format!("vercel rollback failed:\n{}\n{}", out.stdout, out.stderr),
+            });
+        }
+        let mut result = DeployOutput::dry_run(self.slug(), false);
+        result.url = extract_deploy_url(&out.stdout);
+        result.status = if result.url.is_some() {
+            DeployStatus::Ready
+        } else {
+            DeployStatus::Unknown
+        };
+        result.created_at = Some(chrono::Utc::now());
+        result.duration_ms = Some(start.elapsed().as_millis() as u64);
+        Ok(result)
     }
 }
 

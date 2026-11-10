@@ -275,7 +275,10 @@ pub fn run(project_dir: &Path, req: DeployRequest) -> Result<DeployOutput, Strin
     // build and upload it all again.
     // The check is only an optimization: if the project cannot be fingerprinted
     // the deploy goes ahead.
-    if !req.force
+    // Render deploys its connected remote, whose revision isn't in this hash.
+    let cache_local_files = slug != "render";
+    if cache_local_files
+        && !req.force
         && let Ok(fp) =
             crate::deploy_state::fingerprint(project_dir, &fingerprint_extra(&slug, &req, &config))
         && let Some(last) = crate::deploy_state::unchanged(project_dir, &slug, req.prod, &fp)
@@ -406,7 +409,8 @@ pub fn run(project_dir: &Path, req: DeployRequest) -> Result<DeployOutput, Strin
     .map_err(|e| e.to_string())?;
 
     output.setup_files = setup_names;
-    if !req.dry_run
+    if cache_local_files
+        && !req.dry_run
         && let Some(url) = &output.url
         && let Ok(fp) = crate::deploy_state::fingerprint(
             project_dir,
@@ -669,7 +673,7 @@ fn domain_ctx(
 
     let slug = match target.or_else(|| config.default.clone()) {
         Some(slug) => slug,
-        None => autodetect_target(project_dir)?,
+        None => autodetect_target(project_dir).unwrap_or_else(|_| "appzdev".to_string()),
     };
 
     let provider = get_provider(&slug).map_err(|e| e.to_string())?;
@@ -729,6 +733,34 @@ pub fn remove_domain(
         .map_err(|e| e.to_string())
 }
 
+pub fn list_projects(
+    project_dir: &Path,
+    target: Option<String>,
+) -> Result<Vec<appz_deploy::ProjectInfo>, String> {
+    let (provider, ctx) = domain_ctx(project_dir, target)?;
+    provider.list_projects(&ctx).map_err(|e| e.to_string())
+}
+
+pub fn add_project(
+    project_dir: &Path,
+    target: Option<String>,
+    name: &str,
+) -> Result<appz_deploy::ProjectInfo, String> {
+    let (provider, ctx) = domain_ctx(project_dir, target)?;
+    provider.add_project(&ctx, name).map_err(|e| e.to_string())
+}
+
+pub fn remove_project(
+    project_dir: &Path,
+    target: Option<String>,
+    id_or_slug: &str,
+) -> Result<bool, String> {
+    let (provider, ctx) = domain_ctx(project_dir, target)?;
+    provider
+        .remove_project(&ctx, id_or_slug)
+        .map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -747,6 +779,32 @@ mod tests {
             login: Consent::Never,
             link: Consent::Never,
         }
+    }
+
+    #[test]
+    fn render_does_not_skip_remote_deploys_based_on_local_files() {
+        let dir = std::env::temp_dir().join(format!("appz-render-cache-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("appz.jsonc"),
+            r#"{"deploy":{"default":"render","targets":{"render":{"service":"srv-one"}}}}"#,
+        )
+        .unwrap();
+        let mut request = req(&["RENDER_API_KEY=test-key"], &[], None);
+        request.prod = true;
+        request.dry_run = true;
+        request.json = true;
+        let config = read_deploy_config(&dir).unwrap().unwrap();
+        let fp =
+            crate::deploy_state::fingerprint(&dir, &fingerprint_extra("render", &request, &config))
+                .unwrap();
+        crate::deploy_state::record(&dir, "render", true, &fp, "https://old.example");
+        let output = run(&dir, request).unwrap();
+        assert!(
+            !output.unchanged,
+            "local files cannot identify Render's remote source revision"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

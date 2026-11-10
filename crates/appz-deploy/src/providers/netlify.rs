@@ -17,8 +17,10 @@ use std::time::Instant;
 
 use crate::context::DeployContext;
 use crate::error::{DeployError, DeployResult};
-use crate::output::{DeployOutput, DeployStatus, DetectedConfig, PrerequisiteStatus};
-use crate::provider::{DEPLOY_TIMEOUT, DeployProvider};
+use crate::output::{
+    DeployOutput, DeployStatus, DeploymentInfo, DetectedConfig, PrerequisiteStatus,
+};
+use crate::provider::{DEPLOY_TIMEOUT, DeployProvider, QUERY_TIMEOUT};
 
 pub struct NetlifyProvider;
 
@@ -135,6 +137,39 @@ impl DeployProvider for NetlifyProvider {
         Ok(None)
     }
 
+    fn is_linked(&self, ctx: &DeployContext) -> bool {
+        // The site id variable pins the project outright.
+        if ctx.run_env.contains_key("NETLIFY_SITE_ID")
+            || std::env::var_os("NETLIFY_SITE_ID").is_some()
+        {
+            return true;
+        }
+        // Otherwise the link lives in `.netlify/state.json`. Unlike Vercel's
+        // `project.json` this stores only the `siteId`, not the site name, so
+        // there is no local name to compare against a `--project` choice; the
+        // linked site is simply whatever this directory is linked to.
+        std::fs::read_to_string(ctx.project_dir.join(".netlify/state.json"))
+            .ok()
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            .and_then(|state| state.get("siteId")?.as_str().map(str::to_string))
+            .is_some_and(|id| !id.is_empty())
+    }
+
+    fn link_args(&self, ctx: &DeployContext, interactive: bool) -> Option<Vec<String>> {
+        if interactive {
+            // `netlify link` asks existing-vs-new and the site name itself.
+            return Some(vec!["link".into()]);
+        }
+        // `netlify link --name` only links to an EXISTING site, so it would
+        // fail on first deploy. `sites:create --name` creates the site and
+        // links the current directory to it.
+        Some(vec![
+            "sites:create".into(),
+            "--name".into(),
+            ctx.project_name(self.slug()),
+        ])
+    }
+
     /// `netlify.toml` with the build command and publish directory, so the
     /// build output is what gets published.
     fn setup_files(&self, ctx: &DeployContext) -> DeployResult<Vec<(String, String)>> {
@@ -170,6 +205,121 @@ impl DeployProvider for NetlifyProvider {
     fn deploy_preview(&self, ctx: &DeployContext) -> DeployResult<DeployOutput> {
         self.deploy_internal(ctx, true)
     }
+
+    fn list_deployments(&self, ctx: &DeployContext) -> DeployResult<Vec<DeploymentInfo>> {
+        let data = serde_json::json!({ "site_id": site_id(ctx)? });
+        let response = api(ctx, "listSiteDeploys", &data, QUERY_TIMEOUT)?;
+        let deployments: Vec<NetlifyDeployment> = serde_json::from_value(response)?;
+        Ok(deployments
+            .into_iter()
+            .map(|d| DeploymentInfo {
+                id: d.id,
+                version_id: None,
+                url: d.deploy_ssl_url.or(d.ssl_url).or(d.url),
+                status: netlify_status(&d.state),
+                created_at: d.created_at,
+                is_current: false,
+            })
+            .collect())
+    }
+
+    fn rollback(&self, ctx: &DeployContext, deployment_id: &str) -> DeployResult<DeployOutput> {
+        crate::provider::validate_deployment_id(self.name(), deployment_id)?;
+        if ctx.dry_run {
+            return Ok(DeployOutput::dry_run(self.slug(), false));
+        }
+        let start = Instant::now();
+        let data = serde_json::json!({ "site_id": site_id(ctx)?, "deploy_id": deployment_id });
+        let d: NetlifyDeployment =
+            serde_json::from_value(api(ctx, "restoreSiteDeploy", &data, DEPLOY_TIMEOUT)?)?;
+        let mut result = DeployOutput::dry_run(self.slug(), false);
+        result.url = d.ssl_url.or(d.url);
+        result.status = netlify_status(&d.state);
+        result.created_at = d.created_at;
+        result.duration_ms = Some(start.elapsed().as_millis() as u64);
+        Ok(result)
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct NetlifyDeployment {
+    id: String,
+    state: String,
+    #[serde(default)]
+    deploy_ssl_url: Option<String>,
+    #[serde(default)]
+    ssl_url: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    created_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+fn netlify_status(state: &str) -> DeployStatus {
+    match state {
+        "ready" => DeployStatus::Ready,
+        "new" | "enqueued" | "building" | "uploading" | "uploaded" | "processing" | "prepared" => {
+            DeployStatus::Building
+        }
+        "error" | "rejected" => DeployStatus::Error,
+        _ => DeployStatus::Unknown,
+    }
+}
+
+fn site_id(ctx: &DeployContext) -> DeployResult<String> {
+    let env = ctx
+        .run_env
+        .get("NETLIFY_SITE_ID")
+        .cloned()
+        .or_else(|| std::env::var("NETLIFY_SITE_ID").ok())
+        .filter(|v| !v.is_empty());
+    let id = match env {
+        Some(id) => id,
+        None => {
+            let text = std::fs::read_to_string(ctx.project_dir.join(".netlify/state.json"))
+                .map_err(|_| DeployError::DeployFailed {
+                    provider: "Netlify",
+                    reason: "set NETLIFY_SITE_ID or run netlify link first".into(),
+                })?;
+            let state: serde_json::Value = serde_json::from_str(&text)?;
+            state
+                .get("siteId")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| DeployError::DeployFailed {
+                    provider: "Netlify",
+                    reason: "no siteId in .netlify/state.json: set NETLIFY_SITE_ID or run netlify link first".into(),
+                })?
+                .to_string()
+        }
+    };
+    crate::provider::validate_deployment_id("Netlify", &id)?;
+    Ok(id)
+}
+
+fn api(
+    ctx: &DeployContext,
+    method: &str,
+    data: &serde_json::Value,
+    timeout: std::time::Duration,
+) -> DeployResult<serde_json::Value> {
+    let data = data.to_string();
+    let out = ctx
+        .exec("netlify", &["api", method, "--data", &data], timeout)
+        .map_err(|reason| DeployError::DeployFailed {
+            provider: "Netlify",
+            reason,
+        })?;
+    if !out.success {
+        return Err(DeployError::DeployFailed {
+            provider: "Netlify",
+            reason: format!(
+                "netlify api {method} failed:\n{}\n{}",
+                out.stdout, out.stderr
+            ),
+        });
+    }
+    Ok(serde_json::from_str(&out.stdout)?)
 }
 
 /// Extract the real deployment URL from `netlify deploy`'s output.
@@ -220,6 +370,73 @@ mod tests {
     #[test]
     fn returns_none_instead_of_fabricating_a_url() {
         assert_eq!(extract_deploy_url("no url here"), None);
+    }
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::*;
+
+    fn ctx_with_state(tag: &str, contents: Option<&str>) -> (std::path::PathBuf, DeployContext) {
+        let dir =
+            std::env::temp_dir().join(format!("appz-netlify-link-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".netlify")).unwrap();
+        if let Some(c) = contents {
+            std::fs::write(dir.join(".netlify/state.json"), c).unwrap();
+        }
+        let ctx = DeployContext::new(dir.clone(), "dist".into());
+        (dir, ctx)
+    }
+
+    #[test]
+    fn a_state_file_with_a_site_id_means_linked() {
+        let (dir, ctx) = ctx_with_state("state", Some(r#"{"siteId":"abc-123"}"#));
+        assert!(NetlifyProvider.is_linked(&ctx));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn no_state_file_and_no_env_means_not_linked() {
+        let (dir, ctx) = ctx_with_state("none", None);
+        assert!(!NetlifyProvider.is_linked(&ctx));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn site_id_in_the_environment_means_linked_without_a_state_file() {
+        let (dir, mut ctx) = ctx_with_state("env", None);
+        ctx.run_env
+            .insert("NETLIFY_SITE_ID".into(), "abc-123".into());
+        assert!(NetlifyProvider.is_linked(&ctx));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn non_interactive_link_creates_the_named_site() {
+        let dir =
+            std::env::temp_dir().join(format!("appz-netlify-link-args-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut ctx = DeployContext::new(dir.clone(), "dist".into());
+        ctx.deploy_config.targets.insert(
+            "netlify".into(),
+            serde_json::json!({ "project": "My Site" }),
+        );
+        assert_eq!(
+            NetlifyProvider.link_args(&ctx, false),
+            Some(vec![
+                "sites:create".to_string(),
+                "--name".to_string(),
+                "my-site".to_string()
+            ])
+        );
+        // Interactive mode lets the CLI ask existing-vs-new itself.
+        assert_eq!(
+            NetlifyProvider.link_args(&ctx, true),
+            Some(vec!["link".to_string()])
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

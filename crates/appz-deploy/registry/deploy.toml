@@ -1,6 +1,7 @@
 # Data-driven deploy providers: platforms appz drives through their own CLI,
-# described here instead of one Rust struct each. Vercel, Netlify and Cloudflare
-# are native providers (they need link/pull/config logic) and are not listed.
+# described here instead of one Rust struct each. Vercel, Netlify, Cloudflare,
+# GitHub Pages, AWS S3, Render, Firebase and Azure Static Web Apps are native
+# providers (they need link/pull/config logic) and are not listed.
 #
 # Ported from the old appz deployer blueprints, but only what could be
 # checked, and with these rules:
@@ -43,21 +44,6 @@ required = ["app"]
 production = [["flyctl", "deploy", "--app", "{{app}}"]]
 
 [[provider]]
-slug = "firebase"
-name = "Firebase Hosting"
-cli = "firebase"
-mise = "npm:firebase-tools"
-install_hint = "npm install -g firebase-tools"
-token_env = "FIREBASE_TOKEN"
-login = ["login"]
-login_hint = "firebase login"
-detect = ["firebase.json"]
-url_hosts = [".web.app", ".firebaseapp.com"]
-required = ["project"]
-preview = [["firebase", "hosting:channel:deploy", "preview", "--project", "{{project}}"]]
-production = [["firebase", "deploy", "--only", "hosting", "--project", "{{project}}"]]
-
-[[provider]]
 slug = "deno-deploy"
 name = "Deno Deploy"
 cli = "deployctl"
@@ -71,40 +57,6 @@ preview = [["deployctl", "deploy", "--project={{project}}", "{{entry_point}}"]]
 production = [["deployctl", "deploy", "--project={{project}}", "--prod", "{{entry_point}}"]]
 [provider.config]
 entry_point = "main.ts"
-
-[[provider]]
-slug = "azure-static"
-name = "Azure Static Web Apps"
-cli = "swa"
-mise = "npm:@azure/static-web-apps-cli"
-install_hint = "npm install -g @azure/static-web-apps-cli"
-token_env = "SWA_CLI_DEPLOYMENT_TOKEN"
-login = ["login"]
-login_hint = "swa login (or set SWA_CLI_DEPLOYMENT_TOKEN)"
-detect = ["staticwebapp.config.json", "swa-cli.config.json"]
-url_hosts = [".azurestaticapps.net"]
-preview = [["swa", "deploy", "{{output_dir}}", "--env", "preview"]]
-production = [["swa", "deploy", "{{output_dir}}", "--env", "production"]]
-
-[[provider]]
-slug = "aws-s3"
-name = "AWS S3"
-cli = "aws"
-mise = "aws-cli"
-install_hint = "https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html"
-token_env = "AWS_ACCESS_KEY_ID"
-login = ["configure"]
-login_hint = "aws configure (or set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY)"
-whoami = ["sts", "get-caller-identity"]
-required = ["bucket"]
-# `--delete` removes bucket objects that are not in the build output, which is
-# what a site sync means. appz refuses to run it when the output is missing or
-# empty. No cache-control is set (the old blueprint marked every file,
-# index.html included, immutable for a year).
-production = [["aws", "s3", "sync", "{{output_dir}}", "s3://{{bucket}}/{{prefix}}", "--region", "{{region}}", "--delete"]]
-[provider.config]
-region = "us-east-1"
-prefix = ""
 
 [[provider]]
 slug = "aws-sst"
@@ -147,18 +99,6 @@ whoami = ["whoami"]
 url_hosts = [".surge.sh"]
 required = ["domain"]
 production = [["surge", "{{output_dir}}", "{{domain}}"]]
-
-[[provider]]
-slug = "github-pages"
-name = "GitHub Pages"
-cli = "gh-pages"
-mise = "npm:gh-pages"
-install_hint = "npm install -g gh-pages"
-# gh-pages pushes the build output to the gh-pages branch of `origin` with your
-# git credentials, so there is no token variable to check.
-token_env = ""
-login_hint = "make sure `git push` to origin works"
-production = [["gh-pages", "-d", "{{output_dir}}"]]
 
 # The following were ported from the old blueprints but their CLI commands were
 # not exercised end to end: verify before trusting them in CI.
@@ -225,17 +165,3 @@ detect = ["zerops.yml", "zerops.yaml"]
 required = ["project_id", "service_id"]
 # Zerops builds from the project sources and zerops.yml, not the local build output.
 production = [["zcli", "push", "--project-id", "{{project_id}}", "--service-id", "{{service_id}}"]]
-
-[[provider]]
-slug = "render"
-name = "Render"
-cli = "render"
-# Not in the mise registry (Homebrew or a release binary).
-mise = ""
-install_hint = "https://render.com/docs/cli"
-token_env = "RENDER_API_KEY"
-login_hint = "set RENDER_API_KEY (Render dashboard > Account Settings > API Keys)"
-required = ["service_id"]
-# Triggers a deploy of the service as configured on Render (from its repo), and
-# waits for it. The CLI prints no trustworthy deployment URL, so none is reported.
-production = [["render", "deploys", "create", "{{service_id}}", "--wait", "--confirm"]]

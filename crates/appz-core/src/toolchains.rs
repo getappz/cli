@@ -146,6 +146,7 @@ pub static FRAMEWORKS: &[Framework] = &[
     NODE_RUNTIME,
     GO_RUNTIME,
     JAVA_RUNTIME,
+    PHP_RUNTIME,
     // ── Package managers ───────────────────────────────────
     NPM_PM,
     PNPM_PM,
@@ -253,6 +254,16 @@ pub static JAVA_RUNTIME: Framework = fw!(
         d!("build.gradle.kts"),
         d!("settings.gradle")
     ],
+    cmds!(NONE!(), NONE!(), NONE!())
+);
+pub static PHP_RUNTIME: Framework = fw!(
+    "PHP",
+    "php",
+    "php",
+    &[".php-version"],
+    "latest",
+    &[],
+    &[d!("composer.json"), d!("composer.lock")],
     cmds!(NONE!(), NONE!(), NONE!())
 );
 // ── Package managers ────────────────────────────────────

@@ -215,6 +215,38 @@ Cloudflare, ...), so set that platform's native env vars/secrets (e.g.
 `VERCEL_TOKEN`, `CLOUDFLARE_API_TOKEN`) directly on the step or job — the
 action doesn't take platform-specific inputs.
 
+## Configuration
+
+`appz` reads `appz.jsonc` (JSON with comments) in the project root. The
+`vite` section is read by the `@getappz/vite` plugin (the `appz` CLI itself
+does not read it):
+
+```jsonc
+{
+  "vite": {
+    // Deploy target for `appz deploy --target <slug>` after the vite build.
+    // One of: vercel, netlify, cloudflare, github-pages, fly, deno-deploy,
+    // aws-s3, aws-sst, railway, surge, firebase, azure-static. Omit to let the plugin detect it from
+    // the installed vite provider plugin.
+    "target": "vercel",
+    // Run `appz deploy --target <target> --yes` after `vite build`.
+    // appz installs the platform CLI via mise when it's missing.
+    "deploy_after_build": false,
+    // Vite provider plugin names the plugin expects to find in
+    // vite.config.*. When none match, appz warns instead of failing.
+    "provider_plugins": ["vite-plugin-vercel"]
+  }
+}
+```
+
+Field | Meaning
+---|---
+`target` | Deploy slug. If set, `appz deploy` is pinned to it; otherwise the target is detected from the installed vite provider plugin.
+`deploy_after_build` | When true, `appz deploy` runs after `vite build` (default: false).
+`provider_plugins` | Provider plugin names to look for (default: `[]`, no plugin check).
+
+The plugin detects the target from provider plugin names (`vercel` → `vite-plugin-vercel`, `netlify` → `@netlify/vite-plugin`, `cloudflare` → `vite-plugin-cloudflare-pages`) and warns when the expected plugin is missing. No Universal Deploy dependency is used — `appz deploy` drives each platform's own CLI directly.
+
 ## devcontainer Feature
 
 ```json

@@ -1864,3 +1864,68 @@ match_package = "mastra"
 build = "npm run build"
 install = "npm install"
 dev = "npm run dev"
+
+[[frameworks]]
+name = "PHP"
+slug = "php"
+mise_plugin = "php"
+version_files = [
+    ".php-version",
+]
+default_version = "latest"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+every = []
+
+[[frameworks.detectors.some]]
+path = "composer.json"
+
+[[frameworks.detectors.some]]
+path = "composer.lock"
+
+[frameworks.commands]
+install = "composer install"
+
+[[frameworks]]
+name = "Laravel"
+slug = "laravel"
+mise_plugin = "php"
+version_files = []
+default_version = "latest"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+every = []
+
+[[frameworks.detectors.some]]
+path = "composer.json"
+match_content = "laravel/framework"
+
+[frameworks.commands]
+build = "php artisan optimize"
+install = "composer install"
+dev = "php artisan serve"
+
+[[frameworks]]
+name = "Symfony"
+slug = "symfony"
+mise_plugin = "php"
+version_files = []
+default_version = "latest"
+supersedes = []
+detection_confidence = "strong"
+
+[frameworks.detectors]
+every = []
+
+[[frameworks.detectors.some]]
+path = "composer.json"
+match_content = "symfony/framework-bundle"
+
+[frameworks.commands]
+build = "php bin/console cache:warmup"
+install = "composer install"
+dev = "symfony server:start"

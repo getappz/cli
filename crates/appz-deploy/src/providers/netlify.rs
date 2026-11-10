@@ -137,6 +137,39 @@ impl DeployProvider for NetlifyProvider {
         Ok(None)
     }
 
+    fn is_linked(&self, ctx: &DeployContext) -> bool {
+        // The site id variable pins the project outright.
+        if ctx.run_env.contains_key("NETLIFY_SITE_ID")
+            || std::env::var_os("NETLIFY_SITE_ID").is_some()
+        {
+            return true;
+        }
+        // Otherwise the link lives in `.netlify/state.json`. Unlike Vercel's
+        // `project.json` this stores only the `siteId`, not the site name, so
+        // there is no local name to compare against a `--project` choice; the
+        // linked site is simply whatever this directory is linked to.
+        std::fs::read_to_string(ctx.project_dir.join(".netlify/state.json"))
+            .ok()
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            .and_then(|state| state.get("siteId")?.as_str().map(str::to_string))
+            .is_some_and(|id| !id.is_empty())
+    }
+
+    fn link_args(&self, ctx: &DeployContext, interactive: bool) -> Option<Vec<String>> {
+        if interactive {
+            // `netlify link` asks existing-vs-new and the site name itself.
+            return Some(vec!["link".into()]);
+        }
+        // `netlify link --name` only links to an EXISTING site, so it would
+        // fail on first deploy. `sites:create --name` creates the site and
+        // links the current directory to it.
+        Some(vec![
+            "sites:create".into(),
+            "--name".into(),
+            ctx.project_name(self.slug()),
+        ])
+    }
+
     /// `netlify.toml` with the build command and publish directory, so the
     /// build output is what gets published.
     fn setup_files(&self, ctx: &DeployContext) -> DeployResult<Vec<(String, String)>> {
@@ -337,6 +370,73 @@ mod tests {
     #[test]
     fn returns_none_instead_of_fabricating_a_url() {
         assert_eq!(extract_deploy_url("no url here"), None);
+    }
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::*;
+
+    fn ctx_with_state(tag: &str, contents: Option<&str>) -> (std::path::PathBuf, DeployContext) {
+        let dir =
+            std::env::temp_dir().join(format!("appz-netlify-link-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".netlify")).unwrap();
+        if let Some(c) = contents {
+            std::fs::write(dir.join(".netlify/state.json"), c).unwrap();
+        }
+        let ctx = DeployContext::new(dir.clone(), "dist".into());
+        (dir, ctx)
+    }
+
+    #[test]
+    fn a_state_file_with_a_site_id_means_linked() {
+        let (dir, ctx) = ctx_with_state("state", Some(r#"{"siteId":"abc-123"}"#));
+        assert!(NetlifyProvider.is_linked(&ctx));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn no_state_file_and_no_env_means_not_linked() {
+        let (dir, ctx) = ctx_with_state("none", None);
+        assert!(!NetlifyProvider.is_linked(&ctx));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn site_id_in_the_environment_means_linked_without_a_state_file() {
+        let (dir, mut ctx) = ctx_with_state("env", None);
+        ctx.run_env
+            .insert("NETLIFY_SITE_ID".into(), "abc-123".into());
+        assert!(NetlifyProvider.is_linked(&ctx));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn non_interactive_link_creates_the_named_site() {
+        let dir =
+            std::env::temp_dir().join(format!("appz-netlify-link-args-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut ctx = DeployContext::new(dir.clone(), "dist".into());
+        ctx.deploy_config.targets.insert(
+            "netlify".into(),
+            serde_json::json!({ "project": "My Site" }),
+        );
+        assert_eq!(
+            NetlifyProvider.link_args(&ctx, false),
+            Some(vec![
+                "sites:create".to_string(),
+                "--name".to_string(),
+                "my-site".to_string()
+            ])
+        );
+        // Interactive mode lets the CLI ask existing-vs-new itself.
+        assert_eq!(
+            NetlifyProvider.link_args(&ctx, true),
+            Some(vec!["link".to_string()])
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

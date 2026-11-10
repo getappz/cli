@@ -256,6 +256,8 @@ pub fn create_provider_registry() -> Vec<Box<dyn DeployProvider>> {
         Box::new(crate::providers::github_pages::GithubPagesProvider),
         Box::new(crate::providers::aws_s3::AwsS3Provider),
         Box::new(crate::providers::render::RenderProvider),
+        Box::new(crate::providers::firebase::FirebaseProvider),
+        Box::new(crate::providers::azure::AzureStaticProvider),
     ];
     // The rest are described by the embedded registry (registry/deploy.toml).
     all.extend(crate::providers::generic::providers());

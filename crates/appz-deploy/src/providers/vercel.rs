@@ -307,7 +307,8 @@ impl DeployProvider for VercelProvider {
         #[derive(serde::Deserialize)]
         struct Deployment {
             id: String,
-            url: String,
+            // null while an upload is incomplete (REST API contract)
+            url: Option<String>,
             state: Option<String>,
             #[serde(rename = "createdAt")]
             created_at: Option<i64>,
@@ -319,10 +320,12 @@ impl DeployProvider for VercelProvider {
                 crate::provider::validate_deployment_id(self.name(), &d.id)?;
                 Ok(DeploymentInfo {
                     id: d.id,
-                    url: Some(if d.url.starts_with("https://") {
-                        d.url
-                    } else {
-                        format!("https://{}", d.url)
+                    url: d.url.filter(|u| !u.is_empty()).map(|u| {
+                        if u.starts_with("https://") {
+                            u
+                        } else {
+                            format!("https://{u}")
+                        }
                     }),
                     status: match d.state.as_deref() {
                         Some("READY") => DeployStatus::Ready,

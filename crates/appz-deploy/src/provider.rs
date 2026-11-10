@@ -238,6 +238,8 @@ pub fn create_provider_registry() -> Vec<Box<dyn DeployProvider>> {
         Box::new(crate::providers::vercel::VercelProvider),
         Box::new(crate::providers::netlify::NetlifyProvider),
         Box::new(crate::providers::cloudflare::CloudflareProvider),
+        Box::new(crate::providers::firebase::FirebaseProvider),
+        Box::new(crate::providers::azure::AzureStaticProvider),
     ];
     // The rest are described by the embedded registry (registry/deploy.toml).
     all.extend(crate::providers::generic::providers());

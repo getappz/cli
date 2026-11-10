@@ -1,6 +1,7 @@
 # Data-driven deploy providers: platforms appz drives through their own CLI,
-# described here instead of one Rust struct each. Vercel, Netlify and Cloudflare
-# are native providers (they need link/pull/config logic) and are not listed.
+# described here instead of one Rust struct each. Vercel, Netlify, Cloudflare,
+# Firebase and Azure Static Web Apps are native providers (they need
+# link/pull/config/project-resolution logic) and are not listed.
 #
 # Ported from the old appz deployer blueprints, but only what could be
 # checked, and with these rules:
@@ -43,21 +44,6 @@ required = ["app"]
 production = [["flyctl", "deploy", "--app", "{{app}}"]]
 
 [[provider]]
-slug = "firebase"
-name = "Firebase Hosting"
-cli = "firebase"
-mise = "npm:firebase-tools"
-install_hint = "npm install -g firebase-tools"
-token_env = "FIREBASE_TOKEN"
-login = ["login"]
-login_hint = "firebase login"
-detect = ["firebase.json"]
-url_hosts = [".web.app", ".firebaseapp.com"]
-required = ["project"]
-preview = [["firebase", "hosting:channel:deploy", "preview", "--project", "{{project}}"]]
-production = [["firebase", "deploy", "--only", "hosting", "--project", "{{project}}"]]
-
-[[provider]]
 slug = "deno-deploy"
 name = "Deno Deploy"
 cli = "deployctl"
@@ -71,20 +57,6 @@ preview = [["deployctl", "deploy", "--project={{project}}", "{{entry_point}}"]]
 production = [["deployctl", "deploy", "--project={{project}}", "--prod", "{{entry_point}}"]]
 [provider.config]
 entry_point = "main.ts"
-
-[[provider]]
-slug = "azure-static"
-name = "Azure Static Web Apps"
-cli = "swa"
-mise = "npm:@azure/static-web-apps-cli"
-install_hint = "npm install -g @azure/static-web-apps-cli"
-token_env = "SWA_CLI_DEPLOYMENT_TOKEN"
-login = ["login"]
-login_hint = "swa login (or set SWA_CLI_DEPLOYMENT_TOKEN)"
-detect = ["staticwebapp.config.json", "swa-cli.config.json"]
-url_hosts = [".azurestaticapps.net"]
-preview = [["swa", "deploy", "{{output_dir}}", "--env", "preview"]]
-production = [["swa", "deploy", "{{output_dir}}", "--env", "production"]]
 
 [[provider]]
 slug = "aws-s3"

@@ -426,7 +426,13 @@ mod tests {
     /// slugs are unique and never shadow a native provider.
     #[test]
     fn the_embedded_registry_is_consistent() {
-        let native = ["vercel", "netlify", "cloudflare"];
+        let native = [
+            "vercel",
+            "netlify",
+            "cloudflare",
+            "firebase",
+            "azure-static",
+        ];
         let mut slugs = BTreeSet::new();
         for l in loaded() {
             let s = &l.spec;
@@ -484,7 +490,7 @@ mod tests {
                 );
             }
         }
-        assert!(slugs.len() >= 9);
+        assert!(slugs.len() >= 7);
     }
 
     #[test]

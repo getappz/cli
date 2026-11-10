@@ -230,6 +230,9 @@ struct DeployArgs {
     /// Install a missing platform CLI through mise without asking
     #[arg(short = 'y', long)]
     yes: bool,
+    /// Deploy to every target configured under deploy.targets instead of one
+    #[arg(long, conflicts_with = "target")]
+    all: bool,
 }
 
 #[derive(Args)]
@@ -1466,41 +1469,66 @@ fn run_env(args: EnvArgs, json: bool) {
 
 fn run_deploy(args: DeployArgs, json: bool) {
     let canonical = resolve_root(&args.dir);
-    match deploy::run(
-        &canonical,
-        deploy::DeployRequest {
-            target: args.target,
-            project: args.project,
-            force: args.force,
-            prod: args.prod,
-            env: args.env,
-            build_env: args.build_env,
-            dry_run: args.dry_run,
-            json,
-            install: if args.yes {
-                deploy::Consent::Yes
-            } else if !json && is_tty() {
-                deploy::Consent::Ask
-            } else {
-                deploy::Consent::Never
-            },
-            link: if args.yes {
-                deploy::Consent::Yes
-            } else if !json && is_tty() {
-                deploy::Consent::Ask
-            } else {
-                deploy::Consent::Never
-            },
-            // Login needs a browser, so it requires a real terminal even with --yes.
-            login: if json || !is_tty() {
-                deploy::Consent::Never
-            } else if args.yes {
-                deploy::Consent::Yes
-            } else {
-                deploy::Consent::Ask
-            },
+    let all = args.all;
+    let req = deploy::DeployRequest {
+        target: args.target,
+        project: args.project,
+        force: args.force,
+        prod: args.prod,
+        env: args.env,
+        build_env: args.build_env,
+        dry_run: args.dry_run,
+        json,
+        install: if args.yes {
+            deploy::Consent::Yes
+        } else if !json && is_tty() {
+            deploy::Consent::Ask
+        } else {
+            deploy::Consent::Never
         },
-    ) {
+        link: if args.yes {
+            deploy::Consent::Yes
+        } else if !json && is_tty() {
+            deploy::Consent::Ask
+        } else {
+            deploy::Consent::Never
+        },
+        // Login needs a browser, so it requires a real terminal even with --yes.
+        login: if json || !is_tty() {
+            deploy::Consent::Never
+        } else if args.yes {
+            deploy::Consent::Yes
+        } else {
+            deploy::Consent::Ask
+        },
+    };
+    if all {
+        match deploy::run_all(&canonical, req) {
+            Ok(outputs) => {
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&outputs).unwrap());
+                } else {
+                    intro("appz deploy");
+                    for output in &outputs {
+                        let target = if output.is_preview {
+                            "preview"
+                        } else {
+                            "production"
+                        };
+                        success(&format!(
+                            "{} ({target}): {}",
+                            output.provider,
+                            output.url.as_deref().unwrap_or("deployed (url unknown)")
+                        ));
+                    }
+                    outro("deploy complete");
+                }
+            }
+            Err(e) => error(&e),
+        }
+        return;
+    }
+    match deploy::run(&canonical, req) {
         Ok(output) => {
             if json {
                 println!("{}", serde_json::to_string_pretty(&output).unwrap());

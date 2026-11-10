@@ -74,10 +74,47 @@ impl DeployOutput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeploymentInfo {
     pub id: String,
+    #[serde(default)]
+    pub version_id: Option<String>,
     pub url: Option<String>,
     pub status: DeployStatus,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
     pub is_current: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InspectFileEntry {
+    pub path: String,
+    pub size: u64,
+    pub hash: String,
+    #[serde(default)]
+    pub content_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeploymentInspect {
+    pub id: String,
+    pub project_id: String,
+    pub version_id: String,
+    pub status: DeployStatus,
+    #[serde(default)]
+    pub target: String,
+    #[serde(default)]
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    pub hosts: Vec<String>,
+    #[serde(default)]
+    pub file_count: usize,
+    #[serde(default)]
+    pub total_bytes: u64,
+    #[serde(default)]
+    pub manifest_key: Option<String>,
+    #[serde(default)]
+    pub redirects: Vec<String>,
+    #[serde(default)]
+    pub headers: Vec<String>,
+    #[serde(default)]
+    pub files: Option<Vec<InspectFileEntry>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -486,6 +486,73 @@ pub fn alias(
     provider.alias(&ctx, domain).map_err(|e| e.to_string())
 }
 
+pub fn list(
+    project_dir: &Path,
+    target: Option<String>,
+) -> Result<Vec<appz_deploy::DeploymentInfo>, String> {
+    let config = read_deploy_config(project_dir)
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+
+    let slug = match target.clone().or_else(|| config.default.clone()) {
+        Some(slug) => slug,
+        None => autodetect_target(project_dir)?,
+    };
+
+    let provider = get_provider(&slug).map_err(|e| e.to_string())?;
+
+    let allowed: Vec<String> = std::iter::once(provider.auth_env_var().to_string())
+        .chain(LINK_VARS.map(String::from))
+        .chain(config.env.iter().cloned())
+        .collect();
+    let vault = crate::secrets::deploy_env(project_dir, &allowed)?;
+
+    let mut ctx = DeployContext::new(project_dir.to_path_buf(), "dist".to_string());
+    ctx.deploy_config = config;
+    ctx.run_env = vault
+        .vars
+        .into_iter()
+        .filter(|(k, _)| std::env::var_os(k).is_none())
+        .collect();
+
+    provider.list_deployments(&ctx).map_err(|e| e.to_string())
+}
+
+pub fn inspect(
+    project_dir: &Path,
+    target: Option<String>,
+    id_or_url: &str,
+) -> Result<appz_deploy::DeploymentInspect, String> {
+    let config = read_deploy_config(project_dir)
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+
+    let slug = match target.clone().or_else(|| config.default.clone()) {
+        Some(slug) => slug,
+        None => autodetect_target(project_dir)?,
+    };
+
+    let provider = get_provider(&slug).map_err(|e| e.to_string())?;
+
+    let allowed: Vec<String> = std::iter::once(provider.auth_env_var().to_string())
+        .chain(LINK_VARS.map(String::from))
+        .chain(config.env.iter().cloned())
+        .collect();
+    let vault = crate::secrets::deploy_env(project_dir, &allowed)?;
+
+    let mut ctx = DeployContext::new(project_dir.to_path_buf(), "dist".to_string());
+    ctx.deploy_config = config;
+    ctx.run_env = vault
+        .vars
+        .into_iter()
+        .filter(|(k, _)| std::env::var_os(k).is_none())
+        .collect();
+
+    provider
+        .inspect_deployment(&ctx, id_or_url)
+        .map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

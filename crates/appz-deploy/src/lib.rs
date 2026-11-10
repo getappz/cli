@@ -10,7 +10,8 @@ pub use context::{DeployConfig, DeployContext, parse_kv, read_deploy_config};
 pub use error::{DeployError, DeployResult};
 pub use exec::ExecOutput;
 pub use output::{
-    AuthState, DeployOutput, DeployStatus, DeploymentInfo, DetectedConfig, PrerequisiteStatus,
+    AuthState, DeployOutput, DeployStatus, DeploymentInfo, DeploymentInspect, DetectedConfig,
+    InspectFileEntry, PrerequisiteStatus,
 };
 pub use provider::{
     DEPLOY_TIMEOUT, DeployProvider, QUERY_TIMEOUT, available_provider_slugs,

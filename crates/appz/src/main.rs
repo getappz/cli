@@ -59,6 +59,11 @@ enum AppzCmd {
     Link(LinkArgs),
     /// Point a custom domain or alias to the deployment
     Alias(AliasArgs),
+    /// List deployments for the project
+    #[command(alias = "deployments", alias = "ls")]
+    List(ListArgs),
+    /// Inspect edge deployment manifest, hosts, and CAS metrics
+    Inspect(InspectArgs),
     /// Store credentials in an encrypted vault used by `appz deploy`
     Env(EnvArgs),
     /// Discover and install agent skills relevant to this project
@@ -227,6 +232,29 @@ struct AliasArgs {
     dir: PathBuf,
     /// Custom domain or alias to assign (e.g. app.example.com)
     domain: String,
+    /// Provider slug (default: detects from project or config)
+    #[arg(long)]
+    target: Option<String>,
+}
+
+#[derive(Args)]
+struct ListArgs {
+    #[arg(default_value = ".")]
+    dir: PathBuf,
+    /// Provider slug (default: detects from project or config)
+    #[arg(long)]
+    target: Option<String>,
+}
+
+#[derive(Args)]
+struct InspectArgs {
+    #[arg(default_value = ".")]
+    dir: PathBuf,
+    /// Deployment ID or live URL to inspect
+    id_or_url: String,
+    /// Also display all files contained in the deployment manifest
+    #[arg(long)]
+    files: bool,
     /// Provider slug (default: detects from project or config)
     #[arg(long)]
     target: Option<String>,
@@ -1061,6 +1089,8 @@ fn main() {
         AppzCmd::Rollback(a) => run_rollback(a, json),
         AppzCmd::Link(a) => run_link(a, json),
         AppzCmd::Alias(a) => run_alias(a, json),
+        AppzCmd::List(a) => run_list(a, json),
+        AppzCmd::Inspect(a) => run_inspect(a, json),
         AppzCmd::Env(a) => run_env(a, json),
         AppzCmd::Skills(a) => run_skills(a, json),
         AppzCmd::Agents(a) => run_agents(a, json),
@@ -1412,6 +1442,103 @@ fn run_alias(args: AliasArgs, json: bool) {
                 success(&format!("assigned alias {}", args.domain));
                 info(&url);
                 outro("alias complete");
+            }
+        }
+        Err(e) => error(&e),
+    }
+}
+
+fn run_list(args: ListArgs, json: bool) {
+    let canonical = resolve_root(&args.dir);
+    match deploy::list(&canonical, args.target) {
+        Ok(deployments) => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&deployments).unwrap());
+            } else {
+                intro("appz list");
+                if deployments.is_empty() {
+                    info("no deployments found for this project");
+                } else {
+                    for d in &deployments {
+                        let current_marker = if d.is_current { " (current)" } else { "" };
+                        let version = d.version_id.as_deref().unwrap_or("-");
+                        let url = d.url.as_deref().unwrap_or("-");
+                        let age = d
+                            .created_at
+                            .map(|t| format!("{}", t.format("%Y-%m-%d %H:%M UTC")))
+                            .unwrap_or_else(|| "-".to_string());
+                        info(&format!(
+                            "{:<16}  {:<14}  {:<32}  {} [{:?}{}]",
+                            d.id, version, url, age, d.status, current_marker
+                        ));
+                    }
+                }
+                outro("done");
+            }
+        }
+        Err(e) => error(&e),
+    }
+}
+
+fn run_inspect(args: InspectArgs, json: bool) {
+    let canonical = resolve_root(&args.dir);
+    match deploy::inspect(&canonical, args.target, &args.id_or_url) {
+        Ok(insp) => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&insp).unwrap());
+            } else {
+                intro("appz inspect");
+                step("deployment");
+                info(&format!("id:          {}", insp.id));
+                info(&format!("project:     {}", insp.project_id));
+                info(&format!("version:     {}", insp.version_id));
+                info(&format!("status:      {:?}", insp.status));
+                info(&format!("target:      {}", insp.target));
+                if let Some(created) = insp.created_at {
+                    info(&format!("created:     {}", created.format("%Y-%m-%d %H:%M:%S UTC")));
+                }
+
+                if !insp.hosts.is_empty() {
+                    step("hosts");
+                    for h in &insp.hosts {
+                        info(&format!("  https://{h}"));
+                    }
+                }
+
+                step("edge storage & cas");
+                info(&format!("files:       {}", insp.file_count));
+                info(&format!("size:        {}", appz_core::format_size(insp.total_bytes)));
+                if let Some(mkey) = &insp.manifest_key {
+                    info(&format!("manifest:    {mkey}"));
+                }
+
+                if !insp.redirects.is_empty() || !insp.headers.is_empty() {
+                    step("routing rules");
+                    for r in &insp.redirects {
+                        info(&format!("redirect:    {r}"));
+                    }
+                    for h in &insp.headers {
+                        info(&format!("header:      {h}"));
+                    }
+                }
+
+                if args.files {
+                    if let Some(files) = &insp.files {
+                        step("manifest files");
+                        for f in files {
+                            let ct = f.content_type.as_deref().unwrap_or("-");
+                            let hash_short = if f.hash.len() > 12 { &f.hash[..12] } else { &f.hash };
+                            info(&format!(
+                                "{:<36}  {:>8}  {:<24}  hash:{}...",
+                                f.path,
+                                appz_core::format_size(f.size),
+                                ct,
+                                hash_short
+                            ));
+                        }
+                    }
+                }
+                outro("inspection complete");
             }
         }
         Err(e) => error(&e),

@@ -3,7 +3,9 @@ use std::time::Duration;
 
 use crate::context::DeployContext;
 use crate::error::{DeployError, DeployResult};
-use crate::output::{AuthState, DeployOutput, DeploymentInfo, DetectedConfig, PrerequisiteStatus};
+use crate::output::{
+    AuthState, DeployOutput, DeploymentInfo, DeploymentInspect, DetectedConfig, PrerequisiteStatus,
+};
 
 /// Timeout for the actual deploy invocation (platform CLIs can legitimately
 /// take minutes to build+upload).
@@ -181,6 +183,18 @@ pub trait DeployProvider: Send + Sync {
         Err(DeployError::Unsupported {
             provider: self.name(),
             operation: "alias",
+        })
+    }
+
+    fn inspect_deployment(
+        &self,
+        ctx: &DeployContext,
+        id_or_url: &str,
+    ) -> DeployResult<DeploymentInspect> {
+        let _ = (ctx, id_or_url);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "inspect",
         })
     }
 }

@@ -12,7 +12,10 @@ use std::time::Instant;
 
 use crate::context::DeployContext;
 use crate::error::{DeployError, DeployResult};
-use crate::output::{DeployOutput, DeployStatus, DetectedConfig, PrerequisiteStatus};
+use crate::output::{
+    DeployOutput, DeployStatus, DeploymentInfo, DeploymentInspect, DetectedConfig,
+    PrerequisiteStatus,
+};
 use crate::provider::DeployProvider;
 use crate::static_cas::scan_output_dir;
 
@@ -379,6 +382,109 @@ impl DeployProvider for AppzdevProvider {
 
         let bound_domain = resp["domain"].as_str().unwrap_or(domain);
         Ok(format!("https://{bound_domain}"))
+    }
+
+    fn list_deployments(&self, ctx: &DeployContext) -> DeployResult<Vec<DeploymentInfo>> {
+        let project_id = self.resolve_project_id(ctx);
+        let api_base = self.api_base(ctx);
+        let list_url = format!("{}/api/v0/projects/{}/deployments", api_base, project_id);
+
+        let mut req = ureq::get(&list_url);
+        if let Ok(token) = std::env::var("APPZ_TOKEN") {
+            req = req.set("Authorization", &format!("Bearer {token}"));
+        }
+
+        let resp: serde_json::Value = req
+            .call()
+            .map_err(|e| DeployError::DeployFailed {
+                provider: self.name(),
+                reason: format!("Failed to list deployments: {e}"),
+            })?
+            .into_json()
+            .map_err(|e| DeployError::DeployFailed {
+                provider: self.name(),
+                reason: format!("Invalid JSON from list deployments: {e}"),
+            })?;
+
+        let items = resp
+            .as_array()
+            .ok_or_else(|| DeployError::DeployFailed {
+                provider: self.name(),
+                reason: "Expected JSON array of deployments".into(),
+            })?;
+
+        let mut out = Vec::new();
+        for item in items {
+            let id = item["id"].as_str().unwrap_or_default().to_string();
+            let version_id = item["versionId"].as_str().map(String::from);
+            let url = item["url"].as_str().map(String::from);
+            let status_str = item["status"].as_str().unwrap_or("ready");
+            let status = match status_str {
+                "ready" => DeployStatus::Ready,
+                "building" => DeployStatus::Building,
+                "error" => DeployStatus::Error,
+                _ => DeployStatus::Unknown,
+            };
+            let created_at = item["createdAt"]
+                .as_i64()
+                .and_then(|ms| chrono::DateTime::from_timestamp_millis(ms));
+            let is_current = item["isCurrent"].as_bool().unwrap_or(false);
+
+            out.push(DeploymentInfo {
+                id,
+                version_id,
+                url,
+                status,
+                created_at,
+                is_current,
+            });
+        }
+
+        Ok(out)
+    }
+
+    fn inspect_deployment(
+        &self,
+        ctx: &DeployContext,
+        id_or_url: &str,
+    ) -> DeployResult<DeploymentInspect> {
+        let api_base = self.api_base(ctx);
+        let trimmed = id_or_url
+            .trim_start_matches("https://")
+            .trim_start_matches("http://");
+        let dpl_id = trimmed
+            .split('/')
+            .next()
+            .unwrap_or(trimmed)
+            .split('.')
+            .next()
+            .unwrap_or(trimmed);
+
+        let inspect_url = format!("{}/api/v0/deployments/{}", api_base, dpl_id);
+        let mut req = ureq::get(&inspect_url);
+        if let Ok(token) = std::env::var("APPZ_TOKEN") {
+            req = req.set("Authorization", &format!("Bearer {token}"));
+        }
+
+        let resp: serde_json::Value = req
+            .call()
+            .map_err(|e| DeployError::DeployFailed {
+                provider: self.name(),
+                reason: format!("Failed to inspect deployment {dpl_id}: {e}"),
+            })?
+            .into_json()
+            .map_err(|e| DeployError::DeployFailed {
+                provider: self.name(),
+                reason: format!("Invalid JSON from inspect deployment: {e}"),
+            })?;
+
+        let inspect: DeploymentInspect =
+            serde_json::from_value(resp).map_err(|e| DeployError::DeployFailed {
+                provider: self.name(),
+                reason: format!("Failed to parse deployment inspect: {e}"),
+            })?;
+
+        Ok(inspect)
     }
 }
 

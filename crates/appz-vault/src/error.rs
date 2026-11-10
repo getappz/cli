@@ -8,6 +8,9 @@ pub enum VaultError {
     #[error("wrong passphrase or corrupt vault")]
     WrongPassphrase,
 
+    #[error("secret could not be decrypted (stale session or corrupt vault)")]
+    Decrypt,
+
     #[error("secret '{0}' already exists")]
     SecretAlreadyExists(String),
 

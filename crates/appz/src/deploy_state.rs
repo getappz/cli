@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// Build output and tool state: not source, and they change on every build.
-const SKIP_DIRS: [&str; 22] = [
+pub(crate) const SKIP_DIRS: [&str; 22] = [
     ".cache",
     ".turbo",
     ".parcel-cache",
@@ -77,12 +77,19 @@ fn collect(dir: &Path, root: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<(
     Ok(())
 }
 
-/// Content hash of the project's source files (names and bytes), plus
-/// anything that changes what gets deployed (`extra`).
-pub fn fingerprint(root: &Path, extra: &str) -> Result<String, String> {
+/// Every source file (relative, sorted) that the fingerprint covers: build
+/// output, tool state and volatile local files are already excluded.
+pub(crate) fn source_files(root: &Path) -> Result<Vec<PathBuf>, String> {
     let mut files = Vec::new();
     collect(root, root, &mut files).map_err(|e| format!("cannot read project: {e}"))?;
     files.sort();
+    Ok(files)
+}
+
+/// Content hash of the project's source files (names and bytes), plus
+/// anything that changes what gets deployed (`extra`).
+pub fn fingerprint(root: &Path, extra: &str) -> Result<String, String> {
+    let files = source_files(root)?;
     let mut hasher = Sha256::new();
     hasher.update(extra.as_bytes());
     for rel in files {

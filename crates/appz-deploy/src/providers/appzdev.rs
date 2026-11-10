@@ -289,16 +289,24 @@ pub fn resolve_project_id_from_dir(dir: &Path) -> String {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CloudEnvVar {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
     pub key: String,
     pub value: String,
     #[serde(default = "default_targets")]
     pub target: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub git_branch: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<i64>,
+}
+
+#[derive(serde::Serialize)]
+struct EnvPushItem<'a> {
+    key: &'a str,
+    value: &'a str,
+    #[serde(skip_serializing_if = "<[String]>::is_empty")]
+    target: &'a [String],
 }
 
 fn default_targets() -> Vec<String> {
@@ -396,8 +404,17 @@ pub fn push_cloud_env(
     if let Some(tok) = token {
         req = req.set("Authorization", &format!("Bearer {tok}"));
     }
+    let payload_items: Vec<EnvPushItem> = vars
+        .iter()
+        .map(|v| EnvPushItem {
+            key: &v.key,
+            value: &v.value,
+            target: &v.target,
+        })
+        .collect();
+
     let resp: serde_json::Value = req
-        .send_json(serde_json::json!({ "env": vars }))
+        .send_json(serde_json::json!({ "env": payload_items }))
         .map_err(|e| parse_api_error(e, "AppzDev", "Push environment variables"))?
         .into_json()
         .map_err(|e| DeployError::DeployFailed {
@@ -1233,11 +1250,26 @@ impl DeployProvider for AppzdevProvider {
                 reason: format!("Invalid JSON from inspect deployment: {e}"),
             })?;
 
-        let inspect: DeploymentInspect =
-            serde_json::from_value(resp).map_err(|e| DeployError::DeployFailed {
+        let mut inspect: DeploymentInspect =
+            serde_json::from_value(resp.clone()).map_err(|e| DeployError::DeployFailed {
                 provider: self.name(),
                 reason: format!("Failed to parse deployment inspect: {e}"),
             })?;
+
+        if inspect.hosts.is_empty() {
+            if let Some(url_str) = resp.get("url").and_then(|u| u.as_str()) {
+                let h = url_str
+                    .trim_start_matches("https://")
+                    .trim_start_matches("http://");
+                inspect.hosts.push(h.to_string());
+            }
+            if let Some(prod_url) = resp.get("productionUrl").and_then(|u| u.as_str()) {
+                let h = prod_url
+                    .trim_start_matches("https://")
+                    .trim_start_matches("http://");
+                inspect.hosts.push(h.to_string());
+            }
+        }
 
         Ok(inspect)
     }
@@ -1360,6 +1392,10 @@ mod tests {
     #[test]
     fn test_link_omits_placeholder_org() {
         let dir = tempdir().unwrap();
+        let old_override = std::env::var("APPZ_VAULT_HOME_OVERRIDE").ok();
+        unsafe {
+            std::env::set_var("APPZ_VAULT_HOME_OVERRIDE", dir.path());
+        }
         let mut ctx = DeployContext::new(dir.path().to_path_buf(), "dist".to_string());
         ctx.run_env
             .insert("APPZ_PROJECT_ID".to_string(), "prj_custom_1".to_string());
@@ -1374,6 +1410,16 @@ mod tests {
         let val: serde_json::Value = serde_json::from_str(&raw).unwrap();
         assert_eq!(val["projectId"], "prj_custom_1");
         assert!(val.get("orgId").is_none());
+
+        if let Some(orig) = old_override {
+            unsafe {
+                std::env::set_var("APPZ_VAULT_HOME_OVERRIDE", orig);
+            }
+        } else {
+            unsafe {
+                std::env::remove_var("APPZ_VAULT_HOME_OVERRIDE");
+            }
+        }
     }
 
     #[test]

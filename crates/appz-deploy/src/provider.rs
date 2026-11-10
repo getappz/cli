@@ -5,7 +5,7 @@ use crate::context::DeployContext;
 use crate::error::{DeployError, DeployResult};
 use crate::output::{
     AuthState, DeployOutput, DeploymentInfo, DeploymentInspect, DetectedConfig, DomainVerifyResult,
-    PrerequisiteStatus, ProjectDomain,
+    PrerequisiteStatus, ProjectDomain, ProjectInfo,
 };
 
 /// Timeout for the actual deploy invocation (platform CLIs can legitimately
@@ -228,6 +228,30 @@ pub trait DeployProvider: Send + Sync {
         Err(DeployError::Unsupported {
             provider: self.name(),
             operation: "domains remove",
+        })
+    }
+
+    fn list_projects(&self, ctx: &DeployContext) -> DeployResult<Vec<ProjectInfo>> {
+        let _ = ctx;
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "projects list",
+        })
+    }
+
+    fn add_project(&self, ctx: &DeployContext, name: &str) -> DeployResult<ProjectInfo> {
+        let _ = (ctx, name);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "projects add",
+        })
+    }
+
+    fn remove_project(&self, ctx: &DeployContext, id_or_slug: &str) -> DeployResult<bool> {
+        let _ = (ctx, id_or_slug);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "projects remove",
         })
     }
 }

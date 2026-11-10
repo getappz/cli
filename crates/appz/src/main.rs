@@ -71,8 +71,13 @@ enum AppzCmd {
     /// Manage custom domains and DNS verification on Cloudflare Edge
     #[command(alias = "domain")]
     Domains(DomainsArgs),
+    /// Manage projects on the edge hosting platform
+    #[command(alias = "project")]
+    Projects(ProjectsArgs),
     /// Log in to Appz via browser device flow
     Login(LoginArgs),
+    /// Log out of Appz and remove the stored session token
+    Logout,
     /// Print currently authenticated user and active organization
     Whoami,
     /// Store credentials in an encrypted vault used by `appz deploy`
@@ -324,6 +329,36 @@ enum DomainsCmd {
     Remove {
         /// Domain name to remove
         domain: String,
+    },
+}
+
+#[derive(Args)]
+struct ProjectsArgs {
+    #[command(subcommand)]
+    command: ProjectsCmd,
+    /// Project directory (defaults to current directory)
+    #[arg(default_value = ".")]
+    dir: PathBuf,
+    /// Provider slug (default: detects from project or config)
+    #[arg(long)]
+    target: Option<String>,
+}
+
+#[derive(Subcommand, Debug)]
+enum ProjectsCmd {
+    /// List all projects in the active organization
+    #[command(alias = "ls")]
+    List,
+    /// Create a new project on the platform
+    Add {
+        /// Name of the project
+        name: String,
+    },
+    /// Remove a project from the platform
+    #[command(alias = "rm")]
+    Remove {
+        /// Name or ID of the project to remove
+        name: String,
     },
 }
 
@@ -1168,7 +1203,9 @@ fn main() {
         AppzCmd::List(a) => run_list(a, json),
         AppzCmd::Inspect(a) => run_inspect(a, json),
         AppzCmd::Domains(a) => run_domains(a, json),
+        AppzCmd::Projects(a) => run_projects(a, json),
         AppzCmd::Login(a) => run_login(a, json),
+        AppzCmd::Logout => run_logout(json),
         AppzCmd::Whoami => run_whoami(json),
         AppzCmd::Env(a) => run_env(a, json),
         AppzCmd::Skills(a) => run_skills(a, json),
@@ -1367,8 +1404,8 @@ fn run_env(args: EnvArgs, json: bool) {
             if token.is_none() {
                 error("not authenticated. Run `appz login` or set APPZ_TOKEN");
             }
-            let api_base =
-                std::env::var("APPZ_API_URL").unwrap_or_else(|_| "https://appz.to".to_string());
+            let api_base = std::env::var("APPZ_API_URL")
+                .unwrap_or_else(|_| "https://api.appz.dev".to_string());
             match appz_deploy::pull_cloud_env(
                 &api_base,
                 &project_id,
@@ -1406,8 +1443,8 @@ fn run_env(args: EnvArgs, json: bool) {
             if token.is_none() {
                 error("not authenticated. Run `appz login` or set APPZ_TOKEN");
             }
-            let api_base =
-                std::env::var("APPZ_API_URL").unwrap_or_else(|_| "https://appz.to".to_string());
+            let api_base = std::env::var("APPZ_API_URL")
+                .unwrap_or_else(|_| "https://api.appz.dev".to_string());
             let target_path = if root.join(&file).is_file() {
                 root.join(&file)
             } else if file.as_path() == std::path::Path::new(".env.local")
@@ -1778,11 +1815,28 @@ fn run_domains(args: DomainsArgs, json: bool) {
                 } else {
                     intro("appz domains add");
                     info(&format!("domain:      {}", dom.domain));
-                    info(&format!("status:      {}", dom.status));
+                    info(&format!("status:      {}", dom.display_status()));
                     if let Some(ssl) = &dom.ssl_status {
                         info(&format!("ssl:         {ssl}"));
                     }
-                    if !dom.verification.is_empty() {
+                    if let Some(ch) = &dom.challenge
+                        && !dom.verified
+                    {
+                        step("1. Ownership verification (required once):");
+                        info(&format!("{:<8}  {:<36}  {}", ch.r#type, ch.name, ch.value));
+                    }
+                    if dom.cname.is_some() || dom.apex.is_some() {
+                        step("2. DNS routing target:");
+                        if let Some(cname) = &dom.cname {
+                            info(&format!(
+                                "{:<8}  {:<36}  {}",
+                                "CNAME", cname.name, cname.target
+                            ));
+                        }
+                        if let Some(apex) = &dom.apex {
+                            info(&format!("{:<8}  {:<36}  {}", "A", apex.name, apex.ip));
+                        }
+                    } else if !dom.verification.is_empty() {
                         step("dns configuration records");
                         for v in &dom.verification {
                             let reason = v.reason.as_deref().unwrap_or("-");
@@ -1794,13 +1848,15 @@ fn run_domains(args: DomainsArgs, json: bool) {
                                 reason
                             ));
                         }
-                        step("next steps");
-                        info("1. Add the DNS records above at your DNS provider");
-                        info(&format!(
-                            "2. Run `appz domains verify {}` once configured",
-                            dom.domain
-                        ));
                     }
+                    step("next steps");
+                    info(
+                        "1. Configure the DNS records above at your domain registrar/DNS provider",
+                    );
+                    info(&format!(
+                        "2. Run `appz domains verify {}` once configured",
+                        dom.domain
+                    ));
                     outro("domain added");
                 }
             }
@@ -1821,7 +1877,10 @@ fn run_domains(args: DomainsArgs, json: bool) {
                             let verified_str = if d.verified { "verified" } else { "pending" };
                             info(&format!(
                                 "{:<30}  status:{:<12}  ssl:{:<10}  {}",
-                                d.domain, d.status, ssl, verified_str
+                                d.domain,
+                                d.display_status(),
+                                ssl,
+                                verified_str
                             ));
                         }
                     }
@@ -1838,7 +1897,7 @@ fn run_domains(args: DomainsArgs, json: bool) {
                     } else {
                         intro("appz domains verify");
                         info(&format!("domain:      {}", res.domain));
-                        info(&format!("status:      {}", res.status));
+                        info(&format!("status:      {}", res.display_status()));
                         if let Some(ssl) = &res.ssl_status {
                             info(&format!("ssl:         {ssl}"));
                         }
@@ -1846,6 +1905,21 @@ fn run_domains(args: DomainsArgs, json: bool) {
                             success(&format!("{} is verified and active!", res.domain));
                         } else {
                             warning("verification still pending");
+                            if let Some(ch) = &res.challenge {
+                                step("required ownership challenge");
+                                info(&format!("{:<8}  {:<36}  {}", ch.r#type, ch.name, ch.value));
+                            }
+                            if let Some(cname) = &res.cname {
+                                step("routing target");
+                                info(&format!(
+                                    "{:<8}  {:<36}  {}",
+                                    "CNAME", cname.name, cname.target
+                                ));
+                            }
+                            if let Some(apex) = &res.apex {
+                                step("apex target");
+                                info(&format!("{:<8}  {:<36}  {}", "A", apex.name, apex.ip));
+                            }
                             if !res.verification.is_empty() {
                                 step("required dns records");
                                 for v in &res.verification {
@@ -1884,8 +1958,69 @@ fn run_domains(args: DomainsArgs, json: bool) {
     }
 }
 
+fn run_projects(args: ProjectsArgs, json: bool) {
+    let canonical = resolve_root(&args.dir);
+    match args.command {
+        ProjectsCmd::List => match deploy::list_projects(&canonical, args.target) {
+            Ok(projects) => {
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&projects).unwrap());
+                } else {
+                    intro("appz projects");
+                    if projects.is_empty() {
+                        info("no projects found in active organization");
+                        info("run `appz projects add <name>` to create a project");
+                    } else {
+                        for p in &projects {
+                            let fw = p.framework.as_deref().unwrap_or("-");
+                            info(&format!(
+                                "{:<30}  id:{:<24}  framework:{:<12}",
+                                p.name, p.id, fw
+                            ));
+                        }
+                    }
+                    outro("done");
+                }
+            }
+            Err(e) => error(&e),
+        },
+        ProjectsCmd::Add { name } => match deploy::add_project(&canonical, args.target, &name) {
+            Ok(p) => {
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&p).unwrap());
+                } else {
+                    intro("appz projects add");
+                    success(&format!("created project {}", p.name));
+                    info(&format!("id:   {}", p.id));
+                    info(&format!("slug: {}", p.slug));
+                    outro("done");
+                }
+            }
+            Err(e) => error(&e),
+        },
+        ProjectsCmd::Remove { name } => {
+            match deploy::remove_project(&canonical, args.target, &name) {
+                Ok(_) => {
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::json!({ "status": "removed", "project": name })
+                        );
+                    } else {
+                        intro("appz projects remove");
+                        success(&format!("removed project {name}"));
+                        outro("done");
+                    }
+                }
+                Err(e) => error(&e),
+            }
+        }
+    }
+}
+
 fn run_login(args: LoginArgs, json: bool) {
-    let api_base = std::env::var("APPZ_API_URL").unwrap_or_else(|_| "https://appz.to".to_string());
+    let api_base =
+        std::env::var("APPZ_API_URL").unwrap_or_else(|_| "https://api.appz.dev".to_string());
     if !json {
         intro("appz login");
     }
@@ -2033,8 +2168,8 @@ fn run_whoami(json: bool) {
         }
         Some(t) => {
             let stored = appz_deploy::load_stored_auth();
-            let api_base =
-                std::env::var("APPZ_API_URL").unwrap_or_else(|_| "https://appz.to".to_string());
+            let api_base = std::env::var("APPZ_API_URL")
+                .unwrap_or_else(|_| "https://api.appz.dev".to_string());
             let session_url = format!("{api_base}/api/auth/get-session");
             let session_res = ureq::get(&session_url)
                 .set("Authorization", &format!("Bearer {t}"))
@@ -2088,5 +2223,20 @@ fn run_whoami(json: bool) {
                 outro("done");
             }
         }
+    }
+}
+
+fn run_logout(json: bool) {
+    match appz_deploy::clear_stored_auth() {
+        Ok(()) => {
+            if json {
+                println!("{}", serde_json::json!({ "status": "logged_out" }));
+            } else {
+                intro("appz logout");
+                success("logged out successfully");
+                outro("done");
+            }
+        }
+        Err(e) => error(&format!("failed to clear session token: {e}")),
     }
 }

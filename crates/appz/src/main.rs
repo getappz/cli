@@ -10,6 +10,7 @@ mod agents;
 #[allow(dead_code)]
 mod backup;
 mod build_stage;
+mod ci;
 mod deploy;
 mod deploy_state;
 mod dev_install;
@@ -82,6 +83,8 @@ enum AppzCmd {
     Whoami,
     /// Store credentials in an encrypted vault used by `appz deploy`
     Env(EnvArgs),
+    /// Write a GitHub Actions workflow that deploys this project
+    Ci(CiArgs),
     /// Discover and install agent skills relevant to this project
     Skills(SkillsArgs),
     /// Detect installed AI agents and diagnose their config (skills: `appz skills`)
@@ -205,6 +208,39 @@ enum EnvCmd {
         #[arg(long, value_delimiter = ',')]
         target: Option<Vec<String>>,
     },
+}
+
+#[derive(Args)]
+struct CiArgs {
+    #[command(subcommand)]
+    command: CiCmd,
+}
+
+#[derive(Subcommand)]
+enum CiCmd {
+    /// Write .github/workflows/appz-deploy.yml for this project
+    Init(CiInitArgs),
+}
+
+#[derive(Args)]
+struct CiInitArgs {
+    #[arg(default_value = ".")]
+    dir: PathBuf,
+    /// Provider slug to pin in the workflow (default: appz.jsonc deploy.default, else detected)
+    #[arg(long)]
+    target: Option<String>,
+    /// Branch that triggers a production deploy (default: the checked-out branch)
+    #[arg(long)]
+    branch: Option<String>,
+    /// Overwrite an existing workflow
+    #[arg(long)]
+    force: bool,
+    /// Write the workflow but do not set repository secrets
+    #[arg(long, conflicts_with = "yes")]
+    no_secrets: bool,
+    /// Set the repository secrets with gh without asking
+    #[arg(short = 'y', long)]
+    yes: bool,
 }
 
 #[derive(Args)]
@@ -1208,6 +1244,7 @@ fn main() {
         AppzCmd::Logout => run_logout(json),
         AppzCmd::Whoami => run_whoami(json),
         AppzCmd::Env(a) => run_env(a, json),
+        AppzCmd::Ci(a) => run_ci(a, json),
         AppzCmd::Skills(a) => run_skills(a, json),
         AppzCmd::Agents(a) => run_agents(a, json),
         AppzCmd::Update(a) => update::run(a.version, a.check, a.quiet),
@@ -1504,6 +1541,66 @@ fn run_env(args: EnvArgs, json: bool) {
             }
         }
     }
+}
+
+fn run_ci(args: CiArgs, json: bool) {
+    let CiCmd::Init(init) = args.command;
+    let root = resolve_root(&init.dir);
+    // Setting repository secrets is an account-visible action: only with an
+    // explicit --yes, or after the user agrees at a real terminal.
+    let set_secrets = if init.no_secrets {
+        false
+    } else if init.yes {
+        true
+    } else if is_tty() {
+        cliclack::confirm("Store the deploy token(s) as GitHub repository secrets with gh?")
+            .initial_value(false)
+            .interact()
+            .unwrap_or(false)
+    } else {
+        false
+    };
+
+    let report = match ci::run(
+        &root,
+        &ci::CiRequest {
+            target: init.target,
+            branch: init.branch,
+            force: init.force,
+            set_secrets,
+        },
+    ) {
+        Ok(r) => r,
+        Err(e) => error(&e),
+    };
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report).unwrap());
+        return;
+    }
+
+    intro("appz ci");
+    success(&format!("wrote {}", report.workflow));
+    info(&format!(
+        "repo: {}\ntarget: {}\nbranch: {}",
+        report.repo, report.target, report.branch
+    ));
+    for secret in &report.secrets {
+        match secret.status {
+            "set" => success(&format!("set repository secret {}", secret.name)),
+            "failed" => warning(&format!(
+                "could not set {}: {}",
+                secret.name,
+                secret.detail.as_deref().unwrap_or("unknown error")
+            )),
+            _ => info(&format!(
+                "secret {} not set: {}",
+                secret.name,
+                secret.detail.as_deref().unwrap_or("no value")
+            )),
+        }
+    }
+    outro("commit the workflow to turn on deploy-on-push");
 }
 
 fn run_deploy(args: DeployArgs, json: bool) {

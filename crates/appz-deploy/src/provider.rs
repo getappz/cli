@@ -3,7 +3,10 @@ use std::time::Duration;
 
 use crate::context::DeployContext;
 use crate::error::{DeployError, DeployResult};
-use crate::output::{AuthState, DeployOutput, DeploymentInfo, DetectedConfig, PrerequisiteStatus};
+use crate::output::{
+    AuthState, DeployOutput, DeploymentInfo, DeploymentInspect, DetectedConfig, DomainVerifyResult,
+    PrerequisiteStatus, ProjectDomain,
+};
 
 /// Timeout for the actual deploy invocation (platform CLIs can legitimately
 /// take minutes to build+upload).
@@ -175,10 +178,63 @@ pub trait DeployProvider: Send + Sync {
             operation: "rollback",
         })
     }
+
+    fn alias(&self, ctx: &DeployContext, domain: &str) -> DeployResult<String> {
+        let _ = (ctx, domain);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "alias",
+        })
+    }
+
+    fn inspect_deployment(
+        &self,
+        ctx: &DeployContext,
+        id_or_url: &str,
+    ) -> DeployResult<DeploymentInspect> {
+        let _ = (ctx, id_or_url);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "inspect",
+        })
+    }
+
+    fn add_domain(&self, ctx: &DeployContext, domain: &str) -> DeployResult<ProjectDomain> {
+        let _ = (ctx, domain);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "domains add",
+        })
+    }
+
+    fn list_domains(&self, ctx: &DeployContext) -> DeployResult<Vec<ProjectDomain>> {
+        let _ = ctx;
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "domains list",
+        })
+    }
+
+    fn verify_domain(&self, ctx: &DeployContext, domain: &str) -> DeployResult<DomainVerifyResult> {
+        let _ = (ctx, domain);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "domains verify",
+        })
+    }
+
+    fn remove_domain(&self, ctx: &DeployContext, domain: &str) -> DeployResult<bool> {
+        let _ = (ctx, domain);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "domains remove",
+        })
+    }
 }
 
 pub fn create_provider_registry() -> Vec<Box<dyn DeployProvider>> {
     let mut all: Vec<Box<dyn DeployProvider>> = vec![
+        Box::new(crate::providers::appzdev::AppzdevProvider),
         Box::new(crate::providers::vercel::VercelProvider),
         Box::new(crate::providers::netlify::NetlifyProvider),
         Box::new(crate::providers::cloudflare::CloudflareProvider),

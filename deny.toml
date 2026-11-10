@@ -9,7 +9,10 @@ all-features = true
 unmaintained = "workspace"
 yanked = "warn"
 unused-ignored-advisory = "warn"
-ignore = []
+ignore = [
+    "RUSTSEC-2026-0457", # rmcp: OAuth client SSRF (unused; appz uses stdio transport)
+    "RUSTSEC-2026-0462", # rmcp: Unbounded body buffering (unused; appz uses stdio transport)
+]
 
 [licenses]
 # Deliberately broad, forward-looking allow-list so routine dependency bumps

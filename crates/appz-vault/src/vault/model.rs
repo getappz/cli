@@ -1,6 +1,12 @@
+use crate::crypto::kdf::KdfParams;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+
+/// Newest vault file format this build reads and writes. A newer file is
+/// refused instead of being rewritten through a struct that would drop its
+/// newer fields.
+pub const FORMAT_VERSION: u32 = 2;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct VaultFile {
@@ -13,6 +19,12 @@ pub struct VaultFile {
     /// Empty in vaults created before this field existed: those cannot be checked.
     #[serde(default, with = "serde_bytes")]
     pub key_check: Vec<u8>,
+    /// Argon2id cost parameters recorded at creation, so a vault still opens if
+    /// the build's defaults ever change. `None` in vaults created before this
+    /// field existed (v1): those used the build's defaults. Its `salt` is a
+    /// copy: the top-level `salt` is the one used.
+    #[serde(default)]
+    pub kdf: Option<KdfParams>,
     #[serde(default)]
     pub body: VaultBody,
 }
@@ -24,6 +36,11 @@ pub struct SecretEntry {
     pub added_at: DateTime<Utc>,
     #[serde(default)]
     pub rotated_at: Option<DateTime<Utc>>,
+    /// Whether `value` is bound to its name as AES-GCM additional
+    /// authenticated data (v2). `false` for entries written before AAD
+    /// binding existed: those decrypt with empty AAD until rewritten.
+    #[serde(default)]
+    pub aad: bool,
 }
 
 impl Drop for SecretEntry {
@@ -59,10 +76,11 @@ impl Drop for VaultBody {
 impl VaultFile {
     pub fn new(encrypted_dek: Vec<u8>, salt: Vec<u8>) -> Self {
         Self {
-            version: 1,
+            version: FORMAT_VERSION,
             encrypted_dek,
             salt,
             key_check: Vec::new(),
+            kdf: None,
             body: VaultBody::default(),
         }
     }

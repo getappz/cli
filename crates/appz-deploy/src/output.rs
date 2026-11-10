@@ -138,6 +138,28 @@ pub enum PrerequisiteStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DnsRecordChallenge {
+    pub r#type: String,
+    pub name: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CnameRecord {
+    pub name: String,
+    pub target: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApexRecord {
+    pub name: String,
+    pub ip: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DomainVerificationRecord {
     pub r#type: String,
     pub domain: String,
@@ -149,31 +171,40 @@ pub struct DomainVerificationRecord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectDomain {
-    pub id: String,
+    #[serde(default)]
+    pub id: Option<String>,
     pub domain: String,
-    pub status: String,
+    #[serde(default)]
+    pub verified: bool,
     #[serde(default, alias = "ssl_status")]
     pub ssl_status: Option<String>,
     #[serde(default)]
-    pub verified: bool,
+    pub status: Option<String>,
+    #[serde(default)]
+    pub challenge: Option<DnsRecordChallenge>,
+    #[serde(default)]
+    pub cname: Option<CnameRecord>,
+    #[serde(default)]
+    pub apex: Option<ApexRecord>,
     #[serde(default)]
     pub verification: Vec<DomainVerificationRecord>,
     #[serde(default, alias = "created_at")]
     pub created_at: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DomainVerifyResult {
-    pub domain: String,
-    pub status: String,
-    #[serde(default, alias = "ssl_status")]
-    pub ssl_status: Option<String>,
-    #[serde(default)]
-    pub verified: bool,
-    #[serde(default)]
-    pub verification: Vec<DomainVerificationRecord>,
+impl ProjectDomain {
+    pub fn display_status(&self) -> &str {
+        if self.verified {
+            self.ssl_status.as_deref().unwrap_or("active")
+        } else if let Some(s) = &self.status {
+            s.as_str()
+        } else {
+            "pending_verification"
+        }
+    }
 }
+
+pub type DomainVerifyResult = ProjectDomain;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

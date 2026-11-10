@@ -425,7 +425,7 @@ impl AppzServer {
             ));
         }
         let api_base =
-            std::env::var("APPZ_API_URL").unwrap_or_else(|_| "https://appz.to".to_string());
+            std::env::var("APPZ_API_URL").unwrap_or_else(|_| "https://api.appz.dev".to_string());
         match appz_deploy::pull_cloud_env(
             &api_base,
             &project_id,

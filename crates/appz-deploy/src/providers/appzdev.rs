@@ -24,7 +24,7 @@ use crate::static_cas::scan_output_dir;
 
 pub struct AppzdevProvider;
 
-const DEFAULT_API_URL: &str = "https://appz.to";
+const DEFAULT_API_URL: &str = "https://api.appz.dev";
 
 /// Normalizes a project id or name into a valid edge project slug:
 /// - Values starting with `prj_` are preserved untouched.
@@ -126,6 +126,24 @@ pub fn parse_api_error(
                     provider: provider_name,
                     env_var: "APPZ_TOKEN",
                     login_hint: "run `appz login` or set APPZ_TOKEN".to_string(),
+                };
+            }
+            if code == 409 && operation.contains("Verify") {
+                return DeployError::DeployFailed {
+                    provider: provider_name,
+                    reason: "DNS ownership TXT record not propagated yet. Please ensure the DNS challenge TXT record is configured and wait a few minutes before re-checking.".into(),
+                };
+            }
+            if code == 503 && operation.contains("domain") {
+                return DeployError::DeployFailed {
+                    provider: provider_name,
+                    reason: "Custom domains are not configured on the server.".into(),
+                };
+            }
+            if code == 502 && operation.contains("domain") {
+                return DeployError::DeployFailed {
+                    provider: provider_name,
+                    reason: "Cloudflare upstream failure; verification was recorded, please retry shortly.".into(),
                 };
             }
             if let Ok(json) = resp.into_json::<serde_json::Value>() {
@@ -394,6 +412,24 @@ pub fn push_cloud_env(
         .unwrap_or(vars.len());
 
     Ok(count)
+}
+
+pub fn delete_cloud_env_var(
+    api_base: &str,
+    project_id: &str,
+    token: Option<&str>,
+    key: &str,
+) -> DeployResult<bool> {
+    let url = format!("{api_base}/api/v0/projects/{project_id}/env/{key}");
+    let mut req = ureq::delete(&url);
+    if let Some(tok) = token {
+        req = req.set("Authorization", &format!("Bearer {tok}"));
+    }
+    let _ = req
+        .call()
+        .map_err(|e| parse_api_error(e, "AppzDev", "Delete environment variable"))?;
+
+    Ok(true)
 }
 
 /// Trim/lowercase a hostname and reject anything that would alter the URL path
@@ -1287,6 +1323,9 @@ mod tests {
         assert_eq!(loaded.email.as_deref(), Some("dev@appz.to"));
         assert_eq!(loaded.organization_id.as_deref(), Some("org_999"));
 
+        clear_stored_auth().unwrap();
+        assert!(load_stored_auth().is_none());
+
         if let Some(orig) = old_override {
             unsafe {
                 std::env::set_var("APPZ_VAULT_HOME_OVERRIDE", orig);
@@ -1411,17 +1450,17 @@ SPACED=hello world
                             } else if method == "POST" && path.ends_with("/verify") {
                                 (
                                     "200 OK",
-                                    r#"{"domain":"custom.example.com","status":"active","sslStatus":"active","verified":true,"verification":[]}"#,
+                                    r#"{"id":"dom_1","domain":"custom.example.com","sslStatus":"active","verified":true,"cname":{"name":"custom.example.com","target":"cname.appz.to"}}"#,
                                 )
                             } else if method == "POST" && path.ends_with("/domains") {
                                 (
                                     "200 OK",
-                                    r#"{"id":"dom_1","domain":"custom.example.com","status":"pending_verification","sslStatus":"pending","verified":false,"verification":[{"type":"cname","domain":"custom.example.com","value":"cname.appz.to","reason":"Routing target"}]}"#,
+                                    r#"{"id":"dom_1","domain":"custom.example.com","sslStatus":"pending","verified":false,"challenge":{"type":"TXT","name":"_appz-challenge.custom.example.com","value":"appz-verify=mock_token"},"cname":{"name":"custom.example.com","target":"cname.appz.to"},"apex":{"name":"custom.example.com","ip":"15.207.29.70"}}"#,
                                 )
                             } else if method == "GET" && path.ends_with("/domains") {
                                 (
                                     "200 OK",
-                                    r#"[{"id":"dom_1","domain":"custom.example.com","status":"active","sslStatus":"active","verified":true,"verification":[]}]"#,
+                                    r#"[{"id":"dom_1","domain":"custom.example.com","sslStatus":"active","verified":true,"cname":{"name":"custom.example.com","target":"cname.appz.to"}}]"#,
                                 )
                             } else if method == "DELETE" && path.contains("/domains/") {
                                 (
@@ -1431,10 +1470,12 @@ SPACED=hello world
                             } else if method == "GET" && path.contains("/env") {
                                 (
                                     "200 OK",
-                                    r#"{"env":[{"key":"MOCK_VAR","value":"test_val_123","target":["production"]}]}"#,
+                                    r#"[{"id":"env_1","key":"MOCK_VAR","value":"test_val_123","target":["production"],"gitBranch":null,"createdAt":1762732800}]"#,
                                 )
                             } else if method == "POST" && path.contains("/env") {
-                                ("200 OK", r#"{"count":1}"#)
+                                ("200 OK", r#"{"status":"synced","count":1}"#)
+                            } else if method == "DELETE" && path.contains("/env/") {
+                                ("204 No Content", "")
                             } else if method == "GET" && path == "/api/v0/projects" {
                                 (
                                     "200 OK",
@@ -1568,30 +1609,41 @@ SPACED=hello world
         .expect("env push must succeed");
         assert_eq!(push_count, 1);
 
-        // 8. Custom Domains (DF-008)
+        // 8. Custom Domains (DF-008, live API schema)
         let added_domain = provider
             .add_domain(&ctx, "custom.example.com")
             .expect("add domain must succeed");
         assert_eq!(added_domain.domain, "custom.example.com");
-        assert_eq!(added_domain.status, "pending_verification");
-        assert_eq!(added_domain.verification.len(), 1);
+        assert_eq!(added_domain.display_status(), "pending_verification");
+        assert!(!added_domain.verified);
+        assert!(added_domain.challenge.is_some());
+        assert_eq!(added_domain.challenge.as_ref().unwrap().r#type, "TXT");
+        assert!(added_domain.cname.is_some());
+        assert_eq!(added_domain.cname.as_ref().unwrap().target, "cname.appz.to");
+        assert!(added_domain.apex.is_some());
 
         let dom_list = provider
             .list_domains(&ctx)
             .expect("list domains must succeed");
         assert_eq!(dom_list.len(), 1);
         assert_eq!(dom_list[0].domain, "custom.example.com");
+        assert_eq!(dom_list[0].display_status(), "active");
 
         let verify_res = provider
             .verify_domain(&ctx, "custom.example.com")
             .expect("verify domain must succeed");
-        assert_eq!(verify_res.status, "active");
+        assert_eq!(verify_res.display_status(), "active");
         assert!(verify_res.verified);
 
         let removed = provider
             .remove_domain(&ctx, "custom.example.com")
             .expect("remove domain must succeed");
         assert!(removed);
+
+        let deleted_env =
+            delete_cloud_env_var(&server.addr, "prj_mock", Some("mock_token_123"), "MOCK_VAR")
+                .expect("delete env var must succeed");
+        assert!(deleted_env);
 
         // 9. Projects
         let projects = provider
@@ -1611,8 +1663,5 @@ SPACED=hello world
             .remove_project(&ctx, "mock-app")
             .expect("remove project must succeed");
         assert!(removed_proj);
-
-        // 10. Clear stored auth
-        clear_stored_auth().unwrap();
     }
 }

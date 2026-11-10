@@ -239,11 +239,32 @@ pub trait DeployProvider: Send + Sync {
         })
     }
 
+    fn get_project(&self, ctx: &DeployContext, id_or_slug: &str) -> DeployResult<ProjectInfo> {
+        let _ = (ctx, id_or_slug);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "projects get",
+        })
+    }
+
     fn add_project(&self, ctx: &DeployContext, name: &str) -> DeployResult<ProjectInfo> {
         let _ = (ctx, name);
         Err(DeployError::Unsupported {
             provider: self.name(),
             operation: "projects add",
+        })
+    }
+
+    fn rename_project(
+        &self,
+        ctx: &DeployContext,
+        id_or_slug: &str,
+        new_name: &str,
+    ) -> DeployResult<ProjectInfo> {
+        let _ = (ctx, id_or_slug, new_name);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "projects rename",
         })
     }
 

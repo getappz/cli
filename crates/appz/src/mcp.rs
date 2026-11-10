@@ -193,6 +193,32 @@ pub struct ProjectsRemoveArg {
     pub target: Option<String>,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ProjectsGetArg {
+    /// Name or ID of the project to inspect
+    pub id_or_slug: String,
+    /// Project directory. Defaults to the current directory.
+    #[serde(default)]
+    pub dir: Option<String>,
+    /// Provider slug (default: auto-detected or appzdev)
+    #[serde(default)]
+    pub target: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ProjectsRenameArg {
+    /// Name or ID of the project to rename
+    pub id_or_slug: String,
+    /// New display name for the project
+    pub new_name: String,
+    /// Project directory. Defaults to the current directory.
+    #[serde(default)]
+    pub dir: Option<String>,
+    /// Provider slug (default: auto-detected or appzdev)
+    #[serde(default)]
+    pub target: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct AppzServer {
     // Read by the `#[tool_handler]`-generated dispatch; dead-code analysis
@@ -534,6 +560,40 @@ impl AppzServer {
     ) -> Result<CallToolResult, McpError> {
         let root = Self::resolve(&arg.dir);
         match crate::deploy::add_project(&root, arg.target, &arg.name) {
+            Ok(proj) => {
+                let json = serde_json::to_string_pretty(&proj).unwrap_or_default();
+                Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
+            }
+            Err(e) => Ok(Self::err(e)),
+        }
+    }
+
+    #[tool(
+        description = "Get details of a project in the active organization on the edge hosting platform. Returns JSON."
+    )]
+    fn projects_get(
+        &self,
+        Parameters(arg): Parameters<ProjectsGetArg>,
+    ) -> Result<CallToolResult, McpError> {
+        let root = Self::resolve(&arg.dir);
+        match crate::deploy::get_project(&root, arg.target, &arg.id_or_slug) {
+            Ok(proj) => {
+                let json = serde_json::to_string_pretty(&proj).unwrap_or_default();
+                Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
+            }
+            Err(e) => Ok(Self::err(e)),
+        }
+    }
+
+    #[tool(
+        description = "Rename a project's display name on the edge hosting platform. Returns JSON."
+    )]
+    fn projects_rename(
+        &self,
+        Parameters(arg): Parameters<ProjectsRenameArg>,
+    ) -> Result<CallToolResult, McpError> {
+        let root = Self::resolve(&arg.dir);
+        match crate::deploy::rename_project(&root, arg.target, &arg.id_or_slug, &arg.new_name) {
             Ok(proj) => {
                 let json = serde_json::to_string_pretty(&proj).unwrap_or_default();
                 Ok(CallToolResult::success(vec![ContentBlock::text(json)]))

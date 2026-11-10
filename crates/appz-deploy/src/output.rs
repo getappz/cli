@@ -225,4 +225,6 @@ pub struct ProjectInfo {
     pub created_at: Option<i64>,
     #[serde(default, alias = "updated_at")]
     pub updated_at: Option<i64>,
+    #[serde(default, alias = "production_url")]
+    pub production_url: Option<String>,
 }

@@ -17,7 +17,7 @@ use crate::context::DeployContext;
 use crate::error::{DeployError, DeployResult};
 use crate::output::{
     DeployOutput, DeployStatus, DeploymentInfo, DeploymentInspect, DetectedConfig,
-    PrerequisiteStatus,
+    DomainVerifyResult, PrerequisiteStatus, ProjectDomain,
 };
 use crate::provider::DeployProvider;
 use crate::static_cas::scan_output_dir;
@@ -386,6 +386,134 @@ pub fn push_cloud_env(
         .unwrap_or(vars.len());
 
     Ok(count)
+}
+
+/// Trim/lowercase a hostname and reject anything that would alter the URL path
+/// when interpolated into `/domains/{domain}` (slashes, queries, whitespace, ...).
+fn normalize_domain(domain: &str) -> DeployResult<String> {
+    let d = domain.trim().trim_end_matches('.').to_ascii_lowercase();
+    let ok = !d.is_empty()
+        && d.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.' || c == '*');
+    if !ok {
+        return Err(DeployError::DeployFailed {
+            provider: "AppzDev",
+            reason: format!("Invalid domain name: {domain:?}"),
+        });
+    }
+    Ok(d)
+}
+
+pub fn add_project_domain(
+    api_base: &str,
+    project_id: &str,
+    token: Option<&str>,
+    domain: &str,
+) -> DeployResult<ProjectDomain> {
+    let domain = normalize_domain(domain)?;
+    let domain = domain.as_str();
+    let url = format!("{api_base}/api/v0/projects/{project_id}/domains");
+    let mut req = ureq::post(&url);
+    if let Some(tok) = token {
+        req = req.set("Authorization", &format!("Bearer {tok}"));
+    }
+    let resp: serde_json::Value = req
+        .send_json(serde_json::json!({ "domain": domain }))
+        .map_err(|e| parse_api_error(e, "AppzDev", "Add custom domain"))?
+        .into_json()
+        .map_err(|e| DeployError::DeployFailed {
+            provider: "AppzDev",
+            reason: format!("Invalid JSON response from add domain: {e}"),
+        })?;
+
+    serde_json::from_value(resp).map_err(|e| DeployError::DeployFailed {
+        provider: "AppzDev",
+        reason: format!("Failed to parse added domain record: {e}"),
+    })
+}
+
+pub fn list_project_domains(
+    api_base: &str,
+    project_id: &str,
+    token: Option<&str>,
+) -> DeployResult<Vec<ProjectDomain>> {
+    let url = format!("{api_base}/api/v0/projects/{project_id}/domains");
+    let mut req = ureq::get(&url);
+    if let Some(tok) = token {
+        req = req.set("Authorization", &format!("Bearer {tok}"));
+    }
+    let resp: serde_json::Value = req
+        .call()
+        .map_err(|e| parse_api_error(e, "AppzDev", "List custom domains"))?
+        .into_json()
+        .map_err(|e| DeployError::DeployFailed {
+            provider: "AppzDev",
+            reason: format!("Invalid JSON response from list domains: {e}"),
+        })?;
+
+    let items = if resp.is_array() {
+        resp
+    } else if let Some(arr) = resp.get("domains").filter(|v| v.is_array()) {
+        arr.clone()
+    } else {
+        return Err(DeployError::DeployFailed {
+            provider: "AppzDev",
+            reason: "Expected array of domain records".into(),
+        });
+    };
+
+    serde_json::from_value(items).map_err(|e| DeployError::DeployFailed {
+        provider: "AppzDev",
+        reason: format!("Failed to parse domain list: {e}"),
+    })
+}
+
+pub fn verify_project_domain(
+    api_base: &str,
+    project_id: &str,
+    token: Option<&str>,
+    domain: &str,
+) -> DeployResult<DomainVerifyResult> {
+    let domain = normalize_domain(domain)?;
+    let domain = domain.as_str();
+    let url = format!("{api_base}/api/v0/projects/{project_id}/domains/{domain}/verify");
+    let mut req = ureq::post(&url);
+    if let Some(tok) = token {
+        req = req.set("Authorization", &format!("Bearer {tok}"));
+    }
+    let resp: serde_json::Value = req
+        .send_json(serde_json::json!({}))
+        .map_err(|e| parse_api_error(e, "AppzDev", "Verify custom domain"))?
+        .into_json()
+        .map_err(|e| DeployError::DeployFailed {
+            provider: "AppzDev",
+            reason: format!("Invalid JSON response from verify domain: {e}"),
+        })?;
+
+    serde_json::from_value(resp).map_err(|e| DeployError::DeployFailed {
+        provider: "AppzDev",
+        reason: format!("Failed to parse domain verification result: {e}"),
+    })
+}
+
+pub fn remove_project_domain(
+    api_base: &str,
+    project_id: &str,
+    token: Option<&str>,
+    domain: &str,
+) -> DeployResult<bool> {
+    let domain = normalize_domain(domain)?;
+    let domain = domain.as_str();
+    let url = format!("{api_base}/api/v0/projects/{project_id}/domains/{domain}");
+    let mut req = ureq::delete(&url);
+    if let Some(tok) = token {
+        req = req.set("Authorization", &format!("Bearer {tok}"));
+    }
+    let _ = req
+        .call()
+        .map_err(|e| parse_api_error(e, "AppzDev", "Remove custom domain"))?;
+
+    Ok(true)
 }
 
 impl AppzdevProvider {
@@ -896,6 +1024,34 @@ impl DeployProvider for AppzdevProvider {
 
         Ok(inspect)
     }
+
+    fn add_domain(&self, ctx: &DeployContext, domain: &str) -> DeployResult<ProjectDomain> {
+        let project_id = self.resolve_project_id(ctx);
+        let api_base = self.api_base(ctx);
+        let token = resolve_auth_token(Some(ctx));
+        add_project_domain(&api_base, &project_id, token.as_deref(), domain)
+    }
+
+    fn list_domains(&self, ctx: &DeployContext) -> DeployResult<Vec<ProjectDomain>> {
+        let project_id = self.resolve_project_id(ctx);
+        let api_base = self.api_base(ctx);
+        let token = resolve_auth_token(Some(ctx));
+        list_project_domains(&api_base, &project_id, token.as_deref())
+    }
+
+    fn verify_domain(&self, ctx: &DeployContext, domain: &str) -> DeployResult<DomainVerifyResult> {
+        let project_id = self.resolve_project_id(ctx);
+        let api_base = self.api_base(ctx);
+        let token = resolve_auth_token(Some(ctx));
+        verify_project_domain(&api_base, &project_id, token.as_deref(), domain)
+    }
+
+    fn remove_domain(&self, ctx: &DeployContext, domain: &str) -> DeployResult<bool> {
+        let project_id = self.resolve_project_id(ctx);
+        let api_base = self.api_base(ctx);
+        let token = resolve_auth_token(Some(ctx));
+        remove_project_domain(&api_base, &project_id, token.as_deref(), domain)
+    }
 }
 
 #[cfg(test)]
@@ -1150,6 +1306,26 @@ SPACED=hello world
                                 ("200 OK", r#"{"success":true,"versionId":"ver_mock_1"}"#)
                             } else if method == "POST" && path.contains("/alias") {
                                 ("200 OK", r#"{"success":true,"domain":"custom.com"}"#)
+                            } else if method == "POST" && path.ends_with("/verify") {
+                                (
+                                    "200 OK",
+                                    r#"{"domain":"custom.example.com","status":"active","sslStatus":"active","verified":true,"verification":[]}"#,
+                                )
+                            } else if method == "POST" && path.ends_with("/domains") {
+                                (
+                                    "200 OK",
+                                    r#"{"id":"dom_1","domain":"custom.example.com","status":"pending_verification","sslStatus":"pending","verified":false,"verification":[{"type":"cname","domain":"custom.example.com","value":"cname.appz.to","reason":"Routing target"}]}"#,
+                                )
+                            } else if method == "GET" && path.ends_with("/domains") {
+                                (
+                                    "200 OK",
+                                    r#"[{"id":"dom_1","domain":"custom.example.com","status":"active","sslStatus":"active","verified":true,"verification":[]}]"#,
+                                )
+                            } else if method == "DELETE" && path.contains("/domains/") {
+                                (
+                                    "200 OK",
+                                    r#"{"status":"deleted","domain":"custom.example.com"}"#,
+                                )
                             } else if method == "GET" && path.contains("/env") {
                                 (
                                     "200 OK",
@@ -1277,5 +1453,30 @@ SPACED=hello world
         )
         .expect("env push must succeed");
         assert_eq!(push_count, 1);
+
+        // 8. Custom Domains (DF-008)
+        let added_domain = provider
+            .add_domain(&ctx, "custom.example.com")
+            .expect("add domain must succeed");
+        assert_eq!(added_domain.domain, "custom.example.com");
+        assert_eq!(added_domain.status, "pending_verification");
+        assert_eq!(added_domain.verification.len(), 1);
+
+        let dom_list = provider
+            .list_domains(&ctx)
+            .expect("list domains must succeed");
+        assert_eq!(dom_list.len(), 1);
+        assert_eq!(dom_list[0].domain, "custom.example.com");
+
+        let verify_res = provider
+            .verify_domain(&ctx, "custom.example.com")
+            .expect("verify domain must succeed");
+        assert_eq!(verify_res.status, "active");
+        assert!(verify_res.verified);
+
+        let removed = provider
+            .remove_domain(&ctx, "custom.example.com")
+            .expect("remove domain must succeed");
+        assert!(removed);
     }
 }

@@ -550,6 +550,77 @@ pub fn inspect(
         .map_err(|e| e.to_string())
 }
 
+/// Resolve the provider and a vault-backed context for a domain operation.
+fn domain_ctx(
+    project_dir: &Path,
+    target: Option<String>,
+) -> Result<(Box<dyn DeployProvider>, DeployContext), String> {
+    let config = read_deploy_config(project_dir)
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+
+    let slug = match target.or_else(|| config.default.clone()) {
+        Some(slug) => slug,
+        None => autodetect_target(project_dir)?,
+    };
+
+    let provider = get_provider(&slug).map_err(|e| e.to_string())?;
+
+    let allowed: Vec<String> = std::iter::once(provider.auth_env_var().to_string())
+        .chain(LINK_VARS.map(String::from))
+        .chain(config.env.iter().cloned())
+        .collect();
+    let vault = crate::secrets::deploy_env(project_dir, &allowed)?;
+
+    let mut ctx = DeployContext::new(project_dir.to_path_buf(), "dist".to_string());
+    ctx.deploy_config = config;
+    ctx.run_env = vault
+        .vars
+        .into_iter()
+        .filter(|(k, _)| std::env::var_os(k).is_none())
+        .collect();
+    Ok((provider, ctx))
+}
+
+pub fn add_domain(
+    project_dir: &Path,
+    target: Option<String>,
+    domain: &str,
+) -> Result<appz_deploy::ProjectDomain, String> {
+    let (provider, ctx) = domain_ctx(project_dir, target)?;
+    provider.add_domain(&ctx, domain).map_err(|e| e.to_string())
+}
+
+pub fn list_domains(
+    project_dir: &Path,
+    target: Option<String>,
+) -> Result<Vec<appz_deploy::ProjectDomain>, String> {
+    let (provider, ctx) = domain_ctx(project_dir, target)?;
+    provider.list_domains(&ctx).map_err(|e| e.to_string())
+}
+
+pub fn verify_domain(
+    project_dir: &Path,
+    target: Option<String>,
+    domain: &str,
+) -> Result<appz_deploy::DomainVerifyResult, String> {
+    let (provider, ctx) = domain_ctx(project_dir, target)?;
+    provider
+        .verify_domain(&ctx, domain)
+        .map_err(|e| e.to_string())
+}
+
+pub fn remove_domain(
+    project_dir: &Path,
+    target: Option<String>,
+    domain: &str,
+) -> Result<bool, String> {
+    let (provider, ctx) = domain_ctx(project_dir, target)?;
+    provider
+        .remove_domain(&ctx, domain)
+        .map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

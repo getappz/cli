@@ -95,7 +95,15 @@ fn exec_inner(
     cmd.cwd(cwd);
     if !scrub_prefix.is_empty() {
         for (k, _) in std::env::vars_os() {
-            if k.to_string_lossy().starts_with(scrub_prefix) {
+            // Windows env names are case-insensitive: `rustic_repo_hot` must go too.
+            let name = k.to_string_lossy();
+            let hit = if cfg!(windows) {
+                name.to_ascii_uppercase()
+                    .starts_with(&scrub_prefix.to_ascii_uppercase())
+            } else {
+                name.starts_with(scrub_prefix)
+            };
+            if hit {
                 cmd.env_remove(k);
             }
         }

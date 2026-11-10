@@ -459,7 +459,16 @@ pub fn run_all(project_dir: &Path, req: DeployRequest) -> Result<Vec<DeployOutpu
             errors.len(),
             outputs.len() + errors.len(),
             errors.join("\n")
-        ))
+        ) + &outputs
+            .iter()
+            .map(|o| {
+                format!(
+                    "\ndeployed: {} ({})",
+                    o.provider,
+                    o.url.as_deref().unwrap_or("url unknown")
+                )
+            })
+            .collect::<String>())
     }
 }
 

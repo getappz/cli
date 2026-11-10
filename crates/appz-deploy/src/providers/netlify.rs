@@ -158,9 +158,11 @@ impl DeployProvider for NetlifyProvider {
             // `netlify link` asks existing-vs-new and the site name itself.
             return Some(vec!["link".into()]);
         }
-        // Create a site with the chosen name and link to it, non-interactively.
+        // `netlify link --name` only links to an EXISTING site, so it would
+        // fail on first deploy. `sites:create --name` creates the site and
+        // links the current directory to it.
         Some(vec![
-            "link".into(),
+            "sites:create".into(),
             "--name".into(),
             ctx.project_name(self.slug()),
         ])
@@ -258,8 +260,9 @@ mod tests {
 mod link_tests {
     use super::*;
 
-    fn ctx_with_state(contents: Option<&str>) -> (std::path::PathBuf, DeployContext) {
-        let dir = std::env::temp_dir().join(format!("appz-netlify-link-{}", std::process::id()));
+    fn ctx_with_state(tag: &str, contents: Option<&str>) -> (std::path::PathBuf, DeployContext) {
+        let dir =
+            std::env::temp_dir().join(format!("appz-netlify-link-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join(".netlify")).unwrap();
         if let Some(c) = contents {
@@ -271,21 +274,21 @@ mod link_tests {
 
     #[test]
     fn a_state_file_with_a_site_id_means_linked() {
-        let (dir, ctx) = ctx_with_state(Some(r#"{"siteId":"abc-123"}"#));
+        let (dir, ctx) = ctx_with_state("state", Some(r#"{"siteId":"abc-123"}"#));
         assert!(NetlifyProvider.is_linked(&ctx));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn no_state_file_and_no_env_means_not_linked() {
-        let (dir, ctx) = ctx_with_state(None);
+        let (dir, ctx) = ctx_with_state("none", None);
         assert!(!NetlifyProvider.is_linked(&ctx));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn site_id_in_the_environment_means_linked_without_a_state_file() {
-        let (dir, mut ctx) = ctx_with_state(None);
+        let (dir, mut ctx) = ctx_with_state("env", None);
         ctx.run_env
             .insert("NETLIFY_SITE_ID".into(), "abc-123".into());
         assert!(NetlifyProvider.is_linked(&ctx));
@@ -306,7 +309,7 @@ mod link_tests {
         assert_eq!(
             NetlifyProvider.link_args(&ctx, false),
             Some(vec![
-                "link".to_string(),
+                "sites:create".to_string(),
                 "--name".to_string(),
                 "my-site".to_string()
             ])

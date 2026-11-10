@@ -669,7 +669,7 @@ fn domain_ctx(
 
     let slug = match target.or_else(|| config.default.clone()) {
         Some(slug) => slug,
-        None => autodetect_target(project_dir)?,
+        None => autodetect_target(project_dir).unwrap_or_else(|_| "appzdev".to_string()),
     };
 
     let provider = get_provider(&slug).map_err(|e| e.to_string())?;
@@ -726,6 +726,34 @@ pub fn remove_domain(
     let (provider, ctx) = domain_ctx(project_dir, target)?;
     provider
         .remove_domain(&ctx, domain)
+        .map_err(|e| e.to_string())
+}
+
+pub fn list_projects(
+    project_dir: &Path,
+    target: Option<String>,
+) -> Result<Vec<appz_deploy::ProjectInfo>, String> {
+    let (provider, ctx) = domain_ctx(project_dir, target)?;
+    provider.list_projects(&ctx).map_err(|e| e.to_string())
+}
+
+pub fn add_project(
+    project_dir: &Path,
+    target: Option<String>,
+    name: &str,
+) -> Result<appz_deploy::ProjectInfo, String> {
+    let (provider, ctx) = domain_ctx(project_dir, target)?;
+    provider.add_project(&ctx, name).map_err(|e| e.to_string())
+}
+
+pub fn remove_project(
+    project_dir: &Path,
+    target: Option<String>,
+    id_or_slug: &str,
+) -> Result<bool, String> {
+    let (provider, ctx) = domain_ctx(project_dir, target)?;
+    provider
+        .remove_project(&ctx, id_or_slug)
         .map_err(|e| e.to_string())
 }
 

@@ -12,7 +12,7 @@ pub use exec::{ExecOutput, exec_captured, exec_captured_scrubbed};
 pub use output::{
     AuthState, DeployOutput, DeployStatus, DeploymentInfo, DeploymentInspect, DetectedConfig,
     DomainVerificationRecord, DomainVerifyResult, InspectFileEntry, PrerequisiteStatus,
-    ProjectDomain,
+    ProjectDomain, ProjectInfo,
 };
 pub use provider::{
     DEPLOY_TIMEOUT, DeployProvider, QUERY_TIMEOUT, available_provider_slugs,
@@ -20,9 +20,9 @@ pub use provider::{
     install_cli_with_mise,
 };
 pub use providers::appzdev::{
-    CloudEnvVar, DeviceCodeResponse, DevicePollResult, StoredAuth, add_project_domain,
-    auth_file_path, format_env_file, list_project_domains, load_stored_auth, parse_api_error,
-    parse_env_file, poll_device_token, pull_cloud_env, push_cloud_env, remove_project_domain,
-    request_device_code, resolve_auth_token, resolve_project_id_from_dir, save_stored_auth,
-    slugify_project_id, verify_project_domain,
+    CloudEnvVar, DeviceCodeResponse, DevicePollResult, StoredAuth, add_project, add_project_domain,
+    auth_file_path, clear_stored_auth, format_env_file, list_project_domains, list_projects,
+    load_stored_auth, parse_api_error, parse_env_file, poll_device_token, pull_cloud_env,
+    push_cloud_env, remove_project, remove_project_domain, request_device_code, resolve_auth_token,
+    resolve_project_id_from_dir, save_stored_auth, slugify_project_id, verify_project_domain,
 };

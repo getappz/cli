@@ -17,7 +17,7 @@ use crate::context::DeployContext;
 use crate::error::{DeployError, DeployResult};
 use crate::output::{
     DeployOutput, DeployStatus, DeploymentInfo, DeploymentInspect, DetectedConfig,
-    DomainVerifyResult, PrerequisiteStatus, ProjectDomain,
+    DomainVerifyResult, PrerequisiteStatus, ProjectDomain, ProjectInfo,
 };
 use crate::provider::DeployProvider;
 use crate::static_cas::scan_output_dir;
@@ -93,6 +93,14 @@ pub fn save_stored_auth(auth: &StoredAuth) -> Result<(), std::io::Error> {
     }
     let data = serde_json::to_string_pretty(auth).map_err(std::io::Error::other)?;
     std::fs::write(p, data)
+}
+
+pub fn clear_stored_auth() -> Result<(), std::io::Error> {
+    let p = auth_file_path();
+    if p.is_file() {
+        std::fs::remove_file(p)?;
+    }
+    Ok(())
 }
 
 pub fn resolve_auth_token(ctx: Option<&DeployContext>) -> Option<String> {
@@ -512,6 +520,82 @@ pub fn remove_project_domain(
     let _ = req
         .call()
         .map_err(|e| parse_api_error(e, "AppzDev", "Remove custom domain"))?;
+
+    Ok(true)
+}
+
+pub fn list_projects(api_base: &str, token: Option<&str>) -> DeployResult<Vec<ProjectInfo>> {
+    let url = format!("{api_base}/api/v0/projects");
+    let mut req = ureq::get(&url);
+    if let Some(tok) = token {
+        req = req.set("Authorization", &format!("Bearer {tok}"));
+    }
+    let resp: serde_json::Value = req
+        .call()
+        .map_err(|e| parse_api_error(e, "AppzDev", "List projects"))?
+        .into_json()
+        .map_err(|e| DeployError::DeployFailed {
+            provider: "AppzDev",
+            reason: format!("Invalid JSON response from list projects: {e}"),
+        })?;
+
+    let items = if resp.is_array() {
+        resp
+    } else if let Some(arr) = resp.get("projects").filter(|v| v.is_array()) {
+        arr.clone()
+    } else {
+        return Err(DeployError::DeployFailed {
+            provider: "AppzDev",
+            reason: "Expected array of projects".into(),
+        });
+    };
+
+    serde_json::from_value(items).map_err(|e| DeployError::DeployFailed {
+        provider: "AppzDev",
+        reason: format!("Failed to parse project list: {e}"),
+    })
+}
+
+pub fn add_project(api_base: &str, token: Option<&str>, name: &str) -> DeployResult<ProjectInfo> {
+    let url = format!("{api_base}/api/v0/projects");
+    let slug = slugify_project_id(name);
+    let mut req = ureq::post(&url);
+    if let Some(tok) = token {
+        req = req.set("Authorization", &format!("Bearer {tok}"));
+    }
+    let resp: serde_json::Value = req
+        .send_json(serde_json::json!({
+            "name": name,
+            "slug": slug,
+        }))
+        .map_err(|e| parse_api_error(e, "AppzDev", "Create project"))?
+        .into_json()
+        .map_err(|e| DeployError::DeployFailed {
+            provider: "AppzDev",
+            reason: format!("Invalid JSON response from add project: {e}"),
+        })?;
+
+    let val = if resp.get("project").is_some() {
+        resp["project"].clone()
+    } else {
+        resp
+    };
+
+    serde_json::from_value(val).map_err(|e| DeployError::DeployFailed {
+        provider: "AppzDev",
+        reason: format!("Failed to parse created project: {e}"),
+    })
+}
+
+pub fn remove_project(api_base: &str, token: Option<&str>, id_or_slug: &str) -> DeployResult<bool> {
+    let url = format!("{api_base}/api/v0/projects/{id_or_slug}");
+    let mut req = ureq::delete(&url);
+    if let Some(tok) = token {
+        req = req.set("Authorization", &format!("Bearer {tok}"));
+    }
+    let _ = req
+        .call()
+        .map_err(|e| parse_api_error(e, "AppzDev", "Remove project"))?;
 
     Ok(true)
 }
@@ -1052,6 +1136,24 @@ impl DeployProvider for AppzdevProvider {
         let token = resolve_auth_token(Some(ctx));
         remove_project_domain(&api_base, &project_id, token.as_deref(), domain)
     }
+
+    fn list_projects(&self, ctx: &DeployContext) -> DeployResult<Vec<ProjectInfo>> {
+        let api_base = self.api_base(ctx);
+        let token = resolve_auth_token(Some(ctx));
+        list_projects(&api_base, token.as_deref())
+    }
+
+    fn add_project(&self, ctx: &DeployContext, name: &str) -> DeployResult<ProjectInfo> {
+        let api_base = self.api_base(ctx);
+        let token = resolve_auth_token(Some(ctx));
+        add_project(&api_base, token.as_deref(), name)
+    }
+
+    fn remove_project(&self, ctx: &DeployContext, id_or_slug: &str) -> DeployResult<bool> {
+        let api_base = self.api_base(ctx);
+        let token = resolve_auth_token(Some(ctx));
+        remove_project(&api_base, token.as_deref(), id_or_slug)
+    }
 }
 
 #[cfg(test)]
@@ -1333,6 +1435,18 @@ SPACED=hello world
                                 )
                             } else if method == "POST" && path.contains("/env") {
                                 ("200 OK", r#"{"count":1}"#)
+                            } else if method == "GET" && path == "/api/v0/projects" {
+                                (
+                                    "200 OK",
+                                    r#"[{"id":"prj_mock","name":"mock-app","slug":"mock-app","organizationId":"org_mock","createdAt":1762732800}]"#,
+                                )
+                            } else if method == "POST" && path == "/api/v0/projects" {
+                                (
+                                    "200 OK",
+                                    r#"{"id":"prj_new_mock","name":"new-app","slug":"new-app","organizationId":"org_mock","createdAt":1762732800}"#,
+                                )
+                            } else if method == "DELETE" && path.starts_with("/api/v0/projects/") {
+                                ("200 OK", r#"{"status":"deleted","id":"prj_mock"}"#)
                             } else {
                                 ("404 Not Found", r#"{"error":"Not found"}"#)
                             };
@@ -1478,5 +1592,27 @@ SPACED=hello world
             .remove_domain(&ctx, "custom.example.com")
             .expect("remove domain must succeed");
         assert!(removed);
+
+        // 9. Projects
+        let projects = provider
+            .list_projects(&ctx)
+            .expect("list projects must succeed");
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].name, "mock-app");
+        assert_eq!(projects[0].slug, "mock-app");
+
+        let added_proj = provider
+            .add_project(&ctx, "new-app")
+            .expect("add project must succeed");
+        assert_eq!(added_proj.name, "new-app");
+        assert_eq!(added_proj.slug, "new-app");
+
+        let removed_proj = provider
+            .remove_project(&ctx, "mock-app")
+            .expect("remove project must succeed");
+        assert!(removed_proj);
+
+        // 10. Clear stored auth
+        clear_stored_auth().unwrap();
     }
 }

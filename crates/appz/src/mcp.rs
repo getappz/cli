@@ -159,6 +159,40 @@ pub struct DomainsVerifyArg {
     pub target: Option<String>,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ProjectsListArg {
+    /// Project directory. Defaults to the current directory.
+    #[serde(default)]
+    pub dir: Option<String>,
+    /// Provider slug (default: auto-detected or appzdev)
+    #[serde(default)]
+    pub target: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ProjectsAddArg {
+    /// Name of the project to create
+    pub name: String,
+    /// Project directory. Defaults to the current directory.
+    #[serde(default)]
+    pub dir: Option<String>,
+    /// Provider slug (default: auto-detected or appzdev)
+    #[serde(default)]
+    pub target: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ProjectsRemoveArg {
+    /// Name or ID of the project to remove
+    pub id_or_slug: String,
+    /// Project directory. Defaults to the current directory.
+    #[serde(default)]
+    pub dir: Option<String>,
+    /// Provider slug (default: auto-detected or appzdev)
+    #[serde(default)]
+    pub target: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct AppzServer {
     // Read by the `#[tool_handler]`-generated dispatch; dead-code analysis
@@ -468,6 +502,56 @@ impl AppzServer {
         match crate::deploy::verify_domain(&root, arg.target, &arg.domain) {
             Ok(res) => {
                 let json = serde_json::to_string_pretty(&res).unwrap_or_default();
+                Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
+            }
+            Err(e) => Ok(Self::err(e)),
+        }
+    }
+
+    #[tool(
+        description = "List all projects in the active organization on the edge hosting platform. Returns JSON."
+    )]
+    fn projects_list(
+        &self,
+        Parameters(arg): Parameters<ProjectsListArg>,
+    ) -> Result<CallToolResult, McpError> {
+        let root = Self::resolve(&arg.dir);
+        match crate::deploy::list_projects(&root, arg.target) {
+            Ok(projects) => {
+                let json = serde_json::to_string_pretty(&projects).unwrap_or_default();
+                Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
+            }
+            Err(e) => Ok(Self::err(e)),
+        }
+    }
+
+    #[tool(
+        description = "Create a new project in the active organization on the edge hosting platform. Returns JSON."
+    )]
+    fn projects_add(
+        &self,
+        Parameters(arg): Parameters<ProjectsAddArg>,
+    ) -> Result<CallToolResult, McpError> {
+        let root = Self::resolve(&arg.dir);
+        match crate::deploy::add_project(&root, arg.target, &arg.name) {
+            Ok(proj) => {
+                let json = serde_json::to_string_pretty(&proj).unwrap_or_default();
+                Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
+            }
+            Err(e) => Ok(Self::err(e)),
+        }
+    }
+
+    #[tool(description = "Remove a project from the edge hosting platform. Returns JSON.")]
+    fn projects_remove(
+        &self,
+        Parameters(arg): Parameters<ProjectsRemoveArg>,
+    ) -> Result<CallToolResult, McpError> {
+        let root = Self::resolve(&arg.dir);
+        match crate::deploy::remove_project(&root, arg.target, &arg.id_or_slug) {
+            Ok(_) => {
+                let json = serde_json::json!({ "status": "removed", "project": arg.id_or_slug })
+                    .to_string();
                 Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
             }
             Err(e) => Ok(Self::err(e)),

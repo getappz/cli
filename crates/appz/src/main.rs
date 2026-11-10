@@ -71,8 +71,13 @@ enum AppzCmd {
     /// Manage custom domains and DNS verification on Cloudflare Edge
     #[command(alias = "domain")]
     Domains(DomainsArgs),
+    /// Manage projects on the edge hosting platform
+    #[command(alias = "project")]
+    Projects(ProjectsArgs),
     /// Log in to Appz via browser device flow
     Login(LoginArgs),
+    /// Log out of Appz and remove the stored session token
+    Logout,
     /// Print currently authenticated user and active organization
     Whoami,
     /// Store credentials in an encrypted vault used by `appz deploy`
@@ -324,6 +329,36 @@ enum DomainsCmd {
     Remove {
         /// Domain name to remove
         domain: String,
+    },
+}
+
+#[derive(Args)]
+struct ProjectsArgs {
+    #[command(subcommand)]
+    command: ProjectsCmd,
+    /// Project directory (defaults to current directory)
+    #[arg(default_value = ".")]
+    dir: PathBuf,
+    /// Provider slug (default: detects from project or config)
+    #[arg(long)]
+    target: Option<String>,
+}
+
+#[derive(Subcommand, Debug)]
+enum ProjectsCmd {
+    /// List all projects in the active organization
+    #[command(alias = "ls")]
+    List,
+    /// Create a new project on the platform
+    Add {
+        /// Name of the project
+        name: String,
+    },
+    /// Remove a project from the platform
+    #[command(alias = "rm")]
+    Remove {
+        /// Name or ID of the project to remove
+        name: String,
     },
 }
 
@@ -1168,7 +1203,9 @@ fn main() {
         AppzCmd::List(a) => run_list(a, json),
         AppzCmd::Inspect(a) => run_inspect(a, json),
         AppzCmd::Domains(a) => run_domains(a, json),
+        AppzCmd::Projects(a) => run_projects(a, json),
         AppzCmd::Login(a) => run_login(a, json),
+        AppzCmd::Logout => run_logout(json),
         AppzCmd::Whoami => run_whoami(json),
         AppzCmd::Env(a) => run_env(a, json),
         AppzCmd::Skills(a) => run_skills(a, json),
@@ -1884,6 +1921,66 @@ fn run_domains(args: DomainsArgs, json: bool) {
     }
 }
 
+fn run_projects(args: ProjectsArgs, json: bool) {
+    let canonical = resolve_root(&args.dir);
+    match args.command {
+        ProjectsCmd::List => match deploy::list_projects(&canonical, args.target) {
+            Ok(projects) => {
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&projects).unwrap());
+                } else {
+                    intro("appz projects");
+                    if projects.is_empty() {
+                        info("no projects found in active organization");
+                        info("run `appz projects add <name>` to create a project");
+                    } else {
+                        for p in &projects {
+                            let fw = p.framework.as_deref().unwrap_or("-");
+                            info(&format!(
+                                "{:<30}  id:{:<24}  framework:{:<12}",
+                                p.name, p.id, fw
+                            ));
+                        }
+                    }
+                    outro("done");
+                }
+            }
+            Err(e) => error(&e),
+        },
+        ProjectsCmd::Add { name } => match deploy::add_project(&canonical, args.target, &name) {
+            Ok(p) => {
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&p).unwrap());
+                } else {
+                    intro("appz projects add");
+                    success(&format!("created project {}", p.name));
+                    info(&format!("id:   {}", p.id));
+                    info(&format!("slug: {}", p.slug));
+                    outro("done");
+                }
+            }
+            Err(e) => error(&e),
+        },
+        ProjectsCmd::Remove { name } => {
+            match deploy::remove_project(&canonical, args.target, &name) {
+                Ok(_) => {
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::json!({ "status": "removed", "project": name })
+                        );
+                    } else {
+                        intro("appz projects remove");
+                        success(&format!("removed project {name}"));
+                        outro("done");
+                    }
+                }
+                Err(e) => error(&e),
+            }
+        }
+    }
+}
+
 fn run_login(args: LoginArgs, json: bool) {
     let api_base = std::env::var("APPZ_API_URL").unwrap_or_else(|_| "https://appz.to".to_string());
     if !json {
@@ -2088,5 +2185,20 @@ fn run_whoami(json: bool) {
                 outro("done");
             }
         }
+    }
+}
+
+fn run_logout(json: bool) {
+    match appz_deploy::clear_stored_auth() {
+        Ok(()) => {
+            if json {
+                println!("{}", serde_json::json!({ "status": "logged_out" }));
+            } else {
+                intro("appz logout");
+                success("logged out successfully");
+                outro("done");
+            }
+        }
+        Err(e) => error(&format!("failed to clear session token: {e}")),
     }
 }

@@ -174,3 +174,24 @@ pub struct DomainVerifyResult {
     #[serde(default)]
     pub verification: Vec<DomainVerificationRecord>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectInfo {
+    pub id: String,
+    pub name: String,
+    pub slug: String,
+    #[serde(
+        default,
+        alias = "organization_id",
+        alias = "org_id",
+        alias = "team_id"
+    )]
+    pub organization_id: Option<String>,
+    #[serde(default)]
+    pub framework: Option<String>,
+    #[serde(default, alias = "created_at")]
+    pub created_at: Option<i64>,
+    #[serde(default, alias = "updated_at")]
+    pub updated_at: Option<i64>,
+}

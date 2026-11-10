@@ -1363,7 +1363,9 @@ fn run_env(args: EnvArgs, json: bool) {
                 std::env::var("APPZ_API_URL").unwrap_or_else(|_| "https://appz.to".to_string());
             let target_path = if root.join(&file).is_file() {
                 root.join(&file)
-            } else if file == PathBuf::from(".env.local") && root.join(".env").is_file() {
+            } else if file.as_path() == std::path::Path::new(".env.local")
+                && root.join(".env").is_file()
+            {
                 root.join(".env")
             } else {
                 error(&format!(
@@ -1399,12 +1401,8 @@ fn run_env(args: EnvArgs, json: bool) {
                 })
                 .collect();
 
-            match appz_deploy::push_cloud_env(
-                &api_base,
-                &project_id,
-                token.as_deref(),
-                &cloud_vars,
-            ) {
+            match appz_deploy::push_cloud_env(&api_base, &project_id, token.as_deref(), &cloud_vars)
+            {
                 Ok(count) => {
                     if json {
                         println!(
@@ -1635,7 +1633,10 @@ fn run_inspect(args: InspectArgs, json: bool) {
                 info(&format!("status:      {:?}", insp.status));
                 info(&format!("target:      {}", insp.target));
                 if let Some(created) = insp.created_at {
-                    info(&format!("created:     {}", created.format("%Y-%m-%d %H:%M:%S UTC")));
+                    info(&format!(
+                        "created:     {}",
+                        created.format("%Y-%m-%d %H:%M:%S UTC")
+                    ));
                 }
 
                 if !insp.hosts.is_empty() {
@@ -1647,7 +1648,10 @@ fn run_inspect(args: InspectArgs, json: bool) {
 
                 step("edge storage & cas");
                 info(&format!("files:       {}", insp.file_count));
-                info(&format!("size:        {}", appz_core::format_size(insp.total_bytes)));
+                info(&format!(
+                    "size:        {}",
+                    appz_core::format_size(insp.total_bytes)
+                ));
                 if let Some(mkey) = &insp.manifest_key {
                     info(&format!("manifest:    {mkey}"));
                 }
@@ -1662,20 +1666,27 @@ fn run_inspect(args: InspectArgs, json: bool) {
                     }
                 }
 
-                if args.files {
-                    if let Some(files) = &insp.files {
-                        step("manifest files");
-                        for f in files {
-                            let ct = f.content_type.as_deref().unwrap_or("-");
-                            let hash_short = if f.hash.len() > 12 { &f.hash[..12] } else { &f.hash };
-                            info(&format!(
-                                "{:<36}  {:>8}  {:<24}  hash:{}...",
-                                f.path,
-                                appz_core::format_size(f.size),
-                                ct,
-                                hash_short
-                            ));
-                        }
+                let files_to_show = if args.files {
+                    insp.files.as_deref().unwrap_or_default()
+                } else {
+                    &[]
+                };
+                if !files_to_show.is_empty() {
+                    step("manifest files");
+                    for f in files_to_show {
+                        let ct = f.content_type.as_deref().unwrap_or("-");
+                        let hash_short = if f.hash.len() > 12 {
+                            &f.hash[..12]
+                        } else {
+                            &f.hash
+                        };
+                        info(&format!(
+                            "{:<36}  {:>8}  {:<24}  hash:{}...",
+                            f.path,
+                            appz_core::format_size(f.size),
+                            ct,
+                            hash_short
+                        ));
                     }
                 }
                 outro("inspection complete");
@@ -1716,7 +1727,10 @@ fn run_login(args: LoginArgs, json: bool) {
         );
     } else {
         step("device authorization");
-        info(&format!("1. Confirm code in browser:  {}", code_resp.user_code));
+        info(&format!(
+            "1. Confirm code in browser:  {}",
+            code_resp.user_code
+        ));
         info(&format!("2. Open URL:                  {}", verify_url));
 
         if !args.no_browser {
@@ -1728,9 +1742,7 @@ fn run_login(args: LoginArgs, json: bool) {
             }
             #[cfg(target_os = "macos")]
             {
-                let _ = std::process::Command::new("open")
-                    .arg(verify_url)
-                    .spawn();
+                let _ = std::process::Command::new("open").arg(verify_url).spawn();
             }
             #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
             {
@@ -1764,24 +1776,25 @@ fn run_login(args: LoginArgs, json: bool) {
                 let mut email = None;
                 let mut organization_id = None;
 
-                if let Ok(resp) = session_res {
-                    if let Ok(v) = resp.into_json::<serde_json::Value>() {
-                        user_id = v
-                            .get("user")
-                            .and_then(|u| u.get("id"))
-                            .and_then(|s| s.as_str())
-                            .map(String::from);
-                        email = v
-                            .get("user")
-                            .and_then(|u| u.get("email"))
-                            .and_then(|s| s.as_str())
-                            .map(String::from);
-                        organization_id = v
-                            .get("session")
-                            .and_then(|s| s.get("activeOrganizationId"))
-                            .and_then(|s| s.as_str())
-                            .map(String::from);
-                    }
+                if let Some(v) = session_res
+                    .ok()
+                    .and_then(|r| r.into_json::<serde_json::Value>().ok())
+                {
+                    user_id = v
+                        .get("user")
+                        .and_then(|u| u.get("id"))
+                        .and_then(|s| s.as_str())
+                        .map(String::from);
+                    email = v
+                        .get("user")
+                        .and_then(|u| u.get("email"))
+                        .and_then(|s| s.as_str())
+                        .map(String::from);
+                    organization_id = v
+                        .get("session")
+                        .and_then(|s| s.get("activeOrganizationId"))
+                        .and_then(|s| s.as_str())
+                        .map(String::from);
                 }
 
                 let stored = appz_deploy::StoredAuth {

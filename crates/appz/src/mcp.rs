@@ -327,7 +327,10 @@ impl AppzServer {
     #[tool(
         description = "Instant atomic rollback of a project's active deployment on Cloudflare Edge to a previous version ID. Returns JSON."
     )]
-    fn rollback(&self, Parameters(arg): Parameters<RollbackArg>) -> Result<CallToolResult, McpError> {
+    fn rollback(
+        &self,
+        Parameters(arg): Parameters<RollbackArg>,
+    ) -> Result<CallToolResult, McpError> {
         let root = Self::resolve(&arg.dir);
         match crate::deploy::rollback(&root, arg.target, &arg.version) {
             Ok(out) => {
@@ -341,29 +344,46 @@ impl AppzServer {
     #[tool(
         description = "Pull cloud environment variables from Cloudflare Edge D1 into a local .env file (default: .env.local). Returns JSON with count and file path."
     )]
-    fn env_pull(&self, Parameters(arg): Parameters<EnvPullArg>) -> Result<CallToolResult, McpError> {
+    fn env_pull(
+        &self,
+        Parameters(arg): Parameters<EnvPullArg>,
+    ) -> Result<CallToolResult, McpError> {
         let root = Self::resolve(&arg.dir);
         let project_id = appz_deploy::resolve_project_id_from_dir(&root);
         let token = appz_deploy::resolve_auth_token(None);
         if token.is_none() {
-            return Ok(Self::err("not authenticated. Run `appz login` or set APPZ_TOKEN".into()));
+            return Ok(Self::err(
+                "not authenticated. Run `appz login` or set APPZ_TOKEN".into(),
+            ));
         }
-        let api_base = std::env::var("APPZ_API_URL").unwrap_or_else(|_| "https://appz.to".to_string());
-        match appz_deploy::pull_cloud_env(&api_base, &project_id, token.as_deref(), arg.target.as_deref()) {
+        let api_base =
+            std::env::var("APPZ_API_URL").unwrap_or_else(|_| "https://appz.to".to_string());
+        match appz_deploy::pull_cloud_env(
+            &api_base,
+            &project_id,
+            token.as_deref(),
+            arg.target.as_deref(),
+        ) {
             Ok(vars) => {
-                let kvs: Vec<(String, String)> = vars.into_iter().map(|v| (v.key, v.value)).collect();
+                let kvs: Vec<(String, String)> =
+                    vars.into_iter().map(|v| (v.key, v.value)).collect();
                 let formatted = appz_deploy::format_env_file(&kvs);
                 let rel_file = arg.file.unwrap_or_else(|| ".env.local".to_string());
                 let target_path = root.join(&rel_file);
                 if let Err(e) = std::fs::write(&target_path, formatted) {
-                    return Ok(Self::err(format!("failed to write {}: {e}", target_path.display())));
+                    return Ok(Self::err(format!(
+                        "failed to write {}: {e}",
+                        target_path.display()
+                    )));
                 }
                 let res = serde_json::json!({
                     "pulled": kvs.len(),
                     "file": target_path.display().to_string(),
                     "projectId": project_id
                 });
-                Ok(CallToolResult::success(vec![ContentBlock::text(res.to_string())]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(
+                    res.to_string(),
+                )]))
             }
             Err(e) => Ok(Self::err(e.to_string())),
         }

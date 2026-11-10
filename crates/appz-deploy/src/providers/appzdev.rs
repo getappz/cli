@@ -9,8 +9,8 @@
 //! - Sub-second instant rollback via KV HOSTS pointer mutation
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::context::DeployContext;
@@ -91,25 +91,19 @@ pub fn save_stored_auth(auth: &StoredAuth) -> Result<(), std::io::Error> {
     if let Some(parent) = p.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let data = serde_json::to_string_pretty(auth)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    let data = serde_json::to_string_pretty(auth).map_err(std::io::Error::other)?;
     std::fs::write(p, data)
 }
 
 pub fn resolve_auth_token(ctx: Option<&DeployContext>) -> Option<String> {
-    if let Ok(t) = std::env::var("APPZ_TOKEN") {
-        if !t.is_empty() {
-            return Some(t);
-        }
-    }
-    if let Some(c) = ctx {
-        if let Some(t) = c.run_env.get("APPZ_TOKEN") {
-            if !t.is_empty() {
-                return Some(t.clone());
-            }
-        }
-    }
-    load_stored_auth().map(|a| a.token)
+    std::env::var("APPZ_TOKEN")
+        .ok()
+        .filter(|t| !t.is_empty())
+        .or_else(|| {
+            ctx.and_then(|c| c.run_env.get("APPZ_TOKEN").cloned())
+                .filter(|t| !t.is_empty())
+        })
+        .or_else(|| load_stored_auth().map(|a| a.token))
 }
 
 pub fn parse_api_error(
@@ -186,7 +180,10 @@ pub fn request_device_code(api_base: &str) -> DeployResult<DeviceCodeResponse> {
     Ok(DeviceCodeResponse {
         device_code: resp["device_code"].as_str().unwrap_or_default().to_string(),
         user_code: resp["user_code"].as_str().unwrap_or_default().to_string(),
-        verification_uri: resp["verification_uri"].as_str().unwrap_or_default().to_string(),
+        verification_uri: resp["verification_uri"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
         verification_uri_complete: resp["verification_uri_complete"].as_str().map(String::from),
         interval: resp["interval"].as_u64().unwrap_or(5),
         expires_in: resp["expires_in"].as_u64().unwrap_or(900),
@@ -210,12 +207,15 @@ pub fn poll_device_token(api_base: &str, device_code: &str) -> DevicePollResult 
 
     match res {
         Ok(resp) => {
-            if let Ok(v) = resp.into_json::<serde_json::Value>() {
-                if let Some(tok) = v.get("access_token").and_then(|s| s.as_str()) {
-                    return DevicePollResult::Success(tok.to_string());
-                }
+            if let Some(tok) = resp.into_json::<serde_json::Value>().ok().and_then(|v| {
+                v.get("access_token")
+                    .and_then(|s| s.as_str())
+                    .map(String::from)
+            }) {
+                DevicePollResult::Success(tok)
+            } else {
+                DevicePollResult::Failed("Missing access_token in token response".into())
             }
-            DevicePollResult::Failed("Missing access_token in token response".into())
         }
         Err(ureq::Error::Status(code, resp)) => {
             if let Ok(v) = resp.into_json::<serde_json::Value>() {
@@ -237,17 +237,22 @@ pub fn poll_device_token(api_base: &str, device_code: &str) -> DevicePollResult 
 
 pub fn resolve_project_id_from_dir(dir: &Path) -> String {
     let project_json = dir.join(".appz").join("project.json");
-    if let Ok(content) = std::fs::read_to_string(&project_json) {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) {
-            if let Some(id) = v.get("projectId").and_then(|s| s.as_str()) {
-                return slugify_project_id(id);
-            }
-        }
+    if let Some(id) = std::fs::read_to_string(&project_json)
+        .ok()
+        .and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok())
+        .and_then(|v| {
+            v.get("projectId")
+                .and_then(|s| s.as_str())
+                .map(String::from)
+        })
+    {
+        return slugify_project_id(&id);
     }
-    if let Ok(id) = std::env::var("APPZ_PROJECT_ID") {
-        if !id.is_empty() {
-            return slugify_project_id(&id);
-        }
+    if let Some(id) = std::env::var("APPZ_PROJECT_ID")
+        .ok()
+        .filter(|s| !s.is_empty())
+    {
+        return slugify_project_id(&id);
     }
     let folder = dir
         .file_name()
@@ -285,12 +290,10 @@ pub fn parse_env_file(content: &str) -> Vec<(String, String)> {
         if let Some((k, v)) = line_clean.split_once('=') {
             let key = k.trim().to_string();
             let mut val = v.trim().to_string();
-            if (val.starts_with('"') && val.ends_with('"'))
-                || (val.starts_with('\'') && val.ends_with('\''))
-            {
-                if val.len() >= 2 {
-                    val = val[1..val.len() - 1].to_string();
-                }
+            let is_quoted = (val.starts_with('"') && val.ends_with('"'))
+                || (val.starts_with('\'') && val.ends_with('\''));
+            if is_quoted && val.len() >= 2 {
+                val = val[1..val.len() - 1].to_string();
             }
             if !key.is_empty() {
                 out.push((key, val));
@@ -387,21 +390,20 @@ pub fn push_cloud_env(
 
 impl AppzdevProvider {
     fn api_base(&self, ctx: &DeployContext) -> String {
-        if let Some(url) = ctx.run_env.get("APPZ_API_URL") {
-            if !url.is_empty() {
-                return url.clone();
-            }
-        }
-        std::env::var("APPZ_API_URL").unwrap_or_else(|_| DEFAULT_API_URL.to_string())
+        ctx.run_env
+            .get("APPZ_API_URL")
+            .filter(|u| !u.is_empty())
+            .cloned()
+            .or_else(|| std::env::var("APPZ_API_URL").ok().filter(|u| !u.is_empty()))
+            .unwrap_or_else(|| DEFAULT_API_URL.to_string())
     }
 
     fn resolve_project_id(&self, ctx: &DeployContext) -> String {
-        if let Some(id) = ctx.run_env.get("APPZ_PROJECT_ID") {
-            if !id.is_empty() {
-                return slugify_project_id(id);
-            }
-        }
-        resolve_project_id_from_dir(&ctx.project_dir)
+        ctx.run_env
+            .get("APPZ_PROJECT_ID")
+            .filter(|id| !id.is_empty())
+            .map(|id| slugify_project_id(id))
+            .unwrap_or_else(|| resolve_project_id_from_dir(&ctx.project_dir))
     }
 
     fn deploy_internal(&self, ctx: &DeployContext, is_preview: bool) -> DeployResult<DeployOutput> {
@@ -512,7 +514,8 @@ impl AppzdevProvider {
                                 let mut up_req = ureq::put(&upload_url)
                                     .set("Content-Type", "application/octet-stream");
                                 if let Some(token) = &token_opt {
-                                    up_req = up_req.set("Authorization", &format!("Bearer {token}"));
+                                    up_req =
+                                        up_req.set("Authorization", &format!("Bearer {token}"));
                                 }
                                 match up_req.send_bytes(data) {
                                     Ok(_) => {
@@ -522,9 +525,8 @@ impl AppzdevProvider {
                                     Err(ureq::Error::Status(code, _))
                                         if code == 429 || code >= 500 =>
                                     {
-                                        last_err = Some(format!(
-                                            "HTTP {code} uploading blob {hash}"
-                                        ));
+                                        last_err =
+                                            Some(format!("HTTP {code} uploading blob {hash}"));
                                         continue;
                                     }
                                     Err(e) => {
@@ -626,12 +628,11 @@ impl DeployProvider for AppzdevProvider {
         let appz_dir = project_dir.join(".appz");
         let project_json = appz_dir.join("project.json");
         if project_json.is_file() {
-            let content = std::fs::read_to_string(&project_json).map_err(|e| {
-                DeployError::DeployFailed {
+            let content =
+                std::fs::read_to_string(&project_json).map_err(|e| DeployError::DeployFailed {
                     provider: self.name(),
                     reason: e.to_string(),
-                }
-            })?;
+                })?;
             let (name, team) = serde_json::from_str::<serde_json::Value>(&content)
                 .ok()
                 .map(|v| {
@@ -640,9 +641,7 @@ impl DeployProvider for AppzdevProvider {
                             .or_else(|| v.get("projectName"))
                             .and_then(|s| s.as_str())
                             .map(String::from),
-                        v.get("orgId")
-                            .and_then(|s| s.as_str())
-                            .map(String::from),
+                        v.get("orgId").and_then(|s| s.as_str()).map(String::from),
                     )
                 })
                 .unwrap_or((None, None));
@@ -717,11 +716,14 @@ impl DeployProvider for AppzdevProvider {
             })
         };
 
-        std::fs::write(&project_json, serde_json::to_string_pretty(&content).unwrap())
-            .map_err(|e| DeployError::DeployFailed {
-                provider: self.name(),
-                reason: format!("Failed to write .appz/project.json: {e}"),
-            })?;
+        std::fs::write(
+            &project_json,
+            serde_json::to_string_pretty(&content).unwrap(),
+        )
+        .map_err(|e| DeployError::DeployFailed {
+            provider: self.name(),
+            reason: format!("Failed to write .appz/project.json: {e}"),
+        })?;
 
         Ok(())
     }
@@ -817,12 +819,10 @@ impl DeployProvider for AppzdevProvider {
                 reason: format!("Invalid JSON from list deployments: {e}"),
             })?;
 
-        let items = resp
-            .as_array()
-            .ok_or_else(|| DeployError::DeployFailed {
-                provider: self.name(),
-                reason: "Expected JSON array of deployments".into(),
-            })?;
+        let items = resp.as_array().ok_or_else(|| DeployError::DeployFailed {
+            provider: self.name(),
+            reason: "Expected JSON array of deployments".into(),
+        })?;
 
         let mut out = Vec::new();
         for item in items {
@@ -838,7 +838,7 @@ impl DeployProvider for AppzdevProvider {
             };
             let created_at = item["createdAt"]
                 .as_i64()
-                .and_then(|ms| chrono::DateTime::from_timestamp_millis(ms));
+                .and_then(chrono::DateTime::from_timestamp_millis);
             let is_current = item["isCurrent"].as_bool().unwrap_or(false);
 
             out.push(DeploymentInfo {
@@ -1052,8 +1052,17 @@ SPACED=hello world
 "#;
         let vars = parse_env_file(content);
         assert_eq!(vars.len(), 5);
-        assert_eq!(vars[0], ("DATABASE_URL".to_string(), "postgres://user:pass@localhost:5432/db".to_string()));
-        assert_eq!(vars[1], ("API_KEY".to_string(), "sk_test_12345".to_string()));
+        assert_eq!(
+            vars[0],
+            (
+                "DATABASE_URL".to_string(),
+                "postgres://user:pass@localhost:5432/db".to_string()
+            )
+        );
+        assert_eq!(
+            vars[1],
+            ("API_KEY".to_string(), "sk_test_12345".to_string())
+        );
         assert_eq!(vars[2], ("EMPTY_VAL".to_string(), "".to_string()));
         assert_eq!(vars[3], ("QUOTED".to_string(), "single quoted".to_string()));
         assert_eq!(vars[4], ("SPACED".to_string(), "hello world".to_string()));
@@ -1074,8 +1083,8 @@ SPACED=hello world
         fn start() -> Self {
             use std::io::{BufRead, BufReader, Read, Write};
             use std::net::TcpListener;
-            use std::sync::atomic::{AtomicBool, Ordering};
             use std::sync::Arc;
+            use std::sync::atomic::{AtomicBool, Ordering};
 
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = format!("http://{}", listener.local_addr().unwrap());
@@ -1091,7 +1100,9 @@ SPACED=hello world
                             let _ = stream.set_nonblocking(false);
                             let mut reader = BufReader::new(&mut stream);
                             let mut request_line = String::new();
-                            if reader.read_line(&mut request_line).is_err() || request_line.is_empty() {
+                            if reader.read_line(&mut request_line).is_err()
+                                || request_line.is_empty()
+                            {
                                 continue;
                             }
 
@@ -1102,10 +1113,8 @@ SPACED=hello world
                                     break;
                                 }
                                 let lower = line.to_lowercase();
-                                if lower.starts_with("content-length:") {
-                                    if let Some(val) = lower.strip_prefix("content-length:") {
-                                        content_length = val.trim().parse::<usize>().unwrap_or(0);
-                                    }
+                                if let Some(val) = lower.strip_prefix("content-length:") {
+                                    content_length = val.trim().parse::<usize>().unwrap_or(0);
                                 }
                             }
 
@@ -1118,18 +1127,34 @@ SPACED=hello world
                             let method = parts.first().copied().unwrap_or("");
                             let path = parts.get(1).copied().unwrap_or("");
 
-                            let (status, resp_body) = if method == "POST" && path == "/api/v0/deployments" {
-                                ("200 OK", r#"{"deploymentId":"dpl_mock_1","id":"dpl_mock_1","url":"https://mock.appz.page","status":"ready","missing":[]}"#)
-                            } else if method == "GET" && path.starts_with("/api/v0/deployments/dpl_mock_1") {
-                                ("200 OK", r#"{"id":"dpl_mock_1","projectId":"prj_mock","versionId":"ver_mock_1","status":"ready","target":"production","hosts":["mock.appz.page"],"fileCount":2,"totalBytes":128,"files":[{"path":"/index.html","size":64,"hash":"h1"},{"path":"/app.js","size":64,"hash":"h2"}]}"#)
+                            let (status, resp_body) = if method == "POST"
+                                && path == "/api/v0/deployments"
+                            {
+                                (
+                                    "200 OK",
+                                    r#"{"deploymentId":"dpl_mock_1","id":"dpl_mock_1","url":"https://mock.appz.page","status":"ready","missing":[]}"#,
+                                )
+                            } else if method == "GET"
+                                && path.starts_with("/api/v0/deployments/dpl_mock_1")
+                            {
+                                (
+                                    "200 OK",
+                                    r#"{"id":"dpl_mock_1","projectId":"prj_mock","versionId":"ver_mock_1","status":"ready","target":"production","hosts":["mock.appz.page"],"fileCount":2,"totalBytes":128,"files":[{"path":"/index.html","size":64,"hash":"h1"},{"path":"/app.js","size":64,"hash":"h2"}]}"#,
+                                )
                             } else if method == "GET" && path.contains("/deployments") {
-                                ("200 OK", r#"[{"id":"dpl_mock_1","url":"https://mock.appz.page","status":"ready","createdAt":"2026-11-10T00:00:00Z"}]"#)
+                                (
+                                    "200 OK",
+                                    r#"[{"id":"dpl_mock_1","url":"https://mock.appz.page","status":"ready","createdAt":"2026-11-10T00:00:00Z"}]"#,
+                                )
                             } else if method == "POST" && path.contains("/rollback") {
                                 ("200 OK", r#"{"success":true,"versionId":"ver_mock_1"}"#)
                             } else if method == "POST" && path.contains("/alias") {
                                 ("200 OK", r#"{"success":true,"domain":"custom.com"}"#)
                             } else if method == "GET" && path.contains("/env") {
-                                ("200 OK", r#"{"env":[{"key":"MOCK_VAR","value":"test_val_123","target":["production"]}]}"#)
+                                (
+                                    "200 OK",
+                                    r#"{"env":[{"key":"MOCK_VAR","value":"test_val_123","target":["production"]}]}"#,
+                                )
                             } else if method == "POST" && path.contains("/env") {
                                 ("200 OK", r#"{"count":1}"#)
                             } else {
@@ -1163,7 +1188,8 @@ SPACED=hello world
 
     impl Drop for MockServer {
         fn drop(&mut self) {
-            self.shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+            self.shutdown
+                .store(true, std::sync::atomic::Ordering::Relaxed);
             if let Some(h) = self.handle.take() {
                 let _ = h.join();
             }
@@ -1182,9 +1208,12 @@ SPACED=hello world
         std::fs::write(dist.join("app.js"), "console.log('test');").unwrap();
 
         let mut ctx = DeployContext::new(dir.path().to_path_buf(), "dist".to_string());
-        ctx.run_env.insert("APPZ_API_URL".to_string(), server.addr.clone());
-        ctx.run_env.insert("APPZ_TOKEN".to_string(), "mock_token_123".to_string());
-        ctx.run_env.insert("APPZ_PROJECT_ID".to_string(), "prj_mock".to_string());
+        ctx.run_env
+            .insert("APPZ_API_URL".to_string(), server.addr.clone());
+        ctx.run_env
+            .insert("APPZ_TOKEN".to_string(), "mock_token_123".to_string());
+        ctx.run_env
+            .insert("APPZ_PROJECT_ID".to_string(), "prj_mock".to_string());
 
         let provider = AppzdevProvider;
 
@@ -1195,7 +1224,9 @@ SPACED=hello world
         assert_eq!(deploy_out.status, DeployStatus::Ready);
 
         // 2. Inspect
-        let inspect_out = provider.inspect_deployment(&ctx, "dpl_mock_1").expect("inspect must succeed");
+        let inspect_out = provider
+            .inspect_deployment(&ctx, "dpl_mock_1")
+            .expect("inspect must succeed");
         assert_eq!(inspect_out.id, "dpl_mock_1");
         assert_eq!(inspect_out.project_id, "prj_mock");
         assert_eq!(inspect_out.version_id, "ver_mock_1");
@@ -1208,15 +1239,24 @@ SPACED=hello world
         assert_eq!(list_out[0].id, "dpl_mock_1");
 
         // 4. Rollback
-        provider.rollback(&ctx, "ver_mock_1").expect("rollback must succeed");
+        provider
+            .rollback(&ctx, "ver_mock_1")
+            .expect("rollback must succeed");
 
         // 5. Alias
-        let alias_out = provider.alias(&ctx, "custom.com").expect("alias must succeed");
+        let alias_out = provider
+            .alias(&ctx, "custom.com")
+            .expect("alias must succeed");
         assert!(alias_out.contains("custom.com"));
 
         // 6. Env pull
-        let pulled_vars = pull_cloud_env(&server.addr, "prj_mock", Some("mock_token_123"), Some("production"))
-            .expect("env pull must succeed");
+        let pulled_vars = pull_cloud_env(
+            &server.addr,
+            "prj_mock",
+            Some("mock_token_123"),
+            Some("production"),
+        )
+        .expect("env pull must succeed");
         assert_eq!(pulled_vars.len(), 1);
         assert_eq!(pulled_vars[0].key, "MOCK_VAR");
         assert_eq!(pulled_vars[0].value, "test_val_123");

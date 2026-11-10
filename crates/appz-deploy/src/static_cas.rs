@@ -2,9 +2,9 @@
 //!
 //! Adapted from WSL earlier appz-client with SHA-256 (Cloudflare R2 alignment).
 
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::Path;
-use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
 pub const MAX_FILE_SIZE: usize = 25 * 1024 * 1024; // 25 MB edge upload limit
@@ -93,7 +93,10 @@ fn is_ignored(rel: &str) -> bool {
 
 pub fn scan_output_dir(output_dir: &Path) -> Result<ScannedTree, String> {
     if !output_dir.is_dir() {
-        return Err(format!("Output directory not found: {}", output_dir.display()));
+        return Err(format!(
+            "Output directory not found: {}",
+            output_dir.display()
+        ));
     }
 
     let mut files = Vec::new();
@@ -153,10 +156,9 @@ pub fn scan_output_dir(output_dir: &Path) -> Result<ScannedTree, String> {
             immutable: if immutable { Some(true) } else { None },
         });
 
-        blobs_by_hash.entry(hash.clone()).or_insert_with(|| LocalBlob {
-            hash,
-            data,
-        });
+        blobs_by_hash
+            .entry(hash.clone())
+            .or_insert_with(|| LocalBlob { hash, data });
     }
 
     Ok(ScannedTree {
@@ -183,11 +185,19 @@ mod tests {
         assert_eq!(scanned.files.len(), 2);
         assert_eq!(scanned.blobs_by_hash.len(), 2);
 
-        let index_entry = scanned.files.iter().find(|f| f.path == "/index.html").unwrap();
+        let index_entry = scanned
+            .files
+            .iter()
+            .find(|f| f.path == "/index.html")
+            .unwrap();
         assert_eq!(index_entry.r#type, "text/html; charset=utf-8");
         assert_eq!(index_entry.immutable, None);
 
-        let css_entry = scanned.files.iter().find(|f| f.path == "/assets/style.css").unwrap();
+        let css_entry = scanned
+            .files
+            .iter()
+            .find(|f| f.path == "/assets/style.css")
+            .unwrap();
         assert_eq!(css_entry.r#type, "text/css; charset=utf-8");
         assert_eq!(css_entry.immutable, Some(true));
     }

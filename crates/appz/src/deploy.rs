@@ -409,7 +409,9 @@ pub fn rollback(
         .filter(|(k, _)| std::env::var_os(k).is_none())
         .collect();
 
-    provider.rollback(&ctx, version_id).map_err(|e| e.to_string())
+    provider
+        .rollback(&ctx, version_id)
+        .map_err(|e| e.to_string())
 }
 
 pub fn link(
@@ -440,8 +442,7 @@ pub fn link(
         ctx.deploy_config
             .targets
             .entry(slug.clone())
-            .or_insert_with(|| serde_json::json!({}))["project"] =
-            serde_json::Value::String(p);
+            .or_insert_with(|| serde_json::json!({}))["project"] = serde_json::Value::String(p);
     }
     ctx.run_env = vault
         .vars
@@ -453,11 +454,7 @@ pub fn link(
     Ok(provider.name().to_string())
 }
 
-pub fn alias(
-    project_dir: &Path,
-    target: Option<String>,
-    domain: &str,
-) -> Result<String, String> {
+pub fn alias(project_dir: &Path, target: Option<String>, domain: &str) -> Result<String, String> {
     let config = read_deploy_config(project_dir)
         .map_err(|e| e.to_string())?
         .unwrap_or_default();

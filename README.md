@@ -43,6 +43,7 @@ appz format    # run the formatter
 appz deploy    # deploy via the target platform's own CLI
 appz doctor    # diagnose project stack, config, and suggestions
 appz mcp       # stdio MCP server exposing detect/doctor/run to AI agents
+appz skills add  # install the appz agent skill into detected AI agents (--global for user-wide)
 ```
 
 ## Install

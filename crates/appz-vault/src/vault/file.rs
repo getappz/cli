@@ -44,13 +44,18 @@ fn write_inner(path: &Path, data: &[u8], exclusive: bool) -> VaultResult<()> {
         .map_err(|e| crate::error::VaultError::Other(format!("lock vault temp: {e}")))?;
     let mut file = file;
     file.write_all(data)?;
-    file.flush()?;
+    // Sync data and metadata to disk before the rename publishes the file, so
+    // a crash can't leave a truncated (or zero-length) vault in place.
+    file.sync_all()?;
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o600))?;
     }
+
+    #[cfg(windows)]
+    restrict_to_current_user(tmp.path());
 
     if exclusive {
         tmp.persist_noclobber(path).map_err(|e| {
@@ -65,7 +70,38 @@ fn write_inner(path: &Path, data: &[u8], exclusive: bool) -> VaultResult<()> {
             .map_err(|e| crate::error::VaultError::Other(format!("rename temp to vault: {e}")))?;
     }
 
+    // Make the rename itself durable: without syncing the directory, a crash
+    // right after it can bring the old file (or no file) back.
+    #[cfg(unix)]
+    {
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            // Best effort: some filesystems reject directory fsync, and the
+            // vault is already replaced at this point.
+            let _ = std::fs::File::open(parent).and_then(|d| d.sync_all());
+        }
+    }
+
     Ok(())
+}
+
+/// Best effort: drop inherited ACEs and grant only the current user access
+/// (the Windows analogue of 0o600). A failure leaves the default ACL.
+#[cfg(windows)]
+fn restrict_to_current_user(path: &Path) {
+    let Some(user) = std::env::var_os("USERNAME") else {
+        return;
+    };
+    let mut grant = user;
+    grant.push(":(F)");
+    let restricted = std::process::Command::new("icacls")
+        .arg(path)
+        .args(["/inheritance:r", "/grant:r"])
+        .arg(grant)
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !restricted {
+        eprintln!("warning: could not restrict vault file permissions to the current user");
+    }
 }
 
 pub fn vault_file_exists(path: &Path) -> bool {

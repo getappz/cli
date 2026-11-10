@@ -1,3 +1,4 @@
+pub mod appzdev;
 pub mod azure;
 pub mod cloudflare;
 pub mod firebase;

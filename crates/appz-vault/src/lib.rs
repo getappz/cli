@@ -14,6 +14,10 @@ pub mod paths;
 pub mod session;
 pub mod vault;
 
+/// Env var that unlocks the vault non-interactively. Never forwarded to child
+/// processes (see `command::DENIED_CHILD_ENV`).
+pub const PASSPHRASE_ENV: &str = "APPZ_VAULT_PASSPHRASE";
+
 pub use error::{VaultError, VaultResult};
 pub use vault::manager::{
     create_vault, get_secret_value, list_secret_names, open_vault, open_vault_with_dek,

@@ -7,3 +7,13 @@
 /.agentflare/
 # appz local state (not shared)
 .appz/
+
+# Agent & IDE workspace directories
+/.agents/
+/.claude/
+/.factory/
+/.fastembed_cache/
+/.kilocode/
+/.windsurf/
+/skills/
+

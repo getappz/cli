@@ -1,6 +1,7 @@
 use clap::{Args, Parser, Subcommand};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use appz_core::{detect_toolchains, generate_claude_md, run_doctor};
 
@@ -56,6 +57,24 @@ enum AppzCmd {
     Mcp,
     /// Deploy to a hosting platform (drives that platform's own CLI)
     Deploy(DeployArgs),
+    /// Roll back a deployment on edge hosting to a previous version
+    Rollback(RollbackArgs),
+    /// Link this directory to a project on the platform
+    Link(LinkArgs),
+    /// Point a custom domain or alias to the deployment
+    Alias(AliasArgs),
+    /// List deployments for the project
+    #[command(alias = "deployments", alias = "ls")]
+    List(ListArgs),
+    /// Inspect edge deployment manifest, hosts, and CAS metrics
+    Inspect(InspectArgs),
+    /// Manage custom domains and DNS verification on Cloudflare Edge
+    #[command(alias = "domain")]
+    Domains(DomainsArgs),
+    /// Log in to Appz via browser device flow
+    Login(LoginArgs),
+    /// Print currently authenticated user and active organization
+    Whoami,
     /// Store credentials in an encrypted vault used by `appz deploy`
     Env(EnvArgs),
     /// Discover and install agent skills relevant to this project
@@ -81,7 +100,10 @@ enum ToolchainCmd {
 }
 
 #[derive(Args)]
+#[command(args_conflicts_with_subcommands = true)]
 struct SkillsArgs {
+    #[command(subcommand)]
+    sub: Option<SkillsSub>,
     /// Search skills.sh directly instead of auto-detecting the project
     query: Option<String>,
     #[arg(default_value = ".")]
@@ -92,6 +114,18 @@ struct SkillsArgs {
     /// Also offer skills from large source repos (slow: full-repo download)
     #[arg(long)]
     include_large: bool,
+}
+
+#[derive(Subcommand)]
+enum SkillsSub {
+    /// Install appz's own agent skill into every detected AI agent
+    Add {
+        /// Install user-wide (home directory) instead of into this project
+        #[arg(long)]
+        global: bool,
+        #[arg(long, default_value = ".")]
+        dir: PathBuf,
+    },
 }
 
 #[derive(Args)]
@@ -148,13 +182,31 @@ enum EnvCmd {
         #[arg(long)]
         global: bool,
     },
+    /// Pull cloud environment variables from Cloudflare Edge into a local .env file
+    Pull {
+        /// Target file to write to (default: .env.local)
+        #[arg(default_value = ".env.local")]
+        file: PathBuf,
+        /// Target environment filter (production, preview, development)
+        #[arg(long)]
+        target: Option<String>,
+    },
+    /// Push local environment variables from a .env file to Cloudflare Edge
+    Push {
+        /// Source file to read from (default: .env.local, falls back to .env)
+        #[arg(default_value = ".env.local")]
+        file: PathBuf,
+        /// Target environments to associate (default: production and preview)
+        #[arg(long, value_delimiter = ',')]
+        target: Option<Vec<String>>,
+    },
 }
 
 #[derive(Args)]
 struct DeployArgs {
     #[arg(default_value = ".")]
     dir: PathBuf,
-    /// Provider slug (vercel, netlify, cloudflare, fly, firebase, deno-deploy, azure-static, aws-s3, aws-sst, railway, surge, github-pages). Uses appz.jsonc's deploy.default if omitted, else detects it from project files.
+    /// Provider slug (appzdev, vercel, netlify, cloudflare, fly, firebase, deno-deploy, azure-static, aws-s3, aws-sst, railway, surge, github-pages). Uses appz.jsonc's deploy.default if omitted, else detects it from project files.
     #[arg(long)]
     target: Option<String>,
     /// Platform project name to create or link (default: asked, suggesting one)
@@ -178,6 +230,108 @@ struct DeployArgs {
     /// Install a missing platform CLI through mise without asking
     #[arg(short = 'y', long)]
     yes: bool,
+    /// Deploy to every target configured under deploy.targets instead of one
+    #[arg(long, conflicts_with = "target")]
+    all: bool,
+}
+
+#[derive(Args)]
+struct RollbackArgs {
+    #[arg(default_value = ".")]
+    dir: PathBuf,
+    /// Version ID to roll back to
+    version: String,
+    /// Provider slug (default: detects from project or config)
+    #[arg(long)]
+    target: Option<String>,
+}
+
+#[derive(Args)]
+struct LinkArgs {
+    #[arg(default_value = ".")]
+    dir: PathBuf,
+    /// Platform project name or ID to link to
+    #[arg(long)]
+    project: Option<String>,
+    /// Provider slug (default: detects from project or config)
+    #[arg(long)]
+    target: Option<String>,
+}
+
+#[derive(Args)]
+struct AliasArgs {
+    #[arg(default_value = ".")]
+    dir: PathBuf,
+    /// Custom domain or alias to assign (e.g. app.example.com)
+    domain: String,
+    /// Provider slug (default: detects from project or config)
+    #[arg(long)]
+    target: Option<String>,
+}
+
+#[derive(Args)]
+struct ListArgs {
+    #[arg(default_value = ".")]
+    dir: PathBuf,
+    /// Provider slug (default: detects from project or config)
+    #[arg(long)]
+    target: Option<String>,
+}
+
+#[derive(Args)]
+struct InspectArgs {
+    #[arg(default_value = ".")]
+    dir: PathBuf,
+    /// Deployment ID or live URL to inspect
+    id_or_url: String,
+    /// Also display all files contained in the deployment manifest
+    #[arg(long)]
+    files: bool,
+    /// Provider slug (default: detects from project or config)
+    #[arg(long)]
+    target: Option<String>,
+}
+
+#[derive(Args)]
+struct DomainsArgs {
+    #[command(subcommand)]
+    command: DomainsCmd,
+    /// Project directory (defaults to current directory)
+    #[arg(default_value = ".")]
+    dir: PathBuf,
+    /// Provider slug (default: detects from project or config)
+    #[arg(long)]
+    target: Option<String>,
+}
+
+#[derive(Subcommand, Debug)]
+enum DomainsCmd {
+    /// Add a custom domain to the project and display DNS configuration records
+    Add {
+        /// Custom domain name (e.g. app.example.com or example.com)
+        domain: String,
+    },
+    /// List all custom domains configured for this project
+    #[command(alias = "ls")]
+    List,
+    /// Trigger DNS ownership and SSL verification check for a domain
+    Verify {
+        /// Domain name to verify
+        domain: String,
+    },
+    /// Remove a custom domain from the project
+    #[command(alias = "rm")]
+    Remove {
+        /// Domain name to remove
+        domain: String,
+    },
+}
+
+#[derive(Args)]
+struct LoginArgs {
+    /// Skip opening browser automatically
+    #[arg(long)]
+    no_browser: bool,
 }
 
 #[derive(Args)]
@@ -1006,6 +1160,14 @@ fn main() {
             }
         }
         AppzCmd::Deploy(a) => run_deploy(a, json),
+        AppzCmd::Rollback(a) => run_rollback(a, json),
+        AppzCmd::Link(a) => run_link(a, json),
+        AppzCmd::Alias(a) => run_alias(a, json),
+        AppzCmd::List(a) => run_list(a, json),
+        AppzCmd::Inspect(a) => run_inspect(a, json),
+        AppzCmd::Domains(a) => run_domains(a, json),
+        AppzCmd::Login(a) => run_login(a, json),
+        AppzCmd::Whoami => run_whoami(json),
         AppzCmd::Env(a) => run_env(a, json),
         AppzCmd::Skills(a) => run_skills(a, json),
         AppzCmd::Agents(a) => run_agents(a, json),
@@ -1035,7 +1197,34 @@ fn run_agents(args: AgentArgs, json: bool) {
     agents::run(&cmd);
 }
 
+fn run_skills_add(dir: PathBuf, global: bool, json: bool) {
+    let root = resolve_root(&dir);
+    let sum = match skills::install_bundled(&root, global) {
+        Ok(sum) => sum,
+        Err(e) => error(&e),
+    };
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({ "installed": sum.installed, "failed": sum.failed })
+        );
+    } else {
+        if !sum.installed.is_empty() {
+            success(&format!("installed skill: {}", sum.installed.join(", ")));
+        }
+        for f in &sum.failed {
+            warning(&format!("failed: {f}"));
+        }
+    }
+    if !sum.failed.is_empty() || sum.installed.is_empty() {
+        std::process::exit(1);
+    }
+}
+
 fn run_skills(args: SkillsArgs, json: bool) {
+    if let Some(SkillsSub::Add { global, dir }) = args.sub {
+        return run_skills_add(dir, global, json);
+    }
     let root = resolve_root(&args.dir);
     let report = match skills::search(
         &root,
@@ -1169,46 +1358,177 @@ fn run_env(args: EnvArgs, json: bool) {
             secrets::lock(&path(global));
             success("vault locked");
         }
+        EnvCmd::Pull { file, target } => {
+            let root = resolve_root(Path::new("."));
+            let project_id = appz_deploy::resolve_project_id_from_dir(&root);
+            let token = appz_deploy::resolve_auth_token(None);
+            if token.is_none() {
+                error("not authenticated. Run `appz login` or set APPZ_TOKEN");
+            }
+            let api_base =
+                std::env::var("APPZ_API_URL").unwrap_or_else(|_| "https://appz.to".to_string());
+            match appz_deploy::pull_cloud_env(
+                &api_base,
+                &project_id,
+                token.as_deref(),
+                target.as_deref(),
+            ) {
+                Ok(vars) => {
+                    let kvs: Vec<(String, String)> =
+                        vars.into_iter().map(|v| (v.key, v.value)).collect();
+                    let formatted = appz_deploy::format_env_file(&kvs);
+                    let target_path = root.join(&file);
+                    if let Err(e) = std::fs::write(&target_path, formatted) {
+                        error(&format!("failed to write {}: {e}", target_path.display()));
+                    }
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::json!({ "pulled": kvs.len(), "file": target_path.display().to_string() })
+                        );
+                    } else {
+                        success(&format!(
+                            "downloaded {} environment variables to {}",
+                            kvs.len(),
+                            target_path.display()
+                        ));
+                    }
+                }
+                Err(e) => error(&e.to_string()),
+            }
+        }
+        EnvCmd::Push { file, target } => {
+            let root = resolve_root(Path::new("."));
+            let project_id = appz_deploy::resolve_project_id_from_dir(&root);
+            let token = appz_deploy::resolve_auth_token(None);
+            if token.is_none() {
+                error("not authenticated. Run `appz login` or set APPZ_TOKEN");
+            }
+            let api_base =
+                std::env::var("APPZ_API_URL").unwrap_or_else(|_| "https://appz.to".to_string());
+            let target_path = if root.join(&file).is_file() {
+                root.join(&file)
+            } else if file.as_path() == std::path::Path::new(".env.local")
+                && root.join(".env").is_file()
+            {
+                root.join(".env")
+            } else {
+                error(&format!(
+                    "environment file not found: {}",
+                    root.join(&file).display()
+                ));
+            };
+
+            let content = std::fs::read_to_string(&target_path).unwrap_or_else(|e| {
+                error(&format!("failed to read {}: {e}", target_path.display()))
+            });
+            let kvs = appz_deploy::parse_env_file(&content);
+            if kvs.is_empty() {
+                if json {
+                    println!("{}", serde_json::json!({ "pushed": 0 }));
+                } else {
+                    info("no environment variables found in file");
+                }
+                return;
+            }
+
+            let targets =
+                target.unwrap_or_else(|| vec!["production".to_string(), "preview".to_string()]);
+            let cloud_vars: Vec<appz_deploy::CloudEnvVar> = kvs
+                .into_iter()
+                .map(|(key, value)| appz_deploy::CloudEnvVar {
+                    id: None,
+                    key,
+                    value,
+                    target: targets.clone(),
+                    git_branch: None,
+                    created_at: None,
+                })
+                .collect();
+
+            match appz_deploy::push_cloud_env(&api_base, &project_id, token.as_deref(), &cloud_vars)
+            {
+                Ok(count) => {
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::json!({ "pushed": count, "projectId": project_id })
+                        );
+                    } else {
+                        success(&format!(
+                            "uploaded {} environment variables to project '{}'",
+                            count, project_id
+                        ));
+                    }
+                }
+                Err(e) => error(&e.to_string()),
+            }
+        }
     }
 }
 
 fn run_deploy(args: DeployArgs, json: bool) {
     let canonical = resolve_root(&args.dir);
-    match deploy::run(
-        &canonical,
-        deploy::DeployRequest {
-            target: args.target,
-            project: args.project,
-            force: args.force,
-            prod: args.prod,
-            env: args.env,
-            build_env: args.build_env,
-            dry_run: args.dry_run,
-            json,
-            install: if args.yes {
-                deploy::Consent::Yes
-            } else if !json && is_tty() {
-                deploy::Consent::Ask
-            } else {
-                deploy::Consent::Never
-            },
-            link: if args.yes {
-                deploy::Consent::Yes
-            } else if !json && is_tty() {
-                deploy::Consent::Ask
-            } else {
-                deploy::Consent::Never
-            },
-            // Login needs a browser, so it requires a real terminal even with --yes.
-            login: if json || !is_tty() {
-                deploy::Consent::Never
-            } else if args.yes {
-                deploy::Consent::Yes
-            } else {
-                deploy::Consent::Ask
-            },
+    let all = args.all;
+    let req = deploy::DeployRequest {
+        target: args.target,
+        project: args.project,
+        force: args.force,
+        prod: args.prod,
+        env: args.env,
+        build_env: args.build_env,
+        dry_run: args.dry_run,
+        json,
+        install: if args.yes {
+            deploy::Consent::Yes
+        } else if !json && is_tty() {
+            deploy::Consent::Ask
+        } else {
+            deploy::Consent::Never
         },
-    ) {
+        link: if args.yes {
+            deploy::Consent::Yes
+        } else if !json && is_tty() {
+            deploy::Consent::Ask
+        } else {
+            deploy::Consent::Never
+        },
+        // Login needs a browser, so it requires a real terminal even with --yes.
+        login: if json || !is_tty() {
+            deploy::Consent::Never
+        } else if args.yes {
+            deploy::Consent::Yes
+        } else {
+            deploy::Consent::Ask
+        },
+    };
+    if all {
+        match deploy::run_all(&canonical, req) {
+            Ok(outputs) => {
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&outputs).unwrap());
+                } else {
+                    intro("appz deploy");
+                    for output in &outputs {
+                        let target = if output.is_preview {
+                            "preview"
+                        } else {
+                            "production"
+                        };
+                        success(&format!(
+                            "{} ({target}): {}",
+                            output.provider,
+                            output.url.as_deref().unwrap_or("deployed (url unknown)")
+                        ));
+                    }
+                    outro("deploy complete");
+                }
+            }
+            Err(e) => error(&e),
+        }
+        return;
+    }
+    match deploy::run(&canonical, req) {
         Ok(output) => {
             if json {
                 println!("{}", serde_json::to_string_pretty(&output).unwrap());
@@ -1275,5 +1595,496 @@ fn run_deploy(args: DeployArgs, json: bool) {
             }
         }
         Err(e) => error(&e),
+    }
+}
+
+fn run_rollback(args: RollbackArgs, json: bool) {
+    let canonical = resolve_root(&args.dir);
+    match deploy::rollback(&canonical, args.target, &args.version) {
+        Ok(output) => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&output).unwrap());
+            } else {
+                intro("appz rollback");
+                success(&format!(
+                    "rolled back {} to version {}",
+                    output.provider, args.version
+                ));
+                if let Some(url) = &output.url {
+                    info(url);
+                }
+                outro("rollback complete");
+            }
+        }
+        Err(e) => error(&e),
+    }
+}
+
+fn run_link(args: LinkArgs, json: bool) {
+    let canonical = resolve_root(&args.dir);
+    match deploy::link(&canonical, args.target, args.project) {
+        Ok(provider_name) => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({ "status": "linked", "provider": provider_name })
+                );
+            } else {
+                intro("appz link");
+                success(&format!("linked project to {provider_name}"));
+                outro("link complete");
+            }
+        }
+        Err(e) => error(&e),
+    }
+}
+
+fn run_alias(args: AliasArgs, json: bool) {
+    let canonical = resolve_root(&args.dir);
+    match deploy::alias(&canonical, args.target, &args.domain) {
+        Ok(url) => {
+            if json {
+                println!("{}", serde_json::json!({ "status": "aliased", "url": url }));
+            } else {
+                intro("appz alias");
+                success(&format!("assigned alias {}", args.domain));
+                info(&url);
+                outro("alias complete");
+            }
+        }
+        Err(e) => error(&e),
+    }
+}
+
+fn run_list(args: ListArgs, json: bool) {
+    let canonical = resolve_root(&args.dir);
+    match deploy::list(&canonical, args.target) {
+        Ok(deployments) => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&deployments).unwrap());
+            } else {
+                intro("appz list");
+                if deployments.is_empty() {
+                    info("no deployments found for this project");
+                } else {
+                    for d in &deployments {
+                        let current_marker = if d.is_current { " (current)" } else { "" };
+                        let version = d.version_id.as_deref().unwrap_or("-");
+                        let url = d.url.as_deref().unwrap_or("-");
+                        let age = d
+                            .created_at
+                            .map(|t| format!("{}", t.format("%Y-%m-%d %H:%M UTC")))
+                            .unwrap_or_else(|| "-".to_string());
+                        info(&format!(
+                            "{:<16}  {:<14}  {:<32}  {} [{:?}{}]",
+                            d.id, version, url, age, d.status, current_marker
+                        ));
+                    }
+                }
+                outro("done");
+            }
+        }
+        Err(e) => error(&e),
+    }
+}
+
+fn run_inspect(args: InspectArgs, json: bool) {
+    let canonical = resolve_root(&args.dir);
+    match deploy::inspect(&canonical, args.target, &args.id_or_url) {
+        Ok(insp) => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&insp).unwrap());
+            } else {
+                intro("appz inspect");
+                step("deployment");
+                info(&format!("id:          {}", insp.id));
+                info(&format!("project:     {}", insp.project_id));
+                info(&format!("version:     {}", insp.version_id));
+                info(&format!("status:      {:?}", insp.status));
+                info(&format!("target:      {}", insp.target));
+                if let Some(created) = insp.created_at {
+                    info(&format!(
+                        "created:     {}",
+                        created.format("%Y-%m-%d %H:%M:%S UTC")
+                    ));
+                }
+
+                if !insp.hosts.is_empty() {
+                    step("hosts");
+                    for h in &insp.hosts {
+                        info(&format!("  https://{h}"));
+                    }
+                }
+
+                step("edge storage & cas");
+                info(&format!("files:       {}", insp.file_count));
+                info(&format!(
+                    "size:        {}",
+                    appz_core::format_size(insp.total_bytes)
+                ));
+                if let Some(mkey) = &insp.manifest_key {
+                    info(&format!("manifest:    {mkey}"));
+                }
+
+                if !insp.redirects.is_empty() || !insp.headers.is_empty() {
+                    step("routing rules");
+                    for r in &insp.redirects {
+                        info(&format!("redirect:    {r}"));
+                    }
+                    for h in &insp.headers {
+                        info(&format!("header:      {h}"));
+                    }
+                }
+
+                let files_to_show = if args.files {
+                    insp.files.as_deref().unwrap_or_default()
+                } else {
+                    &[]
+                };
+                if !files_to_show.is_empty() {
+                    step("manifest files");
+                    for f in files_to_show {
+                        let ct = f.content_type.as_deref().unwrap_or("-");
+                        let hash_short = if f.hash.len() > 12 {
+                            &f.hash[..12]
+                        } else {
+                            &f.hash
+                        };
+                        info(&format!(
+                            "{:<36}  {:>8}  {:<24}  hash:{}...",
+                            f.path,
+                            appz_core::format_size(f.size),
+                            ct,
+                            hash_short
+                        ));
+                    }
+                }
+                outro("inspection complete");
+            }
+        }
+        Err(e) => error(&e),
+    }
+}
+
+fn run_domains(args: DomainsArgs, json: bool) {
+    let canonical = resolve_root(&args.dir);
+    match args.command {
+        DomainsCmd::Add { domain } => match deploy::add_domain(&canonical, args.target, &domain) {
+            Ok(dom) => {
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&dom).unwrap());
+                } else {
+                    intro("appz domains add");
+                    info(&format!("domain:      {}", dom.domain));
+                    info(&format!("status:      {}", dom.status));
+                    if let Some(ssl) = &dom.ssl_status {
+                        info(&format!("ssl:         {ssl}"));
+                    }
+                    if !dom.verification.is_empty() {
+                        step("dns configuration records");
+                        for v in &dom.verification {
+                            let reason = v.reason.as_deref().unwrap_or("-");
+                            info(&format!(
+                                "{:<8}  {:<32}  {}  ({})",
+                                v.r#type.to_uppercase(),
+                                v.domain,
+                                v.value,
+                                reason
+                            ));
+                        }
+                        step("next steps");
+                        info("1. Add the DNS records above at your DNS provider");
+                        info(&format!(
+                            "2. Run `appz domains verify {}` once configured",
+                            dom.domain
+                        ));
+                    }
+                    outro("domain added");
+                }
+            }
+            Err(e) => error(&e),
+        },
+        DomainsCmd::List => match deploy::list_domains(&canonical, args.target) {
+            Ok(domains) => {
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&domains).unwrap());
+                } else {
+                    intro("appz domains");
+                    if domains.is_empty() {
+                        info("no custom domains configured for this project");
+                        info("run `appz domains add <domain>` to connect a custom domain");
+                    } else {
+                        for d in &domains {
+                            let ssl = d.ssl_status.as_deref().unwrap_or("-");
+                            let verified_str = if d.verified { "verified" } else { "pending" };
+                            info(&format!(
+                                "{:<30}  status:{:<12}  ssl:{:<10}  {}",
+                                d.domain, d.status, ssl, verified_str
+                            ));
+                        }
+                    }
+                    outro("done");
+                }
+            }
+            Err(e) => error(&e),
+        },
+        DomainsCmd::Verify { domain } => {
+            match deploy::verify_domain(&canonical, args.target, &domain) {
+                Ok(res) => {
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&res).unwrap());
+                    } else {
+                        intro("appz domains verify");
+                        info(&format!("domain:      {}", res.domain));
+                        info(&format!("status:      {}", res.status));
+                        if let Some(ssl) = &res.ssl_status {
+                            info(&format!("ssl:         {ssl}"));
+                        }
+                        if res.verified {
+                            success(&format!("{} is verified and active!", res.domain));
+                        } else {
+                            warning("verification still pending");
+                            if !res.verification.is_empty() {
+                                step("required dns records");
+                                for v in &res.verification {
+                                    info(&format!(
+                                        "{:<8}  {:<32}  {}",
+                                        v.r#type.to_uppercase(),
+                                        v.domain,
+                                        v.value
+                                    ));
+                                }
+                            }
+                        }
+                        outro("done");
+                    }
+                }
+                Err(e) => error(&e),
+            }
+        }
+        DomainsCmd::Remove { domain } => {
+            match deploy::remove_domain(&canonical, args.target, &domain) {
+                Ok(_) => {
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::json!({ "status": "removed", "domain": domain })
+                        );
+                    } else {
+                        intro("appz domains remove");
+                        success(&format!("removed domain {domain} from project"));
+                        outro("done");
+                    }
+                }
+                Err(e) => error(&e),
+            }
+        }
+    }
+}
+
+fn run_login(args: LoginArgs, json: bool) {
+    let api_base = std::env::var("APPZ_API_URL").unwrap_or_else(|_| "https://appz.to".to_string());
+    if !json {
+        intro("appz login");
+    }
+
+    let code_resp = match appz_deploy::request_device_code(&api_base) {
+        Ok(c) => c,
+        Err(e) => {
+            error(&e.to_string());
+        }
+    };
+
+    let verify_url = code_resp
+        .verification_uri_complete
+        .as_deref()
+        .unwrap_or(&code_resp.verification_uri);
+
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "user_code": code_resp.user_code,
+                "verification_uri": code_resp.verification_uri,
+                "verification_uri_complete": code_resp.verification_uri_complete,
+                "expires_in": code_resp.expires_in,
+                "interval": code_resp.interval,
+            })
+        );
+    } else {
+        step("device authorization");
+        info(&format!(
+            "1. Confirm code in browser:  {}",
+            code_resp.user_code
+        ));
+        info(&format!("2. Open URL:                  {}", verify_url));
+
+        if !args.no_browser {
+            #[cfg(target_os = "windows")]
+            {
+                let _ = std::process::Command::new("cmd")
+                    .args(["/c", "start", verify_url])
+                    .spawn();
+            }
+            #[cfg(target_os = "macos")]
+            {
+                let _ = std::process::Command::new("open").arg(verify_url).spawn();
+            }
+            #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+            {
+                let _ = std::process::Command::new("xdg-open")
+                    .arg(verify_url)
+                    .spawn();
+            }
+        }
+
+        info("waiting for authorization...");
+    }
+
+    let interval = Duration::from_secs(code_resp.interval.max(2));
+    let start = Instant::now();
+    let max_duration = Duration::from_secs(code_resp.expires_in.max(60));
+
+    loop {
+        if start.elapsed() > max_duration {
+            error("Device authorization timed out. Please try again.");
+        }
+        std::thread::sleep(interval);
+
+        match appz_deploy::poll_device_token(&api_base, &code_resp.device_code) {
+            appz_deploy::DevicePollResult::Success(token) => {
+                let session_url = format!("{api_base}/api/auth/get-session");
+                let session_res = ureq::get(&session_url)
+                    .set("Authorization", &format!("Bearer {token}"))
+                    .call();
+
+                let mut user_id = None;
+                let mut email = None;
+                let mut organization_id = None;
+
+                if let Some(v) = session_res
+                    .ok()
+                    .and_then(|r| r.into_json::<serde_json::Value>().ok())
+                {
+                    user_id = v
+                        .get("user")
+                        .and_then(|u| u.get("id"))
+                        .and_then(|s| s.as_str())
+                        .map(String::from);
+                    email = v
+                        .get("user")
+                        .and_then(|u| u.get("email"))
+                        .and_then(|s| s.as_str())
+                        .map(String::from);
+                    organization_id = v
+                        .get("session")
+                        .and_then(|s| s.get("activeOrganizationId"))
+                        .and_then(|s| s.as_str())
+                        .map(String::from);
+                }
+
+                let stored = appz_deploy::StoredAuth {
+                    token,
+                    user_id,
+                    email: email.clone(),
+                    organization_id: organization_id.clone(),
+                };
+
+                if let Err(e) = appz_deploy::save_stored_auth(&stored) {
+                    error(&format!("Failed to save session token: {e}"));
+                }
+
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&stored).unwrap());
+                } else {
+                    success(&format!(
+                        "successfully logged in as {}{}",
+                        email.unwrap_or_else(|| "authorized user".to_string()),
+                        organization_id
+                            .map(|o| format!(" (org: {o})"))
+                            .unwrap_or_default()
+                    ));
+                    outro("ready to deploy");
+                }
+                return;
+            }
+            appz_deploy::DevicePollResult::Pending => {}
+            appz_deploy::DevicePollResult::SlowDown => {
+                std::thread::sleep(Duration::from_secs(5));
+            }
+            appz_deploy::DevicePollResult::Failed(err) => {
+                error(&err);
+            }
+        }
+    }
+}
+
+fn run_whoami(json: bool) {
+    let token = appz_deploy::resolve_auth_token(None);
+    match token {
+        None => {
+            if json {
+                println!("{}", serde_json::json!({ "authenticated": false }));
+            } else {
+                info("not logged in. Run `appz login` or set APPZ_TOKEN");
+            }
+        }
+        Some(t) => {
+            let stored = appz_deploy::load_stored_auth();
+            let api_base =
+                std::env::var("APPZ_API_URL").unwrap_or_else(|_| "https://appz.to".to_string());
+            let session_url = format!("{api_base}/api/auth/get-session");
+            let session_res = ureq::get(&session_url)
+                .set("Authorization", &format!("Bearer {t}"))
+                .call();
+
+            let (email, org) = if let Ok(resp) = session_res {
+                if let Ok(v) = resp.into_json::<serde_json::Value>() {
+                    let email = v
+                        .get("user")
+                        .and_then(|u| u.get("email"))
+                        .and_then(|s| s.as_str())
+                        .map(String::from);
+                    let org = v
+                        .get("session")
+                        .and_then(|s| s.get("activeOrganizationId"))
+                        .and_then(|s| s.as_str())
+                        .map(String::from);
+                    (email, org)
+                } else {
+                    (
+                        stored.as_ref().and_then(|s| s.email.clone()),
+                        stored.as_ref().and_then(|s| s.organization_id.clone()),
+                    )
+                }
+            } else {
+                (
+                    stored.as_ref().and_then(|s| s.email.clone()),
+                    stored.as_ref().and_then(|s| s.organization_id.clone()),
+                )
+            };
+
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "authenticated": true,
+                        "email": email,
+                        "organizationId": org,
+                    })
+                );
+            } else {
+                intro("appz whoami");
+                if let Some(e) = email {
+                    info(&format!("user:         {e}"));
+                } else {
+                    info("user:         authenticated via token");
+                }
+                if let Some(o) = org {
+                    info(&format!("organization: {o}"));
+                }
+                outro("done");
+            }
+        }
     }
 }

@@ -12,6 +12,7 @@ pub fn home_dir() -> PathBuf {
 }
 
 #[cfg(test)]
+#[allow(unsafe_code)] // test-only env mutation, serialized by HOME_OVERRIDE_LOCK
 pub(crate) mod test_support {
     use std::sync::Mutex;
 

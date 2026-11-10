@@ -23,8 +23,15 @@ pub enum Consent {
 }
 
 /// Link ids the platform CLIs read from the environment instead of `link`.
-const LINK_VARS: [&str; 3] = ["VERCEL_ORG_ID", "VERCEL_PROJECT_ID", "NETLIFY_SITE_ID"];
+const LINK_VARS: [&str; 5] = [
+    "VERCEL_ORG_ID",
+    "VERCEL_PROJECT_ID",
+    "NETLIFY_SITE_ID",
+    "APPZ_ORG_ID",
+    "APPZ_PROJECT_ID",
+];
 
+#[derive(Clone)]
 pub struct DeployRequest {
     pub target: Option<String>,
     pub prod: bool,
@@ -82,6 +89,35 @@ fn ensure_linked(
     }
 }
 
+/// Apply the install `policy` before installing `tool` (providing `cli`)
+/// with mise: fail with `missing` when installing is not allowed, ask when
+/// interactive, and announce the install otherwise.
+pub(crate) fn confirm_mise_install(
+    policy: Consent,
+    cli: &str,
+    tool: &str,
+    missing: &str,
+) -> Result<(), String> {
+    match policy {
+        Consent::Never => {
+            return Err(format!("{missing}\n(or re-run with --yes to install it)"));
+        }
+        Consent::Ask => {
+            let prompt = format!("{cli} is not installed. Install {tool} with mise?");
+            if !cliclack::confirm(prompt)
+                .initial_value(true)
+                .interact()
+                .unwrap_or(false)
+            {
+                return Err(missing.to_string());
+            }
+        }
+        Consent::Yes => {}
+    }
+    eprintln!("installing {tool} with mise...");
+    Ok(())
+}
+
 /// The CLI was not found on `PATH` or in mise's bin dirs: install it through
 /// mise if the policy (or the user, when asked) allows, else fail with the
 /// install command. Returns mise's bin dirs, which then contain the CLI.
@@ -95,27 +131,7 @@ fn provision_cli(
         // Nothing appz can install: `missing` already carries the install hint.
         return Err(missing.to_string());
     }
-    match policy {
-        Consent::Never => {
-            return Err(format!("{missing}\n(or re-run with --yes to install it)"));
-        }
-        Consent::Ask => {
-            let prompt = format!(
-                "{} is not installed. Install {} with mise?",
-                p.cli_tool(),
-                p.mise_tool()
-            );
-            if !cliclack::confirm(prompt)
-                .initial_value(true)
-                .interact()
-                .unwrap_or(false)
-            {
-                return Err(missing.to_string());
-            }
-        }
-        Consent::Yes => {}
-    }
-    eprintln!("installing {} with mise...", p.mise_tool());
+    confirm_mise_install(policy, p.cli_tool(), &p.mise_tool(), missing)?;
     install_cli_with_mise(p, project_dir).map_err(|e| e.to_string())
 }
 
@@ -218,6 +234,31 @@ fn fingerprint_extra(slug: &str, req: &DeployRequest, config: &DeployConfig) -> 
     )
 }
 
+/// Run a deploy lifecycle hook as an arg vector (no shell), in the project
+/// directory, with the terminal inherited so its output shows live. `extra_path`
+/// (mise tool bin dirs) is on `PATH` so a hook's own tools resolve. An empty
+/// argv is a no-op.
+fn run_hook(ctx: &DeployContext, name: &str, argv: &[String]) -> Result<(), String> {
+    if argv.is_empty() {
+        return Ok(());
+    }
+    let (bin, args) = argv.split_first().expect("non-empty argv");
+    eprintln!("running {name} hook: {}", argv.join(" "));
+    let mut cmd = command::Command::new(ctx.resolve(bin));
+    cmd.args(args.iter().map(String::as_str))
+        .cwd(&ctx.project_dir)
+        .without_shell()
+        .append_paths(&ctx.extra_path);
+    let status = cmd
+        .exec_interactive()
+        .map_err(|e| format!("{name} hook: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("{name} hook '{bin}' failed"))
+    }
+}
+
 pub fn run(project_dir: &Path, req: DeployRequest) -> Result<DeployOutput, String> {
     let config = read_deploy_config(project_dir)
         .map_err(|e| e.to_string())?
@@ -298,13 +339,22 @@ pub fn run(project_dir: &Path, req: DeployRequest) -> Result<DeployOutput, Strin
             serde_json::Value::String(project.clone());
     }
     ctx.extra_path = extra_path;
-    ctx.run_env = vault
-        .vars
+    // Runtime env for the provider CLI. Precedence (lowest → highest):
+    // `deploy.environments.<env>` < vault secrets < real process env < `-e`.
+    // Config and vault values never override the user's real environment.
+    let mut run_env: HashMap<String, String> = ctx
+        .deploy_config
+        .env_for(ctx.environment_name())
         .into_iter()
         .filter(|(k, _)| std::env::var_os(k).is_none())
         .collect();
-    ctx.run_env
-        .extend(req.env.iter().filter_map(|s| parse_kv(s)));
+    for (k, v) in vault.vars {
+        if std::env::var_os(&k).is_none() {
+            run_env.insert(k, v);
+        }
+    }
+    run_env.extend(req.env.iter().filter_map(|s| parse_kv(s)));
+    ctx.run_env = run_env;
     ctx.build_env = req
         .build_env
         .iter()
@@ -340,6 +390,14 @@ pub fn run(project_dir: &Path, req: DeployRequest) -> Result<DeployOutput, Strin
         }
     }
 
+    if !req.dry_run {
+        run_hook(
+            &ctx,
+            "before_deploy",
+            &ctx.deploy_config.hooks.before_deploy,
+        )?;
+    }
+
     let mut output = if ctx.is_preview {
         provider.deploy_preview(&ctx)
     } else {
@@ -359,6 +417,14 @@ pub fn run(project_dir: &Path, req: DeployRequest) -> Result<DeployOutput, Strin
         // config (wrangler.jsonc, a .gitignore line) that is part of the project now.
         crate::deploy_state::record(project_dir, &slug, req.prod, &fp, url);
     }
+    if !req.dry_run {
+        run_hook(&ctx, "after_deploy", &ctx.deploy_config.hooks.after_deploy).map_err(|e| {
+            format!(
+                "deployed ({}) but {e}",
+                output.url.as_deref().unwrap_or("url unknown")
+            )
+        })?;
+    }
     output.link_needed = req.dry_run && !provider.is_linked(&ctx);
 
     // A dry run is a readiness report: probe sign-in when the CLI is present
@@ -371,6 +437,296 @@ pub fn run(project_dir: &Path, req: DeployRequest) -> Result<DeployOutput, Strin
         }
     }
     Ok(output)
+}
+
+/// Deploy every configured target (`deploy.targets` keys in appz.jsonc),
+/// collecting one `DeployOutput` per target. Deploys in sorted slug order and
+/// fails with a combined error when any target fails.
+pub fn run_all(project_dir: &Path, req: DeployRequest) -> Result<Vec<DeployOutput>, String> {
+    let config = read_deploy_config(project_dir)
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+    let mut slugs: Vec<String> = config.targets.keys().cloned().collect();
+    slugs.sort();
+    if slugs.is_empty() {
+        return Err(
+            "no deploy targets configured — add targets under \"deploy\": { \"targets\": { ... } } in appz.jsonc"
+                .to_string(),
+        );
+    }
+
+    let mut outputs = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+    for slug in slugs {
+        let mut one = req.clone();
+        one.target = Some(slug.clone());
+        match run(project_dir, one) {
+            Ok(output) => outputs.push(output),
+            Err(e) => errors.push(format!("{slug}: {e}")),
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(outputs)
+    } else {
+        Err(format!(
+            "{} of {} target(s) failed:\n{}",
+            errors.len(),
+            outputs.len() + errors.len(),
+            errors.join("\n")
+        ) + &outputs
+            .iter()
+            .map(|o| {
+                format!(
+                    "\ndeployed: {} ({})",
+                    o.provider,
+                    o.url.as_deref().unwrap_or("url unknown")
+                )
+            })
+            .collect::<String>())
+    }
+}
+
+pub fn rollback(
+    project_dir: &Path,
+    target: Option<String>,
+    version_id: &str,
+) -> Result<DeployOutput, String> {
+    let config = read_deploy_config(project_dir)
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+
+    let slug = match target.clone().or_else(|| config.default.clone()) {
+        Some(slug) => slug,
+        None => autodetect_target(project_dir)?,
+    };
+
+    let provider = get_provider(&slug).map_err(|e| e.to_string())?;
+
+    let allowed: Vec<String> = std::iter::once(provider.auth_env_var().to_string())
+        .chain(LINK_VARS.map(String::from))
+        .chain(config.env.iter().cloned())
+        .collect();
+    let vault = crate::secrets::deploy_env(project_dir, &allowed)?;
+
+    let mut ctx = DeployContext::new(project_dir.to_path_buf(), "dist".to_string());
+    ctx.deploy_config = config;
+    ctx.run_env = vault
+        .vars
+        .into_iter()
+        .filter(|(k, _)| std::env::var_os(k).is_none())
+        .collect();
+
+    provider
+        .rollback(&ctx, version_id)
+        .map_err(|e| e.to_string())
+}
+
+pub fn link(
+    project_dir: &Path,
+    target: Option<String>,
+    project: Option<String>,
+) -> Result<String, String> {
+    let config = read_deploy_config(project_dir)
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+
+    let slug = match target.clone().or_else(|| config.default.clone()) {
+        Some(slug) => slug,
+        None => autodetect_target(project_dir)?,
+    };
+
+    let provider = get_provider(&slug).map_err(|e| e.to_string())?;
+
+    let allowed: Vec<String> = std::iter::once(provider.auth_env_var().to_string())
+        .chain(LINK_VARS.map(String::from))
+        .chain(config.env.iter().cloned())
+        .collect();
+    let vault = crate::secrets::deploy_env(project_dir, &allowed)?;
+
+    let mut ctx = DeployContext::new(project_dir.to_path_buf(), "dist".to_string());
+    ctx.deploy_config = config;
+    if let Some(p) = project {
+        ctx.deploy_config
+            .targets
+            .entry(slug.clone())
+            .or_insert_with(|| serde_json::json!({}))["project"] = serde_json::Value::String(p);
+    }
+    ctx.run_env = vault
+        .vars
+        .into_iter()
+        .filter(|(k, _)| std::env::var_os(k).is_none())
+        .collect();
+
+    provider.link(&ctx, true).map_err(|e| e.to_string())?;
+    Ok(provider.name().to_string())
+}
+
+pub fn alias(project_dir: &Path, target: Option<String>, domain: &str) -> Result<String, String> {
+    let config = read_deploy_config(project_dir)
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+
+    let slug = match target.clone().or_else(|| config.default.clone()) {
+        Some(slug) => slug,
+        None => autodetect_target(project_dir)?,
+    };
+
+    let provider = get_provider(&slug).map_err(|e| e.to_string())?;
+
+    let allowed: Vec<String> = std::iter::once(provider.auth_env_var().to_string())
+        .chain(LINK_VARS.map(String::from))
+        .chain(config.env.iter().cloned())
+        .collect();
+    let vault = crate::secrets::deploy_env(project_dir, &allowed)?;
+
+    let mut ctx = DeployContext::new(project_dir.to_path_buf(), "dist".to_string());
+    ctx.deploy_config = config;
+    ctx.run_env = vault
+        .vars
+        .into_iter()
+        .filter(|(k, _)| std::env::var_os(k).is_none())
+        .collect();
+
+    provider.alias(&ctx, domain).map_err(|e| e.to_string())
+}
+
+pub fn list(
+    project_dir: &Path,
+    target: Option<String>,
+) -> Result<Vec<appz_deploy::DeploymentInfo>, String> {
+    let config = read_deploy_config(project_dir)
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+
+    let slug = match target.clone().or_else(|| config.default.clone()) {
+        Some(slug) => slug,
+        None => autodetect_target(project_dir)?,
+    };
+
+    let provider = get_provider(&slug).map_err(|e| e.to_string())?;
+
+    let allowed: Vec<String> = std::iter::once(provider.auth_env_var().to_string())
+        .chain(LINK_VARS.map(String::from))
+        .chain(config.env.iter().cloned())
+        .collect();
+    let vault = crate::secrets::deploy_env(project_dir, &allowed)?;
+
+    let mut ctx = DeployContext::new(project_dir.to_path_buf(), "dist".to_string());
+    ctx.deploy_config = config;
+    ctx.run_env = vault
+        .vars
+        .into_iter()
+        .filter(|(k, _)| std::env::var_os(k).is_none())
+        .collect();
+
+    provider.list_deployments(&ctx).map_err(|e| e.to_string())
+}
+
+pub fn inspect(
+    project_dir: &Path,
+    target: Option<String>,
+    id_or_url: &str,
+) -> Result<appz_deploy::DeploymentInspect, String> {
+    let config = read_deploy_config(project_dir)
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+
+    let slug = match target.clone().or_else(|| config.default.clone()) {
+        Some(slug) => slug,
+        None => autodetect_target(project_dir)?,
+    };
+
+    let provider = get_provider(&slug).map_err(|e| e.to_string())?;
+
+    let allowed: Vec<String> = std::iter::once(provider.auth_env_var().to_string())
+        .chain(LINK_VARS.map(String::from))
+        .chain(config.env.iter().cloned())
+        .collect();
+    let vault = crate::secrets::deploy_env(project_dir, &allowed)?;
+
+    let mut ctx = DeployContext::new(project_dir.to_path_buf(), "dist".to_string());
+    ctx.deploy_config = config;
+    ctx.run_env = vault
+        .vars
+        .into_iter()
+        .filter(|(k, _)| std::env::var_os(k).is_none())
+        .collect();
+
+    provider
+        .inspect_deployment(&ctx, id_or_url)
+        .map_err(|e| e.to_string())
+}
+
+/// Resolve the provider and a vault-backed context for a domain operation.
+fn domain_ctx(
+    project_dir: &Path,
+    target: Option<String>,
+) -> Result<(Box<dyn DeployProvider>, DeployContext), String> {
+    let config = read_deploy_config(project_dir)
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+
+    let slug = match target.or_else(|| config.default.clone()) {
+        Some(slug) => slug,
+        None => autodetect_target(project_dir)?,
+    };
+
+    let provider = get_provider(&slug).map_err(|e| e.to_string())?;
+
+    let allowed: Vec<String> = std::iter::once(provider.auth_env_var().to_string())
+        .chain(LINK_VARS.map(String::from))
+        .chain(config.env.iter().cloned())
+        .collect();
+    let vault = crate::secrets::deploy_env(project_dir, &allowed)?;
+
+    let mut ctx = DeployContext::new(project_dir.to_path_buf(), "dist".to_string());
+    ctx.deploy_config = config;
+    ctx.run_env = vault
+        .vars
+        .into_iter()
+        .filter(|(k, _)| std::env::var_os(k).is_none())
+        .collect();
+    Ok((provider, ctx))
+}
+
+pub fn add_domain(
+    project_dir: &Path,
+    target: Option<String>,
+    domain: &str,
+) -> Result<appz_deploy::ProjectDomain, String> {
+    let (provider, ctx) = domain_ctx(project_dir, target)?;
+    provider.add_domain(&ctx, domain).map_err(|e| e.to_string())
+}
+
+pub fn list_domains(
+    project_dir: &Path,
+    target: Option<String>,
+) -> Result<Vec<appz_deploy::ProjectDomain>, String> {
+    let (provider, ctx) = domain_ctx(project_dir, target)?;
+    provider.list_domains(&ctx).map_err(|e| e.to_string())
+}
+
+pub fn verify_domain(
+    project_dir: &Path,
+    target: Option<String>,
+    domain: &str,
+) -> Result<appz_deploy::DomainVerifyResult, String> {
+    let (provider, ctx) = domain_ctx(project_dir, target)?;
+    provider
+        .verify_domain(&ctx, domain)
+        .map_err(|e| e.to_string())
+}
+
+pub fn remove_domain(
+    project_dir: &Path,
+    target: Option<String>,
+    domain: &str,
+) -> Result<bool, String> {
+    let (provider, ctx) = domain_ctx(project_dir, target)?;
+    provider
+        .remove_domain(&ctx, domain)
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

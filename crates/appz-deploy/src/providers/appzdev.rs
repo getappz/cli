@@ -235,6 +235,150 @@ pub fn poll_device_token(api_base: &str, device_code: &str) -> DevicePollResult 
     }
 }
 
+pub fn resolve_project_id_from_dir(dir: &Path) -> String {
+    let project_json = dir.join(".appz").join("project.json");
+    if let Ok(content) = std::fs::read_to_string(&project_json) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) {
+            if let Some(id) = v.get("projectId").and_then(|s| s.as_str()) {
+                return slugify_project_id(id);
+            }
+        }
+    }
+    if let Ok(id) = std::env::var("APPZ_PROJECT_ID") {
+        if !id.is_empty() {
+            return slugify_project_id(&id);
+        }
+    }
+    let folder = dir
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "default-project".to_string());
+    slugify_project_id(&folder)
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CloudEnvVar {
+    #[serde(default)]
+    pub id: Option<String>,
+    pub key: String,
+    pub value: String,
+    #[serde(default = "default_targets")]
+    pub target: Vec<String>,
+    #[serde(default)]
+    pub git_branch: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<i64>,
+}
+
+fn default_targets() -> Vec<String> {
+    vec!["production".to_string(), "preview".to_string()]
+}
+
+pub fn parse_env_file(content: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let line_clean = trimmed.trim_start_matches("export ").trim();
+        if let Some((k, v)) = line_clean.split_once('=') {
+            let key = k.trim().to_string();
+            let mut val = v.trim().to_string();
+            if (val.starts_with('"') && val.ends_with('"'))
+                || (val.starts_with('\'') && val.ends_with('\''))
+            {
+                if val.len() >= 2 {
+                    val = val[1..val.len() - 1].to_string();
+                }
+            }
+            if !key.is_empty() {
+                out.push((key, val));
+            }
+        }
+    }
+    out
+}
+
+pub fn format_env_file(vars: &[(String, String)]) -> String {
+    let mut lines = Vec::new();
+    for (k, v) in vars {
+        if v.contains(' ') || v.contains('\n') || v.contains('"') || v.is_empty() {
+            let escaped = v.replace('\\', "\\\\").replace('"', "\\\"");
+            lines.push(format!("{k}=\"{escaped}\""));
+        } else {
+            lines.push(format!("{k}={v}"));
+        }
+    }
+    lines.join("\n") + "\n"
+}
+
+pub fn pull_cloud_env(
+    api_base: &str,
+    project_id: &str,
+    token: Option<&str>,
+    target: Option<&str>,
+) -> DeployResult<Vec<CloudEnvVar>> {
+    let mut url = format!("{api_base}/api/v0/projects/{project_id}/env");
+    if let Some(t) = target {
+        url.push_str(&format!("?target={t}"));
+    }
+    let mut req = ureq::get(&url);
+    if let Some(tok) = token {
+        req = req.set("Authorization", &format!("Bearer {tok}"));
+    }
+    let resp: serde_json::Value = req
+        .call()
+        .map_err(|e| parse_api_error(e, "AppzDev", "Pull environment variables"))?
+        .into_json()
+        .map_err(|e| DeployError::DeployFailed {
+            provider: "AppzDev",
+            reason: format!("Invalid JSON response from pull env: {e}"),
+        })?;
+
+    let items = resp.as_array().ok_or_else(|| DeployError::DeployFailed {
+        provider: "AppzDev",
+        reason: "Expected array of environment variables".into(),
+    })?;
+
+    let vars: Vec<CloudEnvVar> = serde_json::from_value(serde_json::Value::Array(items.clone()))
+        .map_err(|e| DeployError::DeployFailed {
+            provider: "AppzDev",
+            reason: format!("Failed to parse cloud env vars: {e}"),
+        })?;
+
+    Ok(vars)
+}
+
+pub fn push_cloud_env(
+    api_base: &str,
+    project_id: &str,
+    token: Option<&str>,
+    vars: &[CloudEnvVar],
+) -> DeployResult<usize> {
+    let url = format!("{api_base}/api/v0/projects/{project_id}/env");
+    let mut req = ureq::post(&url);
+    if let Some(tok) = token {
+        req = req.set("Authorization", &format!("Bearer {tok}"));
+    }
+    let resp: serde_json::Value = req
+        .send_json(serde_json::json!({ "env": vars }))
+        .map_err(|e| parse_api_error(e, "AppzDev", "Push environment variables"))?
+        .into_json()
+        .map_err(|e| DeployError::DeployFailed {
+            provider: "AppzDev",
+            reason: format!("Invalid JSON response from push env: {e}"),
+        })?;
+
+    let count = resp
+        .get("count")
+        .and_then(|c| c.as_u64())
+        .map(|c| c as usize)
+        .unwrap_or(vars.len());
+
+    Ok(count)
+}
+
 impl AppzdevProvider {
     fn api_base(&self, ctx: &DeployContext) -> String {
         if let Some(url) = ctx.run_env.get("APPZ_API_URL") {
@@ -246,35 +390,12 @@ impl AppzdevProvider {
     }
 
     fn resolve_project_id(&self, ctx: &DeployContext) -> String {
-        // 1. Check .appz/project.json
-        let project_json = ctx.project_dir.join(".appz").join("project.json");
-        if let Ok(content) = std::fs::read_to_string(&project_json) {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) {
-                if let Some(id) = v.get("projectId").and_then(|s| s.as_str()) {
-                    return slugify_project_id(id);
-                }
-            }
-        }
-
-        // 2. Check APPZ_PROJECT_ID env var
         if let Some(id) = ctx.run_env.get("APPZ_PROJECT_ID") {
             if !id.is_empty() {
                 return slugify_project_id(id);
             }
         }
-        if let Ok(id) = std::env::var("APPZ_PROJECT_ID") {
-            if !id.is_empty() {
-                return slugify_project_id(&id);
-            }
-        }
-
-        // 3. Fallback to folder name
-        let folder = ctx
-            .project_dir
-            .file_name()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| "default-project".to_string());
-        slugify_project_id(&folder)
+        resolve_project_id_from_dir(&ctx.project_dir)
     }
 
     fn deploy_internal(&self, ctx: &DeployContext, is_preview: bool) -> DeployResult<DeployOutput> {
@@ -910,5 +1031,29 @@ mod tests {
                 std::env::remove_var("APPZ_VAULT_HOME_OVERRIDE");
             }
         }
+    }
+
+    #[test]
+    fn test_parse_and_format_env_file() {
+        let content = r#"
+# Comment line
+DATABASE_URL="postgres://user:pass@localhost:5432/db"
+export API_KEY=sk_test_12345
+EMPTY_VAL=""
+QUOTED='single quoted'
+SPACED=hello world
+"#;
+        let vars = parse_env_file(content);
+        assert_eq!(vars.len(), 5);
+        assert_eq!(vars[0], ("DATABASE_URL".to_string(), "postgres://user:pass@localhost:5432/db".to_string()));
+        assert_eq!(vars[1], ("API_KEY".to_string(), "sk_test_12345".to_string()));
+        assert_eq!(vars[2], ("EMPTY_VAL".to_string(), "".to_string()));
+        assert_eq!(vars[3], ("QUOTED".to_string(), "single quoted".to_string()));
+        assert_eq!(vars[4], ("SPACED".to_string(), "hello world".to_string()));
+
+        let formatted = format_env_file(&vars);
+        assert!(formatted.contains("DATABASE_URL=postgres://user:pass@localhost:5432/db"));
+        assert!(formatted.contains("API_KEY=sk_test_12345"));
+        assert!(formatted.contains("SPACED=\"hello world\""));
     }
 }

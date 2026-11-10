@@ -19,7 +19,8 @@ pub use provider::{
     install_cli_with_mise,
 };
 pub use providers::appzdev::{
-    DeviceCodeResponse, DevicePollResult, StoredAuth, auth_file_path, load_stored_auth,
-    parse_api_error, poll_device_token, request_device_code, resolve_auth_token, save_stored_auth,
-    slugify_project_id,
+    CloudEnvVar, DeviceCodeResponse, DevicePollResult, StoredAuth, auth_file_path, format_env_file,
+    load_stored_auth, parse_api_error, parse_env_file, poll_device_token, pull_cloud_env,
+    push_cloud_env, request_device_code, resolve_auth_token, resolve_project_id_from_dir,
+    save_stored_auth, slugify_project_id,
 };

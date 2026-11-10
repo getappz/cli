@@ -176,6 +176,24 @@ enum EnvCmd {
         #[arg(long)]
         global: bool,
     },
+    /// Pull cloud environment variables from Cloudflare Edge into a local .env file
+    Pull {
+        /// Target file to write to (default: .env.local)
+        #[arg(default_value = ".env.local")]
+        file: PathBuf,
+        /// Target environment filter (production, preview, development)
+        #[arg(long)]
+        target: Option<String>,
+    },
+    /// Push local environment variables from a .env file to Cloudflare Edge
+    Push {
+        /// Source file to read from (default: .env.local, falls back to .env)
+        #[arg(default_value = ".env.local")]
+        file: PathBuf,
+        /// Target environments to associate (default: production and preview)
+        #[arg(long, value_delimiter = ',')]
+        target: Option<Vec<String>>,
+    },
 }
 
 #[derive(Args)]
@@ -1294,6 +1312,114 @@ fn run_env(args: EnvArgs, json: bool) {
         EnvCmd::Lock { global } => {
             secrets::lock(&path(global));
             success("vault locked");
+        }
+        EnvCmd::Pull { file, target } => {
+            let root = resolve_root(Path::new("."));
+            let project_id = appz_deploy::resolve_project_id_from_dir(&root);
+            let token = appz_deploy::resolve_auth_token(None);
+            if token.is_none() {
+                error("not authenticated. Run `appz login` or set APPZ_TOKEN");
+            }
+            let api_base =
+                std::env::var("APPZ_API_URL").unwrap_or_else(|_| "https://appz.to".to_string());
+            match appz_deploy::pull_cloud_env(
+                &api_base,
+                &project_id,
+                token.as_deref(),
+                target.as_deref(),
+            ) {
+                Ok(vars) => {
+                    let kvs: Vec<(String, String)> =
+                        vars.into_iter().map(|v| (v.key, v.value)).collect();
+                    let formatted = appz_deploy::format_env_file(&kvs);
+                    let target_path = root.join(&file);
+                    if let Err(e) = std::fs::write(&target_path, formatted) {
+                        error(&format!("failed to write {}: {e}", target_path.display()));
+                    }
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::json!({ "pulled": kvs.len(), "file": target_path.display().to_string() })
+                        );
+                    } else {
+                        success(&format!(
+                            "downloaded {} environment variables to {}",
+                            kvs.len(),
+                            target_path.display()
+                        ));
+                    }
+                }
+                Err(e) => error(&e.to_string()),
+            }
+        }
+        EnvCmd::Push { file, target } => {
+            let root = resolve_root(Path::new("."));
+            let project_id = appz_deploy::resolve_project_id_from_dir(&root);
+            let token = appz_deploy::resolve_auth_token(None);
+            if token.is_none() {
+                error("not authenticated. Run `appz login` or set APPZ_TOKEN");
+            }
+            let api_base =
+                std::env::var("APPZ_API_URL").unwrap_or_else(|_| "https://appz.to".to_string());
+            let target_path = if root.join(&file).is_file() {
+                root.join(&file)
+            } else if file == PathBuf::from(".env.local") && root.join(".env").is_file() {
+                root.join(".env")
+            } else {
+                error(&format!(
+                    "environment file not found: {}",
+                    root.join(&file).display()
+                ));
+            };
+
+            let content = std::fs::read_to_string(&target_path).unwrap_or_else(|e| {
+                error(&format!("failed to read {}: {e}", target_path.display()))
+            });
+            let kvs = appz_deploy::parse_env_file(&content);
+            if kvs.is_empty() {
+                if json {
+                    println!("{}", serde_json::json!({ "pushed": 0 }));
+                } else {
+                    info("no environment variables found in file");
+                }
+                return;
+            }
+
+            let targets =
+                target.unwrap_or_else(|| vec!["production".to_string(), "preview".to_string()]);
+            let cloud_vars: Vec<appz_deploy::CloudEnvVar> = kvs
+                .into_iter()
+                .map(|(key, value)| appz_deploy::CloudEnvVar {
+                    id: None,
+                    key,
+                    value,
+                    target: targets.clone(),
+                    git_branch: None,
+                    created_at: None,
+                })
+                .collect();
+
+            match appz_deploy::push_cloud_env(
+                &api_base,
+                &project_id,
+                token.as_deref(),
+                &cloud_vars,
+            ) {
+                Ok(count) => {
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::json!({ "pushed": count, "projectId": project_id })
+                        );
+                    } else {
+                        success(&format!(
+                            "uploaded {} environment variables to project '{}'",
+                            count, project_id
+                        ));
+                    }
+                }
+                Err(e) => error(&e.to_string()),
+            }
         }
     }
 }

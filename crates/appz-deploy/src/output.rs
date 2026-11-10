@@ -78,6 +78,7 @@ pub struct DeploymentInfo {
     pub version_id: Option<String>,
     pub url: Option<String>,
     pub status: DeployStatus,
+    #[serde(default, deserialize_with = "deserialize_timestamp_or_rfc3339")]
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
     pub is_current: bool,
 }
@@ -92,6 +93,64 @@ pub struct InspectFileEntry {
     pub content_type: Option<String>,
 }
 
+pub(crate) fn deserialize_timestamp_or_rfc3339<'de, D>(
+    deserializer: D,
+) -> Result<Option<chrono::DateTime<chrono::Utc>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Visitor;
+
+    struct TimestampOrRfc3339Visitor;
+
+    impl<'de> Visitor<'de> for TimestampOrRfc3339Visitor {
+        type Value = Option<chrono::DateTime<chrono::Utc>>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a timestamp integer in milliseconds or an RFC 3339 string")
+        }
+
+        fn visit_none<E>(self) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(None)
+        }
+
+        fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            deserializer.deserialize_any(self)
+        }
+
+        fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(chrono::DateTime::from_timestamp_millis(v))
+        }
+
+        fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(chrono::DateTime::from_timestamp_millis(v as i64))
+        }
+
+        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            chrono::DateTime::parse_from_rfc3339(v)
+                .map(|dt| Some(dt.with_timezone(&chrono::Utc)))
+                .map_err(serde::de::Error::custom)
+        }
+    }
+
+    deserializer.deserialize_option(TimestampOrRfc3339Visitor)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeploymentInspect {
@@ -101,10 +160,18 @@ pub struct DeploymentInspect {
     #[serde(alias = "version_id")]
     pub version_id: String,
     pub status: DeployStatus,
-    #[serde(default)]
+    #[serde(default, alias = "type")]
     pub target: String,
-    #[serde(default, alias = "created_at")]
+    #[serde(
+        default,
+        alias = "created_at",
+        deserialize_with = "deserialize_timestamp_or_rfc3339"
+    )]
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default, alias = "productionUrl", alias = "production_url")]
+    pub production_url: Option<String>,
+    #[serde(default, alias = "isCurrent", alias = "is_current")]
+    pub is_current: Option<bool>,
     #[serde(default)]
     pub hosts: Vec<String>,
     #[serde(default, alias = "file_count")]

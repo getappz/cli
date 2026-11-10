@@ -321,10 +321,11 @@ struct ListArgs {
 
 #[derive(Args)]
 struct InspectArgs {
-    #[arg(default_value = ".")]
-    dir: PathBuf,
     /// Deployment ID or live URL to inspect
     id_or_url: String,
+    /// Project directory (defaults to current directory)
+    #[arg(default_value = ".")]
+    dir: PathBuf,
     /// Also display all files contained in the deployment manifest
     #[arg(long)]
     files: bool,
@@ -1450,7 +1451,14 @@ fn run_env(args: EnvArgs, json: bool) {
         EnvCmd::Pull { file, target } => {
             let root = resolve_root(Path::new("."));
             let project_id = appz_deploy::resolve_project_id_from_dir(&root);
-            let token = appz_deploy::resolve_auth_token(None);
+            let vault_tok = crate::secrets::deploy_env(&root, &["APPZ_TOKEN".to_string()])
+                .ok()
+                .and_then(|v| v.vars.get("APPZ_TOKEN").cloned());
+            let token = std::env::var("APPZ_TOKEN")
+                .ok()
+                .filter(|t| !t.is_empty())
+                .or(vault_tok)
+                .or_else(|| appz_deploy::resolve_auth_token(None));
             if token.is_none() {
                 error("not authenticated. Run `appz login` or set APPZ_TOKEN");
             }
@@ -1489,7 +1497,14 @@ fn run_env(args: EnvArgs, json: bool) {
         EnvCmd::Push { file, target } => {
             let root = resolve_root(Path::new("."));
             let project_id = appz_deploy::resolve_project_id_from_dir(&root);
-            let token = appz_deploy::resolve_auth_token(None);
+            let vault_tok = crate::secrets::deploy_env(&root, &["APPZ_TOKEN".to_string()])
+                .ok()
+                .and_then(|v| v.vars.get("APPZ_TOKEN").cloned());
+            let token = std::env::var("APPZ_TOKEN")
+                .ok()
+                .filter(|t| !t.is_empty())
+                .or(vault_tok)
+                .or_else(|| appz_deploy::resolve_auth_token(None));
             if token.is_none() {
                 error("not authenticated. Run `appz login` or set APPZ_TOKEN");
             }
@@ -1861,7 +1876,10 @@ fn run_inspect(args: InspectArgs, json: bool) {
                 if !insp.hosts.is_empty() {
                     step("hosts");
                     for h in &insp.hosts {
-                        info(&format!("  https://{h}"));
+                        let clean = h
+                            .trim_start_matches("https://")
+                            .trim_start_matches("http://");
+                        info(&format!("  https://{clean}"));
                     }
                 }
 

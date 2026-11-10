@@ -53,6 +53,12 @@ enum AppzCmd {
     Mcp,
     /// Deploy to a hosting platform (drives that platform's own CLI)
     Deploy(DeployArgs),
+    /// Roll back a deployment on edge hosting to a previous version
+    Rollback(RollbackArgs),
+    /// Link this directory to a project on the platform
+    Link(LinkArgs),
+    /// Point a custom domain or alias to the deployment
+    Alias(AliasArgs),
     /// Store credentials in an encrypted vault used by `appz deploy`
     Env(EnvArgs),
     /// Discover and install agent skills relevant to this project
@@ -166,7 +172,7 @@ enum EnvCmd {
 struct DeployArgs {
     #[arg(default_value = ".")]
     dir: PathBuf,
-    /// Provider slug (vercel, netlify, cloudflare, fly, firebase, deno-deploy, azure-static, aws-s3, aws-sst, railway, surge, github-pages). Uses appz.jsonc's deploy.default if omitted, else detects it from project files.
+    /// Provider slug (appzdev, vercel, netlify, cloudflare, fly, firebase, deno-deploy, azure-static, aws-s3, aws-sst, railway, surge, github-pages). Uses appz.jsonc's deploy.default if omitted, else detects it from project files.
     #[arg(long)]
     target: Option<String>,
     /// Platform project name to create or link (default: asked, suggesting one)
@@ -190,6 +196,40 @@ struct DeployArgs {
     /// Install a missing platform CLI through mise without asking
     #[arg(short = 'y', long)]
     yes: bool,
+}
+
+#[derive(Args)]
+struct RollbackArgs {
+    #[arg(default_value = ".")]
+    dir: PathBuf,
+    /// Version ID to roll back to
+    version: String,
+    /// Provider slug (default: detects from project or config)
+    #[arg(long)]
+    target: Option<String>,
+}
+
+#[derive(Args)]
+struct LinkArgs {
+    #[arg(default_value = ".")]
+    dir: PathBuf,
+    /// Platform project name or ID to link to
+    #[arg(long)]
+    project: Option<String>,
+    /// Provider slug (default: detects from project or config)
+    #[arg(long)]
+    target: Option<String>,
+}
+
+#[derive(Args)]
+struct AliasArgs {
+    #[arg(default_value = ".")]
+    dir: PathBuf,
+    /// Custom domain or alias to assign (e.g. app.example.com)
+    domain: String,
+    /// Provider slug (default: detects from project or config)
+    #[arg(long)]
+    target: Option<String>,
 }
 
 #[derive(Args)]
@@ -1018,6 +1058,9 @@ fn main() {
             }
         }
         AppzCmd::Deploy(a) => run_deploy(a, json),
+        AppzCmd::Rollback(a) => run_rollback(a, json),
+        AppzCmd::Link(a) => run_link(a, json),
+        AppzCmd::Alias(a) => run_alias(a, json),
         AppzCmd::Env(a) => run_env(a, json),
         AppzCmd::Skills(a) => run_skills(a, json),
         AppzCmd::Agents(a) => run_agents(a, json),
@@ -1311,6 +1354,64 @@ fn run_deploy(args: DeployArgs, json: bool) {
                     );
                 }
                 outro("deploy complete");
+            }
+        }
+        Err(e) => error(&e),
+    }
+}
+
+fn run_rollback(args: RollbackArgs, json: bool) {
+    let canonical = resolve_root(&args.dir);
+    match deploy::rollback(&canonical, args.target, &args.version) {
+        Ok(output) => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&output).unwrap());
+            } else {
+                intro("appz rollback");
+                success(&format!(
+                    "rolled back {} to version {}",
+                    output.provider, args.version
+                ));
+                if let Some(url) = &output.url {
+                    info(url);
+                }
+                outro("rollback complete");
+            }
+        }
+        Err(e) => error(&e),
+    }
+}
+
+fn run_link(args: LinkArgs, json: bool) {
+    let canonical = resolve_root(&args.dir);
+    match deploy::link(&canonical, args.target, args.project) {
+        Ok(provider_name) => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({ "status": "linked", "provider": provider_name })
+                );
+            } else {
+                intro("appz link");
+                success(&format!("linked project to {provider_name}"));
+                outro("link complete");
+            }
+        }
+        Err(e) => error(&e),
+    }
+}
+
+fn run_alias(args: AliasArgs, json: bool) {
+    let canonical = resolve_root(&args.dir);
+    match deploy::alias(&canonical, args.target, &args.domain) {
+        Ok(url) => {
+            if json {
+                println!("{}", serde_json::json!({ "status": "aliased", "url": url }));
+            } else {
+                intro("appz alias");
+                success(&format!("assigned alias {}", args.domain));
+                info(&url);
+                outro("alias complete");
             }
         }
         Err(e) => error(&e),

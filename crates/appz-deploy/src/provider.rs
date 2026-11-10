@@ -175,10 +175,19 @@ pub trait DeployProvider: Send + Sync {
             operation: "rollback",
         })
     }
+
+    fn alias(&self, ctx: &DeployContext, domain: &str) -> DeployResult<String> {
+        let _ = (ctx, domain);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "alias",
+        })
+    }
 }
 
 pub fn create_provider_registry() -> Vec<Box<dyn DeployProvider>> {
     let mut all: Vec<Box<dyn DeployProvider>> = vec![
+        Box::new(crate::providers::appzdev::AppzdevProvider),
         Box::new(crate::providers::vercel::VercelProvider),
         Box::new(crate::providers::netlify::NetlifyProvider),
         Box::new(crate::providers::cloudflare::CloudflareProvider),

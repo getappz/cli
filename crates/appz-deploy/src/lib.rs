@@ -4,6 +4,7 @@ mod exec;
 mod output;
 mod provider;
 mod providers;
+pub mod static_cas;
 
 pub use context::{DeployConfig, DeployContext, parse_kv, read_deploy_config};
 pub use error::{DeployError, DeployResult};

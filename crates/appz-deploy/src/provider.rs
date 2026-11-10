@@ -4,7 +4,8 @@ use std::time::Duration;
 use crate::context::DeployContext;
 use crate::error::{DeployError, DeployResult};
 use crate::output::{
-    AuthState, DeployOutput, DeploymentInfo, DeploymentInspect, DetectedConfig, PrerequisiteStatus,
+    AuthState, DeployOutput, DeploymentInfo, DeploymentInspect, DetectedConfig, DomainVerifyResult,
+    PrerequisiteStatus, ProjectDomain,
 };
 
 /// Timeout for the actual deploy invocation (platform CLIs can legitimately
@@ -195,6 +196,38 @@ pub trait DeployProvider: Send + Sync {
         Err(DeployError::Unsupported {
             provider: self.name(),
             operation: "inspect",
+        })
+    }
+
+    fn add_domain(&self, ctx: &DeployContext, domain: &str) -> DeployResult<ProjectDomain> {
+        let _ = (ctx, domain);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "domains add",
+        })
+    }
+
+    fn list_domains(&self, ctx: &DeployContext) -> DeployResult<Vec<ProjectDomain>> {
+        let _ = ctx;
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "domains list",
+        })
+    }
+
+    fn verify_domain(&self, ctx: &DeployContext, domain: &str) -> DeployResult<DomainVerifyResult> {
+        let _ = (ctx, domain);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "domains verify",
+        })
+    }
+
+    fn remove_domain(&self, ctx: &DeployContext, domain: &str) -> DeployResult<bool> {
+        let _ = (ctx, domain);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "domains remove",
         })
     }
 }

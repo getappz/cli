@@ -125,6 +125,40 @@ pub struct EnvPullArg {
     pub dir: Option<String>,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct DomainsListArg {
+    /// Project directory. Defaults to the current directory.
+    #[serde(default)]
+    pub dir: Option<String>,
+    /// Provider slug (default: auto-detected or appzdev)
+    #[serde(default)]
+    pub target: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct DomainsAddArg {
+    /// Custom domain name (e.g. app.example.com or example.com)
+    pub domain: String,
+    /// Project directory. Defaults to the current directory.
+    #[serde(default)]
+    pub dir: Option<String>,
+    /// Provider slug (default: auto-detected or appzdev)
+    #[serde(default)]
+    pub target: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct DomainsVerifyArg {
+    /// Domain name to verify
+    pub domain: String,
+    /// Project directory. Defaults to the current directory.
+    #[serde(default)]
+    pub dir: Option<String>,
+    /// Provider slug (default: auto-detected or appzdev)
+    #[serde(default)]
+    pub target: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct AppzServer {
     // Read by the `#[tool_handler]`-generated dispatch; dead-code analysis
@@ -388,6 +422,57 @@ impl AppzServer {
             Err(e) => Ok(Self::err(e.to_string())),
         }
     }
+
+    #[tool(
+        description = "List custom domains configured for a project on Cloudflare Edge with their verification and SSL status. Returns JSON."
+    )]
+    fn domains_list(
+        &self,
+        Parameters(arg): Parameters<DomainsListArg>,
+    ) -> Result<CallToolResult, McpError> {
+        let root = Self::resolve(&arg.dir);
+        match crate::deploy::list_domains(&root, arg.target) {
+            Ok(domains) => {
+                let json = serde_json::to_string_pretty(&domains).unwrap_or_default();
+                Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
+            }
+            Err(e) => Ok(Self::err(e)),
+        }
+    }
+
+    #[tool(
+        description = "Add a custom domain to a project and retrieve DNS ownership and CNAME challenge records. Returns JSON."
+    )]
+    fn domains_add(
+        &self,
+        Parameters(arg): Parameters<DomainsAddArg>,
+    ) -> Result<CallToolResult, McpError> {
+        let root = Self::resolve(&arg.dir);
+        match crate::deploy::add_domain(&root, arg.target, &arg.domain) {
+            Ok(dom) => {
+                let json = serde_json::to_string_pretty(&dom).unwrap_or_default();
+                Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
+            }
+            Err(e) => Ok(Self::err(e)),
+        }
+    }
+
+    #[tool(
+        description = "Trigger immediate DNS verification check for a custom domain on Cloudflare Edge. Returns JSON."
+    )]
+    fn domains_verify(
+        &self,
+        Parameters(arg): Parameters<DomainsVerifyArg>,
+    ) -> Result<CallToolResult, McpError> {
+        let root = Self::resolve(&arg.dir);
+        match crate::deploy::verify_domain(&root, arg.target, &arg.domain) {
+            Ok(res) => {
+                let json = serde_json::to_string_pretty(&res).unwrap_or_default();
+                Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
+            }
+            Err(e) => Ok(Self::err(e)),
+        }
+    }
 }
 
 fn mise_task_name(command: Lifecycle) -> Option<&'static str> {
@@ -466,7 +551,9 @@ impl ServerHandler for AppzServer {
              install/build/test/lint/format), `deploy` (deploy to cloud/edge), `inspect` \
              (inspect edge deployment CAS metrics & manifest), `list` (list project deployments), \
              `rollback` (instant rollback to version ID), `env_pull` (download cloud env vars to \
-             .env.local). Pass `dir` to target a project; defaults to current directory."
+             .env.local), `domains_list` (list custom domains), `domains_add` (connect domain & \
+             get DNS challenge), `domains_verify` (check DNS ownership & SSL). Pass `dir` to \
+             target a project; defaults to current directory."
                     .to_string(),
             )
     }

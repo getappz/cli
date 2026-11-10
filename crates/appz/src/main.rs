@@ -65,6 +65,9 @@ enum AppzCmd {
     List(ListArgs),
     /// Inspect edge deployment manifest, hosts, and CAS metrics
     Inspect(InspectArgs),
+    /// Manage custom domains and DNS verification on Cloudflare Edge
+    #[command(alias = "domain")]
+    Domains(DomainsArgs),
     /// Log in to Appz via browser device flow
     Login(LoginArgs),
     /// Print currently authenticated user and active organization
@@ -281,6 +284,41 @@ struct InspectArgs {
     /// Provider slug (default: detects from project or config)
     #[arg(long)]
     target: Option<String>,
+}
+
+#[derive(Args)]
+struct DomainsArgs {
+    #[command(subcommand)]
+    command: DomainsCmd,
+    /// Project directory (defaults to current directory)
+    #[arg(default_value = ".")]
+    dir: PathBuf,
+    /// Provider slug (default: detects from project or config)
+    #[arg(long)]
+    target: Option<String>,
+}
+
+#[derive(Subcommand, Debug)]
+enum DomainsCmd {
+    /// Add a custom domain to the project and display DNS configuration records
+    Add {
+        /// Custom domain name (e.g. app.example.com or example.com)
+        domain: String,
+    },
+    /// List all custom domains configured for this project
+    #[command(alias = "ls")]
+    List,
+    /// Trigger DNS ownership and SSL verification check for a domain
+    Verify {
+        /// Domain name to verify
+        domain: String,
+    },
+    /// Remove a custom domain from the project
+    #[command(alias = "rm")]
+    Remove {
+        /// Domain name to remove
+        domain: String,
+    },
 }
 
 #[derive(Args)]
@@ -1121,6 +1159,7 @@ fn main() {
         AppzCmd::Alias(a) => run_alias(a, json),
         AppzCmd::List(a) => run_list(a, json),
         AppzCmd::Inspect(a) => run_inspect(a, json),
+        AppzCmd::Domains(a) => run_domains(a, json),
         AppzCmd::Login(a) => run_login(a, json),
         AppzCmd::Whoami => run_whoami(json),
         AppzCmd::Env(a) => run_env(a, json),
@@ -1693,6 +1732,122 @@ fn run_inspect(args: InspectArgs, json: bool) {
             }
         }
         Err(e) => error(&e),
+    }
+}
+
+fn run_domains(args: DomainsArgs, json: bool) {
+    let canonical = resolve_root(&args.dir);
+    match args.command {
+        DomainsCmd::Add { domain } => match deploy::add_domain(&canonical, args.target, &domain) {
+            Ok(dom) => {
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&dom).unwrap());
+                } else {
+                    intro("appz domains add");
+                    info(&format!("domain:      {}", dom.domain));
+                    info(&format!("status:      {}", dom.status));
+                    if let Some(ssl) = &dom.ssl_status {
+                        info(&format!("ssl:         {ssl}"));
+                    }
+                    if !dom.verification.is_empty() {
+                        step("dns configuration records");
+                        for v in &dom.verification {
+                            let reason = v.reason.as_deref().unwrap_or("-");
+                            info(&format!(
+                                "{:<8}  {:<32}  {}  ({})",
+                                v.r#type.to_uppercase(),
+                                v.domain,
+                                v.value,
+                                reason
+                            ));
+                        }
+                        step("next steps");
+                        info("1. Add the DNS records above at your DNS provider");
+                        info(&format!(
+                            "2. Run `appz domains verify {}` once configured",
+                            dom.domain
+                        ));
+                    }
+                    outro("domain added");
+                }
+            }
+            Err(e) => error(&e),
+        },
+        DomainsCmd::List => match deploy::list_domains(&canonical, args.target) {
+            Ok(domains) => {
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&domains).unwrap());
+                } else {
+                    intro("appz domains");
+                    if domains.is_empty() {
+                        info("no custom domains configured for this project");
+                        info("run `appz domains add <domain>` to connect a custom domain");
+                    } else {
+                        for d in &domains {
+                            let ssl = d.ssl_status.as_deref().unwrap_or("-");
+                            let verified_str = if d.verified { "verified" } else { "pending" };
+                            info(&format!(
+                                "{:<30}  status:{:<12}  ssl:{:<10}  {}",
+                                d.domain, d.status, ssl, verified_str
+                            ));
+                        }
+                    }
+                    outro("done");
+                }
+            }
+            Err(e) => error(&e),
+        },
+        DomainsCmd::Verify { domain } => {
+            match deploy::verify_domain(&canonical, args.target, &domain) {
+                Ok(res) => {
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&res).unwrap());
+                    } else {
+                        intro("appz domains verify");
+                        info(&format!("domain:      {}", res.domain));
+                        info(&format!("status:      {}", res.status));
+                        if let Some(ssl) = &res.ssl_status {
+                            info(&format!("ssl:         {ssl}"));
+                        }
+                        if res.verified {
+                            success(&format!("{} is verified and active!", res.domain));
+                        } else {
+                            warning("verification still pending");
+                            if !res.verification.is_empty() {
+                                step("required dns records");
+                                for v in &res.verification {
+                                    info(&format!(
+                                        "{:<8}  {:<32}  {}",
+                                        v.r#type.to_uppercase(),
+                                        v.domain,
+                                        v.value
+                                    ));
+                                }
+                            }
+                        }
+                        outro("done");
+                    }
+                }
+                Err(e) => error(&e),
+            }
+        }
+        DomainsCmd::Remove { domain } => {
+            match deploy::remove_domain(&canonical, args.target, &domain) {
+                Ok(_) => {
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::json!({ "status": "removed", "domain": domain })
+                        );
+                    } else {
+                        intro("appz domains remove");
+                        success(&format!("removed domain {domain} from project"));
+                        outro("done");
+                    }
+                }
+                Err(e) => error(&e),
+            }
+        }
     }
 }
 

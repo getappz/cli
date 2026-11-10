@@ -135,3 +135,42 @@ pub enum PrerequisiteStatus {
     CliMissing { tool: String, install_hint: String },
     AuthMissing { env_var: String, login_hint: String },
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DomainVerificationRecord {
+    pub r#type: String,
+    pub domain: String,
+    pub value: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectDomain {
+    pub id: String,
+    pub domain: String,
+    pub status: String,
+    #[serde(default, alias = "ssl_status")]
+    pub ssl_status: Option<String>,
+    #[serde(default)]
+    pub verified: bool,
+    #[serde(default)]
+    pub verification: Vec<DomainVerificationRecord>,
+    #[serde(default, alias = "created_at")]
+    pub created_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DomainVerifyResult {
+    pub domain: String,
+    pub status: String,
+    #[serde(default, alias = "ssl_status")]
+    pub ssl_status: Option<String>,
+    #[serde(default)]
+    pub verified: bool,
+    #[serde(default)]
+    pub verification: Vec<DomainVerificationRecord>,
+}

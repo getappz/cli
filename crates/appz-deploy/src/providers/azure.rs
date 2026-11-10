@@ -38,15 +38,16 @@ impl AzureStaticProvider {
     }
 
     fn deploy_internal(&self, ctx: &DeployContext, is_preview: bool) -> DeployResult<DeployOutput> {
+        // A dry run skips the build stage, so the output check would always fail.
+        if ctx.dry_run {
+            return Ok(DeployOutput::dry_run(self.slug(), is_preview));
+        }
         let output = ctx.output_path();
         if !std::fs::read_dir(&output).is_ok_and(|mut it| it.next().is_some()) {
             return Err(self.fail(format!(
                 "build output '{}' is missing or empty: build the project first (appz build)",
                 ctx.output_dir
             )));
-        }
-        if ctx.dry_run {
-            return Ok(DeployOutput::dry_run(self.slug(), is_preview));
         }
 
         let start = Instant::now();
@@ -219,6 +220,15 @@ mod tests {
         let ctx = DeployContext::new(dir.clone(), "dist".into());
         let err = AzureStaticProvider.deploy(&ctx).unwrap_err().to_string();
         assert!(err.contains("missing or empty"), "{err}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_dry_run_does_not_need_a_build_output() {
+        let dir = temp("dry");
+        let mut ctx = DeployContext::new(dir.clone(), "dist".into());
+        ctx.dry_run = true;
+        assert!(AzureStaticProvider.deploy(&ctx).is_ok());
         let _ = std::fs::remove_dir_all(dir);
     }
 

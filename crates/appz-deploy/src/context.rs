@@ -18,6 +18,30 @@ pub struct DeployConfig {
     pub env: Vec<String>,
     #[serde(default)]
     pub targets: HashMap<String, serde_json::Value>,
+    /// Literal (non-secret) env vars keyed by environment name
+    /// (`production` / `preview`), injected into the platform CLI. Vault
+    /// secrets, the real process environment and `-e` all override these —
+    /// see `env_for`.
+    #[serde(default)]
+    pub environments: HashMap<String, HashMap<String, String>>,
+    /// Lifecycle hooks run around the deploy as arg vectors (no shell).
+    #[serde(default)]
+    pub hooks: DeployHooks,
+}
+
+/// Lifecycle hooks executed around a deploy. Each hook is a full command as an
+/// arg vector (`["npm", "run", "lint"]`), never a shell string, so it is
+/// spawned directly without a shell. An empty vector means "no hook".
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct DeployHooks {
+    /// Run after build, before the platform CLI deploys. A failure aborts the
+    /// deploy.
+    #[serde(default)]
+    pub before_deploy: Vec<String>,
+    /// Run after a successful platform deploy. A failure is reported as an
+    /// error even though the deploy already went out.
+    #[serde(default)]
+    pub after_deploy: Vec<String>,
 }
 
 impl DeployConfig {
@@ -29,6 +53,15 @@ impl DeployConfig {
             Some(v) => Ok(Some(serde_json::from_value(v.clone())?)),
             None => Ok(None),
         }
+    }
+
+    /// Literal env vars for one environment (`production` / `preview`), or an
+    /// empty map when none are configured.
+    pub fn env_for(&self, environment: &str) -> HashMap<String, String> {
+        self.environments
+            .get(environment)
+            .cloned()
+            .unwrap_or_default()
     }
 }
 
@@ -152,7 +185,7 @@ impl DeployContext {
     /// Full path of `bin`, looked up in the same `PATH` the child will get: a
     /// `PATH` the caller put in `run_env`, else the process `PATH`, then
     /// `extra_path`. Falls back to the bare name.
-    fn resolve(&self, bin: &str) -> String {
+    pub fn resolve(&self, bin: &str) -> String {
         let base = self.run_env.get("PATH").map(std::ffi::OsString::from);
         command::shell::find_command_with_paths(bin, base.as_deref(), &self.extra_path)
             .map_or_else(|| bin.to_string(), |p| p.to_string_lossy().into_owned())
@@ -326,6 +359,25 @@ mod tests {
             .insert("vercel".into(), serde_json::json!({ "project": "app" }));
         assert_eq!(ctx.project_name("vercel"), "app");
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn env_for_reads_per_environment_literal_values() {
+        let config: DeployConfig = serde_json::from_value(serde_json::json!({
+            "environments": {
+                "production": { "API_URL": "https://api.example.com" },
+                "preview": { "API_URL": "https://staging.example.com", "DEBUG": "1" }
+            }
+        }))
+        .unwrap();
+        assert_eq!(
+            config.env_for("production"),
+            [("API_URL".to_string(), "https://api.example.com".to_string())]
+                .into_iter()
+                .collect::<HashMap<_, _>>()
+        );
+        assert_eq!(config.env_for("preview").len(), 2);
+        assert!(config.env_for("staging").is_empty());
     }
 
     #[test]

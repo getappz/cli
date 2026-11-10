@@ -256,12 +256,30 @@ pub trait DeployProvider: Send + Sync {
     }
 }
 
+/// IDs become positional CLI arguments; reject values that could be options.
+pub(crate) fn validate_deployment_id(provider: &'static str, id: &str) -> DeployResult<()> {
+    if id.is_empty()
+        || id.starts_with('-')
+        || id.chars().any(char::is_whitespace)
+        || id.chars().any(char::is_control)
+    {
+        return Err(DeployError::DeployFailed {
+            provider,
+            reason: "invalid deployment ID".into(),
+        });
+    }
+    Ok(())
+}
+
 pub fn create_provider_registry() -> Vec<Box<dyn DeployProvider>> {
     let mut all: Vec<Box<dyn DeployProvider>> = vec![
         Box::new(crate::providers::appzdev::AppzdevProvider),
         Box::new(crate::providers::vercel::VercelProvider),
         Box::new(crate::providers::netlify::NetlifyProvider),
         Box::new(crate::providers::cloudflare::CloudflareProvider),
+        Box::new(crate::providers::github_pages::GithubPagesProvider),
+        Box::new(crate::providers::aws_s3::AwsS3Provider),
+        Box::new(crate::providers::render::RenderProvider),
         Box::new(crate::providers::firebase::FirebaseProvider),
         Box::new(crate::providers::azure::AzureStaticProvider),
     ];
@@ -387,6 +405,30 @@ mod tests {
         assert_eq!(detect_providers(&dir), vec!["netlify", "cloudflare"]);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn native_providers_have_no_duplicate_registry_entries() {
+        let slugs = available_provider_slugs();
+        let unique: std::collections::HashSet<_> = slugs.iter().collect();
+        assert_eq!(slugs.len(), unique.len(), "{slugs:?}");
+        assert_eq!(get_provider("aws-s3").unwrap().mise_tool(), "awscli");
+        assert_eq!(get_provider("render").unwrap().cli_tool(), "render");
+    }
+
+    #[test]
+    fn production_only_providers_refuse_preview_even_in_dry_run() {
+        let mut ctx = DeployContext::new(std::env::temp_dir(), "dist".into());
+        ctx.dry_run = true;
+        for slug in ["github-pages", "aws-s3", "render"] {
+            assert!(
+                matches!(
+                    get_provider(slug).unwrap().deploy_preview(&ctx),
+                    Err(DeployError::Unsupported { .. })
+                ),
+                "{slug} must not publish production as preview"
+            );
+        }
     }
 
     #[test]

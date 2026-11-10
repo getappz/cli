@@ -211,7 +211,7 @@ enum EnvCmd {
 struct DeployArgs {
     #[arg(default_value = ".")]
     dir: PathBuf,
-    /// Provider slug (appzdev, vercel, netlify, cloudflare, fly, firebase, deno-deploy, azure-static, aws-s3, aws-sst, railway, surge, github-pages). Uses appz.jsonc's deploy.default if omitted, else detects it from project files.
+    /// Provider slug (appzdev, vercel, netlify, cloudflare, fly, firebase, deno-deploy, azure-static, aws-s3, aws-sst, railway, surge, github-pages, render). Uses appz.jsonc's deploy.default if omitted, else detects it from project files.
     #[arg(long)]
     target: Option<String>,
     /// Platform project name to create or link (default: asked, suggesting one)

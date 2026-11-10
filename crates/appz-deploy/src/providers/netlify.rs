@@ -17,8 +17,10 @@ use std::time::Instant;
 
 use crate::context::DeployContext;
 use crate::error::{DeployError, DeployResult};
-use crate::output::{DeployOutput, DeployStatus, DetectedConfig, PrerequisiteStatus};
-use crate::provider::{DEPLOY_TIMEOUT, DeployProvider};
+use crate::output::{
+    DeployOutput, DeployStatus, DeploymentInfo, DetectedConfig, PrerequisiteStatus,
+};
+use crate::provider::{DEPLOY_TIMEOUT, DeployProvider, QUERY_TIMEOUT};
 
 pub struct NetlifyProvider;
 
@@ -203,6 +205,121 @@ impl DeployProvider for NetlifyProvider {
     fn deploy_preview(&self, ctx: &DeployContext) -> DeployResult<DeployOutput> {
         self.deploy_internal(ctx, true)
     }
+
+    fn list_deployments(&self, ctx: &DeployContext) -> DeployResult<Vec<DeploymentInfo>> {
+        let data = serde_json::json!({ "site_id": site_id(ctx)? });
+        let response = api(ctx, "listSiteDeploys", &data, QUERY_TIMEOUT)?;
+        let deployments: Vec<NetlifyDeployment> = serde_json::from_value(response)?;
+        Ok(deployments
+            .into_iter()
+            .map(|d| DeploymentInfo {
+                id: d.id,
+                version_id: None,
+                url: d.deploy_ssl_url.or(d.ssl_url).or(d.url),
+                status: netlify_status(&d.state),
+                created_at: d.created_at,
+                is_current: false,
+            })
+            .collect())
+    }
+
+    fn rollback(&self, ctx: &DeployContext, deployment_id: &str) -> DeployResult<DeployOutput> {
+        crate::provider::validate_deployment_id(self.name(), deployment_id)?;
+        if ctx.dry_run {
+            return Ok(DeployOutput::dry_run(self.slug(), false));
+        }
+        let start = Instant::now();
+        let data = serde_json::json!({ "site_id": site_id(ctx)?, "deploy_id": deployment_id });
+        let d: NetlifyDeployment =
+            serde_json::from_value(api(ctx, "restoreSiteDeploy", &data, DEPLOY_TIMEOUT)?)?;
+        let mut result = DeployOutput::dry_run(self.slug(), false);
+        result.url = d.ssl_url.or(d.url);
+        result.status = netlify_status(&d.state);
+        result.created_at = d.created_at;
+        result.duration_ms = Some(start.elapsed().as_millis() as u64);
+        Ok(result)
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct NetlifyDeployment {
+    id: String,
+    state: String,
+    #[serde(default)]
+    deploy_ssl_url: Option<String>,
+    #[serde(default)]
+    ssl_url: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    created_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+fn netlify_status(state: &str) -> DeployStatus {
+    match state {
+        "ready" => DeployStatus::Ready,
+        "new" | "enqueued" | "building" | "uploading" | "uploaded" | "processing" | "prepared" => {
+            DeployStatus::Building
+        }
+        "error" | "rejected" => DeployStatus::Error,
+        _ => DeployStatus::Unknown,
+    }
+}
+
+fn site_id(ctx: &DeployContext) -> DeployResult<String> {
+    let env = ctx
+        .run_env
+        .get("NETLIFY_SITE_ID")
+        .cloned()
+        .or_else(|| std::env::var("NETLIFY_SITE_ID").ok())
+        .filter(|v| !v.is_empty());
+    let id = match env {
+        Some(id) => id,
+        None => {
+            let text = std::fs::read_to_string(ctx.project_dir.join(".netlify/state.json"))
+                .map_err(|_| DeployError::DeployFailed {
+                    provider: "Netlify",
+                    reason: "set NETLIFY_SITE_ID or run netlify link first".into(),
+                })?;
+            let state: serde_json::Value = serde_json::from_str(&text)?;
+            state
+                .get("siteId")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| DeployError::DeployFailed {
+                    provider: "Netlify",
+                    reason: "no siteId in .netlify/state.json: set NETLIFY_SITE_ID or run netlify link first".into(),
+                })?
+                .to_string()
+        }
+    };
+    crate::provider::validate_deployment_id("Netlify", &id)?;
+    Ok(id)
+}
+
+fn api(
+    ctx: &DeployContext,
+    method: &str,
+    data: &serde_json::Value,
+    timeout: std::time::Duration,
+) -> DeployResult<serde_json::Value> {
+    let data = data.to_string();
+    let out = ctx
+        .exec("netlify", &["api", method, "--data", &data], timeout)
+        .map_err(|reason| DeployError::DeployFailed {
+            provider: "Netlify",
+            reason,
+        })?;
+    if !out.success {
+        return Err(DeployError::DeployFailed {
+            provider: "Netlify",
+            reason: format!(
+                "netlify api {method} failed:\n{}\n{}",
+                out.stdout, out.stderr
+            ),
+        });
+    }
+    Ok(serde_json::from_str(&out.stdout)?)
 }
 
 /// Extract the real deployment URL from `netlify deploy`'s output.

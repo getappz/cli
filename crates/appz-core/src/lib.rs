@@ -5,6 +5,7 @@ mod diagnostics;
 mod doctor;
 mod format_defaults;
 mod frameworks;
+pub use frameworks::SERVER_RENDERED_FRAMEWORKS;
 mod fs;
 mod generator;
 mod mise;

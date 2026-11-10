@@ -78,6 +78,53 @@ pub struct DeployArg {
     pub force: bool,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct InspectArg {
+    /// Deployment ID or live URL to inspect
+    pub id_or_url: String,
+    /// Project directory. Defaults to the current directory.
+    #[serde(default)]
+    pub dir: Option<String>,
+    /// Provider slug (default: auto-detected or appzdev)
+    #[serde(default)]
+    pub target: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ListArg {
+    /// Project directory. Defaults to the current directory.
+    #[serde(default)]
+    pub dir: Option<String>,
+    /// Provider slug (default: auto-detected or appzdev)
+    #[serde(default)]
+    pub target: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct RollbackArg {
+    /// Version ID to roll back to (e.g. ver_...)
+    pub version: String,
+    /// Project directory. Defaults to the current directory.
+    #[serde(default)]
+    pub dir: Option<String>,
+    /// Provider slug (default: auto-detected or appzdev)
+    #[serde(default)]
+    pub target: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct EnvPullArg {
+    /// Target file to write variables into (default: .env.local)
+    #[serde(default)]
+    pub file: Option<String>,
+    /// Environment target filter (production, preview, development)
+    #[serde(default)]
+    pub target: Option<String>,
+    /// Project directory. Defaults to the current directory.
+    #[serde(default)]
+    pub dir: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct AppzServer {
     // Read by the `#[tool_handler]`-generated dispatch; dead-code analysis
@@ -248,6 +295,99 @@ impl AppzServer {
             Err(e) => Ok(Self::err(e)),
         }
     }
+
+    #[tool(
+        description = "Inspect an edge deployment: manifest key, host aliases, file count, Brotli CAS metrics, redirect rules, and file entries. Returns JSON."
+    )]
+    fn inspect(&self, Parameters(arg): Parameters<InspectArg>) -> Result<CallToolResult, McpError> {
+        let root = Self::resolve(&arg.dir);
+        match crate::deploy::inspect(&root, arg.target, &arg.id_or_url) {
+            Ok(insp) => {
+                let json = serde_json::to_string_pretty(&insp).unwrap_or_default();
+                Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
+            }
+            Err(e) => Ok(Self::err(e)),
+        }
+    }
+
+    #[tool(
+        description = "List deployments for a project: deployment ID, version ID, status, URL, creation time, and current active pointer. Returns JSON."
+    )]
+    fn list(&self, Parameters(arg): Parameters<ListArg>) -> Result<CallToolResult, McpError> {
+        let root = Self::resolve(&arg.dir);
+        match crate::deploy::list(&root, arg.target) {
+            Ok(items) => {
+                let json = serde_json::to_string_pretty(&items).unwrap_or_default();
+                Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
+            }
+            Err(e) => Ok(Self::err(e)),
+        }
+    }
+
+    #[tool(
+        description = "Instant atomic rollback of a project's active deployment on Cloudflare Edge to a previous version ID. Returns JSON."
+    )]
+    fn rollback(
+        &self,
+        Parameters(arg): Parameters<RollbackArg>,
+    ) -> Result<CallToolResult, McpError> {
+        let root = Self::resolve(&arg.dir);
+        match crate::deploy::rollback(&root, arg.target, &arg.version) {
+            Ok(out) => {
+                let json = serde_json::to_string_pretty(&out).unwrap_or_default();
+                Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
+            }
+            Err(e) => Ok(Self::err(e)),
+        }
+    }
+
+    #[tool(
+        description = "Pull cloud environment variables from Cloudflare Edge D1 into a local .env file (default: .env.local). Returns JSON with count and file path."
+    )]
+    fn env_pull(
+        &self,
+        Parameters(arg): Parameters<EnvPullArg>,
+    ) -> Result<CallToolResult, McpError> {
+        let root = Self::resolve(&arg.dir);
+        let project_id = appz_deploy::resolve_project_id_from_dir(&root);
+        let token = appz_deploy::resolve_auth_token(None);
+        if token.is_none() {
+            return Ok(Self::err(
+                "not authenticated. Run `appz login` or set APPZ_TOKEN".into(),
+            ));
+        }
+        let api_base =
+            std::env::var("APPZ_API_URL").unwrap_or_else(|_| "https://appz.to".to_string());
+        match appz_deploy::pull_cloud_env(
+            &api_base,
+            &project_id,
+            token.as_deref(),
+            arg.target.as_deref(),
+        ) {
+            Ok(vars) => {
+                let kvs: Vec<(String, String)> =
+                    vars.into_iter().map(|v| (v.key, v.value)).collect();
+                let formatted = appz_deploy::format_env_file(&kvs);
+                let rel_file = arg.file.unwrap_or_else(|| ".env.local".to_string());
+                let target_path = root.join(&rel_file);
+                if let Err(e) = std::fs::write(&target_path, formatted) {
+                    return Ok(Self::err(format!(
+                        "failed to write {}: {e}",
+                        target_path.display()
+                    )));
+                }
+                let res = serde_json::json!({
+                    "pulled": kvs.len(),
+                    "file": target_path.display().to_string(),
+                    "projectId": project_id
+                });
+                Ok(CallToolResult::success(vec![ContentBlock::text(
+                    res.to_string(),
+                )]))
+            }
+            Err(e) => Ok(Self::err(e.to_string())),
+        }
+    }
 }
 
 fn mise_task_name(command: Lifecycle) -> Option<&'static str> {
@@ -321,10 +461,12 @@ impl ServerHandler for AppzServer {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("appz", env!("CARGO_PKG_VERSION")))
             .with_instructions(
-                "appz drives project toolchains. Tools: `detect` (JSON toolchain \
-             report), `doctor` (JSON diagnosis + suggestions), `run` (execute \
-             install/build/test/lint/format and return output). Pass `dir` to \
-             target a project; it defaults to the current directory."
+                "appz drives project toolchains and edge deployment. Tools: `detect` (JSON \
+             toolchain report), `doctor` (JSON diagnosis + suggestions), `run` (execute \
+             install/build/test/lint/format), `deploy` (deploy to cloud/edge), `inspect` \
+             (inspect edge deployment CAS metrics & manifest), `list` (list project deployments), \
+             `rollback` (instant rollback to version ID), `env_pull` (download cloud env vars to \
+             .env.local). Pass `dir` to target a project; defaults to current directory."
                     .to_string(),
             )
     }

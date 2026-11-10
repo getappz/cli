@@ -74,10 +74,51 @@ impl DeployOutput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeploymentInfo {
     pub id: String,
+    #[serde(default)]
+    pub version_id: Option<String>,
     pub url: Option<String>,
     pub status: DeployStatus,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
     pub is_current: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InspectFileEntry {
+    pub path: String,
+    pub size: u64,
+    pub hash: String,
+    #[serde(default, alias = "content_type")]
+    pub content_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeploymentInspect {
+    pub id: String,
+    #[serde(alias = "project_id")]
+    pub project_id: String,
+    #[serde(alias = "version_id")]
+    pub version_id: String,
+    pub status: DeployStatus,
+    #[serde(default)]
+    pub target: String,
+    #[serde(default, alias = "created_at")]
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    pub hosts: Vec<String>,
+    #[serde(default, alias = "file_count")]
+    pub file_count: usize,
+    #[serde(default, alias = "total_bytes")]
+    pub total_bytes: u64,
+    #[serde(default, alias = "manifest_key")]
+    pub manifest_key: Option<String>,
+    #[serde(default)]
+    pub redirects: Vec<String>,
+    #[serde(default)]
+    pub headers: Vec<String>,
+    #[serde(default)]
+    pub files: Option<Vec<InspectFileEntry>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

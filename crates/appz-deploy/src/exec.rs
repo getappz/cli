@@ -103,7 +103,17 @@ fn exec_inner(
             } else {
                 name.starts_with(scrub_prefix)
             };
-            if hit {
+            // Never queue a removal for a name we set explicitly: the command
+            // env is a HashMap, and on Windows a differently-cased removal
+            // could be applied after the set and delete our value.
+            let explicit = env.iter().any(|(ek, _)| {
+                if cfg!(windows) {
+                    ek.eq_ignore_ascii_case(&name)
+                } else {
+                    *ek == name
+                }
+            });
+            if hit && !explicit {
                 cmd.env_remove(k);
             }
         }

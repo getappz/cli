@@ -336,10 +336,16 @@ pub fn pull_cloud_env(
             reason: format!("Invalid JSON response from pull env: {e}"),
         })?;
 
-    let items = resp.as_array().ok_or_else(|| DeployError::DeployFailed {
-        provider: "AppzDev",
-        reason: "Expected array of environment variables".into(),
-    })?;
+    let items = if let Some(arr) = resp.as_array() {
+        arr
+    } else if let Some(arr) = resp["env"].as_array() {
+        arr
+    } else {
+        return Err(DeployError::DeployFailed {
+            provider: "AppzDev",
+            reason: "Expected array of environment variables".into(),
+        });
+    };
 
     let vars: Vec<CloudEnvVar> = serde_json::from_value(serde_json::Value::Array(items.clone()))
         .map_err(|e| DeployError::DeployFailed {
@@ -449,6 +455,7 @@ impl AppzdevProvider {
 
         let deployment_id = resp["deploymentId"]
             .as_str()
+            .or_else(|| resp["id"].as_str())
             .ok_or_else(|| DeployError::DeployFailed {
                 provider: self.name(),
                 reason: "Missing deploymentId in response".into(),
@@ -1055,5 +1062,180 @@ SPACED=hello world
         assert!(formatted.contains("DATABASE_URL=postgres://user:pass@localhost:5432/db"));
         assert!(formatted.contains("API_KEY=sk_test_12345"));
         assert!(formatted.contains("SPACED=\"hello world\""));
+    }
+
+    struct MockServer {
+        addr: String,
+        shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        handle: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl MockServer {
+        fn start() -> Self {
+            use std::io::{BufRead, BufReader, Read, Write};
+            use std::net::TcpListener;
+            use std::sync::atomic::{AtomicBool, Ordering};
+            use std::sync::Arc;
+
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = format!("http://{}", listener.local_addr().unwrap());
+            let shutdown = Arc::new(AtomicBool::new(false));
+            let shutdown_clone = Arc::clone(&shutdown);
+
+            listener.set_nonblocking(true).unwrap();
+
+            let handle = std::thread::spawn(move || {
+                while !shutdown_clone.load(Ordering::Relaxed) {
+                    match listener.accept() {
+                        Ok((mut stream, _)) => {
+                            let _ = stream.set_nonblocking(false);
+                            let mut reader = BufReader::new(&mut stream);
+                            let mut request_line = String::new();
+                            if reader.read_line(&mut request_line).is_err() || request_line.is_empty() {
+                                continue;
+                            }
+
+                            let mut content_length = 0;
+                            loop {
+                                let mut line = String::new();
+                                if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                                    break;
+                                }
+                                let lower = line.to_lowercase();
+                                if lower.starts_with("content-length:") {
+                                    if let Some(val) = lower.strip_prefix("content-length:") {
+                                        content_length = val.trim().parse::<usize>().unwrap_or(0);
+                                    }
+                                }
+                            }
+
+                            let mut body = vec![0u8; content_length];
+                            if content_length > 0 {
+                                let _ = reader.read_exact(&mut body);
+                            }
+
+                            let parts: Vec<&str> = request_line.split_whitespace().collect();
+                            let method = parts.first().copied().unwrap_or("");
+                            let path = parts.get(1).copied().unwrap_or("");
+
+                            let (status, resp_body) = if method == "POST" && path == "/api/v0/deployments" {
+                                ("200 OK", r#"{"deploymentId":"dpl_mock_1","id":"dpl_mock_1","url":"https://mock.appz.page","status":"ready","missing":[]}"#)
+                            } else if method == "GET" && path.starts_with("/api/v0/deployments/dpl_mock_1") {
+                                ("200 OK", r#"{"id":"dpl_mock_1","projectId":"prj_mock","versionId":"ver_mock_1","status":"ready","target":"production","hosts":["mock.appz.page"],"fileCount":2,"totalBytes":128,"files":[{"path":"/index.html","size":64,"hash":"h1"},{"path":"/app.js","size":64,"hash":"h2"}]}"#)
+                            } else if method == "GET" && path.contains("/deployments") {
+                                ("200 OK", r#"[{"id":"dpl_mock_1","url":"https://mock.appz.page","status":"ready","createdAt":"2026-11-10T00:00:00Z"}]"#)
+                            } else if method == "POST" && path.contains("/rollback") {
+                                ("200 OK", r#"{"success":true,"versionId":"ver_mock_1"}"#)
+                            } else if method == "POST" && path.contains("/alias") {
+                                ("200 OK", r#"{"success":true,"domain":"custom.com"}"#)
+                            } else if method == "GET" && path.contains("/env") {
+                                ("200 OK", r#"{"env":[{"key":"MOCK_VAR","value":"test_val_123","target":["production"]}]}"#)
+                            } else if method == "POST" && path.contains("/env") {
+                                ("200 OK", r#"{"count":1}"#)
+                            } else {
+                                ("404 Not Found", r#"{"error":"Not found"}"#)
+                            };
+
+                            let response = format!(
+                                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                                status,
+                                resp_body.len(),
+                                resp_body
+                            );
+                            let _ = stream.write_all(response.as_bytes());
+                            let _ = stream.flush();
+                        }
+                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            std::thread::sleep(std::time::Duration::from_millis(10));
+                        }
+                        Err(_) => break,
+                    }
+                }
+            });
+
+            Self {
+                addr,
+                shutdown,
+                handle: Some(handle),
+            }
+        }
+    }
+
+    impl Drop for MockServer {
+        fn drop(&mut self) {
+            self.shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+            if let Some(h) = self.handle.take() {
+                let _ = h.join();
+            }
+        }
+    }
+
+    #[test]
+    fn test_appzdev_mock_end_to_end_flow() {
+        let server = MockServer::start();
+        let dir = tempdir().unwrap();
+
+        // Scaffold a mock project with dist output
+        let dist = dir.path().join("dist");
+        std::fs::create_dir_all(&dist).unwrap();
+        std::fs::write(dist.join("index.html"), "<h1>Hello Appz</h1>").unwrap();
+        std::fs::write(dist.join("app.js"), "console.log('test');").unwrap();
+
+        let mut ctx = DeployContext::new(dir.path().to_path_buf(), "dist".to_string());
+        ctx.run_env.insert("APPZ_API_URL".to_string(), server.addr.clone());
+        ctx.run_env.insert("APPZ_TOKEN".to_string(), "mock_token_123".to_string());
+        ctx.run_env.insert("APPZ_PROJECT_ID".to_string(), "prj_mock".to_string());
+
+        let provider = AppzdevProvider;
+
+        // 1. Deploy
+        let deploy_out = provider.deploy(&ctx).expect("deploy must succeed");
+        assert_eq!(deploy_out.provider, "appzdev");
+        assert_eq!(deploy_out.url.as_deref(), Some("https://mock.appz.page"));
+        assert_eq!(deploy_out.status, DeployStatus::Ready);
+
+        // 2. Inspect
+        let inspect_out = provider.inspect_deployment(&ctx, "dpl_mock_1").expect("inspect must succeed");
+        assert_eq!(inspect_out.id, "dpl_mock_1");
+        assert_eq!(inspect_out.project_id, "prj_mock");
+        assert_eq!(inspect_out.version_id, "ver_mock_1");
+        assert_eq!(inspect_out.file_count, 2);
+        assert_eq!(inspect_out.files.as_ref().unwrap().len(), 2);
+
+        // 3. List
+        let list_out = provider.list_deployments(&ctx).expect("list must succeed");
+        assert_eq!(list_out.len(), 1);
+        assert_eq!(list_out[0].id, "dpl_mock_1");
+
+        // 4. Rollback
+        provider.rollback(&ctx, "ver_mock_1").expect("rollback must succeed");
+
+        // 5. Alias
+        let alias_out = provider.alias(&ctx, "custom.com").expect("alias must succeed");
+        assert!(alias_out.contains("custom.com"));
+
+        // 6. Env pull
+        let pulled_vars = pull_cloud_env(&server.addr, "prj_mock", Some("mock_token_123"), Some("production"))
+            .expect("env pull must succeed");
+        assert_eq!(pulled_vars.len(), 1);
+        assert_eq!(pulled_vars[0].key, "MOCK_VAR");
+        assert_eq!(pulled_vars[0].value, "test_val_123");
+
+        // 7. Env push
+        let push_count = push_cloud_env(
+            &server.addr,
+            "prj_mock",
+            Some("mock_token_123"),
+            &[CloudEnvVar {
+                id: None,
+                key: "NEW_VAR".to_string(),
+                value: "new_val".to_string(),
+                target: vec!["production".to_string()],
+                git_branch: None,
+                created_at: None,
+            }],
+        )
+        .expect("env push must succeed");
+        assert_eq!(push_count, 1);
     }
 }

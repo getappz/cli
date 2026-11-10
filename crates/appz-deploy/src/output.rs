@@ -83,31 +83,35 @@ pub struct DeploymentInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct InspectFileEntry {
     pub path: String,
     pub size: u64,
     pub hash: String,
-    #[serde(default)]
+    #[serde(default, alias = "content_type")]
     pub content_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DeploymentInspect {
     pub id: String,
+    #[serde(alias = "project_id")]
     pub project_id: String,
+    #[serde(alias = "version_id")]
     pub version_id: String,
     pub status: DeployStatus,
     #[serde(default)]
     pub target: String,
-    #[serde(default)]
+    #[serde(default, alias = "created_at")]
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(default)]
     pub hosts: Vec<String>,
-    #[serde(default)]
+    #[serde(default, alias = "file_count")]
     pub file_count: usize,
-    #[serde(default)]
+    #[serde(default, alias = "total_bytes")]
     pub total_bytes: u64,
-    #[serde(default)]
+    #[serde(default, alias = "manifest_key")]
     pub manifest_key: Option<String>,
     #[serde(default)]
     pub redirects: Vec<String>,

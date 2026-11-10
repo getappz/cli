@@ -18,3 +18,8 @@ pub use provider::{
     create_provider_registry, detect_providers, ensure_cli_available, get_provider,
     install_cli_with_mise,
 };
+pub use providers::appzdev::{
+    DeviceCodeResponse, DevicePollResult, StoredAuth, auth_file_path, load_stored_auth,
+    parse_api_error, poll_device_token, request_device_code, resolve_auth_token, save_stored_auth,
+    slugify_project_id,
+};

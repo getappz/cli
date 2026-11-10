@@ -1,6 +1,7 @@
 use clap::{Args, Parser, Subcommand};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use appz_core::{detect_toolchains, generate_claude_md, run_doctor};
 
@@ -64,6 +65,10 @@ enum AppzCmd {
     List(ListArgs),
     /// Inspect edge deployment manifest, hosts, and CAS metrics
     Inspect(InspectArgs),
+    /// Log in to Appz via browser device flow
+    Login(LoginArgs),
+    /// Print currently authenticated user and active organization
+    Whoami,
     /// Store credentials in an encrypted vault used by `appz deploy`
     Env(EnvArgs),
     /// Discover and install agent skills relevant to this project
@@ -258,6 +263,13 @@ struct InspectArgs {
     /// Provider slug (default: detects from project or config)
     #[arg(long)]
     target: Option<String>,
+}
+
+#[derive(Args)]
+struct LoginArgs {
+    /// Skip opening browser automatically
+    #[arg(long)]
+    no_browser: bool,
 }
 
 #[derive(Args)]
@@ -1091,6 +1103,8 @@ fn main() {
         AppzCmd::Alias(a) => run_alias(a, json),
         AppzCmd::List(a) => run_list(a, json),
         AppzCmd::Inspect(a) => run_inspect(a, json),
+        AppzCmd::Login(a) => run_login(a, json),
+        AppzCmd::Whoami => run_whoami(json),
         AppzCmd::Env(a) => run_env(a, json),
         AppzCmd::Skills(a) => run_skills(a, json),
         AppzCmd::Agents(a) => run_agents(a, json),
@@ -1542,5 +1556,210 @@ fn run_inspect(args: InspectArgs, json: bool) {
             }
         }
         Err(e) => error(&e),
+    }
+}
+
+fn run_login(args: LoginArgs, json: bool) {
+    let api_base = std::env::var("APPZ_API_URL").unwrap_or_else(|_| "https://appz.to".to_string());
+    if !json {
+        intro("appz login");
+    }
+
+    let code_resp = match appz_deploy::request_device_code(&api_base) {
+        Ok(c) => c,
+        Err(e) => {
+            error(&e.to_string());
+        }
+    };
+
+    let verify_url = code_resp
+        .verification_uri_complete
+        .as_deref()
+        .unwrap_or(&code_resp.verification_uri);
+
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "user_code": code_resp.user_code,
+                "verification_uri": code_resp.verification_uri,
+                "verification_uri_complete": code_resp.verification_uri_complete,
+                "expires_in": code_resp.expires_in,
+                "interval": code_resp.interval,
+            })
+        );
+    } else {
+        step("device authorization");
+        info(&format!("1. Confirm code in browser:  {}", code_resp.user_code));
+        info(&format!("2. Open URL:                  {}", verify_url));
+
+        if !args.no_browser {
+            #[cfg(target_os = "windows")]
+            {
+                let _ = std::process::Command::new("cmd")
+                    .args(["/c", "start", verify_url])
+                    .spawn();
+            }
+            #[cfg(target_os = "macos")]
+            {
+                let _ = std::process::Command::new("open")
+                    .arg(verify_url)
+                    .spawn();
+            }
+            #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+            {
+                let _ = std::process::Command::new("xdg-open")
+                    .arg(verify_url)
+                    .spawn();
+            }
+        }
+
+        info("waiting for authorization...");
+    }
+
+    let interval = Duration::from_secs(code_resp.interval.max(2));
+    let start = Instant::now();
+    let max_duration = Duration::from_secs(code_resp.expires_in.max(60));
+
+    loop {
+        if start.elapsed() > max_duration {
+            error("Device authorization timed out. Please try again.");
+        }
+        std::thread::sleep(interval);
+
+        match appz_deploy::poll_device_token(&api_base, &code_resp.device_code) {
+            appz_deploy::DevicePollResult::Success(token) => {
+                let session_url = format!("{api_base}/api/auth/get-session");
+                let session_res = ureq::get(&session_url)
+                    .set("Authorization", &format!("Bearer {token}"))
+                    .call();
+
+                let mut user_id = None;
+                let mut email = None;
+                let mut organization_id = None;
+
+                if let Ok(resp) = session_res {
+                    if let Ok(v) = resp.into_json::<serde_json::Value>() {
+                        user_id = v
+                            .get("user")
+                            .and_then(|u| u.get("id"))
+                            .and_then(|s| s.as_str())
+                            .map(String::from);
+                        email = v
+                            .get("user")
+                            .and_then(|u| u.get("email"))
+                            .and_then(|s| s.as_str())
+                            .map(String::from);
+                        organization_id = v
+                            .get("session")
+                            .and_then(|s| s.get("activeOrganizationId"))
+                            .and_then(|s| s.as_str())
+                            .map(String::from);
+                    }
+                }
+
+                let stored = appz_deploy::StoredAuth {
+                    token,
+                    user_id,
+                    email: email.clone(),
+                    organization_id: organization_id.clone(),
+                };
+
+                if let Err(e) = appz_deploy::save_stored_auth(&stored) {
+                    error(&format!("Failed to save session token: {e}"));
+                }
+
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&stored).unwrap());
+                } else {
+                    success(&format!(
+                        "successfully logged in as {}{}",
+                        email.unwrap_or_else(|| "authorized user".to_string()),
+                        organization_id
+                            .map(|o| format!(" (org: {o})"))
+                            .unwrap_or_default()
+                    ));
+                    outro("ready to deploy");
+                }
+                return;
+            }
+            appz_deploy::DevicePollResult::Pending => {}
+            appz_deploy::DevicePollResult::SlowDown => {
+                std::thread::sleep(Duration::from_secs(5));
+            }
+            appz_deploy::DevicePollResult::Failed(err) => {
+                error(&err);
+            }
+        }
+    }
+}
+
+fn run_whoami(json: bool) {
+    let token = appz_deploy::resolve_auth_token(None);
+    match token {
+        None => {
+            if json {
+                println!("{}", serde_json::json!({ "authenticated": false }));
+            } else {
+                info("not logged in. Run `appz login` or set APPZ_TOKEN");
+            }
+        }
+        Some(t) => {
+            let stored = appz_deploy::load_stored_auth();
+            let api_base =
+                std::env::var("APPZ_API_URL").unwrap_or_else(|_| "https://appz.to".to_string());
+            let session_url = format!("{api_base}/api/auth/get-session");
+            let session_res = ureq::get(&session_url)
+                .set("Authorization", &format!("Bearer {t}"))
+                .call();
+
+            let (email, org) = if let Ok(resp) = session_res {
+                if let Ok(v) = resp.into_json::<serde_json::Value>() {
+                    let email = v
+                        .get("user")
+                        .and_then(|u| u.get("email"))
+                        .and_then(|s| s.as_str())
+                        .map(String::from);
+                    let org = v
+                        .get("session")
+                        .and_then(|s| s.get("activeOrganizationId"))
+                        .and_then(|s| s.as_str())
+                        .map(String::from);
+                    (email, org)
+                } else {
+                    (
+                        stored.as_ref().and_then(|s| s.email.clone()),
+                        stored.as_ref().and_then(|s| s.organization_id.clone()),
+                    )
+                }
+            } else {
+                (
+                    stored.as_ref().and_then(|s| s.email.clone()),
+                    stored.as_ref().and_then(|s| s.organization_id.clone()),
+                )
+            };
+
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "authenticated": true,
+                        "email": email,
+                        "organizationId": org,
+                    })
+                );
+            } else {
+                intro("appz whoami");
+                if let Some(e) = email {
+                    info(&format!("user:         {e}"));
+                } else {
+                    info("user:         authenticated via token");
+                }
+                if let Some(o) = org {
+                    info(&format!("organization: {o}"));
+                }
+                outro("done");
+            }
+        }
     }
 }

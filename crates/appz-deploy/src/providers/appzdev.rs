@@ -4,11 +4,14 @@
 //! Features:
 //! - Multi-threaded SHA-256 Merkle tree calculation
 //! - Delta-check: only missing hashes are uploaded (zero duplicate transfer)
+//! - Bounded concurrency blob uploads with retries
 //! - Atomic immutable deployment to R2 MANIFESTS
 //! - Sub-second instant rollback via KV HOSTS pointer mutation
 
-use std::path::Path;
-use std::time::Instant;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use crate::context::DeployContext;
 use crate::error::{DeployError, DeployResult};
@@ -22,6 +25,215 @@ use crate::static_cas::scan_output_dir;
 pub struct AppzdevProvider;
 
 const DEFAULT_API_URL: &str = "https://appz.to";
+
+/// Normalizes a project id or name into a valid edge project slug:
+/// - Values starting with `prj_` are preserved untouched.
+/// - Otherwise: lowercase, replace non `[a-z0-9]` runs with `-`, trim `-`, cap at 40 chars.
+/// - Falls back to `default-project` if empty.
+pub fn slugify_project_id(raw: &str) -> String {
+    if raw.starts_with("prj_") {
+        return raw.to_string();
+    }
+    let mut out = String::with_capacity(raw.len());
+    let mut last_dash = false;
+    for c in raw.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+            last_dash = false;
+        } else if !last_dash {
+            out.push('-');
+            last_dash = true;
+        }
+    }
+    let trimmed = out.trim_matches('-');
+    let capped = if trimmed.len() > 40 {
+        &trimmed[..40]
+    } else {
+        trimmed
+    };
+    let final_slug = capped.trim_end_matches('-');
+    if final_slug.is_empty() {
+        "default-project".to_string()
+    } else {
+        final_slug.to_string()
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct StoredAuth {
+    pub token: String,
+    #[serde(default)]
+    pub user_id: Option<String>,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub organization_id: Option<String>,
+}
+
+pub fn auth_file_path() -> PathBuf {
+    if let Ok(p) = std::env::var("APPZ_VAULT_HOME_OVERRIDE") {
+        return PathBuf::from(p).join(".appz").join("auth.json");
+    }
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".appz")
+        .join("auth.json")
+}
+
+pub fn load_stored_auth() -> Option<StoredAuth> {
+    let p = auth_file_path();
+    let content = std::fs::read_to_string(p).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+pub fn save_stored_auth(auth: &StoredAuth) -> Result<(), std::io::Error> {
+    let p = auth_file_path();
+    if let Some(parent) = p.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let data = serde_json::to_string_pretty(auth)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    std::fs::write(p, data)
+}
+
+pub fn resolve_auth_token(ctx: Option<&DeployContext>) -> Option<String> {
+    if let Ok(t) = std::env::var("APPZ_TOKEN") {
+        if !t.is_empty() {
+            return Some(t);
+        }
+    }
+    if let Some(c) = ctx {
+        if let Some(t) = c.run_env.get("APPZ_TOKEN") {
+            if !t.is_empty() {
+                return Some(t.clone());
+            }
+        }
+    }
+    load_stored_auth().map(|a| a.token)
+}
+
+pub fn parse_api_error(
+    err: ureq::Error,
+    provider_name: &'static str,
+    operation: &str,
+) -> DeployError {
+    match err {
+        ureq::Error::Status(code, resp) => {
+            if code == 401 {
+                return DeployError::AuthMissing {
+                    provider: provider_name,
+                    env_var: "APPZ_TOKEN",
+                    login_hint: "run `appz login` or set APPZ_TOKEN".to_string(),
+                };
+            }
+            if let Ok(json) = resp.into_json::<serde_json::Value>() {
+                let mut msg = String::new();
+                if let Some(err_str) = json.get("error").and_then(|e| e.as_str()) {
+                    msg.push_str(err_str);
+                } else {
+                    msg.push_str(&format!("HTTP {code}"));
+                }
+                if let Some(issues) = json.get("issues").and_then(|i| i.as_array()) {
+                    for issue in issues {
+                        let path = issue.get("path").and_then(|p| p.as_str()).unwrap_or("");
+                        let message = issue.get("message").and_then(|m| m.as_str()).unwrap_or("");
+                        if !path.is_empty() || !message.is_empty() {
+                            msg.push_str(&format!("\n  - {path}: {message}"));
+                        }
+                    }
+                }
+                if let Some(missing) = json.get("missing").and_then(|m| m.as_array()) {
+                    msg.push_str(&format!(" (missing {} blobs)", missing.len()));
+                }
+                DeployError::DeployFailed {
+                    provider: provider_name,
+                    reason: format!("{operation} failed ({code}): {msg}"),
+                }
+            } else {
+                DeployError::DeployFailed {
+                    provider: provider_name,
+                    reason: format!("{operation} failed with HTTP status {code}"),
+                }
+            }
+        }
+        ureq::Error::Transport(e) => DeployError::DeployFailed {
+            provider: provider_name,
+            reason: format!("{operation} network error: {e}"),
+        },
+    }
+}
+
+pub struct DeviceCodeResponse {
+    pub device_code: String,
+    pub user_code: String,
+    pub verification_uri: String,
+    pub verification_uri_complete: Option<String>,
+    pub interval: u64,
+    pub expires_in: u64,
+}
+
+pub fn request_device_code(api_base: &str) -> DeployResult<DeviceCodeResponse> {
+    let url = format!("{api_base}/api/auth/device/code");
+    let resp: serde_json::Value = ureq::post(&url)
+        .send_json(serde_json::json!({ "client_id": "appz-cli" }))
+        .map_err(|e| parse_api_error(e, "AppzDev", "Request device code"))?
+        .into_json()
+        .map_err(|e| DeployError::DeployFailed {
+            provider: "AppzDev",
+            reason: format!("Invalid device code response: {e}"),
+        })?;
+
+    Ok(DeviceCodeResponse {
+        device_code: resp["device_code"].as_str().unwrap_or_default().to_string(),
+        user_code: resp["user_code"].as_str().unwrap_or_default().to_string(),
+        verification_uri: resp["verification_uri"].as_str().unwrap_or_default().to_string(),
+        verification_uri_complete: resp["verification_uri_complete"].as_str().map(String::from),
+        interval: resp["interval"].as_u64().unwrap_or(5),
+        expires_in: resp["expires_in"].as_u64().unwrap_or(900),
+    })
+}
+
+pub enum DevicePollResult {
+    Success(String),
+    Pending,
+    SlowDown,
+    Failed(String),
+}
+
+pub fn poll_device_token(api_base: &str, device_code: &str) -> DevicePollResult {
+    let url = format!("{api_base}/api/auth/device/token");
+    let res = ureq::post(&url).send_json(serde_json::json!({
+        "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+        "device_code": device_code,
+        "client_id": "appz-cli",
+    }));
+
+    match res {
+        Ok(resp) => {
+            if let Ok(v) = resp.into_json::<serde_json::Value>() {
+                if let Some(tok) = v.get("access_token").and_then(|s| s.as_str()) {
+                    return DevicePollResult::Success(tok.to_string());
+                }
+            }
+            DevicePollResult::Failed("Missing access_token in token response".into())
+        }
+        Err(ureq::Error::Status(code, resp)) => {
+            if let Ok(v) = resp.into_json::<serde_json::Value>() {
+                let err = v.get("error").and_then(|s| s.as_str()).unwrap_or("");
+                match err {
+                    "authorization_pending" => DevicePollResult::Pending,
+                    "slow_down" => DevicePollResult::SlowDown,
+                    "access_denied" => DevicePollResult::Failed("Access denied by user".into()),
+                    "expired_token" => DevicePollResult::Failed("Device code expired".into()),
+                    _ => DevicePollResult::Failed(format!("Device token failed ({code}): {err}")),
+                }
+            } else {
+                DevicePollResult::Failed(format!("HTTP {code} from device token endpoint"))
+            }
+        }
+        Err(e) => DevicePollResult::Failed(format!("Network error: {e}")),
+    }
+}
 
 impl AppzdevProvider {
     fn api_base(&self, ctx: &DeployContext) -> String {
@@ -39,7 +251,7 @@ impl AppzdevProvider {
         if let Ok(content) = std::fs::read_to_string(&project_json) {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) {
                 if let Some(id) = v.get("projectId").and_then(|s| s.as_str()) {
-                    return id.to_string();
+                    return slugify_project_id(id);
                 }
             }
         }
@@ -47,20 +259,22 @@ impl AppzdevProvider {
         // 2. Check APPZ_PROJECT_ID env var
         if let Some(id) = ctx.run_env.get("APPZ_PROJECT_ID") {
             if !id.is_empty() {
-                return id.clone();
+                return slugify_project_id(id);
             }
         }
         if let Ok(id) = std::env::var("APPZ_PROJECT_ID") {
             if !id.is_empty() {
-                return id;
+                return slugify_project_id(&id);
             }
         }
 
         // 3. Fallback to folder name
-        ctx.project_dir
+        let folder = ctx
+            .project_dir
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| "default-project".to_string())
+            .unwrap_or_else(|| "default-project".to_string());
+        slugify_project_id(&folder)
     }
 
     fn deploy_internal(&self, ctx: &DeployContext, is_preview: bool) -> DeployResult<DeployOutput> {
@@ -87,6 +301,7 @@ impl AppzdevProvider {
 
         let project_id = self.resolve_project_id(ctx);
         let api_base = self.api_base(ctx);
+        let token_opt = resolve_auth_token(Some(ctx));
         let target = if is_preview { "preview" } else { "production" };
 
         let payload = serde_json::json!({
@@ -98,16 +313,13 @@ impl AppzdevProvider {
         // Step 1: POST /api/v0/deployments - Handshake & missing blob diff
         let create_url = format!("{}/api/v0/deployments", api_base);
         let mut req = ureq::post(&create_url);
-        if let Ok(token) = std::env::var("APPZ_TOKEN") {
+        if let Some(token) = &token_opt {
             req = req.set("Authorization", &format!("Bearer {token}"));
         }
 
         let resp: serde_json::Value = req
             .send_json(payload)
-            .map_err(|e| DeployError::DeployFailed {
-                provider: self.name(),
-                reason: format!("Failed to initiate deployment to {create_url}: {e}"),
-            })?
+            .map_err(|e| parse_api_error(e, self.name(), "Initiate deployment"))?
             .into_json()
             .map_err(|e| DeployError::DeployFailed {
                 provider: self.name(),
@@ -131,40 +343,99 @@ impl AppzdevProvider {
             })
             .unwrap_or_default();
 
-        // Step 2: Upload missing blobs
-        for hash in &missing {
-            if let Some(blob) = scanned.blobs_by_hash.get(hash) {
-                let upload_url = format!(
-                    "{}/api/v0/deployments/{}/files/{}",
-                    api_base, deployment_id, hash
-                );
-                let mut up_req = ureq::put(&upload_url)
-                    .set("Content-Type", "application/octet-stream");
-                if let Ok(token) = std::env::var("APPZ_TOKEN") {
-                    up_req = up_req.set("Authorization", &format!("Bearer {token}"));
+        // Step 2: Upload missing blobs with bounded concurrency (pool of 8) and retry
+        if !missing.is_empty() {
+            let missing_blobs: Vec<(&str, &[u8])> = missing
+                .iter()
+                .filter_map(|h| {
+                    scanned
+                        .blobs_by_hash
+                        .get(h)
+                        .map(|b| (h.as_str(), b.data.as_slice()))
+                })
+                .collect();
+
+            let worker_count = 8.min(missing_blobs.len()).max(1);
+            let next_idx = AtomicUsize::new(0);
+            let upload_error = Mutex::new(None::<String>);
+
+            std::thread::scope(|s| {
+                for _ in 0..worker_count {
+                    s.spawn(|| {
+                        loop {
+                            let idx = next_idx.fetch_add(1, Ordering::Relaxed);
+                            if idx >= missing_blobs.len() {
+                                break;
+                            }
+                            if upload_error.lock().unwrap().is_some() {
+                                break;
+                            }
+                            let (hash, data) = missing_blobs[idx];
+
+                            let mut last_err = None;
+                            for attempt in 0..3 {
+                                if attempt > 0 {
+                                    std::thread::sleep(Duration::from_millis(200 * (1 << attempt)));
+                                }
+                                let upload_url = format!(
+                                    "{}/api/v0/deployments/{}/files/{}",
+                                    api_base, deployment_id, hash
+                                );
+                                let mut up_req = ureq::put(&upload_url)
+                                    .set("Content-Type", "application/octet-stream");
+                                if let Some(token) = &token_opt {
+                                    up_req = up_req.set("Authorization", &format!("Bearer {token}"));
+                                }
+                                match up_req.send_bytes(data) {
+                                    Ok(_) => {
+                                        last_err = None;
+                                        break;
+                                    }
+                                    Err(ureq::Error::Status(code, _))
+                                        if code == 429 || code >= 500 =>
+                                    {
+                                        last_err = Some(format!(
+                                            "HTTP {code} uploading blob {hash}"
+                                        ));
+                                        continue;
+                                    }
+                                    Err(e) => {
+                                        let parsed = parse_api_error(e, "AppzDev", "Upload blob");
+                                        last_err = Some(parsed.to_string());
+                                        break;
+                                    }
+                                }
+                            }
+                            if let Some(err) = last_err {
+                                let mut lock = upload_error.lock().unwrap();
+                                if lock.is_none() {
+                                    *lock = Some(err);
+                                }
+                                break;
+                            }
+                        }
+                    });
                 }
-                up_req
-                    .send_bytes(&blob.data)
-                    .map_err(|e| DeployError::DeployFailed {
-                        provider: self.name(),
-                        reason: format!("Failed to upload blob {hash}: {e}"),
-                    })?;
+            });
+
+            if let Some(err) = upload_error.into_inner().unwrap() {
+                return Err(DeployError::DeployFailed {
+                    provider: self.name(),
+                    reason: err,
+                });
             }
         }
 
-        // Step 3: Commit deployment if blobs were uploaded
+        // Step 3: Commit deployment if blobs were uploaded; when missing is empty the deployment is already published
         let final_url = if !missing.is_empty() {
             let commit_url = format!("{}/api/v0/deployments/{}/commit", api_base, deployment_id);
             let mut commit_req = ureq::post(&commit_url);
-            if let Ok(token) = std::env::var("APPZ_TOKEN") {
+            if let Some(token) = &token_opt {
                 commit_req = commit_req.set("Authorization", &format!("Bearer {token}"));
             }
             let commit_resp: serde_json::Value = commit_req
                 .send_json(serde_json::json!({}))
-                .map_err(|e| DeployError::DeployFailed {
-                    provider: self.name(),
-                    reason: format!("Failed to commit deployment: {e}"),
-                })?
+                .map_err(|e| parse_api_error(e, self.name(), "Commit deployment"))?
                 .into_json()
                 .map_err(|e| DeployError::DeployFailed {
                     provider: self.name(),
@@ -295,10 +566,28 @@ impl DeployProvider for AppzdevProvider {
 
         let project_id = self.resolve_project_id(ctx);
         let project_json = appz_dir.join("project.json");
-        let content = serde_json::json!({
-            "projectId": project_id,
-            "orgId": "team_default",
-        });
+
+        let stored_org = load_stored_auth().and_then(|a| a.organization_id);
+        let existing_org = if project_json.is_file() {
+            std::fs::read_to_string(&project_json)
+                .ok()
+                .and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok())
+                .and_then(|v| v.get("orgId").and_then(|s| s.as_str()).map(String::from))
+        } else {
+            None
+        };
+
+        let org_id = existing_org.or(stored_org);
+        let content = if let Some(org) = org_id {
+            serde_json::json!({
+                "projectId": project_id,
+                "orgId": org,
+            })
+        } else {
+            serde_json::json!({
+                "projectId": project_id,
+            })
+        };
 
         std::fs::write(&project_json, serde_json::to_string_pretty(&content).unwrap())
             .map_err(|e| DeployError::DeployFailed {
@@ -322,18 +611,16 @@ impl DeployProvider for AppzdevProvider {
         let project_id = self.resolve_project_id(ctx);
         let api_base = self.api_base(ctx);
         let rollback_url = format!("{}/api/v0/projects/{}/rollback", api_base, project_id);
+        let token_opt = resolve_auth_token(Some(ctx));
 
         let mut req = ureq::post(&rollback_url);
-        if let Ok(token) = std::env::var("APPZ_TOKEN") {
+        if let Some(token) = &token_opt {
             req = req.set("Authorization", &format!("Bearer {token}"));
         }
 
         let resp: serde_json::Value = req
             .send_json(serde_json::json!({ "versionId": version_id }))
-            .map_err(|e| DeployError::DeployFailed {
-                provider: self.name(),
-                reason: format!("Rollback request failed: {e}"),
-            })?
+            .map_err(|e| parse_api_error(e, self.name(), "Rollback deployment"))?
             .into_json()
             .map_err(|e| DeployError::DeployFailed {
                 provider: self.name(),
@@ -362,18 +649,16 @@ impl DeployProvider for AppzdevProvider {
         let project_id = self.resolve_project_id(ctx);
         let api_base = self.api_base(ctx);
         let alias_url = format!("{}/api/v0/projects/{}/alias", api_base, project_id);
+        let token_opt = resolve_auth_token(Some(ctx));
 
         let mut req = ureq::post(&alias_url);
-        if let Ok(token) = std::env::var("APPZ_TOKEN") {
+        if let Some(token) = &token_opt {
             req = req.set("Authorization", &format!("Bearer {token}"));
         }
 
         let resp: serde_json::Value = req
             .send_json(serde_json::json!({ "domain": domain }))
-            .map_err(|e| DeployError::DeployFailed {
-                provider: self.name(),
-                reason: format!("Alias request failed: {e}"),
-            })?
+            .map_err(|e| parse_api_error(e, self.name(), "Alias domain"))?
             .into_json()
             .map_err(|e| DeployError::DeployFailed {
                 provider: self.name(),
@@ -388,18 +673,16 @@ impl DeployProvider for AppzdevProvider {
         let project_id = self.resolve_project_id(ctx);
         let api_base = self.api_base(ctx);
         let list_url = format!("{}/api/v0/projects/{}/deployments", api_base, project_id);
+        let token_opt = resolve_auth_token(Some(ctx));
 
         let mut req = ureq::get(&list_url);
-        if let Ok(token) = std::env::var("APPZ_TOKEN") {
+        if let Some(token) = &token_opt {
             req = req.set("Authorization", &format!("Bearer {token}"));
         }
 
         let resp: serde_json::Value = req
             .call()
-            .map_err(|e| DeployError::DeployFailed {
-                provider: self.name(),
-                reason: format!("Failed to list deployments: {e}"),
-            })?
+            .map_err(|e| parse_api_error(e, self.name(), "List deployments"))?
             .into_json()
             .map_err(|e| DeployError::DeployFailed {
                 provider: self.name(),
@@ -461,17 +744,16 @@ impl DeployProvider for AppzdevProvider {
             .unwrap_or(trimmed);
 
         let inspect_url = format!("{}/api/v0/deployments/{}", api_base, dpl_id);
+        let token_opt = resolve_auth_token(Some(ctx));
+
         let mut req = ureq::get(&inspect_url);
-        if let Ok(token) = std::env::var("APPZ_TOKEN") {
+        if let Some(token) = &token_opt {
             req = req.set("Authorization", &format!("Bearer {token}"));
         }
 
         let resp: serde_json::Value = req
             .call()
-            .map_err(|e| DeployError::DeployFailed {
-                provider: self.name(),
-                reason: format!("Failed to inspect deployment {dpl_id}: {e}"),
-            })?
+            .map_err(|e| parse_api_error(e, self.name(), "Inspect deployment"))?
             .into_json()
             .map_err(|e| DeployError::DeployFailed {
                 provider: self.name(),
@@ -489,9 +771,23 @@ impl DeployProvider for AppzdevProvider {
 }
 
 #[cfg(test)]
+#[allow(unsafe_code)]
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn test_slugify_project_id() {
+        assert_eq!(slugify_project_id("prj_1234567890"), "prj_1234567890");
+        assert_eq!(slugify_project_id("My Awesome Site"), "my-awesome-site");
+        assert_eq!(slugify_project_id("---foo---bar---"), "foo-bar");
+        assert_eq!(slugify_project_id("Hello, World! 123"), "hello-world-123");
+        assert_eq!(slugify_project_id("$$$"), "default-project");
+        let long_name = "a".repeat(60);
+        let slug = slugify_project_id(&long_name);
+        assert_eq!(slug.len(), 40);
+        assert_eq!(slug, "a".repeat(40));
+    }
 
     #[test]
     fn test_resolve_project_id_from_file() {
@@ -500,7 +796,7 @@ mod tests {
         std::fs::create_dir_all(&appz_dir).unwrap();
         std::fs::write(
             appz_dir.join("project.json"),
-            r#"{"projectId": "prj_file123", "orgId": "team_abc"}"#,
+            r#"{"projectId": "prj_file123", "orgId": "org_abc"}"#,
         )
         .unwrap();
 
@@ -511,23 +807,22 @@ mod tests {
 
         let config = provider.detect_config(dir.path()).unwrap().unwrap();
         assert_eq!(config.project_name.as_deref(), Some("prj_file123"));
-        assert_eq!(config.team.as_deref(), Some("team_abc"));
+        assert_eq!(config.team.as_deref(), Some("org_abc"));
     }
 
     #[test]
-    fn test_resolve_project_id_from_env() {
+    fn test_resolve_project_id_normalizes_folder_name() {
         let dir = tempdir().unwrap();
-        let mut ctx = DeployContext::new(dir.path().to_path_buf(), "dist".to_string());
-        ctx.run_env
-            .insert("APPZ_PROJECT_ID".to_string(), "prj_env999".to_string());
+        let folder = dir.path().join("My Test Project!");
+        std::fs::create_dir_all(&folder).unwrap();
 
+        let ctx = DeployContext::new(folder, "dist".to_string());
         let provider = AppzdevProvider;
-        assert_eq!(provider.resolve_project_id(&ctx), "prj_env999");
-        assert!(provider.is_linked(&ctx));
+        assert_eq!(provider.resolve_project_id(&ctx), "my-test-project");
     }
 
     #[test]
-    fn test_link_writes_clean_project_json() {
+    fn test_link_omits_placeholder_org() {
         let dir = tempdir().unwrap();
         let mut ctx = DeployContext::new(dir.path().to_path_buf(), "dist".to_string());
         ctx.run_env
@@ -542,6 +837,78 @@ mod tests {
         let raw = std::fs::read_to_string(&project_json).unwrap();
         let val: serde_json::Value = serde_json::from_str(&raw).unwrap();
         assert_eq!(val["projectId"], "prj_custom_1");
-        assert_eq!(val["orgId"], "team_default");
+        assert!(val.get("orgId").is_none());
+    }
+
+    #[test]
+    fn test_link_uses_stored_org_when_present() {
+        let dir = tempdir().unwrap();
+        let old_override = std::env::var("APPZ_VAULT_HOME_OVERRIDE").ok();
+        unsafe {
+            std::env::set_var("APPZ_VAULT_HOME_OVERRIDE", dir.path());
+        }
+
+        save_stored_auth(&StoredAuth {
+            token: "tok".to_string(),
+            user_id: None,
+            email: None,
+            organization_id: Some("org_from_session".to_string()),
+        })
+        .unwrap();
+
+        let mut ctx = DeployContext::new(dir.path().to_path_buf(), "dist".to_string());
+        ctx.run_env
+            .insert("APPZ_PROJECT_ID".to_string(), "prj_stored_org".to_string());
+
+        let provider = AppzdevProvider;
+        provider.link(&ctx, false).unwrap();
+
+        let project_json = dir.path().join(".appz").join("project.json");
+        let raw = std::fs::read_to_string(&project_json).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(val["projectId"], "prj_stored_org");
+        assert_eq!(val["orgId"], "org_from_session");
+
+        if let Some(orig) = old_override {
+            unsafe {
+                std::env::set_var("APPZ_VAULT_HOME_OVERRIDE", orig);
+            }
+        } else {
+            unsafe {
+                std::env::remove_var("APPZ_VAULT_HOME_OVERRIDE");
+            }
+        }
+    }
+
+    #[test]
+    fn test_stored_auth_roundtrip() {
+        let dir = tempdir().unwrap();
+        let old_override = std::env::var("APPZ_VAULT_HOME_OVERRIDE").ok();
+        unsafe {
+            std::env::set_var("APPZ_VAULT_HOME_OVERRIDE", dir.path());
+        }
+
+        let auth = StoredAuth {
+            token: "test_token_xyz".to_string(),
+            user_id: Some("usr_123".to_string()),
+            email: Some("dev@appz.to".to_string()),
+            organization_id: Some("org_999".to_string()),
+        };
+
+        save_stored_auth(&auth).unwrap();
+        let loaded = load_stored_auth().unwrap();
+        assert_eq!(loaded.token, "test_token_xyz");
+        assert_eq!(loaded.email.as_deref(), Some("dev@appz.to"));
+        assert_eq!(loaded.organization_id.as_deref(), Some("org_999"));
+
+        if let Some(orig) = old_override {
+            unsafe {
+                std::env::set_var("APPZ_VAULT_HOME_OVERRIDE", orig);
+            }
+        } else {
+            unsafe {
+                std::env::remove_var("APPZ_VAULT_HOME_OVERRIDE");
+            }
+        }
     }
 }

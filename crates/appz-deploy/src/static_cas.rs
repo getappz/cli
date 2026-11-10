@@ -7,6 +7,8 @@ use std::path::Path;
 use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
+pub const MAX_FILE_SIZE: usize = 25 * 1024 * 1024; // 25 MB edge upload limit
+
 const DEFAULT_IGNORES: &[&str] = &[
     ".git",
     ".gitmodules",
@@ -118,17 +120,27 @@ pub fn scan_output_dir(output_dir: &Path) -> Result<ScannedTree, String> {
             continue;
         }
 
-        let data = std::fs::read(abs_path)
-            .map_err(|e| format!("Failed to read {}: {e}", abs_path.display()))?;
-        let hash = sha256_hex(&data);
-        let size = data.len();
-        total_bytes += size;
-
         let norm_path = if rel_str.starts_with('/') {
             rel_str.replace('\\', "/")
         } else {
             format!("/{}", rel_str.replace('\\', "/"))
         };
+
+        let metadata = entry
+            .metadata()
+            .map_err(|e| format!("Failed to read metadata for {}: {e}", abs_path.display()))?;
+        let size = metadata.len() as usize;
+        if size > MAX_FILE_SIZE {
+            return Err(format!(
+                "File '{}' exceeds maximum allowed size of 25 MB (size: {} bytes)",
+                norm_path, size
+            ));
+        }
+
+        let data = std::fs::read(abs_path)
+            .map_err(|e| format!("Failed to read {}: {e}", abs_path.display()))?;
+        let hash = sha256_hex(&data);
+        total_bytes += size;
 
         let mime = guess_mime(&norm_path);
         let immutable = is_immutable_asset(&norm_path);
@@ -152,4 +164,44 @@ pub fn scan_output_dir(output_dir: &Path) -> Result<ScannedTree, String> {
         blobs_by_hash,
         total_bytes,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_scan_output_dir_basic() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("index.html"), "<h1>Hello</h1>").unwrap();
+        let sub = dir.path().join("assets");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("style.css"), "body { color: red; }").unwrap();
+
+        let scanned = scan_output_dir(dir.path()).unwrap();
+        assert_eq!(scanned.files.len(), 2);
+        assert_eq!(scanned.blobs_by_hash.len(), 2);
+
+        let index_entry = scanned.files.iter().find(|f| f.path == "/index.html").unwrap();
+        assert_eq!(index_entry.r#type, "text/html; charset=utf-8");
+        assert_eq!(index_entry.immutable, None);
+
+        let css_entry = scanned.files.iter().find(|f| f.path == "/assets/style.css").unwrap();
+        assert_eq!(css_entry.r#type, "text/css; charset=utf-8");
+        assert_eq!(css_entry.immutable, Some(true));
+    }
+
+    #[test]
+    fn test_scan_output_dir_rejects_oversized_file() {
+        let dir = tempdir().unwrap();
+        let large_file = dir.path().join("large.bin");
+        // Create sparse or truncated file simulating > 25 MB
+        let f = std::fs::File::create(&large_file).unwrap();
+        f.set_len((MAX_FILE_SIZE + 1024) as u64).unwrap();
+
+        let err = scan_output_dir(dir.path()).unwrap_err();
+        assert!(err.contains("exceeds maximum allowed size of 25 MB"));
+        assert!(err.contains("/large.bin"));
+    }
 }

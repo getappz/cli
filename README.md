@@ -174,15 +174,15 @@ action doesn't take platform-specific inputs.
 ## Configuration
 
 `appz` reads `appz.jsonc` (JSON with comments) in the project root. The
-`vite` section is read by the `@getappz/vite` plugin and by `appz` itself for
-target validation and warnings:
+`vite` section is read by the `@getappz/vite` plugin (the `appz` CLI itself
+does not read it):
 
 ```jsonc
 {
   "vite": {
     // Deploy target for `appz deploy --target <slug>` after the vite build.
     // One of: vercel, netlify, cloudflare, github-pages, fly, deno-deploy,
-    // aws-s3, aws-sst, railway, surge. Omit to let the plugin detect it from
+    // aws-s3, aws-sst, railway, surge, firebase, azure-static. Omit to let the plugin detect it from
     // the installed vite provider plugin.
     "target": "vercel",
     // Run `appz deploy --target <target> --yes` after `vite build`.

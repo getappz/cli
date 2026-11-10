@@ -320,6 +320,7 @@ impl DeployProvider for VercelProvider {
                 crate::provider::validate_deployment_id(self.name(), &d.id)?;
                 Ok(DeploymentInfo {
                     id: d.id,
+                    version_id: None,
                     url: d.url.filter(|u| !u.is_empty()).map(|u| {
                         if u.starts_with("https://") {
                             u

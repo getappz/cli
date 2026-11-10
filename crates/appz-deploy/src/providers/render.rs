@@ -193,6 +193,7 @@ impl DeployProvider for RenderProvider {
                 let state = d.get("status").and_then(|v| v.as_str()).unwrap_or("");
                 Ok(DeploymentInfo {
                     id: id.into(),
+                    version_id: None,
                     url: None,
                     status: match state {
                         "live" | "deactivated" => DeployStatus::Ready,

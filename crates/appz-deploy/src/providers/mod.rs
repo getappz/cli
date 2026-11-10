@@ -1,3 +1,4 @@
+pub mod appzdev;
 pub mod aws_s3;
 pub mod cloudflare;
 pub mod generic;

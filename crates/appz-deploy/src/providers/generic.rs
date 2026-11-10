@@ -484,7 +484,7 @@ mod tests {
                 );
             }
         }
-        assert_eq!(slugs.len(), 7);
+        assert_eq!(slugs.len(), 11);
     }
 
     #[test]

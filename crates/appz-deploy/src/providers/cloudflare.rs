@@ -182,6 +182,7 @@ impl DeployProvider for CloudflareProvider {
             .enumerate()
             .map(|(index, d)| DeploymentInfo {
                 id: d.id,
+                version_id: None,
                 url: None,
                 status: DeployStatus::Ready,
                 created_at: Some(d.created_on),

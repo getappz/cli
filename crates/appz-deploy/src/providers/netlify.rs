@@ -181,6 +181,7 @@ impl DeployProvider for NetlifyProvider {
             .into_iter()
             .map(|d| DeploymentInfo {
                 id: d.id,
+                version_id: None,
                 url: d.deploy_ssl_url.or(d.ssl_url).or(d.url),
                 status: netlify_status(&d.state),
                 created_at: d.created_at,

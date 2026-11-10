@@ -80,6 +80,9 @@ pub fn run(release: bool, dry_run: bool) {
 /// profile changes the directory name. Human progress streams to stderr.
 fn build_and_locate(release: bool) -> Result<PathBuf, String> {
     let mut cmd = Command::new("cargo");
+    for k in command::DENIED_CHILD_ENV {
+        cmd.env_remove(k);
+    }
     cmd.args([
         "build",
         "-p",
@@ -149,7 +152,11 @@ fn parse_executable_path(build_json: &str) -> Option<PathBuf> {
 /// Run `<binary> --version` and confirm it exits successfully within
 /// [`VERIFY_TIMEOUT`].
 fn verify_runs(binary: &Path) -> Result<(), String> {
-    let mut child = Command::new(binary)
+    let mut verify = Command::new(binary);
+    for k in command::DENIED_CHILD_ENV {
+        verify.env_remove(k);
+    }
+    let mut child = verify
         .arg("--version")
         .stdout(Stdio::null())
         .stderr(Stdio::null())

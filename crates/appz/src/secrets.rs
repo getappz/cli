@@ -11,7 +11,7 @@ use appz_vault::{
 };
 
 const APP: &str = "appz";
-const PASSPHRASE_VAR: &str = "APPZ_VAULT_PASSPHRASE";
+const PASSPHRASE_VAR: &str = appz_vault::PASSPHRASE_ENV;
 
 /// Vault locations for the project containing `dir`. `dir` is canonicalized
 /// first so `appz env` (run from `.` or a subfolder) and `appz deploy` (which
@@ -213,6 +213,13 @@ mod tests {
         assert!(!valid_name("1X"));
         assert!(!valid_name("A-B"));
         assert!(!valid_name(""));
+    }
+
+    #[test]
+    fn the_passphrase_variable_is_never_inherited_by_children() {
+        // `command` cannot depend on the vault crate, so its deny-list holds a
+        // copy of the name: this keeps the two in step.
+        assert!(command::DENIED_CHILD_ENV.contains(&PASSPHRASE_VAR));
     }
 
     #[test]

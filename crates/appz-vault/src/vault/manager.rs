@@ -228,6 +228,8 @@ pub fn write_vault_body(path: &Path, body: &VaultBody) -> VaultResult<()> {
     let data = read_vault_file(path)?;
     let mut vault = parse_vault(&data)?;
     vault.body = body.clone();
+    // Entries written by this build are AAD-bound; label the file so.
+    vault.version = FORMAT_VERSION;
     let json = serde_json::to_string_pretty(&vault)?;
     write_vault_file(path, json.as_bytes())
 }
@@ -524,6 +526,20 @@ mod tests {
         assert_eq!(kdf.memory_cost, defaults.memory_cost);
         assert_eq!(kdf.parallelism, defaults.parallelism);
         assert_eq!(kdf.salt, vault.salt);
+    }
+
+    #[test]
+    fn rewriting_a_v1_vault_labels_it_current() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("vault.json");
+        create_vault(&path, "pw").unwrap();
+        let mut vault: VaultFile =
+            serde_json::from_slice(&read_vault_file(&path).unwrap()).unwrap();
+        vault.version = 1;
+        write_vault_file(&path, serde_json::to_string(&vault).unwrap().as_bytes()).unwrap();
+        update_vault_body(&path, |_| Ok(())).unwrap();
+        let after: VaultFile = serde_json::from_slice(&read_vault_file(&path).unwrap()).unwrap();
+        assert_eq!(after.version, FORMAT_VERSION);
     }
 
     #[test]

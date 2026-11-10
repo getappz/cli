@@ -75,7 +75,9 @@ fn write_inner(path: &Path, data: &[u8], exclusive: bool) -> VaultResult<()> {
     #[cfg(unix)]
     {
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-            std::fs::File::open(parent)?.sync_all()?;
+            // Best effort: some filesystems reject directory fsync, and the
+            // vault is already replaced at this point.
+            let _ = std::fs::File::open(parent).and_then(|d| d.sync_all());
         }
     }
 

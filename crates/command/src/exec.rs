@@ -564,7 +564,9 @@ pub const DENIED_CHILD_ENV: &[&str] = &["APPZ_VAULT_PASSPHRASE"];
 fn forwarded_env(
     vars: impl Iterator<Item = (String, String)>,
 ) -> impl Iterator<Item = (String, String)> {
-    vars.filter(|(k, _)| !DENIED_CHILD_ENV.contains(&k.as_str()))
+    // Case-insensitive: Windows env names are, so `appz_vault_passphrase` is
+    // read by appz yet would slip past an exact match.
+    vars.filter(|(k, _)| !DENIED_CHILD_ENV.iter().any(|d| d.eq_ignore_ascii_case(k)))
 }
 
 #[cfg(test)]
@@ -576,6 +578,7 @@ mod denied_env_tests {
         let vars = vec![
             ("PATH".to_string(), "/bin".to_string()),
             ("APPZ_VAULT_PASSPHRASE".to_string(), "s3cret".to_string()),
+            ("Appz_Vault_Passphrase".to_string(), "s3cret".to_string()),
             ("HOME".to_string(), "/h".to_string()),
         ];
         let kept: Vec<String> = forwarded_env(vars.into_iter()).map(|(k, _)| k).collect();

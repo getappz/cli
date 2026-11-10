@@ -390,6 +390,19 @@ enum ProjectsCmd {
         /// Name of the project
         name: String,
     },
+    /// Inspect or get details of a project
+    #[command(alias = "get")]
+    Inspect {
+        /// Name or ID of the project
+        name: String,
+    },
+    /// Rename a project's display name
+    Rename {
+        /// Name or ID of the project to rename
+        name: String,
+        /// New display name for the project
+        new_name: String,
+    },
     /// Remove a project from the platform
     #[command(alias = "rm")]
     Remove {
@@ -2095,6 +2108,44 @@ fn run_projects(args: ProjectsArgs, json: bool) {
             }
             Err(e) => error(&e),
         },
+        ProjectsCmd::Inspect { name } => {
+            match deploy::get_project(&canonical, args.target, &name) {
+                Ok(p) => {
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&p).unwrap());
+                    } else {
+                        intro("appz projects inspect");
+                        info(&format!("name:            {}", p.name));
+                        info(&format!("id:              {}", p.id));
+                        info(&format!("slug:            {}", p.slug));
+                        if let Some(org) = &p.organization_id {
+                            info(&format!("organization:    {}", org));
+                        }
+                        if let Some(url) = &p.production_url {
+                            info(&format!("production url:  {}", url));
+                        }
+                        outro("done");
+                    }
+                }
+                Err(e) => error(&e),
+            }
+        }
+        ProjectsCmd::Rename { name, new_name } => {
+            match deploy::rename_project(&canonical, args.target, &name, &new_name) {
+                Ok(p) => {
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&p).unwrap());
+                    } else {
+                        intro("appz projects rename");
+                        success(&format!("renamed project to {}", p.name));
+                        info(&format!("id:   {}", p.id));
+                        info(&format!("slug: {}", p.slug));
+                        outro("done");
+                    }
+                }
+                Err(e) => error(&e),
+            }
+        }
         ProjectsCmd::Remove { name } => {
             match deploy::remove_project(&canonical, args.target, &name) {
                 Ok(_) => {

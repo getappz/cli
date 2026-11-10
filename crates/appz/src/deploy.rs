@@ -750,6 +750,29 @@ pub fn add_project(
     provider.add_project(&ctx, name).map_err(|e| e.to_string())
 }
 
+pub fn get_project(
+    project_dir: &Path,
+    target: Option<String>,
+    id_or_slug: &str,
+) -> Result<appz_deploy::ProjectInfo, String> {
+    let (provider, ctx) = domain_ctx(project_dir, target)?;
+    provider
+        .get_project(&ctx, id_or_slug)
+        .map_err(|e| e.to_string())
+}
+
+pub fn rename_project(
+    project_dir: &Path,
+    target: Option<String>,
+    id_or_slug: &str,
+    new_name: &str,
+) -> Result<appz_deploy::ProjectInfo, String> {
+    let (provider, ctx) = domain_ctx(project_dir, target)?;
+    provider
+        .rename_project(&ctx, id_or_slug, new_name)
+        .map_err(|e| e.to_string())
+}
+
 pub fn remove_project(
     project_dir: &Path,
     target: Option<String>,

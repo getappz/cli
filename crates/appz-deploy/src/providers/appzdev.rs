@@ -636,6 +636,78 @@ pub fn remove_project(api_base: &str, token: Option<&str>, id_or_slug: &str) -> 
     Ok(true)
 }
 
+pub fn get_project(
+    api_base: &str,
+    token: Option<&str>,
+    id_or_slug: &str,
+) -> DeployResult<ProjectInfo> {
+    let url = format!("{api_base}/api/v0/projects/{id_or_slug}");
+    let mut req = ureq::get(&url);
+    if let Some(tok) = token {
+        req = req.set("Authorization", &format!("Bearer {tok}"));
+    }
+    let resp: serde_json::Value = req
+        .call()
+        .map_err(|e| parse_api_error(e, "AppzDev", "Get project"))?
+        .into_json()
+        .map_err(|e| DeployError::DeployFailed {
+            provider: "AppzDev",
+            reason: format!("Invalid JSON response from get project: {e}"),
+        })?;
+
+    let val = if resp.get("project").is_some() {
+        resp["project"].clone()
+    } else {
+        resp
+    };
+
+    serde_json::from_value(val).map_err(|e| DeployError::DeployFailed {
+        provider: "AppzDev",
+        reason: format!("Failed to parse project details: {e}"),
+    })
+}
+
+pub fn rename_project(
+    api_base: &str,
+    token: Option<&str>,
+    id_or_slug: &str,
+    new_name: &str,
+) -> DeployResult<ProjectInfo> {
+    let trimmed = new_name.trim();
+    if trimmed.is_empty() || trimmed.len() > 100 {
+        return Err(DeployError::DeployFailed {
+            provider: "AppzDev",
+            reason: "Project name must be between 1 and 100 characters".into(),
+        });
+    }
+    let url = format!("{api_base}/api/v0/projects/{id_or_slug}");
+    let mut req = ureq::patch(&url);
+    if let Some(tok) = token {
+        req = req.set("Authorization", &format!("Bearer {tok}"));
+    }
+    let resp: serde_json::Value = req
+        .send_json(serde_json::json!({
+            "name": trimmed,
+        }))
+        .map_err(|e| parse_api_error(e, "AppzDev", "Rename project"))?
+        .into_json()
+        .map_err(|e| DeployError::DeployFailed {
+            provider: "AppzDev",
+            reason: format!("Invalid JSON response from rename project: {e}"),
+        })?;
+
+    let val = if resp.get("project").is_some() {
+        resp["project"].clone()
+    } else {
+        resp
+    };
+
+    serde_json::from_value(val).map_err(|e| DeployError::DeployFailed {
+        provider: "AppzDev",
+        reason: format!("Failed to parse renamed project: {e}"),
+    })
+}
+
 impl AppzdevProvider {
     fn api_base(&self, ctx: &DeployContext) -> String {
         ctx.run_env
@@ -694,32 +766,57 @@ impl AppzdevProvider {
             req = req.set("Authorization", &format!("Bearer {token}"));
         }
 
-        let resp: serde_json::Value = req
-            .send_json(payload)
-            .map_err(|e| parse_api_error(e, self.name(), "Initiate deployment"))?
-            .into_json()
-            .map_err(|e| DeployError::DeployFailed {
-                provider: self.name(),
-                reason: format!("Invalid JSON response from {create_url}: {e}"),
-            })?;
-
-        let deployment_id = resp["deploymentId"]
-            .as_str()
-            .or_else(|| resp["id"].as_str())
-            .ok_or_else(|| DeployError::DeployFailed {
-                provider: self.name(),
-                reason: "Missing deploymentId in response".into(),
-            })?;
-
-        let missing = resp["missing"]
-            .as_array()
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str())
-                    .map(String::from)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+        let resp_result = req.send_json(payload);
+        let (resp, deployment_id, missing, inline_publish_failed) = match resp_result {
+            Ok(r) => {
+                let v: serde_json::Value =
+                    r.into_json().map_err(|e| DeployError::DeployFailed {
+                        provider: self.name(),
+                        reason: format!("Invalid JSON response from {create_url}: {e}"),
+                    })?;
+                let dpl_id = v["deploymentId"]
+                    .as_str()
+                    .or_else(|| v["id"].as_str())
+                    .ok_or_else(|| DeployError::DeployFailed {
+                        provider: self.name(),
+                        reason: "Missing deploymentId in response".into(),
+                    })?
+                    .to_string();
+                let missing = v["missing"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str())
+                            .map(String::from)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                (v, dpl_id, missing, false)
+            }
+            Err(ureq::Error::Status(500, response)) => {
+                let err_text = response.into_string().unwrap_or_default();
+                if let Ok(body) = serde_json::from_str::<serde_json::Value>(&err_text) {
+                    if let Some(dpl_id) = body
+                        .get("deploymentId")
+                        .and_then(|v| v.as_str())
+                        .map(String::from)
+                    {
+                        (body, dpl_id, Vec::new(), true)
+                    } else {
+                        return Err(DeployError::DeployFailed {
+                            provider: self.name(),
+                            reason: format!("Initiate deployment failed (500): {err_text}"),
+                        });
+                    }
+                } else {
+                    return Err(DeployError::DeployFailed {
+                        provider: self.name(),
+                        reason: format!("Initiate deployment failed (500): {err_text}"),
+                    });
+                }
+            }
+            Err(e) => return Err(parse_api_error(e, self.name(), "Initiate deployment")),
+        };
 
         // Step 2: Upload missing blobs with bounded concurrency (pool of 8) and retry
         if !missing.is_empty() {
@@ -804,8 +901,8 @@ impl AppzdevProvider {
             }
         }
 
-        // Step 3: Commit deployment if blobs were uploaded; when missing is empty the deployment is already published
-        let final_url = if !missing.is_empty() {
+        // Step 3: Commit deployment if blobs were uploaded, or if inline publish failed on 500
+        let final_url = if !missing.is_empty() || inline_publish_failed {
             let commit_url = format!("{}/api/v0/deployments/{}/commit", api_base, deployment_id);
             let mut commit_req = ureq::post(&commit_url);
             if let Some(token) = &token_opt {
@@ -1179,10 +1276,27 @@ impl DeployProvider for AppzdevProvider {
         list_projects(&api_base, token.as_deref())
     }
 
+    fn get_project(&self, ctx: &DeployContext, id_or_slug: &str) -> DeployResult<ProjectInfo> {
+        let api_base = self.api_base(ctx);
+        let token = resolve_auth_token(Some(ctx));
+        get_project(&api_base, token.as_deref(), id_or_slug)
+    }
+
     fn add_project(&self, ctx: &DeployContext, name: &str) -> DeployResult<ProjectInfo> {
         let api_base = self.api_base(ctx);
         let token = resolve_auth_token(Some(ctx));
         add_project(&api_base, token.as_deref(), name)
+    }
+
+    fn rename_project(
+        &self,
+        ctx: &DeployContext,
+        id_or_slug: &str,
+        new_name: &str,
+    ) -> DeployResult<ProjectInfo> {
+        let api_base = self.api_base(ctx);
+        let token = resolve_auth_token(Some(ctx));
+        rename_project(&api_base, token.as_deref(), id_or_slug, new_name)
     }
 
     fn remove_project(&self, ctx: &DeployContext, id_or_slug: &str) -> DeployResult<bool> {
@@ -1481,6 +1595,21 @@ SPACED=hello world
                                     "200 OK",
                                     r#"[{"id":"prj_mock","name":"mock-app","slug":"mock-app","organizationId":"org_mock","createdAt":1762732800}]"#,
                                 )
+                            } else if method == "GET"
+                                && path.starts_with("/api/v0/projects/")
+                                && !path.contains("/env")
+                                && !path.contains("/domains")
+                                && !path.contains("/deployments")
+                            {
+                                (
+                                    "200 OK",
+                                    r#"{"id":"prj_mock","name":"mock-app","slug":"mock-app","organizationId":"org_mock","createdAt":1762732800}"#,
+                                )
+                            } else if method == "PATCH" && path.starts_with("/api/v0/projects/") {
+                                (
+                                    "200 OK",
+                                    r#"{"id":"prj_mock","name":"renamed-app","slug":"mock-app","organizationId":"org_mock","createdAt":1762732800}"#,
+                                )
                             } else if method == "POST" && path == "/api/v0/projects" {
                                 (
                                     "200 OK",
@@ -1653,6 +1782,17 @@ SPACED=hello world
         assert_eq!(projects[0].name, "mock-app");
         assert_eq!(projects[0].slug, "mock-app");
 
+        let got_proj = provider
+            .get_project(&ctx, "mock-app")
+            .expect("get project must succeed");
+        assert_eq!(got_proj.name, "mock-app");
+        assert_eq!(got_proj.id, "prj_mock");
+
+        let renamed_proj = provider
+            .rename_project(&ctx, "mock-app", "renamed-app")
+            .expect("rename project must succeed");
+        assert_eq!(renamed_proj.name, "renamed-app");
+
         let added_proj = provider
             .add_project(&ctx, "new-app")
             .expect("add project must succeed");
@@ -1663,5 +1803,88 @@ SPACED=hello world
             .remove_project(&ctx, "mock-app")
             .expect("remove project must succeed");
         assert!(removed_proj);
+    }
+
+    #[test]
+    fn test_inline_publish_failure_fallback_commits() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = format!("http://{}", listener.local_addr().unwrap());
+        listener.set_nonblocking(true).unwrap();
+
+        let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let shutdown_clone = shutdown.clone();
+
+        let handle = std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            while !shutdown_clone.load(std::sync::atomic::Ordering::Relaxed) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let mut buf = [0u8; 4096];
+                        let n = stream.read(&mut buf).unwrap_or(0);
+                        let req_str = String::from_utf8_lossy(&buf[..n]);
+                        let first_line = req_str.lines().next().unwrap_or("");
+                        let parts: Vec<&str> = first_line.split_whitespace().collect();
+                        if parts.len() < 2 {
+                            continue;
+                        }
+                        let method = parts[0];
+                        let path = parts[1];
+
+                        let (status, resp_body) = if method == "POST"
+                            && path == "/api/v0/deployments"
+                        {
+                            (
+                                "500 Internal Server Error",
+                                r#"{"error":"publish failed; retry with POST /deployments/:id/commit","deploymentId":"dpl_inline_retry_1"}"#,
+                            )
+                        } else if method == "POST"
+                            && path == "/api/v0/deployments/dpl_inline_retry_1/commit"
+                        {
+                            (
+                                "200 OK",
+                                r#"{"deploymentId":"dpl_inline_retry_1","versionId":"ver_retry_1","status":"ready","url":"https://mock-retry.appz.to"}"#,
+                            )
+                        } else {
+                            ("404 Not Found", r#"{"error":"Not found"}"#)
+                        };
+
+                        let response = format!(
+                            "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            status,
+                            resp_body.len(),
+                            resp_body
+                        );
+                        let _ = stream.write_all(response.as_bytes());
+                        let _ = stream.flush();
+                    }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        let dir = tempdir().unwrap();
+        let dist = dir.path().join("dist");
+        std::fs::create_dir_all(&dist).unwrap();
+        std::fs::write(dist.join("index.html"), "<h1>Retry Test</h1>").unwrap();
+
+        let mut ctx = DeployContext::new(dir.path().to_path_buf(), "dist".to_string());
+        ctx.run_env.insert("APPZ_API_URL".to_string(), addr);
+        ctx.run_env
+            .insert("APPZ_TOKEN".to_string(), "mock_tok".to_string());
+        ctx.run_env
+            .insert("APPZ_PROJECT_ID".to_string(), "retry-site".to_string());
+
+        let provider = AppzdevProvider;
+        let out = provider
+            .deploy(&ctx)
+            .expect("deploy must succeed via fallback commit");
+        assert_eq!(out.status, DeployStatus::Ready);
+        assert_eq!(out.url.as_deref(), Some("https://mock-retry.appz.to"));
+
+        shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = handle.join();
     }
 }

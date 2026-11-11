@@ -322,9 +322,9 @@ fn scan_frameworks(fs: &DetectorFilesystem, slug: &str) -> Vec<frameworks::Detec
 fn detect_package_version(fs: &DetectorFilesystem, tc: &Framework) -> Option<String> {
     let detectors = tc.detectors.every.iter().chain(tc.detectors.some.iter());
     for d in detectors {
-        if let Some(pkg) = d.match_package {
-            let content = fs.read_file("package.json")?;
-            if let Some(v) = crate::pkg::parse_deps(&content).get(pkg)
+        if let Some(spec) = d.match_package {
+            let (pkg, _) = crate::pkg::split_package_spec(spec);
+            if let Some(v) = fs.package_deps()?.get(pkg)
                 && !v.is_empty()
             {
                 return Some(v.clone());
@@ -471,6 +471,48 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// The repo's own registry: a pre-1.0 SvelteKit matches the v0 entry
+    /// (its `@sveltejs/kit@1.0.0-next` spec is version-qualified), which
+    /// supersedes the 1+ entry; a current kit matches only the 1+ entry.
+    #[test]
+    fn pre_release_sveltekit_matches_the_legacy_entry_only() {
+        let raw = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../registry/toolchains.toml"
+        ))
+        .unwrap();
+        let frameworks: Vec<Framework> = crate::toolchain_registry::parse_registry_toml(&raw)
+            .unwrap()
+            .into_iter()
+            .map(crate::toolchain_registry::convert_to_framework)
+            .collect();
+        let by_slug = |slug: &str| frameworks.iter().find(|f| f.slug == slug).unwrap();
+        let (v0, v1) = (by_slug("sveltekit"), by_slug("sveltekit-1"));
+        assert!(v0.supersedes.contains(&"sveltekit-1"));
+
+        let dir = test_dir("sveltekit-next");
+        fs::write(
+            dir.join("package.json"),
+            r#"{"devDependencies":{"@sveltejs/kit":"1.0.0-next.589"}}"#,
+        )
+        .unwrap();
+        let probe = DetectorFilesystem::new(dir.clone());
+        assert!(check_criteria(&probe, &v0.detectors));
+        assert_eq!(
+            detect_package_version(&probe, v0).as_deref(),
+            Some("1.0.0-next.589")
+        );
+
+        fs::write(
+            dir.join("package.json"),
+            r#"{"devDependencies":{"@sveltejs/kit":"^2.5.0"}}"#,
+        )
+        .unwrap();
+        let probe = DetectorFilesystem::new(dir.clone());
+        assert!(!check_criteria(&probe, &v0.detectors));
+        assert!(check_criteria(&probe, &v1.detectors));
     }
 
     #[test]

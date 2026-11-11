@@ -412,19 +412,38 @@ impl Command {
                 .map(|s| s.to_string_lossy())
                 .collect::<Vec<_>>()
                 .join("\n");
-            cmd.stdin(Stdio::piped());
+            // Capture output like `cmd.output()` does on the no-input path;
+            // otherwise callers get an empty stdout/stderr (e.g. the reason
+            // `gh secret set` failed) and the child writes to our terminal.
+            cmd.stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
             let mut child = cmd
                 .spawn()
                 .map_err(|e| CommandError::SpawnFailed(e.to_string()))?;
-            if let Some(mut stdin) = child.stdin.take() {
-                use std::io::Write;
-                stdin
-                    .write_all(input_str.as_bytes())
-                    .map_err(|e| CommandError::WriteStdinFailed(e.to_string()))?;
-            }
-            child
+            // Write on another thread while `wait_with_output` drains the
+            // output: writing all input first deadlocks once the child fills
+            // its output pipe before it has read everything we send.
+            let writer = child.stdin.take().map(|mut stdin| {
+                std::thread::spawn(move || {
+                    use std::io::Write;
+                    stdin.write_all(input_str.as_bytes())
+                })
+            });
+            let output = child
                 .wait_with_output()
-                .map_err(|e| CommandError::ExecutionFailed(e.to_string()).into())
+                .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
+            if let Some(writer) = writer {
+                match writer.join() {
+                    // A child that exits without reading all its input
+                    // closes the pipe; its exit status already says how it went.
+                    Ok(Err(e)) if e.kind() != std::io::ErrorKind::BrokenPipe => {
+                        return Err(CommandError::WriteStdinFailed(e.to_string()).into());
+                    }
+                    _ => {}
+                }
+            }
+            Ok(output)
         } else {
             cmd.output()
                 .map_err(|e| CommandError::ExecutionFailed(e.to_string()).into())
@@ -583,5 +602,28 @@ mod denied_env_tests {
         ];
         let kept: Vec<String> = forwarded_env(vars.into_iter()).map(|(k, _)| k).collect();
         assert_eq!(kept, ["PATH", "HOME"]);
+    }
+}
+
+#[cfg(test)]
+mod input_tests {
+    use super::*;
+
+    /// A child that echoes its input back: its output must be captured, and
+    /// input larger than a pipe buffer must not deadlock against it.
+    #[test]
+    fn input_is_fed_while_the_output_is_captured() {
+        let line = "x".repeat(63);
+        let lines: Vec<&str> = std::iter::repeat_n(line.as_str(), 8000).collect();
+        #[cfg(windows)]
+        let mut cmd = Command::new("findstr");
+        #[cfg(windows)]
+        cmd.args(["x"]);
+        #[cfg(not(windows))]
+        let mut cmd = Command::new("cat");
+        let out = cmd.without_shell().input(lines).exec().unwrap();
+        assert!(out.status.success());
+        let echoed = String::from_utf8_lossy(&out.stdout);
+        assert_eq!(echoed.lines().filter(|l| *l == line).count(), 8000);
     }
 }

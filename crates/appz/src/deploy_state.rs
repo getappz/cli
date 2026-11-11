@@ -100,9 +100,10 @@ pub fn fingerprint(root: &Path, extra: &str) -> Result<String, String> {
                 .as_bytes(),
         );
         hasher.update(b"\0");
-        let bytes = std::fs::read(root.join(&rel))
+        // Streamed: a large asset (video, dataset) is never loaded whole.
+        std::fs::File::open(root.join(&rel))
+            .and_then(|mut f| std::io::copy(&mut f, &mut hasher))
             .map_err(|e| format!("cannot read {}: {e}", rel.display()))?;
-        hasher.update(&bytes);
     }
     Ok(format!("{:x}", hasher.finalize()))
 }

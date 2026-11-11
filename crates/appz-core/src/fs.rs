@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 use glob::glob;
 use regex::Regex;
@@ -23,6 +23,9 @@ pub struct DetectorFilesystem {
     file_cache: Mutex<HashMap<String, bool>>,
     read_cache: Mutex<HashMap<String, Option<String>>>,
     readdir_cache: Mutex<HashMap<String, Vec<FsEntry>>>,
+    /// package.json's dependencies, parsed once for all package detectors
+    /// (`None` when there is no package.json).
+    package_deps: OnceLock<Option<HashMap<String, String>>>,
 }
 
 impl DetectorFilesystem {
@@ -33,6 +36,7 @@ impl DetectorFilesystem {
             file_cache: Mutex::new(HashMap::new()),
             read_cache: Mutex::new(HashMap::new()),
             readdir_cache: Mutex::new(HashMap::new()),
+            package_deps: OnceLock::new(),
         }
     }
 
@@ -99,13 +103,31 @@ impl DetectorFilesystem {
             .clone()
     }
 
+    /// Files under the root matching `pattern`. The root is escaped: a
+    /// project folder named like `site [old]` must not be read as a glob.
+    fn glob_files(&self, pattern: &str) -> impl Iterator<Item = PathBuf> {
+        let root = glob::Pattern::escape(&self.root.to_string_lossy());
+        let full = format!("{root}{}{pattern}", std::path::MAIN_SEPARATOR);
+        glob(&full)
+            .ok()
+            .into_iter()
+            .flat_map(|e| e.filter_map(|p| p.ok()))
+            .filter(|p| p.is_file())
+    }
+
     /// Check if a glob pattern matches any files.
     pub fn has_glob(&self, pattern: &str) -> bool {
-        let full = self.root.join(pattern);
-        let s = full.to_string_lossy();
-        glob(&s)
-            .ok()
-            .is_some_and(|entries| entries.filter_map(|e| e.ok()).any(|p| p.is_file()))
+        self.glob_files(pattern).next().is_some()
+    }
+
+    /// package.json's dependencies and devDependencies, parsed on first use.
+    pub fn package_deps(&self) -> Option<&HashMap<String, String>> {
+        self.package_deps
+            .get_or_init(|| {
+                self.read_file("package.json")
+                    .map(|c| crate::pkg::parse_deps(&c))
+            })
+            .as_ref()
     }
 
     /// Check a detector: exact path or glob, with optional content regex and package match.
@@ -118,22 +140,13 @@ impl DetectorFilesystem {
     ) -> bool {
         // match_package: check if a dependency exists in package.json
         if let Some(pkg) = match_package {
-            let content = match self.read_file("package.json") {
-                Some(c) => c,
-                None => return false,
-            };
-            return crate::pkg::has_dependency(&content, pkg);
+            return self
+                .package_deps()
+                .is_some_and(|deps| crate::pkg::deps_match(deps, pkg));
         }
 
         if is_glob {
-            let full = self.root.join(path);
-            let s = full.to_string_lossy();
-            let entries: Vec<_> = glob(&s)
-                .ok()
-                .into_iter()
-                .flat_map(|e| e.filter_map(|p| p.ok()))
-                .filter(|p| p.is_file())
-                .collect();
+            let entries: Vec<_> = self.glob_files(path).collect();
 
             if entries.is_empty() {
                 return false;
@@ -165,5 +178,23 @@ impl DetectorFilesystem {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn globs_work_in_a_folder_whose_name_looks_like_a_glob() {
+        let base = std::env::temp_dir().join(format!("appz-core-fs-glob-{}", std::process::id()));
+        let root = base.join("site [old]");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("main.tf"), "x").unwrap();
+        let probe = DetectorFilesystem::new(root);
+        assert!(probe.has_glob("*.tf"));
+        assert!(probe.check_detector("*.tf", true, Some("x"), None));
+        assert!(!probe.has_glob("*.py"));
+        let _ = fs::remove_dir_all(base);
     }
 }

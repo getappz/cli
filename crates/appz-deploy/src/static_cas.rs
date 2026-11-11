@@ -4,7 +4,7 @@
 
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 pub const MAX_FILE_SIZE: usize = 25 * 1024 * 1024; // 25 MB edge upload limit
@@ -12,6 +12,8 @@ pub const MAX_FILE_SIZE: usize = 25 * 1024 * 1024; // 25 MB edge upload limit
 const DEFAULT_IGNORES: &[&str] = &[
     ".git",
     ".gitmodules",
+    ".gitignore",
+    ".gitattributes",
     ".cache",
     ".next",
     ".vercel",
@@ -31,10 +33,12 @@ pub struct ScannedFileEntry {
     pub immutable: Option<bool>,
 }
 
+/// A unique file content, located on disk. Its bytes are read again only if
+/// the server asks for the blob, so a large site is never held in memory.
 #[derive(Debug, Clone)]
 pub struct LocalBlob {
     pub hash: String,
-    pub data: Vec<u8>,
+    pub path: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -51,8 +55,12 @@ pub fn sha256_hex(data: &[u8]) -> String {
 }
 
 pub fn guess_mime(path: &str) -> &'static str {
-    let ext = path.rsplit('.').next().unwrap_or("");
-    match ext {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let ext = name
+        .rsplit_once('.')
+        .map(|(_, ext)| ext.to_ascii_lowercase())
+        .unwrap_or_default();
+    match ext.as_str() {
         "html" | "htm" => "text/html; charset=utf-8",
         "css" => "text/css; charset=utf-8",
         "js" | "mjs" => "application/javascript; charset=utf-8",
@@ -69,26 +77,59 @@ pub fn guess_mime(path: &str) -> &'static str {
         "txt" => "text/plain; charset=utf-8",
         "xml" => "application/xml; charset=utf-8",
         "wasm" => "application/wasm",
+        "avif" => "image/avif",
+        "otf" => "font/otf",
+        "pdf" => "application/pdf",
+        "map" => "application/json; charset=utf-8",
+        "webmanifest" => "application/manifest+json",
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        "mp3" => "audio/mpeg",
         _ => "application/octet-stream",
     }
 }
 
+/// Whether a file can be cached forever: its URL changes whenever its content
+/// does. Bundler-only folders (`/_astro/`, `/_next/static/`) always qualify;
+/// in the shared `/assets/` and `/static/` folders only a file whose name
+/// carries a content hash does — a hand-written `/assets/style.css` is edited
+/// in place, and marking it immutable would serve stale copies after a deploy.
 pub fn is_immutable_asset(path: &str) -> bool {
-    // Standard bundler immutable asset markers (e.g. /_astro/..., /assets/main.1a2b3c.js)
-    path.starts_with("/_astro/")
-        || path.starts_with("/assets/")
-        || path.starts_with("/static/")
-        || path.contains(".hash.")
+    if path.starts_with("/_astro/") || path.starts_with("/_next/static/") || path.contains(".hash.")
+    {
+        return true;
+    }
+    (path.starts_with("/assets/") || path.starts_with("/static/")) && has_content_hash(path)
 }
 
+/// A name like `index-B1x2c3D4.js` or `main.073c9b0a.chunk.css`: some segment
+/// after the first is a hash (8+ word characters, with a digit or mixed case,
+/// so ordinary words like `navigation` don't count).
+fn has_content_hash(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
+    stem.split(['.', '-']).skip(1).any(|seg| {
+        seg.len() >= 8
+            && seg.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            && (seg.chars().any(|c| c.is_ascii_digit())
+                || (seg.chars().any(|c| c.is_ascii_uppercase())
+                    && seg.chars().any(|c| c.is_ascii_lowercase())))
+    })
+}
+
+/// Whether any path component is one of the ignored names. Whole components
+/// only: a substring match would also drop `.github/`, `.gitbook/` or
+/// `app.cache.js` from the deploy.
 fn is_ignored(rel: &str) -> bool {
-    let norm = rel.replace('\\', "/");
-    for &pattern in DEFAULT_IGNORES {
-        if norm.contains(pattern) || norm.starts_with(pattern) {
-            return true;
-        }
-    }
-    false
+    rel.split(['/', '\\'])
+        .any(|part| DEFAULT_IGNORES.contains(&part))
+}
+
+/// SHA-256 of a file, streamed so only a small buffer is in memory.
+fn sha256_file(path: &Path) -> std::io::Result<String> {
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut std::fs::File::open(path)?, &mut hasher)?;
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 pub fn scan_output_dir(output_dir: &Path) -> Result<ScannedTree, String> {
@@ -140,9 +181,8 @@ pub fn scan_output_dir(output_dir: &Path) -> Result<ScannedTree, String> {
             ));
         }
 
-        let data = std::fs::read(abs_path)
+        let hash = sha256_file(abs_path)
             .map_err(|e| format!("Failed to read {}: {e}", abs_path.display()))?;
-        let hash = sha256_hex(&data);
         total_bytes += size;
 
         let mime = guess_mime(&norm_path);
@@ -158,7 +198,10 @@ pub fn scan_output_dir(output_dir: &Path) -> Result<ScannedTree, String> {
 
         blobs_by_hash
             .entry(hash.clone())
-            .or_insert_with(|| LocalBlob { hash, data });
+            .or_insert_with(|| LocalBlob {
+                hash,
+                path: abs_path.to_path_buf(),
+            });
     }
 
     Ok(ScannedTree {
@@ -199,7 +242,52 @@ mod tests {
             .find(|f| f.path == "/assets/style.css")
             .unwrap();
         assert_eq!(css_entry.r#type, "text/css; charset=utf-8");
-        assert_eq!(css_entry.immutable, Some(true));
+        // Not content-hashed: edited in place, so never cached forever.
+        assert_eq!(css_entry.immutable, None);
+        assert_eq!(css_entry.hash, sha256_hex(b"body { color: red; }"));
+        let blob = &scanned.blobs_by_hash[&css_entry.hash];
+        assert_eq!(std::fs::read(&blob.path).unwrap(), b"body { color: red; }");
+    }
+
+    #[test]
+    fn only_content_hashed_files_are_immutable() {
+        for path in [
+            "/assets/index-B1x2c3D4.js",
+            "/assets/index-DkIpYxHs.css",
+            "/static/js/main.1a2b3c4d.js",
+            "/static/css/787.073c9b0a.chunk.css",
+            "/_astro/page.B1x2c3D4.css",
+            "/_next/static/chunks/app.js",
+        ] {
+            assert!(is_immutable_asset(path), "{path}");
+        }
+        for path in [
+            "/assets/style.css",
+            "/assets/main-navigation.js",
+            "/assets/jquery-3.6.0.min.js",
+            "/static/logo.png",
+            "/index.html",
+        ] {
+            assert!(!is_immutable_asset(path), "{path}");
+        }
+    }
+
+    #[test]
+    fn ignores_whole_path_components_only() {
+        assert!(is_ignored(".git/config"));
+        assert!(is_ignored("sub\\node_modules\\x.js"));
+        assert!(is_ignored(".DS_Store"));
+        assert!(!is_ignored(".gitbook/assets/a.png"));
+        assert!(!is_ignored(".github/workflows/x.yml"));
+        assert!(!is_ignored("js/app.cache.js"));
+        assert!(!is_ignored("blog/next-steps.html"));
+    }
+
+    #[test]
+    fn mime_types_ignore_extension_case() {
+        assert_eq!(guess_mime("/IMG.PNG"), "image/png");
+        assert_eq!(guess_mime("/photo.avif"), "image/avif");
+        assert_eq!(guess_mime("/v1.2/LICENSE"), "application/octet-stream");
     }
 
     #[test]

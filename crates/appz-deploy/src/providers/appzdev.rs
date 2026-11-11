@@ -837,15 +837,21 @@ impl AppzdevProvider {
 
         // Step 2: Upload missing blobs with bounded concurrency (pool of 8) and retry
         if !missing.is_empty() {
-            let missing_blobs: Vec<(&str, &[u8])> = missing
+            // A hash we never sent can't be uploaded; committing without it
+            // would publish an incomplete site, so stop here instead.
+            let missing_blobs: Vec<(&str, &std::path::Path)> = missing
                 .iter()
-                .filter_map(|h| {
+                .map(|h| {
                     scanned
                         .blobs_by_hash
                         .get(h)
-                        .map(|b| (h.as_str(), b.data.as_slice()))
+                        .map(|b| (h.as_str(), b.path.as_path()))
+                        .ok_or_else(|| DeployError::DeployFailed {
+                            provider: self.name(),
+                            reason: format!("server asked for unknown file content {h}"),
+                        })
                 })
-                .collect();
+                .collect::<Result<_, _>>()?;
 
             let worker_count = 8.min(missing_blobs.len()).max(1);
             let next_idx = AtomicUsize::new(0);
@@ -862,7 +868,20 @@ impl AppzdevProvider {
                             if upload_error.lock().unwrap().is_some() {
                                 break;
                             }
-                            let (hash, data) = missing_blobs[idx];
+                            let (hash, path) = missing_blobs[idx];
+                            // Read only now, so at most one file per worker is
+                            // in memory instead of the whole output directory.
+                            let data = match std::fs::read(path) {
+                                Ok(d) => d,
+                                Err(e) => {
+                                    let mut lock = upload_error.lock().unwrap();
+                                    if lock.is_none() {
+                                        *lock =
+                                            Some(format!("cannot read {}: {e}", path.display()));
+                                    }
+                                    break;
+                                }
+                            };
 
                             let mut last_err = None;
                             for attempt in 0..3 {
@@ -879,7 +898,7 @@ impl AppzdevProvider {
                                     up_req =
                                         up_req.set("Authorization", &format!("Bearer {token}"));
                                 }
-                                match up_req.send_bytes(data) {
+                                match up_req.send_bytes(&data) {
                                     Ok(_) => {
                                         last_err = None;
                                         break;
@@ -889,6 +908,12 @@ impl AppzdevProvider {
                                     {
                                         last_err =
                                             Some(format!("HTTP {code} uploading blob {hash}"));
+                                        continue;
+                                    }
+                                    // A dropped connection or timeout is as
+                                    // transient as a 5xx: retry it too.
+                                    Err(ureq::Error::Transport(t)) => {
+                                        last_err = Some(format!("uploading blob {hash}: {t}"));
                                         continue;
                                     }
                                     Err(e) => {
@@ -956,7 +981,9 @@ impl AppzdevProvider {
             setup_files: Vec::new(),
             cli_missing: false,
             link_needed: false,
-            unchanged: missing.is_empty(),
+            // A new deployment was created and published even when every
+            // blob was already stored, so this is never "nothing redeployed".
+            unchanged: false,
         })
     }
 }

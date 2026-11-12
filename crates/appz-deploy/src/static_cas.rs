@@ -325,7 +325,8 @@ pub fn scan_output_dir(output_dir: &Path) -> Result<ScannedTree, String> {
                         Err(e) => {
                             let mut lock = error_slot.lock().unwrap();
                             if lock.is_none() {
-                                *lock = Some(format!("Failed to read {}: {e}", c.abs_path.display()));
+                                *lock =
+                                    Some(format!("Failed to read {}: {e}", c.abs_path.display()));
                             }
                             break;
                         }
@@ -340,7 +341,10 @@ pub fn scan_output_dir(output_dir: &Path) -> Result<ScannedTree, String> {
     }
 
     for (c, hash_mutex) in candidates.into_iter().zip(hashes.into_iter()) {
-        let hash = hash_mutex.into_inner().unwrap().ok_or_else(|| "Missing computed hash".to_string())?;
+        let hash = hash_mutex
+            .into_inner()
+            .unwrap()
+            .ok_or_else(|| "Missing computed hash".to_string())?;
         total_bytes += c.size;
 
         files.push(ScannedFileEntry {
@@ -351,10 +355,12 @@ pub fn scan_output_dir(output_dir: &Path) -> Result<ScannedTree, String> {
             immutable: if c.immutable { Some(true) } else { None },
         });
 
-        blobs_by_hash.entry(hash.clone()).or_insert_with(|| LocalBlob {
-            hash,
-            path: c.abs_path,
-        });
+        blobs_by_hash
+            .entry(hash.clone())
+            .or_insert_with(|| LocalBlob {
+                hash,
+                path: c.abs_path,
+            });
     }
 
     Ok(ScannedTree {

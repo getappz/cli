@@ -14,12 +14,36 @@ fn create_sample_tree(count: usize) -> TempDir {
 
     for i in 0..count {
         let (sub, file, content) = match i % 6 {
-            0 => ("pages", format!("page_{i}.html"), format!("<html><body>Page {i}</body></html>")),
-            1 => ("assets", format!("bundle_{i}-a1b2c3d4.js"), format!("console.log('chunk {i}');\nlet x = {i};\n")),
-            2 => ("assets", format!("style_{i}.css"), format!(".class_{i} {{ margin: {i}px; }}\n")),
-            3 => ("static/images", format!("image_{i}.svg"), format!("<svg width=\"{i}\" height=\"{i}\"></svg>")),
-            4 => ("fonts", format!("font_{i}.woff2"), format!("FONT_DATA_{i}_BYTES_PADDING_1234567890")),
-            _ => ("data", format!("data_{i}.json"), format!("{{\"id\": {i}, \"status\": \"ok\"}}")),
+            0 => (
+                "pages",
+                format!("page_{i}.html"),
+                format!("<html><body>Page {i}</body></html>"),
+            ),
+            1 => (
+                "assets",
+                format!("bundle_{i}-a1b2c3d4.js"),
+                format!("console.log('chunk {i}');\nlet x = {i};\n"),
+            ),
+            2 => (
+                "assets",
+                format!("style_{i}.css"),
+                format!(".class_{i} {{ margin: {i}px; }}\n"),
+            ),
+            3 => (
+                "static/images",
+                format!("image_{i}.svg"),
+                format!("<svg width=\"{i}\" height=\"{i}\"></svg>"),
+            ),
+            4 => (
+                "fonts",
+                format!("font_{i}.woff2"),
+                format!("FONT_DATA_{i}_BYTES_PADDING_1234567890"),
+            ),
+            _ => (
+                "data",
+                format!("data_{i}.json"),
+                format!("{{\"id\": {i}, \"status\": \"ok\"}}"),
+            ),
         };
         let subdir = root.join(sub);
         std::fs::create_dir_all(&subdir).unwrap();
@@ -97,9 +121,15 @@ fn bench_all() {
     let env_vars = vec![
         ("NODE_ENV".to_string(), "production".to_string()),
         ("API_URL".to_string(), "https://api.appz.dev/v0".to_string()),
-        ("SECRET_KEY".to_string(), "foo=\"bar\"\\with\\quotes".to_string()),
+        (
+            "SECRET_KEY".to_string(),
+            "foo=\"bar\"\\with\\quotes".to_string(),
+        ),
         ("EMPTY_VAL".to_string(), "".to_string()),
-        ("SPACED_VALUE".to_string(), "hello world from appz".to_string()),
+        (
+            "SPACED_VALUE".to_string(),
+            "hello world from appz".to_string(),
+        ),
     ];
     let start = Instant::now();
     let env_iters = 10_000;
@@ -125,7 +155,10 @@ fn bench_all() {
     }
     let dur_scan = start.elapsed();
     println!("scan_output_dir 500 files (10 iterations): {:?}", dur_scan);
-    println!("scan_output_dir 500 files average per scan: {:?}", dur_scan / scan_iters);
+    println!(
+        "scan_output_dir 500 files average per scan: {:?}",
+        dur_scan / scan_iters
+    );
 
     // 6. DetectorFilesystem probe caching (100,000 queries)
     let dfs = DetectorFilesystem::new(sample_path.to_path_buf());

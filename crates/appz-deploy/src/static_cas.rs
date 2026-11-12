@@ -340,7 +340,7 @@ pub fn scan_output_dir(output_dir: &Path) -> Result<ScannedTree, String> {
         return Err(err);
     }
 
-    for (c, hash_mutex) in candidates.into_iter().zip(hashes.into_iter()) {
+    for (c, hash_mutex) in candidates.into_iter().zip(hashes) {
         let hash = hash_mutex
             .into_inner()
             .unwrap()

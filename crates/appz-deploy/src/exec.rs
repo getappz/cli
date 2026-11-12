@@ -284,6 +284,7 @@ mod tests {
 
     /// Print, start a grandchild that inherits our stdout/stderr, and exit
     /// right away, like a CLI that leaves a background daemon behind.
+    #[allow(clippy::zombie_processes)]
     fn leave_a_process_holding_stdout() {
         let exe = std::env::current_exe().unwrap();
         std::process::Command::new(&exe)

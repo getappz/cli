@@ -4,7 +4,10 @@
 
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use walkdir::WalkDir;
 
 pub const MAX_FILE_SIZE: usize = 25 * 1024 * 1024; // 25 MB edge upload limit
@@ -54,38 +57,58 @@ pub fn sha256_hex(data: &[u8]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+#[inline]
 pub fn guess_mime(path: &str) -> &'static str {
     let name = path.rsplit('/').next().unwrap_or(path);
-    let ext = name
-        .rsplit_once('.')
-        .map(|(_, ext)| ext.to_ascii_lowercase())
-        .unwrap_or_default();
-    match ext.as_str() {
-        "html" | "htm" => "text/html; charset=utf-8",
-        "css" => "text/css; charset=utf-8",
-        "js" | "mjs" => "application/javascript; charset=utf-8",
-        "json" => "application/json; charset=utf-8",
-        "svg" => "image/svg+xml",
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "webp" => "image/webp",
-        "gif" => "image/gif",
-        "ico" => "image/x-icon",
-        "woff" => "font/woff",
-        "woff2" => "font/woff2",
-        "ttf" => "font/ttf",
-        "txt" => "text/plain; charset=utf-8",
-        "xml" => "application/xml; charset=utf-8",
-        "wasm" => "application/wasm",
-        "avif" => "image/avif",
-        "otf" => "font/otf",
-        "pdf" => "application/pdf",
-        "map" => "application/json; charset=utf-8",
-        "webmanifest" => "application/manifest+json",
-        "mp4" => "video/mp4",
-        "webm" => "video/webm",
-        "mp3" => "audio/mpeg",
-        _ => "application/octet-stream",
+    let ext = name.rsplit_once('.').map_or("", |(_, ext)| ext);
+    if ext.eq_ignore_ascii_case("html") || ext.eq_ignore_ascii_case("htm") {
+        "text/html; charset=utf-8"
+    } else if ext.eq_ignore_ascii_case("css") {
+        "text/css; charset=utf-8"
+    } else if ext.eq_ignore_ascii_case("js") || ext.eq_ignore_ascii_case("mjs") {
+        "application/javascript; charset=utf-8"
+    } else if ext.eq_ignore_ascii_case("json") || ext.eq_ignore_ascii_case("map") {
+        "application/json; charset=utf-8"
+    } else if ext.eq_ignore_ascii_case("svg") {
+        "image/svg+xml"
+    } else if ext.eq_ignore_ascii_case("png") {
+        "image/png"
+    } else if ext.eq_ignore_ascii_case("jpg") || ext.eq_ignore_ascii_case("jpeg") {
+        "image/jpeg"
+    } else if ext.eq_ignore_ascii_case("webp") {
+        "image/webp"
+    } else if ext.eq_ignore_ascii_case("gif") {
+        "image/gif"
+    } else if ext.eq_ignore_ascii_case("ico") {
+        "image/x-icon"
+    } else if ext.eq_ignore_ascii_case("woff") {
+        "font/woff"
+    } else if ext.eq_ignore_ascii_case("woff2") {
+        "font/woff2"
+    } else if ext.eq_ignore_ascii_case("ttf") {
+        "font/ttf"
+    } else if ext.eq_ignore_ascii_case("txt") {
+        "text/plain; charset=utf-8"
+    } else if ext.eq_ignore_ascii_case("xml") {
+        "application/xml; charset=utf-8"
+    } else if ext.eq_ignore_ascii_case("wasm") {
+        "application/wasm"
+    } else if ext.eq_ignore_ascii_case("avif") {
+        "image/avif"
+    } else if ext.eq_ignore_ascii_case("otf") {
+        "font/otf"
+    } else if ext.eq_ignore_ascii_case("pdf") {
+        "application/pdf"
+    } else if ext.eq_ignore_ascii_case("webmanifest") {
+        "application/manifest+json"
+    } else if ext.eq_ignore_ascii_case("mp4") {
+        "video/mp4"
+    } else if ext.eq_ignore_ascii_case("webm") {
+        "video/webm"
+    } else if ext.eq_ignore_ascii_case("mp3") {
+        "audio/mpeg"
+    } else {
+        "application/octet-stream"
     }
 }
 
@@ -109,11 +132,24 @@ fn has_content_hash(path: &str) -> bool {
     let name = path.rsplit('/').next().unwrap_or(path);
     let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
     stem.split(['.', '-']).skip(1).any(|seg| {
-        seg.len() >= 8
-            && seg.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-            && (seg.chars().any(|c| c.is_ascii_digit())
-                || (seg.chars().any(|c| c.is_ascii_uppercase())
-                    && seg.chars().any(|c| c.is_ascii_lowercase())))
+        if seg.len() < 8 {
+            return false;
+        }
+        let mut has_digit = false;
+        let mut has_upper = false;
+        let mut has_lower = false;
+        for &b in seg.as_bytes() {
+            if b.is_ascii_digit() {
+                has_digit = true;
+            } else if b.is_ascii_uppercase() {
+                has_upper = true;
+            } else if b.is_ascii_lowercase() {
+                has_lower = true;
+            } else if b != b'_' {
+                return false;
+            }
+        }
+        has_digit || (has_upper && has_lower)
     })
 }
 
@@ -125,11 +161,43 @@ fn is_ignored(rel: &str) -> bool {
         .any(|part| DEFAULT_IGNORES.contains(&part))
 }
 
-/// SHA-256 of a file, streamed so only a small buffer is in memory.
+/// SHA-256 of a file, streamed with a 64KB buffer to minimize syscall overhead.
 fn sha256_file(path: &Path) -> std::io::Result<String> {
     let mut hasher = Sha256::new();
-    std::io::copy(&mut std::fs::File::open(path)?, &mut hasher)?;
+    let mut file = std::fs::File::open(path)?;
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn normalize_rel_path(rel: &Path) -> String {
+    let rel_str = rel.to_string_lossy();
+    let mut norm = String::with_capacity(rel_str.len() + 1);
+    if !rel_str.starts_with('/') && !rel_str.starts_with('\\') {
+        norm.push('/');
+    }
+    for c in rel_str.chars() {
+        if c == '\\' {
+            norm.push('/');
+        } else {
+            norm.push(c);
+        }
+    }
+    norm
+}
+
+struct Candidate {
+    abs_path: PathBuf,
+    norm_path: String,
+    size: usize,
+    mime: &'static str,
+    immutable: bool,
 }
 
 pub fn scan_output_dir(output_dir: &Path) -> Result<ScannedTree, String> {
@@ -140,9 +208,7 @@ pub fn scan_output_dir(output_dir: &Path) -> Result<ScannedTree, String> {
         ));
     }
 
-    let mut files = Vec::new();
-    let mut blobs_by_hash = HashMap::new();
-    let mut total_bytes = 0;
+    let mut candidates = Vec::new();
 
     for entry in WalkDir::new(output_dir)
         .follow_links(false)
@@ -159,16 +225,12 @@ pub fn scan_output_dir(output_dir: &Path) -> Result<ScannedTree, String> {
             Err(_) => continue,
         };
 
-        let rel_str = rel.to_string_lossy().to_string();
-        if is_ignored(&rel_str) {
+        let rel_lossy = rel.to_string_lossy();
+        if is_ignored(&rel_lossy) {
             continue;
         }
 
-        let norm_path = if rel_str.starts_with('/') {
-            rel_str.replace('\\', "/")
-        } else {
-            format!("/{}", rel_str.replace('\\', "/"))
-        };
+        let norm_path = normalize_rel_path(rel);
 
         let metadata = entry
             .metadata()
@@ -181,27 +243,118 @@ pub fn scan_output_dir(output_dir: &Path) -> Result<ScannedTree, String> {
             ));
         }
 
-        let hash = sha256_file(abs_path)
-            .map_err(|e| format!("Failed to read {}: {e}", abs_path.display()))?;
-        total_bytes += size;
-
         let mime = guess_mime(&norm_path);
         let immutable = is_immutable_asset(&norm_path);
 
-        files.push(ScannedFileEntry {
-            path: norm_path,
-            hash: hash.clone(),
+        candidates.push(Candidate {
+            abs_path: abs_path.to_path_buf(),
+            norm_path,
             size,
-            r#type: mime.to_string(),
-            immutable: if immutable { Some(true) } else { None },
+            mime,
+            immutable,
+        });
+    }
+
+    if candidates.is_empty() {
+        return Ok(ScannedTree {
+            files: Vec::new(),
+            blobs_by_hash: HashMap::new(),
+            total_bytes: 0,
+        });
+    }
+
+    let count = candidates.len();
+    let mut files = Vec::with_capacity(count);
+    let mut blobs_by_hash = HashMap::with_capacity(count);
+    let mut total_bytes = 0;
+
+    if count == 1 {
+        let c = &candidates[0];
+        let hash = sha256_file(&c.abs_path)
+            .map_err(|e| format!("Failed to read {}: {e}", c.abs_path.display()))?;
+        total_bytes += c.size;
+        files.push(ScannedFileEntry {
+            path: c.norm_path.clone(),
+            hash: hash.clone(),
+            size: c.size,
+            r#type: c.mime.to_string(),
+            immutable: if c.immutable { Some(true) } else { None },
+        });
+        blobs_by_hash.insert(
+            hash.clone(),
+            LocalBlob {
+                hash,
+                path: c.abs_path.clone(),
+            },
+        );
+        return Ok(ScannedTree {
+            files,
+            blobs_by_hash,
+            total_bytes,
+        });
+    }
+
+    // Multi-threaded Merkle tree calculation across available cores
+    let num_threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .clamp(1, 8)
+        .min(count);
+
+    let next_idx = AtomicUsize::new(0);
+    let error_slot = Mutex::new(None::<String>);
+    let hashes: Vec<Mutex<Option<String>>> = (0..count).map(|_| Mutex::new(None)).collect();
+
+    std::thread::scope(|s| {
+        for _ in 0..num_threads {
+            s.spawn(|| {
+                loop {
+                    let idx = next_idx.fetch_add(1, Ordering::Relaxed);
+                    if idx >= count {
+                        break;
+                    }
+                    if error_slot.lock().unwrap().is_some() {
+                        break;
+                    }
+
+                    let c = &candidates[idx];
+                    match sha256_file(&c.abs_path) {
+                        Ok(hash) => {
+                            *hashes[idx].lock().unwrap() = Some(hash);
+                        }
+                        Err(e) => {
+                            let mut lock = error_slot.lock().unwrap();
+                            if lock.is_none() {
+                                *lock = Some(format!("Failed to read {}: {e}", c.abs_path.display()));
+                            }
+                            break;
+                        }
+                    }
+                }
+            });
+        }
+    });
+
+    if let Some(err) = error_slot.into_inner().unwrap() {
+        return Err(err);
+    }
+
+    for (c, hash_mutex) in candidates.into_iter().zip(hashes.into_iter()) {
+        let hash = hash_mutex.into_inner().unwrap().ok_or_else(|| "Missing computed hash".to_string())?;
+        total_bytes += c.size;
+
+        files.push(ScannedFileEntry {
+            path: c.norm_path,
+            hash: hash.clone(),
+            size: c.size,
+            r#type: c.mime.to_string(),
+            immutable: if c.immutable { Some(true) } else { None },
         });
 
-        blobs_by_hash
-            .entry(hash.clone())
-            .or_insert_with(|| LocalBlob {
-                hash,
-                path: abs_path.to_path_buf(),
-            });
+        blobs_by_hash.entry(hash.clone()).or_insert_with(|| LocalBlob {
+            hash,
+            path: c.abs_path,
+        });
     }
 
     Ok(ScannedTree {

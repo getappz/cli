@@ -23,6 +23,7 @@ pub struct DetectorFilesystem {
     file_cache: Mutex<HashMap<String, bool>>,
     read_cache: Mutex<HashMap<String, Option<String>>>,
     readdir_cache: Mutex<HashMap<String, Vec<FsEntry>>>,
+    regex_cache: Mutex<HashMap<String, Option<Regex>>>,
     /// package.json's dependencies, parsed once for all package detectors
     /// (`None` when there is no package.json).
     package_deps: OnceLock<Option<HashMap<String, String>>>,
@@ -36,6 +37,7 @@ impl DetectorFilesystem {
             file_cache: Mutex::new(HashMap::new()),
             read_cache: Mutex::new(HashMap::new()),
             readdir_cache: Mutex::new(HashMap::new()),
+            regex_cache: Mutex::new(HashMap::new()),
             package_deps: OnceLock::new(),
         }
     }
@@ -50,57 +52,65 @@ impl DetectorFilesystem {
 
     pub fn has_path(&self, path: &str) -> bool {
         let mut cache = self.path_cache.lock().unwrap();
-        *cache
-            .entry(path.to_string())
-            .or_insert_with(|| self.abs_path(path).exists())
+        if let Some(&hit) = cache.get(path) {
+            return hit;
+        }
+        let exists = self.abs_path(path).exists();
+        cache.insert(path.to_string(), exists);
+        exists
     }
 
     pub fn is_file(&self, name: &str) -> bool {
         let mut cache = self.file_cache.lock().unwrap();
-        *cache
-            .entry(name.to_string())
-            .or_insert_with(|| self.abs_path(name).is_file())
+        if let Some(&hit) = cache.get(name) {
+            return hit;
+        }
+        let is_f = self.abs_path(name).is_file();
+        cache.insert(name.to_string(), is_f);
+        is_f
     }
 
     pub fn read_file(&self, name: &str) -> Option<String> {
         let mut cache = self.read_cache.lock().unwrap();
-        cache
-            .entry(name.to_string())
-            .or_insert_with(|| fs::read_to_string(self.abs_path(name)).ok())
-            .clone()
+        if let Some(hit) = cache.get(name) {
+            return hit.clone();
+        }
+        let content = fs::read_to_string(self.abs_path(name)).ok();
+        cache.insert(name.to_string(), content.clone());
+        content
     }
 
     pub fn readdir(&self, dir_path: &str) -> Vec<FsEntry> {
         let mut cache = self.readdir_cache.lock().unwrap();
-        cache
-            .entry(dir_path.to_string())
-            .or_insert_with(|| {
-                let p = if dir_path.is_empty() || dir_path == "." {
-                    self.root.clone()
-                } else {
-                    self.abs_path(dir_path)
-                };
-                fs::read_dir(&p)
-                    .ok()
-                    .into_iter()
-                    .flat_map(|entries| {
-                        entries
-                            .filter_map(|e| e.ok())
-                            .map(|e| {
-                                let name = e.file_name().to_string_lossy().to_string();
-                                let path = format!("{}/{}", dir_path.trim_end_matches('/'), name);
-                                let is_file = e.file_type().map(|t| t.is_file()).unwrap_or(false);
-                                FsEntry {
-                                    name,
-                                    path,
-                                    is_file,
-                                }
-                            })
-                            .collect::<Vec<_>>()
+        if let Some(hit) = cache.get(dir_path) {
+            return hit.clone();
+        }
+        let p = if dir_path.is_empty() || dir_path == "." {
+            self.root.clone()
+        } else {
+            self.abs_path(dir_path)
+        };
+        let entries = fs::read_dir(&p)
+            .ok()
+            .into_iter()
+            .flat_map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .map(|e| {
+                        let name = e.file_name().to_string_lossy().to_string();
+                        let path = format!("{}/{}", dir_path.trim_end_matches('/'), name);
+                        let is_file = e.file_type().map(|t| t.is_file()).unwrap_or(false);
+                        FsEntry {
+                            name,
+                            path,
+                            is_file,
+                        }
                     })
-                    .collect()
+                    .collect::<Vec<_>>()
             })
-            .clone()
+            .collect();
+        cache.insert(dir_path.to_string(), entries);
+        cache.get(dir_path).unwrap().clone()
     }
 
     /// Files under the root matching `pattern`. The root is escaped: a
@@ -130,6 +140,16 @@ impl DetectorFilesystem {
             .as_ref()
     }
 
+    fn get_regex(&self, re_str: &str) -> Option<Regex> {
+        let mut cache = self.regex_cache.lock().unwrap();
+        if let Some(r) = cache.get(re_str) {
+            return r.clone();
+        }
+        let compiled = Regex::new(re_str).ok();
+        cache.insert(re_str.to_string(), compiled.clone());
+        compiled
+    }
+
     /// Check a detector: exact path or glob, with optional content regex and package match.
     pub fn check_detector(
         &self,
@@ -155,8 +175,7 @@ impl DetectorFilesystem {
             match match_content {
                 None => true,
                 Some(re_str) => {
-                    let re = Regex::new(re_str).ok();
-                    let re = match re {
+                    let re = match self.get_regex(re_str) {
                         Some(r) => r,
                         None => return false,
                     };
@@ -172,9 +191,12 @@ impl DetectorFilesystem {
             match match_content {
                 None => true,
                 Some(re_str) => {
+                    let re = match self.get_regex(re_str) {
+                        Some(r) => r,
+                        None => return false,
+                    };
                     let content = self.read_file(path);
-                    content
-                        .is_some_and(|c| Regex::new(re_str).ok().is_some_and(|re| re.is_match(&c)))
+                    content.is_some_and(|c| re.is_match(&c))
                 }
             }
         }

@@ -181,6 +181,9 @@ fn exec_inner(
     if !readers_done_by(&readers, Instant::now() + OUTPUT_GRACE) {
         // The CLI is done; end what it left running in its process group /
         // job so the pipes close, then take whatever output arrived.
+        #[cfg(windows)]
+        let _ = child.start_kill();
+        #[cfg(not(windows))]
         let _ = child.kill();
         readers_done_by(&readers, Instant::now() + Duration::from_secs(1));
     }

@@ -96,7 +96,7 @@ fn cache_decision(cached_version: &str, current: &str, age_hours: i64) -> Option
 fn is_newer(candidate: &str, current: &str) -> bool {
     let parse = |v: &str| semver::Version::parse(v.trim_start_matches('v')).ok();
     match (parse(candidate), parse(current)) {
-        (Some(c), Some(cur)) => c > cur,
+        (Some(c), Some(cur)) => c.cmp_precedence(&cur).is_gt(),
         _ => candidate != current,
     }
 }
@@ -338,6 +338,9 @@ mod tests {
         );
         assert!(is_newer("v0.10.0", "v0.9.0"));
         assert!(!is_newer("v0.9.0", "v0.10.0"));
+        // Build metadata does not make a version newer under SemVer precedence
+        assert!(!is_newer("v0.2.0+build.2", "v0.2.0+build.1"));
+        assert!(!is_newer("v0.2.0+build.1", "v0.2.0"));
     }
 
     #[test]

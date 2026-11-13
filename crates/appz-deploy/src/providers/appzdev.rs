@@ -8,6 +8,7 @@
 //! - Atomic immutable deployment to R2 MANIFESTS
 //! - Sub-second instant rollback via KV HOSTS pointer mutation
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -901,17 +902,42 @@ impl AppzdevProvider {
                             let (hash, path) = missing_blobs[idx];
                             // Read only now, so at most one file per worker is
                             // in memory instead of the whole output directory.
-                            let data = match std::fs::read(path) {
-                                Ok(d) => d,
+                            // Cap read to MAX_FILE_SIZE + 1 bytes to prevent memory exhaustion
+                            // if a file grows after initial scan.
+                            let mut file = match std::fs::File::open(path) {
+                                Ok(f) => f,
                                 Err(e) => {
                                     let mut lock = upload_error.lock().unwrap();
                                     if lock.is_none() {
                                         *lock =
-                                            Some(format!("cannot read {}: {e}", path.display()));
+                                            Some(format!("cannot open {}: {e}", path.display()));
                                     }
                                     break;
                                 }
                             };
+                            let mut data = Vec::new();
+                            if let Err(e) = (&mut file)
+                                .take((crate::static_cas::MAX_FILE_SIZE + 1) as u64)
+                                .read_to_end(&mut data)
+                            {
+                                let mut lock = upload_error.lock().unwrap();
+                                if lock.is_none() {
+                                    *lock =
+                                        Some(format!("cannot read {}: {e}", path.display()));
+                                }
+                                break;
+                            }
+                            if data.len() > crate::static_cas::MAX_FILE_SIZE {
+                                let mut lock = upload_error.lock().unwrap();
+                                if lock.is_none() {
+                                    *lock = Some(format!(
+                                        "file {} exceeds maximum allowed size of {} bytes",
+                                        path.display(),
+                                        crate::static_cas::MAX_FILE_SIZE
+                                    ));
+                                }
+                                break;
+                            }
 
                             let read_hash = crate::static_cas::sha256_hex(&data);
                             if read_hash != hash {

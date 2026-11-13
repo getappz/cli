@@ -382,23 +382,39 @@ fn is_upgrade(request: &[u8]) -> bool {
         .contains("\r\nupgrade:")
 }
 
-/// Replace the request's `Connection` header with `Connection: close`, so the
-/// dev server ends the reply by closing and every request arrives on its own
-/// connection. The tunnel client pools connections across visitors; without
-/// this, a visitor could ride a connection another visitor authenticated.
-fn force_close(request: &[u8]) -> Vec<u8> {
+/// Rewrite the request head for the dev server:
+/// - `Host` becomes `localhost:<port>`. Dev servers (Vite, Astro) refuse a
+///   host they do not know; the visitor's host moves to `X-Forwarded-Host`.
+/// - Unless `keep_alive` (a websocket upgrade), `Connection` becomes `close`,
+///   so the dev server ends the reply by closing and every request arrives on
+///   its own connection. The tunnel client pools connections across visitors;
+///   without this, a visitor could ride a connection another one authenticated.
+fn rewrite_head(request: &[u8], target_port: u16, keep_alive: bool) -> Vec<u8> {
     let Some(end) = head_end(request) else {
         return request.to_vec();
     };
     let head = String::from_utf8_lossy(&request[..end]);
-    let mut out = String::with_capacity(request.len() + 24);
+    let mut out = String::with_capacity(request.len() + 96);
+    let mut public_host = None;
     for line in head.split("\r\n") {
-        if !line.to_ascii_lowercase().starts_with("connection:") {
+        let lower = line.to_ascii_lowercase();
+        if lower.starts_with("host:") {
+            public_host = Some(line[5..].trim().to_string());
+        } else if keep_alive || !lower.starts_with("connection:") {
             out.push_str(line);
             out.push_str("\r\n");
         }
     }
-    out.push_str("Connection: close\r\n\r\n");
+    out.push_str(&format!("Host: localhost:{target_port}\r\n"));
+    if let Some(host) = public_host {
+        out.push_str(&format!(
+            "X-Forwarded-Host: {host}\r\nX-Forwarded-Proto: https\r\n"
+        ));
+    }
+    if !keep_alive {
+        out.push_str("Connection: close\r\n");
+    }
+    out.push_str("\r\n");
     let mut bytes = out.into_bytes();
     bytes.extend_from_slice(&request[end + HEAD_END.len()..]);
     bytes
@@ -413,13 +429,9 @@ fn forward(client: &mut TcpStream, target_port: u16, request: &[u8]) -> u16 {
         let _ = client.write_all(resp.as_bytes());
         return 502;
     };
-    // A websocket (HMR) stays open both ways, so it keeps its headers.
-    let sent = if is_upgrade(request) {
-        target.write_all(request)
-    } else {
-        target.write_all(&force_close(request))
-    };
-    if sent.is_err() {
+    // A websocket (HMR) stays open both ways, so it keeps `Connection`.
+    let head = rewrite_head(request, target_port, is_upgrade(request));
+    if target.write_all(&head).is_err() {
         return 0;
     }
     // The head is in: the rest (upload body, websocket frames) has no deadline.
@@ -454,7 +466,7 @@ pub fn replay(target_port: u16, request: &[u8]) -> Result<u16, String> {
         .map_err(|e| format!("cannot connect to port {target_port}: {e}"))?;
     let _ = target.set_read_timeout(Some(Duration::from_secs(30)));
     target
-        .write_all(&force_close(request))
+        .write_all(&rewrite_head(request, target_port, false))
         .map_err(|e| e.to_string())?;
     let mut buf = [0u8; 64];
     let n = target.read(&mut buf).map_err(|e| e.to_string())?;
@@ -466,12 +478,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn force_close_replaces_connection_header_and_keeps_body() {
-        let req = b"POST /hook HTTP/1.1\r\nHost: x\r\nconnection: keep-alive\r\n\r\nbody";
+    fn rewrite_head_sets_local_host_and_closes_the_connection() {
+        let req = b"POST /hook HTTP/1.1\r\nHost: abc.trycloudflare.com\r\nconnection: keep-alive\r\n\r\nbody";
         assert_eq!(
-            force_close(req),
-            b"POST /hook HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\nbody"
+            String::from_utf8(rewrite_head(req, 4321, false)).unwrap(),
+            "POST /hook HTTP/1.1\r\nHost: localhost:4321\r\nX-Forwarded-Host: abc.trycloudflare.com\r\nX-Forwarded-Proto: https\r\nConnection: close\r\n\r\nbody"
         );
+    }
+
+    #[test]
+    fn rewrite_head_keeps_connection_for_a_websocket_upgrade() {
+        let req = b"GET /ws HTTP/1.1\r\nHost: abc.example\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n";
+        let out = String::from_utf8(rewrite_head(req, 5173, true)).unwrap();
+        assert!(out.contains("Connection: Upgrade\r\n"), "{out}");
+        assert!(out.contains("Host: localhost:5173\r\n"), "{out}");
+        assert!(!out.contains("Connection: close"), "{out}");
     }
 
     #[test]

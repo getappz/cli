@@ -97,33 +97,43 @@ fn run_list(root: &Path, json: bool) {
         return;
     }
 
+    super::intro("appz agents list");
+
     if installed.is_empty() {
         super::info("no agents detected on this system");
     } else {
         super::step("installed agents:");
-        for id in &installed {
-            let display = registry
-                .get(id)
-                .map(|c| c.display_name.as_str())
-                .unwrap_or(id.as_str());
-            super::info(&format!("  {display} ({id})"));
-        }
+        let installed_lines: Vec<String> = installed
+            .iter()
+            .map(|id| {
+                let display = registry
+                    .get(id)
+                    .map(|c| c.display_name.as_str())
+                    .unwrap_or(id.as_str());
+                format!("  {display} ({id})")
+            })
+            .collect();
+        super::info(&installed_lines.join("\n"));
     }
 
     super::step("known agents:");
-    for id in all_ids {
-        let mark = if installed.contains(&id) {
-            " (detected)"
-        } else {
-            ""
-        };
-        if let Some(config) = registry.get(&id) {
-            super::info(&format!(
-                "  {} ({}) — {} skills dir{mark}",
-                config.display_name, id, config.skills_dir
-            ));
-        }
-    }
+    let known_lines: Vec<String> = all_ids
+        .iter()
+        .filter_map(|id| {
+            let mark = if installed.contains(id) {
+                " (detected)"
+            } else {
+                ""
+            };
+            registry.get(id).map(|config| {
+                format!(
+                    "  {} ({}) — {} skills dir{mark}",
+                    config.display_name, id, config.skills_dir
+                )
+            })
+        })
+        .collect();
+    super::info(&known_lines.join("\n"));
 
     super::outro(&format!(
         "{} installed, {} known",
@@ -223,12 +233,12 @@ fn run_doctor(root: &Path, json: bool) {
         return;
     }
 
-    super::step(&format!(
-        "{} AGENTS.md",
-        if has_agents_md { "✓" } else { "✗" }
-    ));
-    super::step(&format!(
-        "{} appz.jsonc",
+    super::intro("appz agents doctor");
+
+    super::step("project files");
+    super::info(&format!(
+        "{} AGENTS.md   {} appz.jsonc",
+        if has_agents_md { "✓" } else { "✗" },
         if has_appz_jsonc { "✓" } else { "✗" }
     ));
 

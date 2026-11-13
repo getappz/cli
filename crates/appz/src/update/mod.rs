@@ -12,6 +12,10 @@ mod swap;
 
 /// Download, verify, and install the requested (or latest) release.
 pub fn run(version: Option<String>, check_only: bool, quiet: bool) {
+    if !quiet && !check_only {
+        crate::intro("appz update");
+    }
+
     let target_version = match resolve_target_version(version, check_only, quiet) {
         Some(v) => v,
         None => return,
@@ -19,66 +23,69 @@ pub fn run(version: Option<String>, check_only: bool, quiet: bool) {
 
     let asset = match github::asset_name(&target_version) {
         Ok(a) => a,
-        Err(e) => {
-            eprintln!("error: {e}");
-            std::process::exit(1);
+        Err(e) => crate::error(&e),
+    };
+
+    let data = if quiet {
+        match github::download_asset(&target_version, &asset) {
+            Ok(d) => d,
+            Err(e) => crate::error(&format!("error downloading: {e}")),
+        }
+    } else {
+        match crate::with_spinner(
+            &format!("downloading {asset}..."),
+            "download complete",
+            || github::download_asset(&target_version, &asset),
+        ) {
+            Ok(d) => d,
+            Err(e) => crate::error(&format!("error downloading: {e}")),
         }
     };
 
-    if !quiet {
-        println!("downloading {asset}...");
-    }
-    let data = match github::download_asset(&target_version, &asset) {
-        Ok(d) => d,
-        Err(e) => {
-            eprintln!("error downloading: {e}");
-            std::process::exit(1);
-        }
-    };
-
-    if !quiet {
-        println!("verifying checksum...");
-    }
-    match github::expected_checksum(&target_version, &asset) {
-        Ok(expected) => {
-            if let Err(e) = github::verify_checksum(&data, &expected) {
-                eprintln!("{e}");
-                std::process::exit(1);
+    if quiet {
+        match github::expected_checksum(&target_version, &asset) {
+            Ok(expected) => {
+                if let Err(e) = github::verify_checksum(&data, &expected) {
+                    crate::error(&e);
+                }
             }
+            Err(e) => crate::error(&format!("error fetching checksum: {e}")),
         }
-        Err(e) => {
-            eprintln!("error fetching checksum: {e}");
-            std::process::exit(1);
+    } else {
+        match crate::with_spinner(
+            "verifying checksum...",
+            "checksum verified",
+            || -> Result<(), String> {
+                let expected = github::expected_checksum(&target_version, &asset)?;
+                github::verify_checksum(&data, &expected)
+            },
+        ) {
+            Ok(()) => {}
+            Err(e) => crate::error(&e),
         }
     }
 
     let new_binary = match extract_binary(&data) {
         Ok(p) => p,
-        Err(e) => {
-            eprintln!("error: {e}");
-            std::process::exit(1);
-        }
+        Err(e) => crate::error(&e),
     };
 
     let current = match std::env::current_exe() {
         Ok(p) => p,
-        Err(e) => {
-            eprintln!("error: cannot determine current binary path: {e}");
-            std::process::exit(1);
-        }
+        Err(e) => crate::error(&format!("cannot determine current binary path: {e}")),
     };
 
     if !quiet {
-        println!("replacing {}...", current.display());
+        crate::step(&format!("replacing {}...", current.display()));
     }
     if let Err(e) = swap::replace_binary(&new_binary, &current) {
-        eprintln!("error replacing binary: {e}");
-        std::process::exit(1);
+        crate::error(&format!("error replacing binary: {e}"));
     }
 
     if !quiet {
-        println!("updated to {target_version}");
+        crate::success(&format!("updated to {target_version}"));
         report_other_instances();
+        crate::outro("update complete");
     }
 }
 
@@ -96,8 +103,8 @@ fn resolve_target_version(
             } else {
                 format!("v{v}")
             };
-            if !quiet {
-                println!("updating to {v}...");
+            if !quiet && !check_only {
+                crate::step(&format!("updating to {v}..."));
             }
             Some(v)
         }
@@ -105,25 +112,35 @@ fn resolve_target_version(
             let latest = match github::check_for_update() {
                 Ok(Some(v)) => v,
                 Ok(None) => {
-                    println!("appz is up to date (v{})", env!("CARGO_PKG_VERSION"));
+                    if !quiet {
+                        if check_only {
+                            crate::intro("appz update --check");
+                        }
+                        crate::success(&format!(
+                            "appz is up to date (v{})",
+                            env!("CARGO_PKG_VERSION")
+                        ));
+                        if check_only {
+                            crate::outro("nothing to update");
+                        }
+                    }
                     return None;
                 }
-                Err(e) => {
-                    eprintln!("error checking for updates: {e}");
-                    std::process::exit(1);
-                }
+                Err(e) => crate::error(&format!("error checking for updates: {e}")),
             };
             if check_only {
                 if !quiet {
-                    println!(
+                    crate::intro("appz update --check");
+                    crate::info(&format!(
                         "new version available: {latest} (current: v{})",
                         env!("CARGO_PKG_VERSION")
-                    );
+                    ));
+                    crate::outro("run `appz update` to upgrade");
                 }
                 return None;
             }
             if !quiet {
-                println!("updating to {latest}...");
+                crate::step(&format!("latest version: {latest}"));
             }
             Some(latest)
         }
@@ -172,10 +189,10 @@ fn report_other_instances() {
             .map(u32::to_string)
             .collect::<Vec<_>>()
             .join(", ");
-        println!(
-            "note: {} other appz process(es) still running the old binary (pid {list}); \
+        crate::warning(&format!(
+            "{} other appz process(es) still running the old binary (pid {list}); \
              restart them to pick up this update",
             others.len()
-        );
+        ));
     }
 }

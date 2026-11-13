@@ -292,7 +292,8 @@ fn printable(s: &str) -> String {
 
 /// The request path as shown in the log: percent-decoded, and with a dev
 /// server's file URLs into the project (`/@fs/C:/work/site/src/a.jpg`)
-/// reduced to the part below `project` (`/src/a.jpg`).
+/// reduced to the part below `project` (`/src/a.jpg`). An image-endpoint
+/// request is shown as `/_image <file>`.
 fn display_path(path: &str, project: &str) -> String {
     let decoded = printable(&percent_decode(path));
     let project = project
@@ -300,10 +301,18 @@ fn display_path(path: &str, project: &str) -> String {
         .replace('\\', "/")
         .trim_matches('/')
         .to_string();
-    if project.is_empty() {
+    let shown = if project.is_empty() {
         decoded
     } else {
         decoded.replace(&format!("/@fs/{project}"), "")
+    };
+    // Astro's image endpoint: the file is what matters, not the resize query.
+    match shown.strip_prefix("/_image?href=") {
+        Some(href) => {
+            let file = href.split(['?', '&']).next().unwrap_or(href);
+            format!("/_image {file}")
+        }
+        None => shown,
     }
 }
 
@@ -757,7 +766,11 @@ mod tests {
         let path = "/_image?href=%2F%40fs%2FC%3A%2Fwork%2Fsite%2Fsrc%2Fassets%2Fa.jpg%3Fw%3D10";
         assert_eq!(
             display_path(path, r"\\?\C:\work\site"),
-            "/_image?href=/src/assets/a.jpg?w=10"
+            "/_image /src/assets/a.jpg"
+        );
+        assert_eq!(
+            display_path("/contact/?service=x", ""),
+            "/contact/?service=x"
         );
         assert_eq!(display_path("/a%20b%zz", ""), "/a b%zz");
     }

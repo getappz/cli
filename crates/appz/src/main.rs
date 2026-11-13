@@ -1092,9 +1092,33 @@ fn run_share(args: share::ShareArgs, json: bool) {
             let dev_command = toolchains.iter().find_map(|t| t.dev_command.as_deref());
             let port = appz_core::detect_dev_port(&canonical, &frameworks, dev_command);
             if !appz_core::is_port_listening(port, 200) {
-                error(&format!(
-                    "no dev server found (tried port {port}). Start it and run `appz share <PORT>`, or use `appz dev --share`"
-                ));
+                let start = is_tty()
+                    && cliclack::confirm(format!(
+                        "No dev server is running (tried port {port}). Start it and share it?"
+                    ))
+                    .initial_value(true)
+                    .interact()
+                    .unwrap_or(false);
+                if !start {
+                    error(&format!(
+                        "no dev server found (tried port {port}). Start it and run `appz share <PORT>`, or use `appz dev --share`"
+                    ));
+                }
+                // The dev server needs the terminal for its own output, so
+                // this is `appz dev --share` with the same options.
+                return run_dev(
+                    DevArgs {
+                        dir: args.dir,
+                        command: None,
+                        skip_install: false,
+                        share: true,
+                        pin: args.pin,
+                        auth: args.auth,
+                        subdomain: args.subdomain,
+                        inspect: args.inspect,
+                    },
+                    false,
+                );
             }
             step(&format!("detected dev server on port {port}"));
             port

@@ -85,6 +85,35 @@ impl CloudflareProvider {
 }
 
 impl DeployProvider for CloudflareProvider {
+    fn parallel_upload_safe(&self, ctx: &DeployContext) -> bool {
+        for name in ["wrangler.jsonc", "wrangler.json", "wrangler.toml"] {
+            let path = ctx.project_dir.join(name);
+            if !path.exists() {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(path) else {
+                return false;
+            };
+            let config = if name.ends_with(".toml") {
+                toml::from_str::<toml::Value>(&text)
+                    .ok()
+                    .and_then(|v| serde_json::to_value(v).ok())
+            } else {
+                serde_json::from_str::<serde_json::Value>(&appz_core::strip_jsonc(&text)).ok()
+            };
+            let Some(config) = config else {
+                return false;
+            };
+            // Wrangler custom builds can rewrite assets; serialize those deploys.
+            return config.is_object()
+                && config.get("build").is_none()
+                && config
+                    .get("env")
+                    .and_then(|v| v.as_object())
+                    .is_none_or(|envs| envs.values().all(|env| env.get("build").is_none()));
+        }
+        false
+    }
     fn name(&self) -> &'static str {
         "Cloudflare"
     }
@@ -307,6 +336,35 @@ fn extract_deploy_url(stdout: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn custom_builds_are_excluded_from_parallel_uploads() {
+        let dir = std::env::temp_dir().join(format!("appz-wrangler-build-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ctx = DeployContext::new(dir.clone(), "dist".into());
+        for (config, safe) in [
+            (r#"{"name":"test"}"#, true),
+            (r#"{"build":{"command":"npm run build"}}"#, false),
+            (
+                r#"{"env":{"preview":{"build":{"command":"npm run build"}}}}"#,
+                false,
+            ),
+            ("invalid config", false),
+        ] {
+            std::fs::write(dir.join("wrangler.jsonc"), config).unwrap();
+            assert_eq!(CloudflareProvider.parallel_upload_safe(&ctx), safe);
+        }
+        std::fs::remove_file(dir.join("wrangler.jsonc")).unwrap();
+        std::fs::write(dir.join("wrangler.toml"), "name = 'test'").unwrap();
+        assert!(CloudflareProvider.parallel_upload_safe(&ctx));
+        std::fs::write(
+            dir.join("wrangler.toml"),
+            "[build]\ncommand = 'npm run build'",
+        )
+        .unwrap();
+        assert!(!CloudflareProvider.parallel_upload_safe(&ctx));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn takes_the_last_url_not_the_first() {

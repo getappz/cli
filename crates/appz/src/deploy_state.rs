@@ -4,9 +4,13 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+
+// Keep each read/modify/rename transaction intact across parallel target workers.
+static STATE_LOCK: Mutex<()> = Mutex::new(());
 
 /// Build output and tool state: not source, and they change on every build.
 pub(crate) const SKIP_DIRS: [&str; 22] = [
@@ -135,6 +139,7 @@ pub fn unchanged(root: &Path, slug: &str, prod: bool, fingerprint: &str) -> Opti
 }
 
 pub fn record(root: &Path, slug: &str, prod: bool, fingerprint: &str, url: &str) {
+    let _guard = STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut all = load(root);
     all.insert(
         key(slug, prod),
@@ -144,6 +149,17 @@ pub fn record(root: &Path, slug: &str, prod: bool, fingerprint: &str, url: &str)
             at: chrono::Utc::now().to_rfc3339(),
         },
     );
+    save(root, &all);
+}
+
+pub fn forget(root: &Path, slug: &str, prod: bool) {
+    let _guard = STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut all = load(root);
+    all.remove(&key(slug, prod));
+    save(root, &all);
+}
+
+fn save(root: &Path, all: &BTreeMap<String, LastDeploy>) {
     let path = state_path(root);
     let Some(dir) = path.parent() else { return };
     if std::fs::create_dir_all(dir).is_err() {
@@ -166,6 +182,31 @@ pub fn record(root: &Path, slug: &str, prod: bool, fingerprint: &str, url: &str)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn concurrent_records_keep_every_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let barrier = std::sync::Barrier::new(16);
+        std::thread::scope(|scope| {
+            for i in 0..16 {
+                let root = dir.path();
+                let barrier = &barrier;
+                scope.spawn(move || {
+                    barrier.wait();
+                    record(
+                        root,
+                        &format!("target-{i}"),
+                        false,
+                        "fingerprint",
+                        "https://example.com",
+                    );
+                });
+            }
+        });
+        for i in 0..16 {
+            assert!(unchanged(dir.path(), &format!("target-{i}"), false, "fingerprint").is_some());
+        }
+    }
 
     #[test]
     fn fingerprint_tracks_source_but_not_build_output_or_local_env() {

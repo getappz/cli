@@ -32,11 +32,10 @@ impl NetlifyProvider {
         }
 
         // appz's cached build already produced the output: upload it as is.
-        let mut args = if ctx.prebuilt {
-            vec!["deploy", "--dir", ctx.output_dir.as_str()]
-        } else {
-            vec!["deploy", "--build"]
-        };
+        let mut args = vec!["deploy", "--no-build"];
+        if ctx.prebuilt {
+            args.extend(["--dir", ctx.output_dir.as_str()]);
+        }
         if !is_preview {
             args.push("--prod");
         }
@@ -73,6 +72,35 @@ impl NetlifyProvider {
 }
 
 impl DeployProvider for NetlifyProvider {
+    fn parallel_upload_safe(&self, _ctx: &DeployContext) -> bool {
+        true
+    }
+
+    fn prepare_deploy(&self, ctx: &DeployContext) -> DeployResult<()> {
+        if ctx.dry_run || ctx.prebuilt {
+            return Ok(());
+        }
+        let output = ctx
+            .exec_live("netlify", &["build"], DEPLOY_TIMEOUT)
+            .map_err(|reason| DeployError::DeployFailed {
+                provider: self.name(),
+                reason,
+            })?;
+        if !output.success {
+            return Err(DeployError::DeployFailed {
+                provider: self.name(),
+                reason: format!(
+                    "netlify build failed:\n{}\n{}",
+                    output.stdout, output.stderr
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    fn deploy_prepared(&self, ctx: &DeployContext) -> DeployResult<DeployOutput> {
+        self.deploy_internal(ctx, ctx.is_preview)
+    }
     fn name(&self) -> &'static str {
         "Netlify"
     }
@@ -199,10 +227,12 @@ impl DeployProvider for NetlifyProvider {
     }
 
     fn deploy(&self, ctx: &DeployContext) -> DeployResult<DeployOutput> {
+        self.prepare_deploy(ctx)?;
         self.deploy_internal(ctx, false)
     }
 
     fn deploy_preview(&self, ctx: &DeployContext) -> DeployResult<DeployOutput> {
+        self.prepare_deploy(ctx)?;
         self.deploy_internal(ctx, true)
     }
 
@@ -348,6 +378,57 @@ fn extract_deploy_url(stdout: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prepared_upload_does_not_run_another_build() {
+        let dir = std::env::temp_dir().join(format!("appz-netlify-prepare-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("commands.log");
+        let _ = std::fs::remove_file(&log);
+        #[cfg(windows)]
+        std::fs::write(
+            dir.join("netlify.cmd"),
+            "@echo off\r\necho %*>>commands.log\r\necho https://test.netlify.app\r\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let path = dir.join("netlify");
+            std::fs::write(
+                &path,
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> commands.log\necho https://test.netlify.app\n",
+            )
+            .unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let mut ctx = DeployContext::new(dir.clone(), "dist".into());
+        ctx.json_output = true;
+        let inherited = std::env::var_os("PATH").unwrap_or_default();
+        let path = std::env::join_paths(
+            std::iter::once(dir.clone()).chain(std::env::split_paths(&inherited)),
+        )
+        .unwrap();
+        ctx.run_env
+            .insert("PATH".into(), path.to_string_lossy().into_owned());
+        NetlifyProvider.prepare_deploy(&ctx).unwrap();
+        assert_eq!(std::fs::read_to_string(&log).unwrap().trim(), "build");
+        NetlifyProvider.deploy_prepared(&ctx).unwrap();
+        ctx.prebuilt = true;
+        NetlifyProvider.prepare_deploy(&ctx).unwrap();
+        NetlifyProvider.deploy_prepared(&ctx).unwrap();
+        let commands = std::fs::read_to_string(log).unwrap();
+        let lines: Vec<_> = commands.lines().map(str::trim).collect();
+        assert_eq!(
+            lines,
+            [
+                "build",
+                "deploy --no-build --prod",
+                "deploy --no-build --dir dist --prod"
+            ]
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn parses_deploy_url_from_json_output() {

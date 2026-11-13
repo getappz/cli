@@ -1,5 +1,6 @@
 use std::io::Read;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -59,17 +60,18 @@ pub fn exec_live(
     exec_inner(bin, args, cwd, env, "", timeout, true)
 }
 
-/// Drain `pipe` to the end, optionally echoing each chunk to stderr.
-fn drain(pipe: Option<impl Read>, echo: bool) -> Vec<u8> {
+/// Drain `pipe` to the end into `buf`, optionally echoing each chunk to
+/// stderr. The buffer is shared so the caller can take what arrived without
+/// waiting for the pipe to close.
+fn drain(pipe: Option<impl Read>, echo: bool, buf: Arc<Mutex<Vec<u8>>>) {
     use std::io::Write;
-    let mut buf = Vec::new();
     if let Some(mut pipe) = pipe {
         let mut chunk = [0u8; 4096];
         while let Ok(n) = pipe.read(&mut chunk) {
             if n == 0 {
                 break;
             }
-            buf.extend_from_slice(&chunk[..n]);
+            buf.lock().unwrap().extend_from_slice(&chunk[..n]);
             if echo {
                 let mut err = std::io::stderr().lock();
                 let _ = err.write_all(&chunk[..n]);
@@ -77,7 +79,24 @@ fn drain(pipe: Option<impl Read>, echo: bool) -> Vec<u8> {
             }
         }
     }
-    buf
+}
+
+/// How long to keep reading after the CLI itself has exited. Its output pipes
+/// close then, unless something it started in the background (a telemetry or
+/// dev daemon) inherited them; without a limit we'd wait for that forever.
+const OUTPUT_GRACE: Duration = Duration::from_secs(5);
+
+/// Wait until both readers are done or `deadline` passes.
+fn readers_done_by(readers: &[&thread::JoinHandle<()>], deadline: Instant) -> bool {
+    loop {
+        if readers.iter().all(|h| h.is_finished()) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
 }
 
 fn exec_inner(
@@ -128,8 +147,19 @@ fn exec_inner(
     let stdout_pipe = child.stdout().take();
     let stderr_pipe = child.stderr().take();
 
-    let stdout_handle = thread::spawn(move || drain(stdout_pipe, echo));
-    let stderr_handle = thread::spawn(move || drain(stderr_pipe, echo));
+    let stdout_buf = Arc::new(Mutex::new(Vec::new()));
+    let stderr_buf = Arc::new(Mutex::new(Vec::new()));
+    // fire-and-forget: each reader ends when its pipe closes; we join it when
+    // it has, and leave it behind if a lingering background process keeps
+    // the pipe open past OUTPUT_GRACE.
+    let stdout_handle = {
+        let buf = Arc::clone(&stdout_buf);
+        thread::spawn(move || drain(stdout_pipe, echo, buf))
+    };
+    let stderr_handle = {
+        let buf = Arc::clone(&stderr_buf);
+        thread::spawn(move || drain(stderr_pipe, echo, buf))
+    };
 
     let start = Instant::now();
     let status = loop {
@@ -147,8 +177,18 @@ fn exec_inner(
         }
     };
 
-    let stdout = stdout_handle.join().unwrap_or_default();
-    let stderr = stderr_handle.join().unwrap_or_default();
+    let readers = [&stdout_handle, &stderr_handle];
+    if !readers_done_by(&readers, Instant::now() + OUTPUT_GRACE) {
+        // The CLI is done; end what it left running in its process group /
+        // job so the pipes close, then take whatever output arrived.
+        #[cfg(windows)]
+        let _ = child.start_kill();
+        #[cfg(not(windows))]
+        let _ = child.kill();
+        readers_done_by(&readers, Instant::now() + Duration::from_secs(1));
+    }
+    let stdout = std::mem::take(&mut *stdout_buf.lock().unwrap());
+    let stderr = std::mem::take(&mut *stderr_buf.lock().unwrap());
 
     Ok(ExecOutput {
         success: status.success(),
@@ -220,6 +260,7 @@ mod tests {
         match std::env::var(TREE_KILL_ROLE).as_deref() {
             Ok("spawner") => tree_kill_spawner(),
             Ok("grandchild") => tree_kill_grandchild(),
+            Ok("leaver") => leave_a_process_holding_stdout(),
             _ => {}
         }
     }
@@ -239,6 +280,19 @@ mod tests {
             .unwrap();
         std::fs::write(&pidfile, grandchild.id().to_string()).unwrap();
         let _ = grandchild.wait();
+    }
+
+    /// Print, start a grandchild that inherits our stdout/stderr, and exit
+    /// right away, like a CLI that leaves a background daemon behind.
+    #[allow(clippy::zombie_processes)]
+    fn leave_a_process_holding_stdout() {
+        let exe = std::env::current_exe().unwrap();
+        std::process::Command::new(&exe)
+            .arg("tree_kill_helper")
+            .env(TREE_KILL_ROLE, "grandchild")
+            .spawn()
+            .unwrap();
+        println!("deployed-ok");
     }
 
     fn tree_kill_grandchild() {
@@ -321,5 +375,26 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn returns_soon_after_the_cli_exits_even_if_a_leftover_process_holds_its_output() {
+        let exe = std::env::current_exe().unwrap();
+        let start = Instant::now();
+        let out = exec_captured(
+            exe.to_str().unwrap(),
+            &["tree_kill_helper", "--nocapture"],
+            &std::env::temp_dir(),
+            &[(TREE_KILL_ROLE, "leaver")],
+            Duration::from_secs(60),
+        )
+        .expect("the CLI itself exited, so this is not a timeout");
+        assert!(out.success, "{out:?}");
+        assert!(out.stdout.contains("deployed-ok"), "{out:?}");
+        assert!(
+            start.elapsed() < Duration::from_secs(30),
+            "waited {:?} for a leftover process",
+            start.elapsed()
+        );
     }
 }

@@ -524,7 +524,8 @@ slug = "sveltekit"
 mise_plugin = "node"
 version_files = []
 default_version = "lts"
-supersedes = ["vite"]
+# A pre-1.0 kit also satisfies the SvelteKit 1+ entry; its commands differ.
+supersedes = ["vite", "sveltekit-1"]
 detection_confidence = "strong"
 output_directory = "public"
 env_prefix = "VITE_"

@@ -34,28 +34,30 @@ pub fn slugify_project_id(raw: &str) -> String {
     if raw.starts_with("prj_") {
         return raw.to_string();
     }
-    let mut out = String::with_capacity(raw.len());
-    let mut last_dash = false;
-    for c in raw.chars() {
-        if c.is_ascii_alphanumeric() {
-            out.push(c.to_ascii_lowercase());
+    let mut out = String::with_capacity(raw.len().min(40));
+    let mut last_dash = true; // suppress leading dash
+    for b in raw.bytes() {
+        if b.is_ascii_alphanumeric() {
+            if out.len() >= 40 {
+                break;
+            }
+            out.push(b.to_ascii_lowercase() as char);
             last_dash = false;
         } else if !last_dash {
+            if out.len() >= 40 {
+                break;
+            }
             out.push('-');
             last_dash = true;
         }
     }
-    let trimmed = out.trim_matches('-');
-    let capped = if trimmed.len() > 40 {
-        &trimmed[..40]
-    } else {
-        trimmed
-    };
-    let final_slug = capped.trim_end_matches('-');
-    if final_slug.is_empty() {
+    while out.ends_with('-') {
+        out.pop();
+    }
+    if out.is_empty() {
         "default-project".to_string()
     } else {
-        final_slug.to_string()
+        out
     }
 }
 
@@ -322,15 +324,15 @@ pub fn parse_env_file(content: &str) -> Vec<(String, String)> {
         }
         let line_clean = trimmed.trim_start_matches("export ").trim();
         if let Some((k, v)) = line_clean.split_once('=') {
-            let key = k.trim().to_string();
-            let mut val = v.trim().to_string();
+            let key = k.trim();
+            let mut val = v.trim();
             let is_quoted = (val.starts_with('"') && val.ends_with('"'))
                 || (val.starts_with('\'') && val.ends_with('\''));
             if is_quoted && val.len() >= 2 {
-                val = val[1..val.len() - 1].to_string();
+                val = &val[1..val.len() - 1];
             }
             if !key.is_empty() {
-                out.push((key, val));
+                out.push((key.to_string(), val.to_string()));
             }
         }
     }
@@ -338,16 +340,29 @@ pub fn parse_env_file(content: &str) -> Vec<(String, String)> {
 }
 
 pub fn format_env_file(vars: &[(String, String)]) -> String {
-    let mut lines = Vec::new();
+    let cap = vars.iter().map(|(k, v)| k.len() + v.len() + 4).sum();
+    let mut out = String::with_capacity(cap);
     for (k, v) in vars {
+        out.push_str(k);
+        out.push('=');
         if v.contains(' ') || v.contains('\n') || v.contains('"') || v.is_empty() {
-            let escaped = v.replace('\\', "\\\\").replace('"', "\\\"");
-            lines.push(format!("{k}=\"{escaped}\""));
+            out.push('"');
+            for c in v.chars() {
+                if c == '\\' {
+                    out.push_str("\\\\");
+                } else if c == '"' {
+                    out.push_str("\\\"");
+                } else {
+                    out.push(c);
+                }
+            }
+            out.push('"');
         } else {
-            lines.push(format!("{k}={v}"));
+            out.push_str(v);
         }
+        out.push('\n');
     }
-    lines.join("\n") + "\n"
+    out
 }
 
 pub fn pull_cloud_env(
@@ -452,17 +467,25 @@ pub fn delete_cloud_env_var(
 /// Trim/lowercase a hostname and reject anything that would alter the URL path
 /// when interpolated into `/domains/{domain}` (slashes, queries, whitespace, ...).
 fn normalize_domain(domain: &str) -> DeployResult<String> {
-    let d = domain.trim().trim_end_matches('.').to_ascii_lowercase();
-    let ok = !d.is_empty()
-        && d.chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.' || c == '*');
-    if !ok {
+    let d = domain.trim().trim_end_matches('.');
+    if d.is_empty() {
         return Err(DeployError::DeployFailed {
             provider: "AppzDev",
             reason: format!("Invalid domain name: {domain:?}"),
         });
     }
-    Ok(d)
+    let mut out = String::with_capacity(d.len());
+    for c in d.chars() {
+        if c.is_ascii_alphanumeric() || c == '-' || c == '.' || c == '*' {
+            out.push(c.to_ascii_lowercase());
+        } else {
+            return Err(DeployError::DeployFailed {
+                provider: "AppzDev",
+                reason: format!("Invalid domain name: {domain:?}"),
+            });
+        }
+    }
+    Ok(out)
 }
 
 pub fn add_project_domain(
@@ -837,19 +860,32 @@ impl AppzdevProvider {
 
         // Step 2: Upload missing blobs with bounded concurrency (pool of 8) and retry
         if !missing.is_empty() {
-            let missing_blobs: Vec<(&str, &[u8])> = missing
+            // A hash we never sent can't be uploaded; committing without it
+            // would publish an incomplete site, so stop here instead.
+            let missing_blobs: Vec<(&str, &std::path::Path)> = missing
                 .iter()
-                .filter_map(|h| {
+                .map(|h| {
                     scanned
                         .blobs_by_hash
                         .get(h)
-                        .map(|b| (h.as_str(), b.data.as_slice()))
+                        .map(|b| (h.as_str(), b.path.as_path()))
+                        .ok_or_else(|| DeployError::DeployFailed {
+                            provider: self.name(),
+                            reason: format!("server asked for unknown file content {h}"),
+                        })
                 })
-                .collect();
+                .collect::<Result<_, _>>()?;
 
             let worker_count = 8.min(missing_blobs.len()).max(1);
             let next_idx = AtomicUsize::new(0);
             let upload_error = Mutex::new(None::<String>);
+            let agent = ureq::builder()
+                .timeout_read(Duration::from_secs(30))
+                .timeout_write(Duration::from_secs(30))
+                .max_idle_connections(32)
+                .max_idle_connections_per_host(16)
+                .build();
+            let auth_header = token_opt.as_deref().map(|t| format!("Bearer {t}"));
 
             std::thread::scope(|s| {
                 for _ in 0..worker_count {
@@ -862,24 +898,50 @@ impl AppzdevProvider {
                             if upload_error.lock().unwrap().is_some() {
                                 break;
                             }
-                            let (hash, data) = missing_blobs[idx];
+                            let (hash, path) = missing_blobs[idx];
+                            // Read only now, so at most one file per worker is
+                            // in memory instead of the whole output directory.
+                            let data = match std::fs::read(path) {
+                                Ok(d) => d,
+                                Err(e) => {
+                                    let mut lock = upload_error.lock().unwrap();
+                                    if lock.is_none() {
+                                        *lock =
+                                            Some(format!("cannot read {}: {e}", path.display()));
+                                    }
+                                    break;
+                                }
+                            };
+
+                            let read_hash = crate::static_cas::sha256_hex(&data);
+                            if read_hash != hash {
+                                let mut lock = upload_error.lock().unwrap();
+                                if lock.is_none() {
+                                    *lock = Some(format!(
+                                        "file {} changed during deploy: expected hash {hash}, got {read_hash}",
+                                        path.display()
+                                    ));
+                                }
+                                break;
+                            }
+
+                            let upload_url = format!(
+                                "{}/api/v0/deployments/{}/files/{}",
+                                api_base, deployment_id, hash
+                            );
 
                             let mut last_err = None;
                             for attempt in 0..3 {
                                 if attempt > 0 {
                                     std::thread::sleep(Duration::from_millis(200 * (1 << attempt)));
                                 }
-                                let upload_url = format!(
-                                    "{}/api/v0/deployments/{}/files/{}",
-                                    api_base, deployment_id, hash
-                                );
-                                let mut up_req = ureq::put(&upload_url)
+                                let mut up_req = agent
+                                    .put(&upload_url)
                                     .set("Content-Type", "application/octet-stream");
-                                if let Some(token) = &token_opt {
-                                    up_req =
-                                        up_req.set("Authorization", &format!("Bearer {token}"));
+                                if let Some(auth) = &auth_header {
+                                    up_req = up_req.set("Authorization", auth);
                                 }
-                                match up_req.send_bytes(data) {
+                                match up_req.send_bytes(&data) {
                                     Ok(_) => {
                                         last_err = None;
                                         break;
@@ -889,6 +951,12 @@ impl AppzdevProvider {
                                     {
                                         last_err =
                                             Some(format!("HTTP {code} uploading blob {hash}"));
+                                        continue;
+                                    }
+                                    // A dropped connection or timeout is as
+                                    // transient as a 5xx: retry it too.
+                                    Err(ureq::Error::Transport(t)) => {
+                                        last_err = Some(format!("uploading blob {hash}: {t}"));
                                         continue;
                                     }
                                     Err(e) => {
@@ -956,7 +1024,9 @@ impl AppzdevProvider {
             setup_files: Vec::new(),
             cli_missing: false,
             link_needed: false,
-            unchanged: missing.is_empty(),
+            // A new deployment was created and published even when every
+            // blob was already stored, so this is never "nothing redeployed".
+            unchanged: false,
         })
     }
 }

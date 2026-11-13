@@ -58,8 +58,8 @@ fn is_volatile(name: &str) -> bool {
 fn collect(dir: &Path, root: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let path = entry.path();
+        let name_os = entry.file_name();
+        let name = name_os.to_string_lossy();
         let kind = entry.file_type()?;
         // Symlinks are not followed: a dangling or directory link would make
         // the read fail, and what they point at is not this project's source.
@@ -67,10 +67,11 @@ fn collect(dir: &Path, root: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<(
             continue;
         }
         if kind.is_dir() {
-            if !SKIP_DIRS.contains(&name.as_str()) {
-                collect(&path, root, out)?;
+            if !SKIP_DIRS.contains(&name.as_ref()) {
+                collect(&entry.path(), root, out)?;
             }
         } else if !is_volatile(&name) {
+            let path = entry.path();
             out.push(path.strip_prefix(root).unwrap_or(&path).to_path_buf());
         }
     }
@@ -89,20 +90,32 @@ pub(crate) fn source_files(root: &Path) -> Result<Vec<PathBuf>, String> {
 /// Content hash of the project's source files (names and bytes), plus
 /// anything that changes what gets deployed (`extra`).
 pub fn fingerprint(root: &Path, extra: &str) -> Result<String, String> {
+    use std::io::Read;
     let files = source_files(root)?;
     let mut hasher = Sha256::new();
     hasher.update(extra.as_bytes());
+    let mut buf = [0u8; 64 * 1024];
     for rel in files {
         hasher.update(b"\0");
-        hasher.update(
-            rel.to_string_lossy()
-                .replace(std::path::MAIN_SEPARATOR, "/")
-                .as_bytes(),
-        );
+        let rel_str = rel.to_string_lossy();
+        if rel_str.contains(std::path::MAIN_SEPARATOR) {
+            hasher.update(rel_str.replace(std::path::MAIN_SEPARATOR, "/").as_bytes());
+        } else {
+            hasher.update(rel_str.as_bytes());
+        }
         hasher.update(b"\0");
-        let bytes = std::fs::read(root.join(&rel))
+        // Streamed: a large asset (video, dataset) is never loaded whole.
+        let mut f = std::fs::File::open(root.join(&rel))
             .map_err(|e| format!("cannot read {}: {e}", rel.display()))?;
-        hasher.update(&bytes);
+        loop {
+            let n = f
+                .read(&mut buf)
+                .map_err(|e| format!("cannot read {}: {e}", rel.display()))?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buf[..n]);
+        }
     }
     Ok(format!("{:x}", hasher.finalize()))
 }

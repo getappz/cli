@@ -82,10 +82,22 @@ fn cache_decision(cached_version: &str, current: &str, age_hours: i64) -> Option
     if age_hours >= 24 {
         return None;
     }
-    if cached_version == current {
-        Some(None)
-    } else {
+    if is_newer(cached_version, current) {
         Some(Some(cached_version.to_string()))
+    } else {
+        Some(None)
+    }
+}
+
+/// Whether release tag `candidate` is a newer version than `current` (both
+/// `vX.Y.Z`). A build ahead of the latest release (or a pre-release) is not
+/// "out of date": offering the release would downgrade it. Tags that don't
+/// parse as semver fall back to "different means newer".
+fn is_newer(candidate: &str, current: &str) -> bool {
+    let parse = |v: &str| semver::Version::parse(v.trim_start_matches('v')).ok();
+    match (parse(candidate), parse(current)) {
+        (Some(c), Some(cur)) => c.cmp_precedence(&cur).is_gt(),
+        _ => candidate != current,
     }
 }
 
@@ -157,7 +169,7 @@ pub(crate) fn check_for_update() -> Result<Option<String>, String> {
     // Cache the result regardless of whether there's an update.
     write_cache(&latest);
 
-    if latest != current {
+    if is_newer(&latest, &current) {
         Ok(Some(latest))
     } else {
         Ok(None)
@@ -180,7 +192,7 @@ fn read_stale_cache() -> Result<Option<String>, String> {
     // no update — without this, that same "up to date" version would be
     // reported as a pending update the next time the network call fails.
     let current = format!("v{}", env!("CARGO_PKG_VERSION"));
-    if version == current {
+    if !is_newer(version, &current) {
         return Ok(None);
     }
     Ok(Some(version.to_string()))
@@ -315,6 +327,20 @@ mod tests {
             cache_decision("v1.2.0", "v1.0.0", 1),
             Some(Some("v1.2.0".to_string()))
         );
+    }
+
+    #[test]
+    fn a_build_ahead_of_the_latest_release_is_not_offered_a_downgrade() {
+        assert_eq!(cache_decision("v0.2.0", "v0.3.0", 1), Some(None));
+        assert_eq!(
+            cache_decision("v0.3.0", "v0.3.0-rc.1", 1),
+            Some(Some("v0.3.0".into()))
+        );
+        assert!(is_newer("v0.10.0", "v0.9.0"));
+        assert!(!is_newer("v0.9.0", "v0.10.0"));
+        // Build metadata does not make a version newer under SemVer precedence
+        assert!(!is_newer("v0.2.0+build.2", "v0.2.0+build.1"));
+        assert!(!is_newer("v0.2.0+build.1", "v0.2.0"));
     }
 
     #[test]

@@ -283,10 +283,10 @@ struct DeployArgs {
 
 #[derive(Args)]
 struct RollbackArgs {
-    #[arg(default_value = ".")]
-    dir: PathBuf,
     /// Version ID to roll back to
     version: String,
+    #[arg(default_value = ".")]
+    dir: PathBuf,
     /// Provider slug (default: detects from project or config)
     #[arg(long)]
     target: Option<String>,
@@ -306,10 +306,10 @@ struct LinkArgs {
 
 #[derive(Args)]
 struct AliasArgs {
-    #[arg(default_value = ".")]
-    dir: PathBuf,
     /// Custom domain or alias to assign (e.g. app.example.com)
     domain: String,
+    #[arg(default_value = ".")]
+    dir: PathBuf,
     /// Provider slug (default: detects from project or config)
     #[arg(long)]
     target: Option<String>,
@@ -2527,5 +2527,28 @@ fn run_logout(json: bool) {
             }
         }
         Err(e) => error(&format!("failed to clear session token: {e}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    /// clap checks the whole command tree here (argument order, duplicate
+    /// names and short flags, conflicting settings), so an invalid definition
+    /// fails the test suite instead of panicking for a user.
+    #[test]
+    fn cli_definition_is_valid() {
+        AppzCli::command().debug_assert();
+    }
+
+    #[test]
+    fn rollback_and_alias_take_the_required_argument_first() {
+        assert!(AppzCli::try_parse_from(["appz", "rollback", "v42"]).is_ok());
+        assert!(AppzCli::try_parse_from(["appz", "rollback", "v42", "site"]).is_ok());
+        assert!(AppzCli::try_parse_from(["appz", "rollback"]).is_err());
+        assert!(AppzCli::try_parse_from(["appz", "alias", "app.example.com"]).is_ok());
+        assert!(AppzCli::try_parse_from(["appz", "alias"]).is_err());
     }
 }

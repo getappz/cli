@@ -260,6 +260,43 @@ Field | Meaning
 `provider_plugins` | Provider plugin names to look for (default: `[]`, no plugin check).
 
 The plugin detects the target from provider plugin names (`vercel` → `vite-plugin-vercel`, `netlify` → `@netlify/vite-plugin`, `cloudflare` → `vite-plugin-cloudflare-pages`) and warns when the expected plugin is missing. No Universal Deploy dependency is used — `appz deploy` drives each platform's own CLI directly.
+### Deploy config (`appz.jsonc`)
+
+```jsonc
+{
+  "deploy": {
+    "default": "vercel",
+    "env": ["SENTRY_AUTH_TOKEN"],            // vault secret NAMES to pass through
+    "environments": {                        // literal, non-secret values
+      "production": { "API_URL": "https://api.example.com" },
+      "preview":    { "API_URL": "https://staging.example.com" }
+    },
+    "hooks": {                               // argv arrays, never shell strings
+      "before_deploy": ["npm", "run", "lint"],
+      "after_deploy":  ["node", "scripts/notify.js"]
+    },
+    "targets": { "vercel": {}, "netlify": {} }
+  }
+}
+```
+
+`env` (a list of vault secret names) and `environments` (literal values per
+`production` / `preview`) coexist. Precedence, lowest to highest:
+`environments` < vault secrets < the real process environment < `-e`.
+Hooks are spawned directly (no shell) in the project directory with the
+resolved deployment environment and a 15-minute timeout. Hook output goes to
+stderr, or is captured with `--json` to keep the result parseable;
+`before_deploy` runs after the build and aborts the deploy on failure, and
+`after_deploy` failing is reported even though the deploy already went out.
+`appz deploy --all` prepares targets in order, then uploads in parallel when
+no prompt is needed. Builds and before hooks finish before uploads begin;
+after hooks wait until all uploads finish. A failed after hook clears the
+target's success cache so the next deploy retries it.
+Provider commands that may still build locally (including Wrangler custom
+builds and registry-defined providers) run before the parallel uploads.
+With `--json`, the command prints one JSON array with a
+`{target, output?, error?}` entry per target; it exits non-zero if any target or
+hook failed.
 
 ## devcontainer Feature
 

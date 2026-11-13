@@ -1853,23 +1853,38 @@ fn run_deploy(args: DeployArgs, json: bool) {
     }
     if all {
         match deploy::run_all(&canonical, req) {
-            Ok(outputs) => {
+            Ok(results) => {
+                let failed = results.iter().filter(|r| r.error.is_some()).count();
                 if json {
-                    println!("{}", serde_json::to_string_pretty(&outputs).unwrap());
+                    println!("{}", serde_json::to_string_pretty(&results).unwrap());
                 } else {
-                    for output in &outputs {
-                        let target = if output.is_preview {
-                            "preview"
-                        } else {
-                            "production"
-                        };
-                        success(&format!(
-                            "{} ({target}): {}",
-                            output.provider,
-                            output.url.as_deref().unwrap_or("deployed (url unknown)")
-                        ));
+                    for r in &results {
+                        if let (Some(_), Some(e)) = (&r.output, &r.error) {
+                            eprintln!("{}: deployed, but a hook failed: {e}", r.target);
+                        }
+                        match (&r.output, &r.error) {
+                            (Some(o), _) => success(&format!(
+                                "{} ({}): {}",
+                                r.target,
+                                if o.is_preview {
+                                    "preview"
+                                } else {
+                                    "production"
+                                },
+                                o.url.as_deref().unwrap_or("deployed (url unknown)")
+                            )),
+                            (_, Some(e)) => eprintln!("{}: failed: {e}", r.target),
+                            _ => {}
+                        }
                     }
-                    outro("deploy complete");
+                    outro(if failed == 0 {
+                        "deploy complete"
+                    } else {
+                        "deploy finished with failures"
+                    });
+                }
+                if failed > 0 {
+                    std::process::exit(1);
                 }
             }
             Err(e) => error(&e),

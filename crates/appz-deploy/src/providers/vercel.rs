@@ -66,12 +66,10 @@ fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
 }
 
 impl VercelProvider {
-    fn deploy_internal(&self, ctx: &DeployContext, is_preview: bool) -> DeployResult<DeployOutput> {
-        let start = Instant::now();
+    fn prepare_internal(&self, ctx: &DeployContext, is_preview: bool) -> DeployResult<()> {
         if ctx.dry_run {
-            return Ok(DeployOutput::dry_run(self.slug(), is_preview));
+            return Ok(());
         }
-
         // A static site appz already built: hand Vercel that output directly
         // (no `vercel pull` / `vercel build`, which start from scratch).
         let static_site = ctx.prebuilt
@@ -123,6 +121,15 @@ impl VercelProvider {
             }
         }
 
+        Ok(())
+    }
+
+    fn deploy_internal(&self, ctx: &DeployContext, is_preview: bool) -> DeployResult<DeployOutput> {
+        let start = Instant::now();
+        if ctx.dry_run {
+            return Ok(DeployOutput::dry_run(self.slug(), is_preview));
+        }
+
         let mut deploy_args = vec!["deploy", "--prebuilt", "--yes"];
         if !is_preview {
             deploy_args.push("--prod");
@@ -160,6 +167,17 @@ impl VercelProvider {
 }
 
 impl DeployProvider for VercelProvider {
+    fn parallel_upload_safe(&self, _ctx: &DeployContext) -> bool {
+        true
+    }
+    fn prepare_deploy(&self, ctx: &DeployContext) -> DeployResult<()> {
+        self.prepare_internal(ctx, ctx.is_preview)
+    }
+
+    fn deploy_prepared(&self, ctx: &DeployContext) -> DeployResult<DeployOutput> {
+        self.deploy_internal(ctx, ctx.is_preview)
+    }
+
     fn needs_prebuild(&self, frameworks: &[String]) -> bool {
         !frameworks
             .iter()
@@ -270,10 +288,12 @@ impl DeployProvider for VercelProvider {
     }
 
     fn deploy(&self, ctx: &DeployContext) -> DeployResult<DeployOutput> {
+        self.prepare_internal(ctx, false)?;
         self.deploy_internal(ctx, false)
     }
 
     fn deploy_preview(&self, ctx: &DeployContext) -> DeployResult<DeployOutput> {
+        self.prepare_internal(ctx, true)?;
         self.deploy_internal(ctx, true)
     }
 
@@ -418,8 +438,9 @@ mod tests {
         std::fs::create_dir_all(dir.join("dist/assets")).unwrap();
         std::fs::write(dir.join("dist/index.html"), "hi").unwrap();
         std::fs::write(dir.join("dist/assets/a.js"), "x").unwrap();
-        let ctx = DeployContext::new(dir.clone(), "dist".into());
-        assert!(assemble_static_output(&ctx).unwrap());
+        let mut ctx = DeployContext::new(dir.clone(), "dist".into());
+        ctx.prebuilt = true;
+        VercelProvider.prepare_deploy(&ctx).unwrap();
         assert!(dir.join(".vercel/output/static/assets/a.js").is_file());
         assert!(dir.join(".vercel/output/config.json").is_file());
         // A server dir means it is not a plain static site.

@@ -163,6 +163,25 @@ pub trait DeployProvider: Send + Sync {
     fn deploy(&self, ctx: &DeployContext) -> DeployResult<DeployOutput>;
     fn deploy_preview(&self, ctx: &DeployContext) -> DeployResult<DeployOutput>;
 
+    /// Local provider builds must finish before parallel uploads start.
+    fn prepare_deploy(&self, _ctx: &DeployContext) -> DeployResult<()> {
+        Ok(())
+    }
+
+    /// Opt in only when deployment cannot run another shared-directory build.
+    fn parallel_upload_safe(&self, _ctx: &DeployContext) -> bool {
+        false
+    }
+
+    /// Deploy after `prepare_deploy`; providers with a local build override this.
+    fn deploy_prepared(&self, ctx: &DeployContext) -> DeployResult<DeployOutput> {
+        if ctx.is_preview {
+            self.deploy_preview(ctx)
+        } else {
+            self.deploy(ctx)
+        }
+    }
+
     fn list_deployments(&self, ctx: &DeployContext) -> DeployResult<Vec<DeploymentInfo>> {
         let _ = ctx;
         Err(DeployError::Unsupported {

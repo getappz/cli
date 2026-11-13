@@ -452,14 +452,17 @@ impl Screen {
         }
         let (rows, cols) = console::Term::stdout().size();
         let (rows, width) = (usize::from(rows), usize::from(cols).saturating_sub(2));
-        let rule = style("─".repeat(width)).dim().to_string();
+        // One column short of the limit lines are cut at, so a full-width line
+        // is never treated as too long.
+        let inner = width.saturating_sub(1);
+        let rule = style("─".repeat(inner)).dim().to_string();
 
         let title = format!(
             "{}  {}",
-            style(" appz share ").bold().black().on_cyan(),
+            style("appz share").bold().cyan(),
             style("● live").green()
         );
-        let gap = width.saturating_sub(
+        let gap = inner.saturating_sub(
             console::measure_text_width(&title) + console::measure_text_width(status),
         );
         let mut lines = vec![

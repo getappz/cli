@@ -243,9 +243,14 @@ pub fn format_request(r: &RequestLog) -> String {
     )
 }
 
-fn print_request(r: &RequestLog) {
+/// A request with the time it was seen: `14:32:01  200 GET   /  12ms`.
+fn request_line(r: &RequestLog) -> String {
     let time = chrono::Local::now().format("%H:%M:%S");
-    println!("   {time}  {}", format_request(r));
+    format!("{time}  {}", format_request(r))
+}
+
+fn print_request(r: &RequestLog) {
+    println!("   {}", request_line(r));
 }
 
 /// Put `text` on the system clipboard with the platform's own tool.
@@ -296,6 +301,97 @@ fn spawn_key_reader() -> mpsc::Receiver<char> {
         }
     });
     rx
+}
+
+/// Full-screen view of an interactive session: the session details pinned
+/// at the top, the shortcuts pinned at the bottom, the newest log lines in
+/// between. Off (no terminal), lines are printed as they come.
+struct Screen {
+    on: bool,
+    header: Vec<String>,
+    footer: &'static str,
+    log: std::collections::VecDeque<String>,
+    /// The frame on screen, so an unchanged one is not written again.
+    drawn: String,
+}
+
+impl Screen {
+    /// Lines kept for redrawing after the terminal is resized.
+    const KEPT: usize = 500;
+
+    fn open(on: bool, header: Vec<String>, footer: &'static str) -> Self {
+        if on {
+            // Alternate screen, cursor hidden.
+            print!("\x1b[?1049h\x1b[?25l");
+        }
+        Self {
+            on,
+            header,
+            footer,
+            log: std::collections::VecDeque::new(),
+            drawn: String::new(),
+        }
+    }
+
+    fn say(&mut self, line: String) {
+        if !self.on {
+            println!("   {line}");
+            return;
+        }
+        if self.log.len() == Self::KEPT {
+            self.log.pop_front();
+        }
+        self.log.push_back(line);
+    }
+
+    /// Redraw if anything changed: a new line, `status`, or the window size.
+    fn draw(&mut self, status: &str) {
+        if !self.on {
+            return;
+        }
+        let (rows, cols) = console::Term::stdout().size();
+        let (rows, cols) = (usize::from(rows), usize::from(cols));
+        let mut lines = self.header.clone();
+        lines.push(status.to_string());
+        lines.push(String::new());
+        let room = rows.saturating_sub(lines.len() + 2);
+        let skip = self.log.len().saturating_sub(room);
+        lines.extend(self.log.iter().skip(skip).cloned());
+        lines.resize(rows.saturating_sub(1), String::new());
+        lines.push(console::style(self.footer).dim().to_string());
+        let frame = lines
+            .iter()
+            .map(|l| {
+                let l = console::truncate_str(l, cols.saturating_sub(2), "…");
+                format!(" {l}\x1b[K")
+            })
+            .collect::<Vec<_>>()
+            .join("\r\n");
+        if frame != self.drawn {
+            print!("\x1b[H{frame}");
+            let _ = std::io::stdout().flush();
+            self.drawn = frame;
+        }
+    }
+
+    /// Back to the normal screen, where the output before `open` still is.
+    fn close(&mut self) {
+        if self.on {
+            print!("\x1b[?25h\x1b[?1049l");
+            let _ = std::io::stdout().flush();
+            self.on = false;
+        }
+    }
+}
+
+/// `1h 59m left` / `42s left`.
+fn time_left(left: Duration) -> String {
+    let secs = left.as_secs();
+    match (secs / 3600, secs % 3600 / 60) {
+        (0, 0) => format!("{secs}s left"),
+        (0, m) => format!("{m}m left"),
+        (h, m) => format!("{h}h {m:02}m left"),
+    }
 }
 
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
@@ -349,11 +445,25 @@ pub fn run_session(args: &ShareArgs, dir: &Path, port: u16, ttl: Duration) {
     // Ctrl+C has to end the loop, not the process, so the tunnel is closed.
     let _ = ctrlc::set_handler(|| INTERRUPTED.store(true, Ordering::SeqCst));
     let keys = crate::is_tty().then(spawn_key_reader);
-    crate::info(match (&keys, args.inspect) {
-        (Some(_), true) => "[r] replay last request  [c] copy url  [p] promote to deploy  [q] stop",
-        (Some(_), false) => "[c] copy url  [p] promote to deploy  [q] stop",
-        (None, _) => "press Ctrl+C to stop",
-    });
+    if keys.is_none() {
+        crate::info("press Ctrl+C to stop");
+    }
+    let mut screen = Screen::open(
+        keys.is_some(),
+        vec![
+            console::style("appz share").bold().to_string(),
+            String::new(),
+            format!("local:    http://localhost:{port}"),
+            format!("public:   {url}"),
+            format!("security: {security}"),
+            format!("via:      {}", session.provider),
+        ],
+        if args.inspect {
+            "[r] replay last request  [c] copy url  [p] promote to deploy  [q] stop"
+        } else {
+            "[c] copy url  [p] promote to deploy  [q] stop"
+        },
+    );
 
     let started = Instant::now();
     let tick = Duration::from_millis(200);
@@ -365,12 +475,16 @@ pub fn run_session(args: &ShareArgs, dir: &Path, port: u16, ttl: Duration) {
         if started.elapsed() >= ttl {
             break End::Expired;
         }
+        screen.draw(&format!(
+            "ttl:      {}",
+            time_left(ttl.saturating_sub(started.elapsed()))
+        ));
         if !session.is_alive() {
             break End::TunnelClosed;
         }
         match requests.recv_timeout(tick) {
             Ok(r) => {
-                print_request(&r);
+                screen.say(request_line(&r));
                 last = Some(r);
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -382,25 +496,24 @@ pub fn run_session(args: &ShareArgs, dir: &Path, port: u16, ttl: Duration) {
             Some('p') => break End::Promote,
             Some('c') => {
                 if copy_to_clipboard(&url) {
-                    crate::success("URL copied");
+                    screen.say("URL copied".to_string());
                 } else {
-                    crate::warning(&format!("could not reach the clipboard; the URL is {url}"));
+                    screen.say(format!("could not reach the clipboard; the URL is {url}"));
                 }
             }
             Some('r') => match &last {
                 Some(r) => match shield::replay(port, &r.raw) {
-                    Ok(status) => {
-                        crate::success(&format!("replayed {} {}: {status}", r.method, r.path))
-                    }
-                    Err(e) => crate::warning(&format!("replay failed: {e}")),
+                    Ok(status) => screen.say(format!("replayed {} {}: {status}", r.method, r.path)),
+                    Err(e) => screen.say(format!("replay failed: {e}")),
                 },
-                None if args.inspect => crate::warning("no request to replay yet"),
+                None if args.inspect => screen.say("no request to replay yet".to_string()),
                 None => {}
             },
             _ => {}
         }
     };
 
+    screen.close();
     drop(session);
     match end {
         End::Quit => crate::outro("share session closed"),
@@ -487,6 +600,13 @@ mod tests {
         let auto = resolve_pin("auto");
         assert_eq!(auto.len(), 4);
         assert!(auto.chars().all(|c| c.is_ascii_digit()));
+    }
+
+    #[test]
+    fn time_left_uses_the_largest_useful_units() {
+        assert_eq!(time_left(Duration::from_secs(7199)), "1h 59m left");
+        assert_eq!(time_left(Duration::from_secs(125)), "2m left");
+        assert_eq!(time_left(Duration::from_secs(42)), "42s left");
     }
 
     #[test]

@@ -555,6 +555,9 @@ struct DevArgs {
     /// Request a specific subdomain on supported tunnel providers
     #[arg(short = 's', long, value_name = "SUBDOMAIN")]
     subdomain: Option<String>,
+    /// With --share: print each request that comes in through the tunnel
+    #[arg(long)]
+    inspect: bool,
 }
 
 // ── UI helpers ──────────────────────────────────────────────────
@@ -1022,7 +1025,7 @@ fn start_dev_share(
         info(&format!("shield mode: PIN {pin}"));
     }
     step(&format!("share: waiting for the dev server on port {port}"));
-    Some(share::DevShare::start(backend, shield))
+    Some(share::DevShare::start(backend, shield, args.inspect))
 }
 
 /// Run the dev commands to completion, then close the share tunnel (also
@@ -1043,10 +1046,10 @@ fn run_dev_commands(cmds: &[String], dir: &Path, sharing: Option<share::DevShare
 }
 
 fn run_share(args: share::ShareArgs, json: bool) {
-    if let Some(ref auth) = args.auth {
-        if let Err(e) = share::validate_basic_auth(auth) {
-            error(&e);
-        }
+    if let Some(ref auth) = args.auth
+        && let Err(e) = share::validate_basic_auth(auth)
+    {
+        error(&e);
     }
     let ttl = match share::parse_ttl_duration(&args.ttl) {
         Ok(secs) => std::time::Duration::from_secs(secs),

@@ -50,27 +50,28 @@ pub fn parse_port_from_dev_command(cmd: &str) -> Option<u16> {
     let parts: Vec<&str> = cmd.split_whitespace().collect();
     for (i, part) in parts.iter().enumerate() {
         // Handle PORT=3000 prefix
-        if let Some(rest) = part.strip_prefix("PORT=") {
-            if let Ok(p) = rest.parse::<u16>() {
-                return Some(p);
-            }
+        if let Some(rest) = part.strip_prefix("PORT=")
+            && let Ok(p) = rest.parse::<u16>()
+        {
+            return Some(p);
         }
         // Handle --port=3000 or -p=3000
-        if let Some(rest) = part.strip_prefix("--port=") {
-            if let Ok(p) = rest.parse::<u16>() {
-                return Some(p);
-            }
+        if let Some(rest) = part.strip_prefix("--port=")
+            && let Ok(p) = rest.parse::<u16>()
+        {
+            return Some(p);
         }
-        if let Some(rest) = part.strip_prefix("-p=") {
-            if let Ok(p) = rest.parse::<u16>() {
-                return Some(p);
-            }
+        if let Some(rest) = part.strip_prefix("-p=")
+            && let Ok(p) = rest.parse::<u16>()
+        {
+            return Some(p);
         }
         // Handle --port 3000 or -p 3000
-        if (*part == "--port" || *part == "-p") && i + 1 < parts.len() {
-            if let Ok(p) = parts[i + 1].parse::<u16>() {
-                return Some(p);
-            }
+        if (*part == "--port" || *part == "-p")
+            && i + 1 < parts.len()
+            && let Ok(p) = parts[i + 1].parse::<u16>()
+        {
+            return Some(p);
         }
     }
     None
@@ -78,18 +79,23 @@ pub fn parse_port_from_dev_command(cmd: &str) -> Option<u16> {
 
 /// Probes whether a TCP socket is listening at `127.0.0.1:<port>` within a short timeout.
 pub fn is_port_listening(port: u16, timeout_ms: u64) -> bool {
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    TcpStream::connect_timeout(&addr, Duration::from_millis(timeout_ms)).is_ok()
+    connect_local(port, Duration::from_millis(timeout_ms)).is_ok()
+}
+
+/// Connect to a dev server on this machine. Tries IPv4 then IPv6 loopback:
+/// a server bound to `localhost` (Vite, Astro) may listen on `::1` only.
+pub fn connect_local(port: u16, timeout: Duration) -> std::io::Result<TcpStream> {
+    let v4 = SocketAddr::from(([127, 0, 0, 1], port));
+    let v6 = SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, port));
+    TcpStream::connect_timeout(&v4, timeout).or_else(|_| TcpStream::connect_timeout(&v6, timeout))
 }
 
 /// Probes a slice of candidate ports, returning the first one with an active TCP listener.
 pub fn find_active_listener(candidates: &[u16], timeout_ms: u64) -> Option<u16> {
-    for &port in candidates {
-        if is_port_listening(port, timeout_ms) {
-            return Some(port);
-        }
-    }
-    None
+    candidates
+        .iter()
+        .find(|&&port| is_port_listening(port, timeout_ms))
+        .copied()
 }
 
 /// Detects the target dev server port for a project.
@@ -103,26 +109,26 @@ pub fn find_active_listener(candidates: &[u16], timeout_ms: u64) -> Option<u16> 
 /// 6. Fallback default (3000).
 pub fn detect_dev_port(_root: &Path, framework_names: &[&str], dev_command: Option<&str>) -> u16 {
     // 1. PORT env var
-    if let Ok(val) = std::env::var("PORT") {
-        if let Ok(p) = val.trim().parse::<u16>() {
-            return p;
-        }
+    if let Ok(val) = std::env::var("PORT")
+        && let Ok(p) = val.trim().parse::<u16>()
+    {
+        return p;
     }
 
     // 2. Command flag
-    if let Some(cmd) = dev_command {
-        if let Some(p) = parse_port_from_dev_command(cmd) {
-            return p;
-        }
+    if let Some(cmd) = dev_command
+        && let Some(p) = parse_port_from_dev_command(cmd)
+    {
+        return p;
     }
 
     // 3. Framework defaults
     let mut candidate_ports = Vec::new();
     for fw in framework_names {
-        if let Some(p) = framework_default_port(fw) {
-            if !candidate_ports.contains(&p) {
-                candidate_ports.push(p);
-            }
+        if let Some(p) = framework_default_port(fw)
+            && !candidate_ports.contains(&p)
+        {
+            candidate_ports.push(p);
         }
     }
 
@@ -149,6 +155,16 @@ pub fn detect_dev_port(_root: &Path, framework_names: &[&str], dev_command: Opti
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn connect_local_reaches_an_ipv6_only_listener() {
+        // Not every CI host has IPv6 loopback; nothing to check without it.
+        let Ok(listener) = std::net::TcpListener::bind("[::1]:0") else {
+            return;
+        };
+        let port = listener.local_addr().unwrap().port();
+        assert!(is_port_listening(port, 500));
+    }
 
     #[test]
     fn framework_default_port_maps_correctly() {

@@ -34,8 +34,8 @@ pub use generator::{generate, generate_merged};
 pub use mise::{ensure_mise, install_global_tool, mise_bin_paths, mise_on_path, trust};
 pub use paths::{canonicalize, find_node_modules_bin_paths};
 pub use port::{
-    detect_dev_port, find_active_listener, framework_default_port, is_port_listening,
-    parse_port_from_dev_command,
+    connect_local, detect_dev_port, find_active_listener, framework_default_port,
+    is_port_listening, parse_port_from_dev_command,
 };
 pub use registry_cache::{CachedPayload, load_cached};
 pub use source::{Host, InitSource, RemoteSource, archive_url, classify, parse_remote};

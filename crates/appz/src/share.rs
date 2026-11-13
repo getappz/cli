@@ -75,7 +75,7 @@ pub fn parse_target_port(raw: Option<&str>) -> Result<u16, String> {
             let stripped = trimmed
                 .trim_start_matches("http://")
                 .trim_start_matches("https://");
-            let port_str = stripped.split(':').last().unwrap_or(stripped);
+            let port_str = stripped.split(':').next_back().unwrap_or(stripped);
             port_str
                 .parse::<u16>()
                 .map_err(|_| format!("invalid port number: `{s}`"))
@@ -243,6 +243,11 @@ pub fn format_request(r: &RequestLog) -> String {
     )
 }
 
+fn print_request(r: &RequestLog) {
+    let time = chrono::Local::now().format("%H:%M:%S");
+    println!("   {time}  {}", format_request(r));
+}
+
 /// Put `text` on the system clipboard with the platform's own tool.
 fn copy_to_clipboard(text: &str) -> bool {
     let tools: &[(&str, &[&str])] = if cfg!(windows) {
@@ -365,8 +370,7 @@ pub fn run_session(args: &ShareArgs, dir: &Path, port: u16, ttl: Duration) {
         }
         match requests.recv_timeout(tick) {
             Ok(r) => {
-                let time = chrono::Local::now().format("%H:%M:%S");
-                println!("   {time}  {}", format_request(&r));
+                print_request(&r);
                 last = Some(r);
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -423,8 +427,15 @@ pub struct DevShare {
 }
 
 impl DevShare {
-    pub fn start(backend: Backend, shield: ShieldConfig) -> Self {
+    /// With `inspect`, each forwarded request is printed between the dev
+    /// server's own output.
+    pub fn start(backend: Backend, mut shield: ShieldConfig, inspect: bool) -> Self {
         let port = shield.target_port;
+        let requests = inspect.then(|| {
+            let (tx, rx) = mpsc::channel();
+            shield.events = Some(tx);
+            rx
+        });
         let session = Arc::new(Mutex::new(None));
         let stopped = Arc::new(AtomicBool::new(false));
         let (slot, stop) = (Arc::clone(&session), Arc::clone(&stopped));
@@ -450,6 +461,10 @@ impl DevShare {
                     }
                 }
                 Err(e) => crate::warning(&format!("share: {e}")),
+            }
+            // Ends when the gateway (which holds the sender) is closed.
+            for r in requests.into_iter().flatten() {
+                print_request(&r);
             }
         });
         Self { session, stopped }

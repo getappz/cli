@@ -120,10 +120,10 @@ pub fn check_pin_cookie(headers: &str, expected_pin: &str) -> bool {
         if let Some(cookie_val) = line.strip_prefix("Cookie:") {
             for part in cookie_val.split(';') {
                 let trimmed = part.trim();
-                if let Some(val) = trimmed.strip_prefix("appz_pin=") {
-                    if val.trim() == expected_pin {
-                        return true;
-                    }
+                if let Some(val) = trimmed.strip_prefix("appz_pin=")
+                    && val.trim() == expected_pin
+                {
+                    return true;
                 }
             }
         }
@@ -141,10 +141,10 @@ pub fn check_basic_auth(headers: &str, expected_auth: &str) -> bool {
                 // Decode base64
                 let raw_b64 = b64.trim();
                 // Simple standard base64 decode
-                if let Ok(decoded_bytes) = simple_base64_decode(raw_b64) {
-                    if let Ok(decoded_str) = std::str::from_utf8(&decoded_bytes) {
-                        return decoded_str == expected_auth;
-                    }
+                if let Ok(decoded_bytes) = simple_base64_decode(raw_b64)
+                    && let Ok(decoded_str) = std::str::from_utf8(&decoded_bytes)
+                {
+                    return decoded_str == expected_auth;
                 }
             }
         }
@@ -273,12 +273,12 @@ fn handle_connection(stream: &mut TcpStream, config: &ShieldConfig, created_at: 
     }
 
     // 2. Check Basic Auth
-    if let Some(ref expected_auth) = config.basic_auth {
-        if !check_basic_auth(&req_str, expected_auth) {
-            let resp = "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"appz shield\"\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nAuthentication required\r\n";
-            let _ = stream.write_all(resp.as_bytes());
-            return;
-        }
+    if let Some(ref expected_auth) = config.basic_auth
+        && !check_basic_auth(&req_str, expected_auth)
+    {
+        let resp = "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"appz shield\"\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nAuthentication required\r\n";
+        let _ = stream.write_all(resp.as_bytes());
+        return;
     }
 
     // 3. Check PIN Gatekeeper
@@ -336,6 +336,8 @@ fn handle_connection(stream: &mut TcpStream, config: &ShieldConfig, created_at: 
 }
 
 const HEAD_END: &[u8] = b"\r\n\r\n";
+/// How long to wait for the dev server to accept a connection.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 /// Largest request head read before forwarding regardless.
 const MAX_HEAD: usize = 64 * 1024;
 
@@ -406,7 +408,7 @@ fn force_close(request: &[u8]) -> Vec<u8> {
 /// dev server and stream the reply back. Returns the reply status: 502 when
 /// the dev server is unreachable, 0 when it sent no status line.
 fn forward(client: &mut TcpStream, target_port: u16, request: &[u8]) -> u16 {
-    let Ok(mut target) = TcpStream::connect(("127.0.0.1", target_port)) else {
+    let Ok(mut target) = appz_core::connect_local(target_port, CONNECT_TIMEOUT) else {
         let resp = "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nCannot connect to target local dev server.\r\n";
         let _ = client.write_all(resp.as_bytes());
         return 502;
@@ -448,7 +450,7 @@ fn forward(client: &mut TcpStream, target_port: u16, request: &[u8]) -> u16 {
 
 /// Re-send a captured request to the dev server and return the reply status.
 pub fn replay(target_port: u16, request: &[u8]) -> Result<u16, String> {
-    let mut target = TcpStream::connect(("127.0.0.1", target_port))
+    let mut target = appz_core::connect_local(target_port, CONNECT_TIMEOUT)
         .map_err(|e| format!("cannot connect to port {target_port}: {e}"))?;
     let _ = target.set_read_timeout(Some(Duration::from_secs(30)));
     target

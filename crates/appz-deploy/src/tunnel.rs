@@ -69,14 +69,9 @@ impl TunnelSession {
 
     /// Check if the underlying tunnel child process is still running
     pub fn is_alive(&mut self) -> bool {
-        if let Some(ref mut child) = self.process {
-            match child.try_wait() {
-                Ok(None) => true,
-                _ => false,
-            }
-        } else {
-            false
-        }
+        self.process
+            .as_mut()
+            .is_some_and(|child| matches!(child.try_wait(), Ok(None)))
     }
 
     /// Explicitly close and terminate the tunnel process
@@ -178,11 +173,11 @@ impl TunnelProvider for CloudflareTunnelProvider {
             if start.elapsed() > config.startup_timeout {
                 break;
             }
-            if let Ok(line) = line_res {
-                if let Some(url) = extract_url_from_line(&line, ".trycloudflare.com") {
-                    public_url = Some(url);
-                    break;
-                }
+            if let Ok(line) = line_res
+                && let Some(url) = extract_url_from_line(&line, ".trycloudflare.com")
+            {
+                public_url = Some(url);
+                break;
             }
         }
 
@@ -241,13 +236,12 @@ impl TunnelProvider for SshTunnelProvider {
             if start.elapsed() > config.startup_timeout {
                 break;
             }
-            if let Ok(line) = line_res {
-                if let Some(url) = extract_url_from_line(&line, ".lhr.life")
+            if let Ok(line) = line_res
+                && let Some(url) = extract_url_from_line(&line, ".lhr.life")
                     .or_else(|| extract_url_from_line(&line, "localhost.run"))
-                {
-                    public_url = Some(url);
-                    break;
-                }
+            {
+                public_url = Some(url);
+                break;
             }
         }
 

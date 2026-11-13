@@ -18,6 +18,7 @@ mod init_source;
 mod mcp;
 mod secrets;
 mod share;
+mod shield;
 mod skills;
 mod update;
 

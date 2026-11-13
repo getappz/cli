@@ -126,8 +126,8 @@ pub fn is_immutable_asset(path: &str) -> bool {
 }
 
 /// A name like `index-B1x2c3D4.js` or `main.073c9b0a.chunk.css`: some segment
-/// after the first is a hash (8+ word characters, with a digit or mixed case,
-/// so ordinary words like `navigation` don't count).
+/// after the first is a hash (8+ characters: mixed-case or hex with digits,
+/// so ordinary words or version labels like `version2024` don't count).
 fn has_content_hash(path: &str) -> bool {
     let name = path.rsplit('/').next().unwrap_or(path);
     let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
@@ -138,6 +138,7 @@ fn has_content_hash(path: &str) -> bool {
         let mut has_digit = false;
         let mut has_upper = false;
         let mut has_lower = false;
+        let mut all_hex = true;
         for &b in seg.as_bytes() {
             if b.is_ascii_digit() {
                 has_digit = true;
@@ -148,8 +149,11 @@ fn has_content_hash(path: &str) -> bool {
             } else if b != b'_' {
                 return false;
             }
+            if !b.is_ascii_hexdigit() {
+                all_hex = false;
+            }
         }
-        has_digit || (has_upper && has_lower)
+        (has_upper && has_lower) || (all_hex && has_digit)
     })
 }
 
@@ -424,6 +428,7 @@ mod tests {
             "/assets/style.css",
             "/assets/main-navigation.js",
             "/assets/jquery-3.6.0.min.js",
+            "/assets/app-version2024.js",
             "/static/logo.png",
             "/index.html",
         ] {

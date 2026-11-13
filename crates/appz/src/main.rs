@@ -947,14 +947,13 @@ fn run_dev(args: DevArgs, json: bool) {
             .collect();
         if !cmds.is_empty() {
             success("inputs unchanged — running cached dev command");
-            for cmd in &cmds {
-                let parts: Vec<&str> = cmd.split(' ').collect();
-                let (prog, args) = parts.split_first().unwrap_or((&"npm", &[]));
-                if !run_cmd(prog, args, &canonical) {
-                    std::process::exit(1);
-                }
-            }
-            outro("dev server stopped");
+            let frameworks: Vec<&str> = snap
+                .toolchains
+                .iter()
+                .flat_map(|t| t.frameworks.iter().map(String::as_str))
+                .collect();
+            let sharing = start_dev_share(&args, &canonical, &frameworks, &cmds);
+            run_dev_commands(&cmds, &canonical, sharing);
             return;
         }
     }
@@ -968,7 +967,7 @@ fn run_dev(args: DevArgs, json: bool) {
         }
     };
 
-    let cmds: Vec<String> = match args.command {
+    let cmds: Vec<String> = match args.command.clone() {
         Some(c) => vec![c],
         None => {
             let mut cmds = Vec::new();
@@ -984,19 +983,61 @@ fn run_dev(args: DevArgs, json: bool) {
         }
     };
 
+    let frameworks: Vec<&str> = toolchains
+        .iter()
+        .flat_map(|t| t.frameworks.iter().map(|f| f.name))
+        .collect();
+    let sharing = start_dev_share(&args, &canonical, &frameworks, &cmds);
     step("starting dev server...");
-    if args.share {
-        step("share mode enabled — dev tunnel will attach to server");
-        if let Some(ref pin) = args.pin {
-            info(&format!("shield mode: PIN enabled ({pin})"));
-        }
+    run_dev_commands(&cmds, &canonical, sharing);
+}
+
+/// `appz dev --share`: pick the tunnel backend now, while the terminal is
+/// free to ask about installing one; the tunnel opens once the server is up.
+fn start_dev_share(
+    args: &DevArgs,
+    root: &Path,
+    frameworks: &[&str],
+    cmds: &[String],
+) -> Option<share::DevShare> {
+    if !args.share {
+        return None;
     }
-    for cmd in &cmds {
+    if let Some(auth) = &args.auth
+        && let Err(e) = share::validate_basic_auth(auth)
+    {
+        error(&e);
+    }
+    let install = if is_tty() {
+        deploy::Consent::Ask
+    } else {
+        deploy::Consent::Never
+    };
+    let backend = share::resolve_backend(root, install).unwrap_or_else(|e| error(&e));
+    let port = appz_core::detect_dev_port(root, frameworks, cmds.first().map(String::as_str));
+    let mut shield = shield::ShieldConfig::new(port);
+    shield.pin = args.pin.as_deref().map(share::resolve_pin);
+    shield.basic_auth = args.auth.clone();
+    if let Some(pin) = &shield.pin {
+        info(&format!("shield mode: PIN {pin}"));
+    }
+    step(&format!("share: waiting for the dev server on port {port}"));
+    Some(share::DevShare::start(backend, shield))
+}
+
+/// Run the dev commands to completion, then close the share tunnel (also
+/// when a command fails, which exits non-zero).
+fn run_dev_commands(cmds: &[String], dir: &Path, sharing: Option<share::DevShare>) {
+    let ok = cmds.iter().all(|cmd| {
         let parts: Vec<&str> = cmd.split(' ').collect();
         let (prog, args) = parts.split_first().unwrap_or((&"npm", &[]));
-        if !run_cmd(prog, args, &canonical) {
-            std::process::exit(1);
-        }
+        run_cmd(prog, args, dir)
+    });
+    if let Some(sharing) = sharing {
+        sharing.stop();
+    }
+    if !ok {
+        std::process::exit(1);
     }
     outro("dev server stopped");
 }
@@ -1007,9 +1048,10 @@ fn run_share(args: share::ShareArgs, json: bool) {
             error(&e);
         }
     }
-    if let Err(e) = share::parse_ttl_duration(&args.ttl) {
-        error(&e);
-    }
+    let ttl = match share::parse_ttl_duration(&args.ttl) {
+        Ok(secs) => std::time::Duration::from_secs(secs),
+        Err(e) => error(&e),
+    };
     let target_port = share::parse_target_port(args.port.as_deref()).ok();
     if json {
         let config = share::ShareConfigJson {
@@ -1025,18 +1067,37 @@ fn run_share(args: share::ShareArgs, json: bool) {
         return;
     }
     intro("appz share");
-    match target_port {
-        Some(port) => {
-            step(&format!("preparing tunnel for port {port}..."));
-            info("tunnel provider initialization");
-            outro("share session closed");
+    let canonical = resolve_root(&args.dir);
+    let port = match args.port.as_deref() {
+        Some(raw) => {
+            let port = share::parse_target_port(Some(raw)).unwrap_or_else(|e| error(&e));
+            if !appz_core::is_port_listening(port, 200) {
+                warning(&format!(
+                    "nothing is listening on port {port} yet; visitors get a 502 until it is"
+                ));
+            }
+            port
         }
         None => {
-            step("auto-detecting project port...");
-            info("run `appz share <PORT>` or start dev server with `appz dev --share`");
-            outro("no active port found");
+            // The last detection run knows the frameworks and dev command.
+            let snap = appz_core::read_latest_snapshot(&canonical);
+            let toolchains = snap.as_ref().map_or(&[][..], |s| &s.toolchains[..]);
+            let frameworks: Vec<&str> = toolchains
+                .iter()
+                .flat_map(|t| t.frameworks.iter().map(String::as_str))
+                .collect();
+            let dev_command = toolchains.iter().find_map(|t| t.dev_command.as_deref());
+            let port = appz_core::detect_dev_port(&canonical, &frameworks, dev_command);
+            if !appz_core::is_port_listening(port, 200) {
+                error(&format!(
+                    "no dev server found (tried port {port}). Start it and run `appz share <PORT>`, or use `appz dev --share`"
+                ));
+            }
+            step(&format!("detected dev server on port {port}"));
+            port
         }
-    }
+    };
+    share::run_session(&args, &canonical, port, ttl);
 }
 
 macro_rules! lifecycle_fn {

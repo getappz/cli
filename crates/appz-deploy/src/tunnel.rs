@@ -1,5 +1,6 @@
 use crate::error::{DeployError, DeployResult};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -34,6 +35,8 @@ pub struct TunnelConfig {
     pub subdomain: Option<String>,
     pub provider: TunnelProviderKind,
     pub startup_timeout: Duration,
+    /// `cloudflared` to run when it is not on `PATH` (e.g. in mise's bin dir).
+    pub cloudflared_bin: Option<PathBuf>,
 }
 
 impl TunnelConfig {
@@ -43,6 +46,7 @@ impl TunnelConfig {
             subdomain: None,
             provider: TunnelProviderKind::Auto,
             startup_timeout: Duration::from_secs(15),
+            cloudflared_bin: None,
         }
     }
 }
@@ -115,6 +119,15 @@ pub fn extract_url_from_line(line: &str, suffix: &str) -> Option<String> {
     None
 }
 
+/// Keep reading the tunnel process's log after the URL was found: closing the
+/// pipe instead makes its next log write fail, which can end the process.
+fn drain(mut output: impl Read + Send + 'static) {
+    // fire-and-forget: ends when the tunnel process exits and closes the pipe.
+    std::thread::spawn(move || {
+        let _ = std::io::copy(&mut output, &mut std::io::sink());
+    });
+}
+
 /// Abstract interface for a tunnel provider
 pub trait TunnelProvider: Send + Sync {
     fn name(&self) -> &'static str;
@@ -135,12 +148,17 @@ impl TunnelProvider for CloudflareTunnelProvider {
     }
 
     fn start_tunnel(&self, config: &TunnelConfig) -> Result<TunnelSession, DeployError> {
-        let mut cmd = Command::new("cloudflared");
+        let bin = config
+            .cloudflared_bin
+            .as_deref()
+            .unwrap_or(Path::new("cloudflared"));
+        let mut cmd = Command::new(bin);
         cmd.arg("tunnel")
             .arg("--url")
             .arg(format!("http://127.0.0.1:{}", config.local_port))
             .arg("--no-autoupdate")
-            .stdout(Stdio::piped())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
             .stderr(Stdio::piped());
 
         let mut child = cmd.spawn().map_err(|e| {
@@ -152,11 +170,11 @@ impl TunnelProvider for CloudflareTunnelProvider {
             .take()
             .ok_or_else(|| DeployError::Tunnel("cannot capture cloudflared stderr".to_string()))?;
 
-        let reader = BufReader::new(stderr);
+        let mut reader = BufReader::new(stderr);
         let start = Instant::now();
         let mut public_url = None;
 
-        for line_res in reader.lines() {
+        for line_res in (&mut reader).lines() {
             if start.elapsed() > config.startup_timeout {
                 break;
             }
@@ -169,6 +187,7 @@ impl TunnelProvider for CloudflareTunnelProvider {
         }
 
         if let Some(url) = public_url {
+            drain(reader);
             Ok(TunnelSession::new(url, self.name(), Some(child)))
         } else {
             let _ = child.kill();
@@ -201,8 +220,9 @@ impl TunnelProvider for SshTunnelProvider {
             .arg("-R")
             .arg(format!("80:127.0.0.1:{}", config.local_port))
             .arg("nokey@localhost.run")
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stderr(Stdio::null());
 
         let mut child = cmd
             .spawn()
@@ -213,11 +233,11 @@ impl TunnelProvider for SshTunnelProvider {
             .take()
             .ok_or_else(|| DeployError::Tunnel("cannot capture ssh stdout".to_string()))?;
 
-        let reader = BufReader::new(stdout);
+        let mut reader = BufReader::new(stdout);
         let start = Instant::now();
         let mut public_url = None;
 
-        for line_res in reader.lines() {
+        for line_res in (&mut reader).lines() {
             if start.elapsed() > config.startup_timeout {
                 break;
             }
@@ -232,6 +252,7 @@ impl TunnelProvider for SshTunnelProvider {
         }
 
         if let Some(url) = public_url {
+            drain(reader);
             Ok(TunnelSession::new(url, self.name(), Some(child)))
         } else {
             let _ = child.kill();
@@ -247,7 +268,7 @@ pub fn start_tunnel(config: &TunnelConfig) -> Result<TunnelSession, DeployError>
     match config.provider {
         TunnelProviderKind::Cloudflare => {
             let cf = CloudflareTunnelProvider;
-            if !cf.is_available() {
+            if config.cloudflared_bin.is_none() && !cf.is_available() {
                 return Err(DeployError::Tunnel(
                     "`cloudflared` is not installed or not on PATH. Install it via `mise use -g cloudflared` or download from https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/".to_string(),
                 ));
@@ -265,7 +286,7 @@ pub fn start_tunnel(config: &TunnelConfig) -> Result<TunnelSession, DeployError>
         }
         TunnelProviderKind::Auto => {
             let cf = CloudflareTunnelProvider;
-            if cf.is_available() {
+            if config.cloudflared_bin.is_some() || cf.is_available() {
                 return cf.start_tunnel(config);
             }
             let ssh = SshTunnelProvider;

@@ -1,7 +1,7 @@
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
-use std::sync::Arc;
+use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -12,6 +12,21 @@ pub struct ShieldConfig {
     pub pin: Option<String>,
     pub basic_auth: Option<String>,
     pub ttl: Duration,
+    /// Receives one entry per request forwarded to the dev server.
+    pub events: Option<mpsc::Sender<RequestLog>>,
+}
+
+/// One request forwarded to the dev server, for the live inspector.
+#[derive(Debug, Clone)]
+pub struct RequestLog {
+    pub method: String,
+    pub path: String,
+    /// Reply status; 0 when the dev server sent no status line.
+    pub status: u16,
+    pub elapsed: Duration,
+    /// The request as received (head plus whatever body arrived with it),
+    /// kept so it can be replayed.
+    pub raw: Vec<u8>,
 }
 
 impl ShieldConfig {
@@ -21,6 +36,7 @@ impl ShieldConfig {
             pin: None,
             basic_auth: None,
             ttl: Duration::from_secs(7200), // 2 hours default
+            events: None,
         }
     }
 }
@@ -46,6 +62,7 @@ impl ShieldGateway {
         let stop_flag = Arc::new(AtomicBool::new(false));
         let stop_clone = Arc::clone(&stop_flag);
 
+        let config = Arc::new(config);
         let handle = thread::spawn(move || {
             let created_at = Instant::now();
             while !stop_clone.load(Ordering::Relaxed) {
@@ -54,7 +71,13 @@ impl ShieldGateway {
                         let _ = client_stream.set_nonblocking(false);
                         let _ = client_stream.set_read_timeout(Some(Duration::from_secs(5)));
                         let _ = client_stream.set_write_timeout(Some(Duration::from_secs(5)));
-                        handle_connection(&mut client_stream, &config, created_at);
+                        let config = Arc::clone(&config);
+                        // fire-and-forget: one connection, ends when either side closes.
+                        // A thread each so a slow or long-lived (websocket) connection
+                        // does not stall the others.
+                        thread::spawn(move || {
+                            handle_connection(&mut client_stream, &config, created_at);
+                        });
                     }
                     Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(10));
@@ -237,13 +260,10 @@ pub fn render_unlock_html(pin_failed: bool) -> String {
 }
 
 fn handle_connection(stream: &mut TcpStream, config: &ShieldConfig, created_at: Instant) {
-    let mut buf = [0u8; 4096];
-    let n = match stream.read(&mut buf) {
-        Ok(0) | Err(_) => return,
-        Ok(n) => n,
+    let Some(request) = read_head(stream) else {
+        return;
     };
-
-    let req_str = String::from_utf8_lossy(&buf[..n]);
+    let req_str = String::from_utf8_lossy(&request);
 
     // 1. Check TTL Expiration
     if is_expired(created_at, config.ttl) {
@@ -301,26 +321,209 @@ fn handle_connection(stream: &mut TcpStream, config: &ShieldConfig, created_at: 
     }
 
     // 4. Forward authorized traffic to target dev server
-    if let Ok(mut target_stream) = TcpStream::connect(("127.0.0.1", config.target_port)) {
-        let _ = target_stream.write_all(&buf[..n]);
-        let mut target_buf = [0u8; 8192];
-        while let Ok(tn) = target_stream.read(&mut target_buf) {
-            if tn == 0 {
-                break;
-            }
-            if stream.write_all(&target_buf[..tn]).is_err() {
-                break;
-            }
-        }
-    } else {
-        let resp = "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nCannot connect to target local dev server.\r\n";
-        let _ = stream.write_all(resp.as_bytes());
+    let started = Instant::now();
+    let status = forward(stream, config.target_port, &request);
+    if let Some(tx) = &config.events {
+        let (method, path) = request_line(&req_str);
+        let _ = tx.send(RequestLog {
+            method,
+            path,
+            status,
+            elapsed: started.elapsed(),
+            raw: request.clone(),
+        });
     }
+}
+
+const HEAD_END: &[u8] = b"\r\n\r\n";
+/// Largest request head read before forwarding regardless.
+const MAX_HEAD: usize = 64 * 1024;
+
+fn head_end(data: &[u8]) -> Option<usize> {
+    data.windows(HEAD_END.len()).position(|w| w == HEAD_END)
+}
+
+/// Read until the end of the request head (the body may follow later).
+fn read_head(stream: &mut TcpStream) -> Option<Vec<u8>> {
+    let mut data = Vec::new();
+    let mut buf = [0u8; 4096];
+    while head_end(&data).is_none() && data.len() < MAX_HEAD {
+        match stream.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => data.extend_from_slice(&buf[..n]),
+        }
+    }
+    (!data.is_empty()).then_some(data)
+}
+
+/// `(method, path)` from the request line.
+fn request_line(request: &str) -> (String, String) {
+    let mut parts = request.lines().next().unwrap_or("").split_whitespace();
+    (
+        parts.next().unwrap_or("?").to_string(),
+        parts.next().unwrap_or("/").to_string(),
+    )
+}
+
+/// Status code from the start of a reply (`HTTP/1.1 200 OK`), 0 if absent.
+fn parse_status(reply: &[u8]) -> u16 {
+    String::from_utf8_lossy(&reply[..reply.len().min(32)])
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0)
+}
+
+fn is_upgrade(request: &[u8]) -> bool {
+    String::from_utf8_lossy(request)
+        .to_ascii_lowercase()
+        .contains("\r\nupgrade:")
+}
+
+/// Replace the request's `Connection` header with `Connection: close`, so the
+/// dev server ends the reply by closing and every request arrives on its own
+/// connection. The tunnel client pools connections across visitors; without
+/// this, a visitor could ride a connection another visitor authenticated.
+fn force_close(request: &[u8]) -> Vec<u8> {
+    let Some(end) = head_end(request) else {
+        return request.to_vec();
+    };
+    let head = String::from_utf8_lossy(&request[..end]);
+    let mut out = String::with_capacity(request.len() + 24);
+    for line in head.split("\r\n") {
+        if !line.to_ascii_lowercase().starts_with("connection:") {
+            out.push_str(line);
+            out.push_str("\r\n");
+        }
+    }
+    out.push_str("Connection: close\r\n\r\n");
+    let mut bytes = out.into_bytes();
+    bytes.extend_from_slice(&request[end + HEAD_END.len()..]);
+    bytes
+}
+
+/// Send `request` (already read) plus whatever the client sends next to the
+/// dev server and stream the reply back. Returns the reply status: 502 when
+/// the dev server is unreachable, 0 when it sent no status line.
+fn forward(client: &mut TcpStream, target_port: u16, request: &[u8]) -> u16 {
+    let Ok(mut target) = TcpStream::connect(("127.0.0.1", target_port)) else {
+        let resp = "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nCannot connect to target local dev server.\r\n";
+        let _ = client.write_all(resp.as_bytes());
+        return 502;
+    };
+    // A websocket (HMR) stays open both ways, so it keeps its headers.
+    let sent = if is_upgrade(request) {
+        target.write_all(request)
+    } else {
+        target.write_all(&force_close(request))
+    };
+    if sent.is_err() {
+        return 0;
+    }
+    // The head is in: the rest (upload body, websocket frames) has no deadline.
+    let _ = client.set_read_timeout(None);
+    if let (Ok(mut from), Ok(mut to)) = (client.try_clone(), target.try_clone()) {
+        // fire-and-forget: ends when the client closes or the reply loop below
+        // shuts both sockets down.
+        thread::spawn(move || {
+            let _ = std::io::copy(&mut from, &mut to);
+            let _ = to.shutdown(Shutdown::Write);
+        });
+    }
+    let mut status = None;
+    let mut buf = [0u8; 8192];
+    while let Ok(n) = target.read(&mut buf) {
+        if n == 0 {
+            break;
+        }
+        status.get_or_insert_with(|| parse_status(&buf[..n]));
+        if client.write_all(&buf[..n]).is_err() {
+            break;
+        }
+    }
+    let _ = client.shutdown(Shutdown::Both);
+    let _ = target.shutdown(Shutdown::Both);
+    status.unwrap_or(0)
+}
+
+/// Re-send a captured request to the dev server and return the reply status.
+pub fn replay(target_port: u16, request: &[u8]) -> Result<u16, String> {
+    let mut target = TcpStream::connect(("127.0.0.1", target_port))
+        .map_err(|e| format!("cannot connect to port {target_port}: {e}"))?;
+    let _ = target.set_read_timeout(Some(Duration::from_secs(30)));
+    target
+        .write_all(&force_close(request))
+        .map_err(|e| e.to_string())?;
+    let mut buf = [0u8; 64];
+    let n = target.read(&mut buf).map_err(|e| e.to_string())?;
+    Ok(parse_status(&buf[..n]))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn force_close_replaces_connection_header_and_keeps_body() {
+        let req = b"POST /hook HTTP/1.1\r\nHost: x\r\nconnection: keep-alive\r\n\r\nbody";
+        assert_eq!(
+            force_close(req),
+            b"POST /hook HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\nbody"
+        );
+    }
+
+    #[test]
+    fn request_line_and_status_are_parsed() {
+        assert_eq!(
+            request_line("GET /a?b=1 HTTP/1.1\r\nHost: x\r\n"),
+            ("GET".to_string(), "/a?b=1".to_string())
+        );
+        assert_eq!(parse_status(b"HTTP/1.1 404 Not Found\r\n"), 404);
+        assert_eq!(parse_status(b"garbage"), 0);
+    }
+
+    #[test]
+    fn upgrade_requests_are_detected() {
+        assert!(is_upgrade(
+            b"GET /ws HTTP/1.1\r\nUpgrade: websocket\r\n\r\n"
+        ));
+        assert!(!is_upgrade(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n"));
+    }
+
+    /// End to end through the gateway: the request reaches the dev server
+    /// with `Connection: close`, the reply comes back, and it is logged.
+    #[test]
+    fn gateway_forwards_and_logs_a_request() {
+        let upstream = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = upstream.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut s, _) = upstream.accept().unwrap();
+            let head = read_head(&mut s).unwrap();
+            s.write_all(b"HTTP/1.1 201 Created\r\nContent-Length: 2\r\n\r\nok")
+                .unwrap();
+            String::from_utf8(head).unwrap()
+        });
+
+        let (tx, rx) = mpsc::channel();
+        let mut config = ShieldConfig::new(port);
+        config.events = Some(tx);
+        let gateway = ShieldGateway::start(config).unwrap();
+
+        let mut client = TcpStream::connect(("127.0.0.1", gateway.bound_port)).unwrap();
+        client
+            .write_all(b"GET /hello HTTP/1.1\r\nHost: x\r\nConnection: keep-alive\r\n\r\n")
+            .unwrap();
+        let mut reply = String::new();
+        client.read_to_string(&mut reply).unwrap();
+
+        assert!(reply.starts_with("HTTP/1.1 201 Created"), "{reply}");
+        assert!(reply.ends_with("ok"));
+        assert!(server.join().unwrap().contains("Connection: close"));
+        let log = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!((log.method.as_str(), log.path.as_str()), ("GET", "/hello"));
+        assert_eq!(log.status, 201);
+        assert_eq!(replay(port, &log.raw).ok(), None, "upstream is gone");
+    }
 
     #[test]
     fn check_pin_cookie_detects_matching_cookie() {

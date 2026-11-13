@@ -5,6 +5,7 @@ mod output;
 mod provider;
 mod providers;
 pub mod static_cas;
+pub mod tunnel;
 
 pub use context::{DeployConfig, DeployContext, DeployHooks, parse_kv, read_deploy_config};
 pub use error::{DeployError, DeployResult};
@@ -26,4 +27,8 @@ pub use providers::appzdev::{
     poll_device_token, pull_cloud_env, push_cloud_env, remove_project, remove_project_domain,
     rename_project, request_device_code, resolve_auth_token, resolve_project_id_from_dir,
     save_stored_auth, slugify_project_id, verify_project_domain,
+};
+pub use tunnel::{
+    CloudflareTunnelProvider, SshTunnelProvider, TunnelConfig, TunnelProvider, TunnelProviderKind,
+    TunnelSession, extract_url_from_line, start_tunnel,
 };

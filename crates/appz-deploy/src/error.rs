@@ -48,6 +48,9 @@ pub enum DeployError {
     #[error("no deploy provider matched slug '{slug}'")]
     ProviderNotFound { slug: String },
 
+    #[error("tunnel error: {0}")]
+    Tunnel(String),
+
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
 

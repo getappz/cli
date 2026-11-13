@@ -58,32 +58,31 @@ impl ShieldGateway {
             .map_err(|e| format!("cannot read bound port: {e}"))?
             .port();
 
-        let _ = listener.set_nonblocking(true);
         let stop_flag = Arc::new(AtomicBool::new(false));
         let stop_clone = Arc::clone(&stop_flag);
 
         let config = Arc::new(config);
         let handle = thread::spawn(move || {
             let created_at = Instant::now();
-            while !stop_clone.load(Ordering::Relaxed) {
-                match listener.accept() {
-                    Ok((mut client_stream, _)) => {
-                        let _ = client_stream.set_nonblocking(false);
-                        let _ = client_stream.set_read_timeout(Some(Duration::from_secs(5)));
-                        let _ = client_stream.set_write_timeout(Some(Duration::from_secs(5)));
-                        let config = Arc::clone(&config);
-                        // fire-and-forget: one connection, ends when either side closes.
-                        // A thread each so a slow or long-lived (websocket) connection
-                        // does not stall the others.
-                        thread::spawn(move || {
-                            handle_connection(&mut client_stream, &config, created_at);
-                        });
-                    }
-                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(10));
-                    }
-                    Err(_) => break,
+            // Blocks in accept (no polling); `stop` wakes it with a connection.
+            for stream in listener.incoming() {
+                if stop_clone.load(Ordering::Relaxed) {
+                    break;
                 }
+                let Ok(mut client_stream) = stream else {
+                    thread::sleep(Duration::from_millis(10));
+                    continue;
+                };
+                let _ = client_stream.set_nodelay(true);
+                let _ = client_stream.set_read_timeout(Some(Duration::from_secs(5)));
+                let _ = client_stream.set_write_timeout(Some(Duration::from_secs(5)));
+                let config = Arc::clone(&config);
+                // fire-and-forget: one connection, ends when either side closes.
+                // A thread each so a slow or long-lived (websocket) connection
+                // does not stall the others.
+                thread::spawn(move || {
+                    handle_connection(&mut client_stream, &config, created_at);
+                });
             }
         });
 
@@ -98,6 +97,8 @@ impl ShieldGateway {
     pub fn stop(&mut self) {
         self.stop_flag.store(true, Ordering::Relaxed);
         if let Some(h) = self.handle.take() {
+            // Wake the accept loop so it sees the flag.
+            let _ = TcpStream::connect(("127.0.0.1", self.bound_port));
             let _ = h.join();
         }
     }
@@ -436,6 +437,7 @@ fn forward(client: &mut TcpStream, target_port: u16, request: &[u8]) -> u16 {
     }
     // The head is in: the rest (upload body, websocket frames) has no deadline.
     let _ = client.set_read_timeout(None);
+    let _ = target.set_nodelay(true);
     if let (Ok(mut from), Ok(mut to)) = (client.try_clone(), target.try_clone()) {
         // fire-and-forget: ends when the client closes or the reply loop below
         // shuts both sockets down.
@@ -445,7 +447,7 @@ fn forward(client: &mut TcpStream, target_port: u16, request: &[u8]) -> u16 {
         });
     }
     let mut status = None;
-    let mut buf = [0u8; 8192];
+    let mut buf = vec![0u8; 64 * 1024];
     while let Ok(n) = target.read(&mut buf) {
         if n == 0 {
             break;

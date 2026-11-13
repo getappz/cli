@@ -228,29 +228,88 @@ pub fn open(backend: &Backend, shield: ShieldConfig) -> Result<Session, String> 
     })
 }
 
-/// One inspector line: `200 GET   /api/hook  42ms`.
-pub fn format_request(r: &RequestLog) -> String {
-    let status = if r.status == 0 {
-        "---".to_string()
+/// Decode `%XX` escapes, leaving anything that is not one as it is.
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let byte = (b[i] == b'%')
+            .then(|| s.get(i + 1..i + 3))
+            .flatten()
+            .and_then(|hex| u8::from_str_radix(hex, 16).ok());
+        match byte {
+            Some(byte) => {
+                out.push(byte);
+                i += 3;
+            }
+            None => {
+                out.push(b[i]);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Text from a visitor's request, safe to print: control characters (which
+/// could drive the terminal) become `?`.
+fn printable(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_control() { '?' } else { c })
+        .collect()
+}
+
+/// The request path as shown in the log: percent-decoded, and with a dev
+/// server's file URLs into the project (`/@fs/C:/work/site/src/a.jpg`)
+/// reduced to the part below `project` (`/src/a.jpg`).
+fn display_path(path: &str, project: &str) -> String {
+    let decoded = printable(&percent_decode(path));
+    let project = project
+        .trim_start_matches(r"\\?\")
+        .replace('\\', "/")
+        .trim_matches('/')
+        .to_string();
+    if project.is_empty() {
+        decoded
     } else {
-        r.status.to_string()
+        decoded.replace(&format!("/@fs/{project}"), "")
+    }
+}
+
+/// One inspector line, the path last so the columns before it line up:
+/// `200  GET       42ms  /api/hook`. The status is coloured by class;
+/// `project` is the directory `display_path` hides (empty for none).
+pub fn format_request(r: &RequestLog, project: &str) -> String {
+    use console::style;
+    let status = match r.status {
+        0 => style("---".to_string()).dim(),
+        s @ 200..=299 => style(s.to_string()).green(),
+        s @ 300..=399 => style(s.to_string()).cyan(),
+        s @ 400..=499 => style(s.to_string()).yellow(),
+        s => style(s.to_string()).red(),
     };
+    let took = format!("{}ms", r.elapsed.as_millis());
     format!(
-        "{status} {:<5} {}  {}ms",
-        r.method,
-        r.path,
-        r.elapsed.as_millis()
+        "{status}  {:<7} {}  {}",
+        printable(&r.method),
+        style(format!("{took:>7}")).dim(),
+        display_path(&r.path, project)
     )
 }
 
-/// A request with the time it was seen: `14:32:01  200 GET   /  12ms`.
-fn request_line(r: &RequestLog) -> String {
+/// A request with the time it was seen: `14:32:01  200  GET  12ms  /`.
+fn request_line(r: &RequestLog, project: &str) -> String {
     let time = chrono::Local::now().format("%H:%M:%S");
-    format!("{time}  {}", format_request(r))
+    format!(
+        "{}  {}",
+        console::style(time).dim(),
+        format_request(r, project)
+    )
 }
 
 fn print_request(r: &RequestLog) {
-    println!("   {}", request_line(r));
+    println!("   {}", request_line(r, ""));
 }
 
 /// Put `text` on the system clipboard with the platform's own tool.
@@ -308,8 +367,12 @@ fn spawn_key_reader() -> mpsc::Receiver<char> {
 /// between. Off (no terminal), lines are printed as they come.
 struct Screen {
     on: bool,
-    header: Vec<String>,
-    footer: &'static str,
+    /// `(label, value)` rows under the title.
+    header: Vec<(&'static str, String)>,
+    /// `(key, what it does)`.
+    shortcuts: Vec<(char, &'static str)>,
+    /// Shown in the log area until the first line arrives.
+    empty: &'static str,
     log: std::collections::VecDeque<String>,
     /// The frame on screen, so an unchanged one is not written again.
     drawn: String,
@@ -319,7 +382,12 @@ impl Screen {
     /// Lines kept for redrawing after the terminal is resized.
     const KEPT: usize = 500;
 
-    fn open(on: bool, header: Vec<String>, footer: &'static str) -> Self {
+    fn open(
+        on: bool,
+        header: Vec<(&'static str, String)>,
+        shortcuts: Vec<(char, &'static str)>,
+        empty: &'static str,
+    ) -> Self {
         if on {
             // Alternate screen, cursor hidden.
             print!("\x1b[?1049h\x1b[?25l");
@@ -327,7 +395,8 @@ impl Screen {
         Self {
             on,
             header,
-            footer,
+            shortcuts,
+            empty,
             log: std::collections::VecDeque::new(),
             drawn: String::new(),
         }
@@ -344,27 +413,57 @@ impl Screen {
         self.log.push_back(line);
     }
 
-    /// Redraw if anything changed: a new line, `status`, or the window size.
+    /// Redraw if anything changed: a new line, `status` (shown at the right
+    /// of the title), or the window size.
     fn draw(&mut self, status: &str) {
+        use console::style;
         if !self.on {
             return;
         }
         let (rows, cols) = console::Term::stdout().size();
-        let (rows, cols) = (usize::from(rows), usize::from(cols));
-        let mut lines = self.header.clone();
-        lines.push(status.to_string());
+        let (rows, width) = (usize::from(rows), usize::from(cols).saturating_sub(2));
+        let rule = style("─".repeat(width)).dim().to_string();
+
+        let title = format!(
+            "{}  {}",
+            style(" appz share ").bold().black().on_cyan(),
+            style("● live").green()
+        );
+        let gap = width.saturating_sub(
+            console::measure_text_width(&title) + console::measure_text_width(status),
+        );
+        let mut lines = vec![
+            String::new(),
+            format!("{title}{}{}", " ".repeat(gap), style(status).dim()),
+            String::new(),
+        ];
+        lines.extend(
+            self.header
+                .iter()
+                .map(|(label, value)| format!("  {}  {value}", style(format!("{label:<8}")).dim())),
+        );
         lines.push(String::new());
+        lines.push(rule.clone());
+        // Below the log: a rule and the shortcuts.
         let room = rows.saturating_sub(lines.len() + 2);
+        if self.log.is_empty() {
+            lines.push(style(self.empty).dim().to_string());
+        }
         let skip = self.log.len().saturating_sub(room);
         lines.extend(self.log.iter().skip(skip).cloned());
-        lines.resize(rows.saturating_sub(1), String::new());
-        lines.push(console::style(self.footer).dim().to_string());
+        lines.resize(rows.saturating_sub(2), String::new());
+        lines.push(rule);
+        lines.push(
+            self.shortcuts
+                .iter()
+                .map(|(key, what)| format!("{} {}", style(key).bold().cyan(), style(what).dim()))
+                .collect::<Vec<_>>()
+                .join("    "),
+        );
+
         let frame = lines
             .iter()
-            .map(|l| {
-                let l = console::truncate_str(l, cols.saturating_sub(2), "…");
-                format!(" {l}\x1b[K")
-            })
+            .map(|l| format!(" {}\x1b[K", console::truncate_str(l, width, "…")))
             .collect::<Vec<_>>()
             .join("\r\n");
         if frame != self.drawn {
@@ -448,26 +547,41 @@ pub fn run_session(args: &ShareArgs, dir: &Path, port: u16, ttl: Duration) {
     if keys.is_none() {
         crate::info("press Ctrl+C to stop");
     }
+    let mut shortcuts = vec![('c', "copy url"), ('p', "deploy"), ('q', "stop")];
+    if args.inspect {
+        shortcuts.insert(0, ('r', "replay last request"));
+    }
+    let protected = args.pin.is_some() || args.auth.is_some();
     let mut screen = Screen::open(
         keys.is_some(),
         vec![
-            console::style("appz share").bold().to_string(),
-            String::new(),
-            format!("local:    http://localhost:{port}"),
-            format!("public:   {url}"),
-            format!("security: {security}"),
-            format!("via:      {}", session.provider),
+            (
+                "Public",
+                console::style(&url).bold().cyan().underlined().to_string(),
+            ),
+            ("Local", format!("http://localhost:{port}")),
+            (
+                "Security",
+                if protected {
+                    console::style(&security).green().to_string()
+                } else {
+                    console::style(&security).yellow().to_string()
+                },
+            ),
+            ("Via", session.provider.to_string()),
         ],
+        shortcuts,
         if args.inspect {
-            "[r] replay last request  [c] copy url  [p] promote to deploy  [q] stop"
+            "waiting for requests"
         } else {
-            "[c] copy url  [p] promote to deploy  [q] stop"
+            "request log is off (run with --inspect to see requests)"
         },
     );
 
     let started = Instant::now();
-    let tick = Duration::from_millis(200);
+    let tick = Duration::from_millis(100);
     let mut last: Option<RequestLog> = None;
+    let mut seen = 0u64;
     let end = loop {
         if INTERRUPTED.load(Ordering::SeqCst) {
             break End::Quit;
@@ -475,16 +589,19 @@ pub fn run_session(args: &ShareArgs, dir: &Path, port: u16, ttl: Duration) {
         if started.elapsed() >= ttl {
             break End::Expired;
         }
-        screen.draw(&format!(
-            "ttl:      {}",
-            time_left(ttl.saturating_sub(started.elapsed()))
-        ));
+        let left = time_left(ttl.saturating_sub(started.elapsed()));
+        screen.draw(&match (args.inspect, seen) {
+            (false, _) => left,
+            (true, 1) => format!("1 request  ·  {left}"),
+            (true, n) => format!("{n} requests  ·  {left}"),
+        });
         if !session.is_alive() {
             break End::TunnelClosed;
         }
         match requests.recv_timeout(tick) {
             Ok(r) => {
-                screen.say(request_line(&r));
+                seen += 1;
+                screen.say(request_line(&r, &dir.to_string_lossy()));
                 last = Some(r);
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -603,6 +720,21 @@ mod tests {
     }
 
     #[test]
+    fn display_path_decodes_and_hides_the_project_directory() {
+        let path = "/_image?href=%2F%40fs%2FC%3A%2Fwork%2Fsite%2Fsrc%2Fassets%2Fa.jpg%3Fw%3D10";
+        assert_eq!(
+            display_path(path, r"\\?\C:\work\site"),
+            "/_image?href=/src/assets/a.jpg?w=10"
+        );
+        assert_eq!(display_path("/a%20b%zz", ""), "/a b%zz");
+    }
+
+    #[test]
+    fn request_text_cannot_send_control_characters_to_the_terminal() {
+        assert_eq!(display_path("/x%1b[2J\u{7}", ""), "/x?[2J?");
+    }
+
+    #[test]
     fn time_left_uses_the_largest_useful_units() {
         assert_eq!(time_left(Duration::from_secs(7199)), "1h 59m left");
         assert_eq!(time_left(Duration::from_secs(125)), "2m left");
@@ -618,9 +750,10 @@ mod tests {
             elapsed: Duration::from_millis(42),
             raw: Vec::new(),
         };
-        assert_eq!(format_request(&r), "200 GET   /api  42ms");
+        let plain = |r: &RequestLog| console::strip_ansi_codes(&format_request(r, "")).to_string();
+        assert_eq!(plain(&r), "200  GET        42ms  /api");
         r.status = 0;
-        assert_eq!(format_request(&r), "--- GET   /api  42ms");
+        assert_eq!(plain(&r), "---  GET        42ms  /api");
     }
 
     #[test]

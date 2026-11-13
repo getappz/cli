@@ -82,12 +82,28 @@ pub fn is_port_listening(port: u16, timeout_ms: u64) -> bool {
     connect_local(port, Duration::from_millis(timeout_ms)).is_ok()
 }
 
-/// Connect to a dev server on this machine. Tries IPv4 then IPv6 loopback:
-/// a server bound to `localhost` (Vite, Astro) may listen on `::1` only.
+/// Set once a dev server answered on IPv6 loopback only, so later
+/// connections go there first.
+static PREFER_V6: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Connect to a dev server on this machine. Tries both loopbacks: a server
+/// bound to `localhost` (Vite, Astro) may listen on `::1` only. The one that
+/// answered is tried first from then on, because Windows takes about two
+/// seconds to report a refused connection.
 pub fn connect_local(port: u16, timeout: Duration) -> std::io::Result<TcpStream> {
+    use std::sync::atomic::Ordering;
     let v4 = SocketAddr::from(([127, 0, 0, 1], port));
     let v6 = SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, port));
-    TcpStream::connect_timeout(&v4, timeout).or_else(|_| TcpStream::connect_timeout(&v6, timeout))
+    if PREFER_V6.load(Ordering::Relaxed)
+        && let Ok(stream) = TcpStream::connect_timeout(&v6, timeout)
+    {
+        return Ok(stream);
+    }
+    TcpStream::connect_timeout(&v4, timeout).or_else(|_| {
+        let stream = TcpStream::connect_timeout(&v6, timeout)?;
+        PREFER_V6.store(true, Ordering::Relaxed);
+        Ok(stream)
+    })
 }
 
 /// Probes a slice of candidate ports, returning the first one with an active TCP listener.

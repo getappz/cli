@@ -17,6 +17,7 @@ mod dev_install;
 mod init_source;
 mod mcp;
 mod secrets;
+mod shield;
 mod skills;
 mod update;
 

@@ -18,6 +18,7 @@ const VERIFY_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Build (release unless `!release`), verify, and replace the running binary.
 pub fn run(release: bool, dry_run: bool) {
+    crate::intro("appz dev-install");
     crate::step(&format!(
         "building appz ({})...",
         if release { "release" } else { "debug" }
@@ -56,6 +57,7 @@ pub fn run(release: bool, dry_run: bool) {
             built.display(),
             target.display()
         ));
+        crate::outro("dry-run complete");
         return;
     }
 
@@ -68,7 +70,7 @@ pub fn run(release: bool, dry_run: bool) {
         crate::error(&format!("error installing binary: {e}"));
     }
     crate::success(&format!("installed to {}", target.display()));
-    crate::info("run `appz --version` to confirm");
+    crate::outro("dev-install complete (run `appz --version` to confirm)");
 }
 
 /// Build the `appz` binary from the current source tree and return the path

@@ -77,9 +77,9 @@ fn ensure_linked(
         Consent::Yes => false,
     };
     if interactive {
-        eprintln!("linking with `{} link`...", p.cli_tool());
+        crate::step(&format!("linking with `{} link`...", p.cli_tool()));
     } else {
-        eprintln!("linking {} project '{name}'...", p.name());
+        crate::step(&format!("linking {} project '{name}'...", p.name()));
     }
     p.link(ctx, interactive).map_err(|e| e.to_string())?;
     if p.is_linked(ctx) {
@@ -114,7 +114,7 @@ pub(crate) fn confirm_mise_install(
         }
         Consent::Yes => {}
     }
-    eprintln!("installing {tool} with mise...");
+    crate::step(&format!("installing {tool} with mise..."));
     Ok(())
 }
 
@@ -243,7 +243,7 @@ fn run_hook(ctx: &DeployContext, name: &str, argv: &[String]) -> Result<(), Stri
         return Ok(());
     }
     let (bin, args) = argv.split_first().expect("non-empty argv");
-    eprintln!("running {name} hook: {}", argv.join(" "));
+    crate::step(&format!("running {name} hook: {}", argv.join(" ")));
     let mut cmd = command::Command::new(ctx.resolve(bin));
     cmd.args(args.iter().map(String::as_str))
         .cwd(&ctx.project_dir)
@@ -325,7 +325,7 @@ pub fn run(project_dir: &Path, req: DeployRequest) -> Result<DeployOutput, Strin
         .collect();
     let vault = crate::secrets::deploy_env(project_dir, &allowed)?;
     if vault.locked && std::env::var_os(provider.auth_env_var()).is_none() {
-        eprintln!("note: vault is locked; run `appz env unlock` to use stored credentials");
+        crate::info("note: vault is locked; run `appz env unlock` to use stored credentials");
     }
 
     let mut ctx = DeployContext::new(project_dir.to_path_buf(), output_dir);
@@ -386,10 +386,10 @@ pub fn run(project_dir: &Path, req: DeployRequest) -> Result<DeployOutput, Strin
         if provider.needs_prebuild(&frameworks) {
             ctx.prebuilt = crate::build_stage::run(&ctx)?;
         } else if !req.json {
-            eprintln!(
+            crate::info(&format!(
                 "note: {} builds this project itself; skipping appz's build stage",
                 provider.name()
-            );
+            ));
         }
     }
 

@@ -542,47 +542,55 @@ struct DevArgs {
 
 // ── UI helpers ──────────────────────────────────────────────────
 
-fn is_tty() -> bool {
-    std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
+pub(crate) fn is_stdout_tty() -> bool {
+    if std::env::var_os("NO_COLOR").is_some() || std::env::var("TERM").as_deref() == Ok("dumb") {
+        return false;
+    }
+    std::io::stdout().is_terminal()
 }
 
-const BRAND: &str = "+-+-+-+-+\n|a|p|p|z|\n+-+-+-+-+";
+pub(crate) fn is_interactive_tty() -> bool {
+    is_stdout_tty() && std::io::stdin().is_terminal()
+}
 
-/// Shown once, at `appz init` — a first-run touch, not decoration on every
-/// command. Skipped outside a real terminal so it never lands in piped/CI
-/// output.
+pub(crate) fn is_tty() -> bool {
+    is_interactive_tty()
+}
+
+/// Shown once, at `appz init` — a clean, subtle header.
+/// Skipped outside a real terminal so it never lands in piped/CI output.
 fn print_brand() {
-    if is_tty() {
-        println!("{BRAND}");
+    if is_stdout_tty() {
+        println!("\n  appz • universal toolchain & deployment\n");
     }
 }
 
-fn intro(msg: &str) {
-    if is_tty() {
+pub(crate) fn intro(msg: &str) {
+    if is_stdout_tty() {
         let _ = cliclack::intro(msg);
     } else {
         println!("> {msg}");
     }
 }
 
-fn outro(msg: &str) {
-    if is_tty() {
+pub(crate) fn outro(msg: &str) {
+    if is_stdout_tty() {
         let _ = cliclack::outro(msg);
     } else {
         println!("✓ {msg}");
     }
 }
 
-fn success(msg: &str) {
-    if is_tty() {
+pub(crate) fn success(msg: &str) {
+    if is_stdout_tty() {
         let _ = cliclack::log::success(msg);
     } else {
         println!("ok  {msg}");
     }
 }
 
-fn info(msg: &str) {
-    if is_tty() {
+pub(crate) fn info(msg: &str) {
+    if is_stdout_tty() {
         let _ = cliclack::log::info(msg);
     } else {
         for line in msg.lines() {
@@ -591,24 +599,24 @@ fn info(msg: &str) {
     }
 }
 
-fn step(msg: &str) {
-    if is_tty() {
+pub(crate) fn step(msg: &str) {
+    if is_stdout_tty() {
         let _ = cliclack::log::step(msg);
     } else {
         println!("  • {msg}");
     }
 }
 
-fn warning(msg: &str) {
-    if is_tty() {
+pub(crate) fn warning(msg: &str) {
+    if is_stdout_tty() {
         let _ = cliclack::log::warning(msg);
     } else {
         eprintln!("warn {msg}");
     }
 }
 
-fn error(msg: &str) -> ! {
-    if is_tty() {
+pub(crate) fn error(msg: &str) -> ! {
+    if is_stdout_tty() {
         let _ = cliclack::log::error(msg);
     } else {
         eprintln!("fail {msg}");
@@ -616,8 +624,8 @@ fn error(msg: &str) -> ! {
     std::process::exit(1);
 }
 
-fn with_spinner<T>(start: &str, done: &str, f: impl FnOnce() -> T) -> T {
-    if !is_tty() {
+pub(crate) fn with_spinner<T>(start: &str, done: &str, f: impl FnOnce() -> T) -> T {
+    if !is_stdout_tty() {
         println!("  {start}");
         let r = f();
         println!("  {done}");
@@ -1348,15 +1356,21 @@ fn run_skills(args: SkillsArgs, json: bool) {
         return;
     }
 
-    for hit in &report.hits {
-        let mark = if hit.installed { " (installed)" } else { "" };
-        step(&format!(
-            "{}  {} installs  {}{mark}",
-            hit.name,
-            skills::format_installs(hit.installs),
-            hit.source
-        ));
-    }
+    step("matching skills");
+    let skill_lines: Vec<String> = report
+        .hits
+        .iter()
+        .map(|hit| {
+            let mark = if hit.installed { " (installed)" } else { "" };
+            format!(
+                "{}  {} installs  {}{mark}",
+                hit.name,
+                skills::format_installs(hit.installs),
+                hit.source
+            )
+        })
+        .collect();
+    info(&skill_lines.join("\n"));
 
     let installable: Vec<skills::SkillHit> =
         report.hits.into_iter().filter(|h| !h.installed).collect();
@@ -1367,7 +1381,7 @@ fn run_skills(args: SkillsArgs, json: bool) {
 
     let selected: Vec<skills::SkillHit> = if args.yes {
         installable
-    } else if !is_tty() {
+    } else if !is_interactive_tty() {
         error("confirmation required — pass --yes to install without prompting");
     } else {
         let mut ms = cliclack::multiselect("select skills to install");
@@ -1424,10 +1438,7 @@ fn run_env(args: EnvArgs, json: bool) {
         EnvCmd::Ls { global } => match secrets::names(&path(global)) {
             Ok(names) if json => println!("{}", serde_json::to_string(&names).unwrap()),
             Ok(names) if names.is_empty() => info("no secrets stored"),
-            Ok(names) => info(&names.join(
-                "
-",
-            )),
+            Ok(names) => info(&names.join("\n")),
             Err(e) => error(&e),
         },
         EnvCmd::Rm { name, global } => match secrets::remove(&path(global), &name) {
@@ -1449,6 +1460,9 @@ fn run_env(args: EnvArgs, json: bool) {
             success("vault locked");
         }
         EnvCmd::Pull { file, target } => {
+            if !json {
+                intro("appz env pull");
+            }
             let root = resolve_root(Path::new("."));
             let project_id = appz_deploy::resolve_project_id_from_dir(&root);
             let vault_tok = crate::secrets::deploy_env(&root, &["APPZ_TOKEN".to_string()])
@@ -1489,12 +1503,16 @@ fn run_env(args: EnvArgs, json: bool) {
                             kvs.len(),
                             target_path.display()
                         ));
+                        outro("done");
                     }
                 }
                 Err(e) => error(&e.to_string()),
             }
         }
         EnvCmd::Push { file, target } => {
+            if !json {
+                intro("appz env push");
+            }
             let root = resolve_root(Path::new("."));
             let project_id = appz_deploy::resolve_project_id_from_dir(&root);
             let vault_tok = crate::secrets::deploy_env(&root, &["APPZ_TOKEN".to_string()])
@@ -1532,6 +1550,7 @@ fn run_env(args: EnvArgs, json: bool) {
                     println!("{}", serde_json::json!({ "pushed": 0 }));
                 } else {
                     info("no environment variables found in file");
+                    outro("nothing to push");
                 }
                 return;
             }
@@ -1563,6 +1582,7 @@ fn run_env(args: EnvArgs, json: bool) {
                             "uploaded {} environment variables to project '{}'",
                             count, project_id
                         ));
+                        outro("done");
                     }
                 }
                 Err(e) => error(&e.to_string()),
@@ -1666,13 +1686,15 @@ fn run_deploy(args: DeployArgs, json: bool) {
             deploy::Consent::Ask
         },
     };
+    if !json {
+        intro("appz deploy");
+    }
     if all {
         match deploy::run_all(&canonical, req) {
             Ok(outputs) => {
                 if json {
                     println!("{}", serde_json::to_string_pretty(&outputs).unwrap());
                 } else {
-                    intro("appz deploy");
                     for output in &outputs {
                         let target = if output.is_preview {
                             "preview"
@@ -1697,7 +1719,6 @@ fn run_deploy(args: DeployArgs, json: bool) {
             if json {
                 println!("{}", serde_json::to_string_pretty(&output).unwrap());
             } else if args.dry_run {
-                intro("appz deploy");
                 success(&format!(
                     "dry run: would deploy to {} ({})",
                     output.provider,
@@ -1732,7 +1753,6 @@ fn run_deploy(args: DeployArgs, json: bool) {
                 }
                 outro("nothing was deployed");
             } else {
-                intro("appz deploy");
                 if output.unchanged {
                     success(&format!(
                         "unchanged since the last deploy to {}; nothing was redeployed (--force to deploy anyway)",
@@ -1764,12 +1784,14 @@ fn run_deploy(args: DeployArgs, json: bool) {
 
 fn run_rollback(args: RollbackArgs, json: bool) {
     let canonical = resolve_root(&args.dir);
+    if !json {
+        intro("appz rollback");
+    }
     match deploy::rollback(&canonical, args.target, &args.version) {
         Ok(output) => {
             if json {
                 println!("{}", serde_json::to_string_pretty(&output).unwrap());
             } else {
-                intro("appz rollback");
                 success(&format!(
                     "rolled back {} to version {}",
                     output.provider, args.version
@@ -1786,6 +1808,9 @@ fn run_rollback(args: RollbackArgs, json: bool) {
 
 fn run_link(args: LinkArgs, json: bool) {
     let canonical = resolve_root(&args.dir);
+    if !json {
+        intro("appz link");
+    }
     match deploy::link(&canonical, args.target, args.project) {
         Ok(provider_name) => {
             if json {
@@ -1794,7 +1819,6 @@ fn run_link(args: LinkArgs, json: bool) {
                     serde_json::json!({ "status": "linked", "provider": provider_name })
                 );
             } else {
-                intro("appz link");
                 success(&format!("linked project to {provider_name}"));
                 outro("link complete");
             }
@@ -1805,12 +1829,14 @@ fn run_link(args: LinkArgs, json: bool) {
 
 fn run_alias(args: AliasArgs, json: bool) {
     let canonical = resolve_root(&args.dir);
+    if !json {
+        intro("appz alias");
+    }
     match deploy::alias(&canonical, args.target, &args.domain) {
         Ok(url) => {
             if json {
                 println!("{}", serde_json::json!({ "status": "aliased", "url": url }));
             } else {
-                intro("appz alias");
                 success(&format!("assigned alias {}", args.domain));
                 info(&url);
                 outro("alias complete");
@@ -1831,19 +1857,24 @@ fn run_list(args: ListArgs, json: bool) {
                 if deployments.is_empty() {
                     info("no deployments found for this project");
                 } else {
-                    for d in &deployments {
-                        let current_marker = if d.is_current { " (current)" } else { "" };
-                        let version = d.version_id.as_deref().unwrap_or("-");
-                        let url = d.url.as_deref().unwrap_or("-");
-                        let age = d
-                            .created_at
-                            .map(|t| format!("{}", t.format("%Y-%m-%d %H:%M UTC")))
-                            .unwrap_or_else(|| "-".to_string());
-                        info(&format!(
-                            "{:<16}  {:<14}  {:<32}  {} [{:?}{}]",
-                            d.id, version, url, age, d.status, current_marker
-                        ));
-                    }
+                    let lines: Vec<String> = deployments
+                        .iter()
+                        .map(|d| {
+                            let current_marker = if d.is_current { " (current)" } else { "" };
+                            let version = d.version_id.as_deref().unwrap_or("-");
+                            let url = d.url.as_deref().unwrap_or("-");
+                            let age = d
+                                .created_at
+                                .map(|t| format!("{}", t.format("%Y-%m-%d %H:%M UTC")))
+                                .unwrap_or_else(|| "-".to_string());
+                            let status = format!("{:?}", d.status).to_lowercase();
+                            format!(
+                                "{:<16}  {:<14}  {:<32}  {} [{status}{current_marker}]",
+                                d.id, version, url, age
+                            )
+                        })
+                        .collect();
+                    info(&lines.join("\n"));
                 }
                 outro("done");
             }
@@ -1861,46 +1892,59 @@ fn run_inspect(args: InspectArgs, json: bool) {
             } else {
                 intro("appz inspect");
                 step("deployment");
-                info(&format!("id:          {}", insp.id));
-                info(&format!("project:     {}", insp.project_id));
-                info(&format!("version:     {}", insp.version_id));
-                info(&format!("status:      {:?}", insp.status));
-                info(&format!("target:      {}", insp.target));
+                let mut dep_info = vec![
+                    format!("id:          {}", insp.id),
+                    format!("project:     {}", insp.project_id),
+                    format!("version:     {}", insp.version_id),
+                    format!(
+                        "status:      {}",
+                        format!("{:?}", insp.status).to_lowercase()
+                    ),
+                    format!("target:      {}", insp.target),
+                ];
                 if let Some(created) = insp.created_at {
-                    info(&format!(
+                    dep_info.push(format!(
                         "created:     {}",
                         created.format("%Y-%m-%d %H:%M:%S UTC")
                     ));
                 }
+                info(&dep_info.join("\n"));
 
                 if !insp.hosts.is_empty() {
                     step("hosts");
-                    for h in &insp.hosts {
-                        let clean = h
-                            .trim_start_matches("https://")
-                            .trim_start_matches("http://");
-                        info(&format!("  https://{clean}"));
-                    }
+                    let host_lines: Vec<String> = insp
+                        .hosts
+                        .iter()
+                        .map(|h| {
+                            let clean = h
+                                .trim_start_matches("https://")
+                                .trim_start_matches("http://");
+                            format!("https://{clean}")
+                        })
+                        .collect();
+                    info(&host_lines.join("\n"));
                 }
 
                 step("edge storage & cas");
-                info(&format!("files:       {}", insp.file_count));
-                info(&format!(
-                    "size:        {}",
-                    appz_core::format_size(insp.total_bytes)
-                ));
+                let mut cas_info = vec![
+                    format!("files:       {}", insp.file_count),
+                    format!("size:        {}", appz_core::format_size(insp.total_bytes)),
+                ];
                 if let Some(mkey) = &insp.manifest_key {
-                    info(&format!("manifest:    {mkey}"));
+                    cas_info.push(format!("manifest:    {mkey}"));
                 }
+                info(&cas_info.join("\n"));
 
                 if !insp.redirects.is_empty() || !insp.headers.is_empty() {
                     step("routing rules");
+                    let mut rules = Vec::new();
                     for r in &insp.redirects {
-                        info(&format!("redirect:    {r}"));
+                        rules.push(format!("redirect:    {r}"));
                     }
                     for h in &insp.headers {
-                        info(&format!("header:      {h}"));
+                        rules.push(format!("header:      {h}"));
                     }
+                    info(&rules.join("\n"));
                 }
 
                 let files_to_show = if args.files {
@@ -1910,21 +1954,25 @@ fn run_inspect(args: InspectArgs, json: bool) {
                 };
                 if !files_to_show.is_empty() {
                     step("manifest files");
-                    for f in files_to_show {
-                        let ct = f.content_type.as_deref().unwrap_or("-");
-                        let hash_short = if f.hash.len() > 12 {
-                            &f.hash[..12]
-                        } else {
-                            &f.hash
-                        };
-                        info(&format!(
-                            "{:<36}  {:>8}  {:<24}  hash:{}...",
-                            f.path,
-                            appz_core::format_size(f.size),
-                            ct,
-                            hash_short
-                        ));
-                    }
+                    let manifest_lines: Vec<String> = files_to_show
+                        .iter()
+                        .map(|f| {
+                            let ct = f.content_type.as_deref().unwrap_or("-");
+                            let hash_short = if f.hash.len() > 12 {
+                                &f.hash[..12]
+                            } else {
+                                &f.hash
+                            };
+                            format!(
+                                "{:<36}  {:>8}  {:<24}  hash:{}...",
+                                f.path,
+                                appz_core::format_size(f.size),
+                                ct,
+                                hash_short
+                            )
+                        })
+                        .collect();
+                    info(&manifest_lines.join("\n"));
                 }
                 outro("inspection complete");
             }
@@ -1942,11 +1990,15 @@ fn run_domains(args: DomainsArgs, json: bool) {
                     println!("{}", serde_json::to_string_pretty(&dom).unwrap());
                 } else {
                     intro("appz domains add");
-                    info(&format!("domain:      {}", dom.domain));
-                    info(&format!("status:      {}", dom.display_status()));
+                    let mut details = vec![
+                        format!("domain:      {}", dom.domain),
+                        format!("status:      {}", dom.display_status()),
+                    ];
                     if let Some(ssl) = &dom.ssl_status {
-                        info(&format!("ssl:         {ssl}"));
+                        details.push(format!("ssl:         {ssl}"));
                     }
+                    info(&details.join("\n"));
+
                     if let Some(ch) = &dom.challenge
                         && !dom.verified
                     {
@@ -1955,34 +2007,39 @@ fn run_domains(args: DomainsArgs, json: bool) {
                     }
                     if dom.cname.is_some() || dom.apex.is_some() {
                         step("2. DNS routing target:");
+                        let mut dns_targets = Vec::new();
                         if let Some(cname) = &dom.cname {
-                            info(&format!(
+                            dns_targets.push(format!(
                                 "{:<8}  {:<36}  {}",
                                 "CNAME", cname.name, cname.target
                             ));
                         }
                         if let Some(apex) = &dom.apex {
-                            info(&format!("{:<8}  {:<36}  {}", "A", apex.name, apex.ip));
+                            dns_targets.push(format!("{:<8}  {:<36}  {}", "A", apex.name, apex.ip));
                         }
+                        info(&dns_targets.join("\n"));
                     } else if !dom.verification.is_empty() {
                         step("dns configuration records");
-                        for v in &dom.verification {
-                            let reason = v.reason.as_deref().unwrap_or("-");
-                            info(&format!(
-                                "{:<8}  {:<32}  {}  ({})",
-                                v.r#type.to_uppercase(),
-                                v.domain,
-                                v.value,
-                                reason
-                            ));
-                        }
+                        let recs: Vec<String> = dom
+                            .verification
+                            .iter()
+                            .map(|v| {
+                                let reason = v.reason.as_deref().unwrap_or("-");
+                                format!(
+                                    "{:<8}  {:<32}  {}  ({})",
+                                    v.r#type.to_uppercase(),
+                                    v.domain,
+                                    v.value,
+                                    reason
+                                )
+                            })
+                            .collect();
+                        info(&recs.join("\n"));
                     }
                     step("next steps");
-                    info(
-                        "1. Configure the DNS records above at your domain registrar/DNS provider",
-                    );
                     info(&format!(
-                        "2. Run `appz domains verify {}` once configured",
+                        "1. Configure the DNS records above at your domain registrar/DNS provider\n\
+                         2. Run `appz domains verify {}` once configured",
                         dom.domain
                     ));
                     outro("domain added");
@@ -1997,20 +2054,25 @@ fn run_domains(args: DomainsArgs, json: bool) {
                 } else {
                     intro("appz domains");
                     if domains.is_empty() {
-                        info("no custom domains configured for this project");
-                        info("run `appz domains add <domain>` to connect a custom domain");
+                        info(
+                            "no custom domains configured for this project\nrun `appz domains add <domain>` to connect a custom domain",
+                        );
                     } else {
-                        for d in &domains {
-                            let ssl = d.ssl_status.as_deref().unwrap_or("-");
-                            let verified_str = if d.verified { "verified" } else { "pending" };
-                            info(&format!(
-                                "{:<30}  status:{:<12}  ssl:{:<10}  {}",
-                                d.domain,
-                                d.display_status(),
-                                ssl,
-                                verified_str
-                            ));
-                        }
+                        let lines: Vec<String> = domains
+                            .iter()
+                            .map(|d| {
+                                let ssl = d.ssl_status.as_deref().unwrap_or("-");
+                                let verified_str = if d.verified { "verified" } else { "pending" };
+                                format!(
+                                    "{:<30}  status:{:<12}  ssl:{:<10}  {}",
+                                    d.domain,
+                                    d.display_status(),
+                                    ssl,
+                                    verified_str
+                                )
+                            })
+                            .collect();
+                        info(&lines.join("\n"));
                     }
                     outro("done");
                 }
@@ -2024,11 +2086,15 @@ fn run_domains(args: DomainsArgs, json: bool) {
                         println!("{}", serde_json::to_string_pretty(&res).unwrap());
                     } else {
                         intro("appz domains verify");
-                        info(&format!("domain:      {}", res.domain));
-                        info(&format!("status:      {}", res.display_status()));
+                        let mut details = vec![
+                            format!("domain:      {}", res.domain),
+                            format!("status:      {}", res.display_status()),
+                        ];
                         if let Some(ssl) = &res.ssl_status {
-                            info(&format!("ssl:         {ssl}"));
+                            details.push(format!("ssl:         {ssl}"));
                         }
+                        info(&details.join("\n"));
+
                         if res.verified {
                             success(&format!("{} is verified and active!", res.domain));
                         } else {
@@ -2037,27 +2103,38 @@ fn run_domains(args: DomainsArgs, json: bool) {
                                 step("required ownership challenge");
                                 info(&format!("{:<8}  {:<36}  {}", ch.r#type, ch.name, ch.value));
                             }
-                            if let Some(cname) = &res.cname {
+                            if res.cname.is_some() || res.apex.is_some() {
                                 step("routing target");
-                                info(&format!(
-                                    "{:<8}  {:<36}  {}",
-                                    "CNAME", cname.name, cname.target
-                                ));
-                            }
-                            if let Some(apex) = &res.apex {
-                                step("apex target");
-                                info(&format!("{:<8}  {:<36}  {}", "A", apex.name, apex.ip));
+                                let mut targets = Vec::new();
+                                if let Some(cname) = &res.cname {
+                                    targets.push(format!(
+                                        "{:<8}  {:<36}  {}",
+                                        "CNAME", cname.name, cname.target
+                                    ));
+                                }
+                                if let Some(apex) = &res.apex {
+                                    targets.push(format!(
+                                        "{:<8}  {:<36}  {}",
+                                        "A", apex.name, apex.ip
+                                    ));
+                                }
+                                info(&targets.join("\n"));
                             }
                             if !res.verification.is_empty() {
                                 step("required dns records");
-                                for v in &res.verification {
-                                    info(&format!(
-                                        "{:<8}  {:<32}  {}",
-                                        v.r#type.to_uppercase(),
-                                        v.domain,
-                                        v.value
-                                    ));
-                                }
+                                let dns_lines: Vec<String> = res
+                                    .verification
+                                    .iter()
+                                    .map(|v| {
+                                        format!(
+                                            "{:<8}  {:<32}  {}",
+                                            v.r#type.to_uppercase(),
+                                            v.domain,
+                                            v.value
+                                        )
+                                    })
+                                    .collect();
+                                info(&dns_lines.join("\n"));
                             }
                         }
                         outro("done");
@@ -2096,16 +2173,18 @@ fn run_projects(args: ProjectsArgs, json: bool) {
                 } else {
                     intro("appz projects");
                     if projects.is_empty() {
-                        info("no projects found in active organization");
-                        info("run `appz projects add <name>` to create a project");
+                        info(
+                            "no projects found in active organization\nrun `appz projects add <name>` to create a project",
+                        );
                     } else {
-                        for p in &projects {
-                            let fw = p.framework.as_deref().unwrap_or("-");
-                            info(&format!(
-                                "{:<30}  id:{:<24}  framework:{:<12}",
-                                p.name, p.id, fw
-                            ));
-                        }
+                        let lines: Vec<String> = projects
+                            .iter()
+                            .map(|p| {
+                                let fw = p.framework.as_deref().unwrap_or("-");
+                                format!("{:<30}  id:{:<24}  framework:{:<12}", p.name, p.id, fw)
+                            })
+                            .collect();
+                        info(&lines.join("\n"));
                     }
                     outro("done");
                 }
@@ -2119,8 +2198,7 @@ fn run_projects(args: ProjectsArgs, json: bool) {
                 } else {
                     intro("appz projects add");
                     success(&format!("created project {}", p.name));
-                    info(&format!("id:   {}", p.id));
-                    info(&format!("slug: {}", p.slug));
+                    info(&format!("id:   {}\nslug: {}", p.id, p.slug));
                     outro("done");
                 }
             }
@@ -2133,15 +2211,18 @@ fn run_projects(args: ProjectsArgs, json: bool) {
                         println!("{}", serde_json::to_string_pretty(&p).unwrap());
                     } else {
                         intro("appz projects inspect");
-                        info(&format!("name:            {}", p.name));
-                        info(&format!("id:              {}", p.id));
-                        info(&format!("slug:            {}", p.slug));
+                        let mut lines = vec![
+                            format!("name:            {}", p.name),
+                            format!("id:              {}", p.id),
+                            format!("slug:            {}", p.slug),
+                        ];
                         if let Some(org) = &p.organization_id {
-                            info(&format!("organization:    {}", org));
+                            lines.push(format!("organization:    {}", org));
                         }
                         if let Some(url) = &p.production_url {
-                            info(&format!("production url:  {}", url));
+                            lines.push(format!("production url:  {}", url));
                         }
+                        info(&lines.join("\n"));
                         outro("done");
                     }
                 }
@@ -2156,8 +2237,7 @@ fn run_projects(args: ProjectsArgs, json: bool) {
                     } else {
                         intro("appz projects rename");
                         success(&format!("renamed project to {}", p.name));
-                        info(&format!("id:   {}", p.id));
-                        info(&format!("slug: {}", p.slug));
+                        info(&format!("id:   {}\nslug: {}", p.id, p.slug));
                         outro("done");
                     }
                 }
@@ -2378,14 +2458,16 @@ fn run_whoami(json: bool) {
                 );
             } else {
                 intro("appz whoami");
+                let mut lines = Vec::new();
                 if let Some(e) = email {
-                    info(&format!("user:         {e}"));
+                    lines.push(format!("user:         {e}"));
                 } else {
-                    info("user:         authenticated via token");
+                    lines.push("user:         authenticated via token".to_string());
                 }
                 if let Some(o) = org {
-                    info(&format!("organization: {o}"));
+                    lines.push(format!("organization: {o}"));
                 }
+                info(&lines.join("\n"));
                 outro("done");
             }
         }

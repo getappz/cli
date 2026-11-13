@@ -173,10 +173,12 @@ impl TunnelProvider for CloudflareTunnelProvider {
             if start.elapsed() > config.startup_timeout {
                 break;
             }
-            if let Ok(line) = line_res
-                && let Some(url) = extract_url_from_line(&line, ".trycloudflare.com")
-            {
-                public_url = Some(url);
+            let Ok(line) = line_res else { continue };
+            if public_url.is_none() {
+                public_url = extract_url_from_line(&line, ".trycloudflare.com");
+            } else if line.contains("Registered tunnel connection") {
+                // cloudflared prints the URL first; it answers (instead of
+                // Cloudflare's error 1033) only once a connection is registered.
                 break;
             }
         }

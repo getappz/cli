@@ -220,12 +220,42 @@ pub fn open(backend: &Backend, shield: ShieldConfig) -> Result<Session, String> 
     config.provider = backend.provider;
     config.cloudflared_bin = backend.cloudflared_bin.clone();
     let tunnel = start_tunnel(&config).map_err(|e| e.to_string())?;
+    wait_for_dns(&tunnel.public_url);
     Ok(Session {
         public_url: tunnel.public_url.clone(),
         provider: tunnel.provider_name,
         tunnel,
         _gateway: gateway,
     })
+}
+
+/// Wait (up to 20s) until a quick tunnel's new hostname is in public DNS, so
+/// the URL works the moment it is shown. Asked over HTTPS, not through the
+/// system resolver: a lookup made before the record exists gets cached as
+/// "not found" and keeps the browser from reaching the URL for minutes.
+fn wait_for_dns(url: &str) {
+    let Some(host) = url.strip_prefix("https://") else {
+        return;
+    };
+    if !host.ends_with(".trycloudflare.com") {
+        return;
+    }
+    let query = format!("https://1.1.1.1/dns-query?name={host}&type=A");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while Instant::now() < deadline {
+        let reply = ureq::get(&query)
+            .set("accept", "application/dns-json")
+            .timeout(Duration::from_secs(3))
+            .call()
+            .ok()
+            .and_then(|r| r.into_json::<serde_json::Value>().ok());
+        match reply {
+            // The resolver is unreachable: nothing to wait on.
+            None => return,
+            Some(v) if v["Answer"].as_array().is_some_and(|a| !a.is_empty()) => return,
+            Some(_) => std::thread::sleep(Duration::from_millis(500)),
+        }
+    }
 }
 
 /// Decode `%XX` escapes, leaving anything that is not one as it is.

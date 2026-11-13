@@ -1438,6 +1438,10 @@ impl DeployProvider for AppzdevProvider {
 #[allow(unsafe_code)]
 mod tests {
     use super::*;
+
+    /// The tests below point `APPZ_VAULT_HOME_OVERRIDE` (process-wide) at
+    /// their own temp dir; they must not run at the same time.
+    static VAULT_HOME_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
     use tempfile::tempdir;
 
     #[test]
@@ -1488,6 +1492,7 @@ mod tests {
     #[test]
     fn test_link_omits_placeholder_org() {
         let dir = tempdir().unwrap();
+        let _env = VAULT_HOME_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let old_override = std::env::var("APPZ_VAULT_HOME_OVERRIDE").ok();
         unsafe {
             std::env::set_var("APPZ_VAULT_HOME_OVERRIDE", dir.path());
@@ -1521,6 +1526,7 @@ mod tests {
     #[test]
     fn test_link_uses_stored_org_when_present() {
         let dir = tempdir().unwrap();
+        let _env = VAULT_HOME_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let old_override = std::env::var("APPZ_VAULT_HOME_OVERRIDE").ok();
         unsafe {
             std::env::set_var("APPZ_VAULT_HOME_OVERRIDE", dir.path());
@@ -1561,6 +1567,7 @@ mod tests {
     #[test]
     fn test_stored_auth_roundtrip() {
         let dir = tempdir().unwrap();
+        let _env = VAULT_HOME_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let old_override = std::env::var("APPZ_VAULT_HOME_OVERRIDE").ok();
         unsafe {
             std::env::set_var("APPZ_VAULT_HOME_OVERRIDE", dir.path());

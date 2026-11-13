@@ -30,8 +30,19 @@ struct AppzCli {
     /// JSON output mode (for agent/CI use)
     #[arg(long, global = true)]
     json: bool,
+    /// Answer yes to every confirmation (installing tools, linking, setting
+    /// secrets, starting the dev server)
+    #[arg(short = 'y', long, global = true)]
+    yes: bool,
     #[command(subcommand)]
     command: AppzCmd,
+}
+
+static ASSUME_YES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether `--yes` / `-y` was given (anywhere on the command line).
+fn assume_yes() -> bool {
+    ASSUME_YES.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 #[derive(Subcommand)]
@@ -121,9 +132,6 @@ struct SkillsArgs {
     query: Option<String>,
     #[arg(default_value = ".")]
     dir: PathBuf,
-    /// Install all recommended/matching skills without prompting
-    #[arg(short = 'y', long)]
-    yes: bool,
     /// Also offer skills from large source repos (slow: full-repo download)
     #[arg(long)]
     include_large: bool,
@@ -243,9 +251,6 @@ struct CiInitArgs {
     /// Write the workflow but do not set repository secrets
     #[arg(long, conflicts_with = "yes")]
     no_secrets: bool,
-    /// Set the repository secrets with gh without asking
-    #[arg(short = 'y', long)]
-    yes: bool,
 }
 
 #[derive(Args)]
@@ -273,9 +278,6 @@ struct DeployArgs {
     /// Deploy even if nothing changed since the last deploy of this target
     #[arg(long)]
     force: bool,
-    /// Install a missing platform CLI through mise without asking
-    #[arg(short = 'y', long)]
-    yes: bool,
     /// Deploy to every target configured under deploy.targets instead of one
     #[arg(long, conflicts_with = "target")]
     all: bool,
@@ -547,7 +549,13 @@ struct DevArgs {
     #[arg(long, help = "Share dev server publicly over a secure tunnel")]
     share: bool,
     /// Require a 4-digit PIN to access the shared dev server
-    #[arg(long, value_name = "CODE", num_args = 0..=1, default_missing_value = "auto")]
+    #[arg(
+        long,
+        value_name = "CODE",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "auto"
+    )]
     pin: Option<String>,
     /// Require HTTP Basic Auth in format username:password
     #[arg(long, value_name = "USER:PASS")]
@@ -1011,7 +1019,9 @@ fn start_dev_share(
     {
         error(&e);
     }
-    let install = if is_tty() {
+    let install = if assume_yes() {
+        deploy::Consent::Yes
+    } else if is_tty() {
         deploy::Consent::Ask
     } else {
         deploy::Consent::Never
@@ -1092,13 +1102,14 @@ fn run_share(args: share::ShareArgs, json: bool) {
             let dev_command = toolchains.iter().find_map(|t| t.dev_command.as_deref());
             let port = appz_core::detect_dev_port(&canonical, &frameworks, dev_command);
             if !appz_core::is_port_listening(port, 200) {
-                let start = is_tty()
-                    && cliclack::confirm(format!(
-                        "No dev server is running (tried port {port}). Start it and share it?"
-                    ))
-                    .initial_value(true)
-                    .interact()
-                    .unwrap_or(false);
+                let start = assume_yes()
+                    || is_tty()
+                        && cliclack::confirm(format!(
+                            "No dev server is running (tried port {port}). Start it and share it?"
+                        ))
+                        .initial_value(true)
+                        .interact()
+                        .unwrap_or(false);
                 if !start {
                     error(&format!(
                         "no dev server found (tried port {port}). Start it and run `appz share <PORT>`, or use `appz dev --share`"
@@ -1379,6 +1390,7 @@ fn run_clean(args: CleanArgs, json: bool) {
 fn main() {
     let cli = AppzCli::parse();
     let json = cli.json;
+    ASSUME_YES.store(cli.yes, std::sync::atomic::Ordering::Relaxed);
     match cli.command {
         AppzCmd::Init(a) => run_init(a, json),
         AppzCmd::Install(a) => run_install(a, json),
@@ -1515,7 +1527,7 @@ fn run_skills(args: SkillsArgs, json: bool) {
         return;
     }
 
-    let selected: Vec<skills::SkillHit> = if args.yes {
+    let selected: Vec<skills::SkillHit> = if assume_yes() {
         installable
     } else if !is_tty() {
         error("confirmation required — pass --yes to install without prompting");
@@ -1728,7 +1740,7 @@ fn run_ci(args: CiArgs, json: bool) {
     // explicit --yes, or after the user agrees at a real terminal.
     let set_secrets = if init.no_secrets {
         false
-    } else if init.yes {
+    } else if assume_yes() {
         true
     } else if is_tty() {
         cliclack::confirm("Store the deploy token(s) as GitHub repository secrets with gh?")
@@ -1793,14 +1805,14 @@ fn run_deploy(args: DeployArgs, json: bool) {
         build_env: args.build_env,
         dry_run: args.dry_run,
         json,
-        install: if args.yes {
+        install: if assume_yes() {
             deploy::Consent::Yes
         } else if !json && is_tty() {
             deploy::Consent::Ask
         } else {
             deploy::Consent::Never
         },
-        link: if args.yes {
+        link: if assume_yes() {
             deploy::Consent::Yes
         } else if !json && is_tty() {
             deploy::Consent::Ask
@@ -1810,7 +1822,7 @@ fn run_deploy(args: DeployArgs, json: bool) {
         // Login needs a browser, so it requires a real terminal even with --yes.
         login: if json || !is_tty() {
             deploy::Consent::Never
-        } else if args.yes {
+        } else if assume_yes() {
             deploy::Consent::Yes
         } else {
             deploy::Consent::Ask
@@ -2577,5 +2589,56 @@ mod tests {
         assert!(AppzCli::try_parse_from(["appz", "rollback"]).is_err());
         assert!(AppzCli::try_parse_from(["appz", "alias", "app.example.com"]).is_ok());
         assert!(AppzCli::try_parse_from(["appz", "alias"]).is_err());
+    }
+
+    #[test]
+    fn yes_is_accepted_before_and_after_any_subcommand() {
+        for args in [
+            &["appz", "-y", "share"][..],
+            &["appz", "share", "-y"],
+            &["appz", "share", "--yes", "3000"],
+            &["appz", "dev", "--share", "-y"],
+            &["appz", "--yes", "deploy"],
+            &["appz", "deploy", "-y"],
+            &["appz", "ci", "init", "-y"],
+            &["appz", "skills", "-y"],
+        ] {
+            let cli = AppzCli::try_parse_from(args).unwrap_or_else(|e| panic!("{args:?}: {e}"));
+            assert!(cli.yes, "{args:?}");
+        }
+        assert!(!AppzCli::try_parse_from(["appz", "share"]).unwrap().yes);
+    }
+
+    /// The same options in any order mean the same thing. `--pin` takes its
+    /// code only as `--pin=CODE`, so a port after a bare `--pin` stays a port.
+    #[test]
+    fn share_options_parse_the_same_in_any_order() {
+        let parse = |args: &[&str]| match AppzCli::try_parse_from(args).unwrap().command {
+            AppzCmd::Share(a) => (a.port, a.pin, a.inspect),
+            _ => panic!("not share"),
+        };
+        let want = (Some("3000".to_string()), Some("auto".to_string()), true);
+        assert_eq!(
+            parse(&["appz", "share", "3000", "--pin", "--inspect"]),
+            want
+        );
+        assert_eq!(
+            parse(&["appz", "share", "--pin", "3000", "--inspect"]),
+            want
+        );
+        assert_eq!(
+            parse(&["appz", "share", "--inspect", "--pin", "3000"]),
+            want
+        );
+        assert_eq!(
+            parse(&["appz", "-y", "share", "--inspect", "3000", "--pin"]),
+            want
+        );
+        assert_eq!(
+            parse(&["appz", "share", "--pin=8492", "3000"]).1.as_deref(),
+            Some("8492")
+        );
+        // `ci init --no-secrets` still refuses to be combined with --yes.
+        assert!(AppzCli::try_parse_from(["appz", "ci", "init", "--no-secrets", "-y"]).is_err());
     }
 }

@@ -28,7 +28,13 @@ pub struct ShareArgs {
     pub dir: PathBuf,
 
     /// Require a 4-digit PIN to access the shared URL (auto-generated if omitted, or specify custom code)
-    #[arg(long, value_name = "CODE", num_args = 0..=1, default_missing_value = "auto")]
+    #[arg(
+        long,
+        value_name = "CODE",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "auto"
+    )]
     pub pin: Option<String>,
 
     /// Require HTTP Basic Auth in format username:password
@@ -46,10 +52,6 @@ pub struct ShareArgs {
     /// Enable interactive live request and webhook inspector
     #[arg(long)]
     pub inspect: bool,
-
-    /// Install a missing tunnel backend (cloudflared, with mise) without asking
-    #[arg(short = 'y', long)]
-    pub yes: bool,
 }
 
 /// JSON output representation of a share request/session
@@ -546,7 +548,7 @@ enum End {
 /// `appz share`: open the tunnel to `port`, show the URLs, then stream
 /// requests and serve the shortcuts until the session ends.
 pub fn run_session(args: &ShareArgs, dir: &Path, port: u16, ttl: Duration) {
-    let install = if args.yes {
+    let install = if crate::assume_yes() {
         Consent::Yes
     } else if crate::is_tty() {
         Consent::Ask

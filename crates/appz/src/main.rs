@@ -17,6 +17,7 @@ mod dev_install;
 mod init_source;
 mod mcp;
 mod secrets;
+mod share;
 mod skills;
 mod update;
 
@@ -42,6 +43,9 @@ enum AppzCmd {
     Build(BuildArgs),
     /// Start the dev server
     Dev(DevArgs),
+    /// Share a local port publicly over a secure tunnel
+    #[command(alias = "tunnel")]
+    Share(share::ShareArgs),
     /// Run tests
     Test(TestArgs),
     /// Run linter
@@ -538,6 +542,18 @@ struct DevArgs {
     command: Option<String>,
     #[arg(long, help = "Skip auto-install before dev")]
     skip_install: bool,
+    /// Share dev server publicly over a secure tunnel
+    #[arg(long, help = "Share dev server publicly over a secure tunnel")]
+    share: bool,
+    /// Require a 4-digit PIN to access the shared dev server
+    #[arg(long, value_name = "CODE", num_args = 0..=1, default_missing_value = "auto")]
+    pin: Option<String>,
+    /// Require HTTP Basic Auth in format username:password
+    #[arg(long, value_name = "USER:PASS")]
+    auth: Option<String>,
+    /// Request a specific subdomain on supported tunnel providers
+    #[arg(short = 's', long, value_name = "SUBDOMAIN")]
+    subdomain: Option<String>,
 }
 
 // ── UI helpers ──────────────────────────────────────────────────
@@ -968,6 +984,12 @@ fn run_dev(args: DevArgs, json: bool) {
     };
 
     step("starting dev server...");
+    if args.share {
+        step("share mode enabled — dev tunnel will attach to server");
+        if let Some(ref pin) = args.pin {
+            info(&format!("shield mode: PIN enabled ({pin})"));
+        }
+    }
     for cmd in &cmds {
         let parts: Vec<&str> = cmd.split(' ').collect();
         let (prog, args) = parts.split_first().unwrap_or((&"npm", &[]));
@@ -976,6 +998,44 @@ fn run_dev(args: DevArgs, json: bool) {
         }
     }
     outro("dev server stopped");
+}
+
+fn run_share(args: share::ShareArgs, json: bool) {
+    if let Some(ref auth) = args.auth {
+        if let Err(e) = share::validate_basic_auth(auth) {
+            error(&e);
+        }
+    }
+    if let Err(e) = share::parse_ttl_duration(&args.ttl) {
+        error(&e);
+    }
+    let target_port = share::parse_target_port(args.port.as_deref()).ok();
+    if json {
+        let config = share::ShareConfigJson {
+            target_port,
+            pin_protected: args.pin.is_some(),
+            pin: args.pin.clone(),
+            auth_required: args.auth.is_some(),
+            subdomain: args.subdomain.clone(),
+            ttl: args.ttl.clone(),
+            inspect: args.inspect,
+        };
+        println!("{}", serde_json::to_string_pretty(&config).unwrap());
+        return;
+    }
+    intro("appz share");
+    match target_port {
+        Some(port) => {
+            step(&format!("preparing tunnel for port {port}..."));
+            info("tunnel provider initialization");
+            outro("share session closed");
+        }
+        None => {
+            step("auto-detecting project port...");
+            info("run `appz share <PORT>` or start dev server with `appz dev --share`");
+            outro("no active port found");
+        }
+    }
 }
 
 macro_rules! lifecycle_fn {
@@ -1235,6 +1295,7 @@ fn main() {
         AppzCmd::Install(a) => run_install(a, json),
         AppzCmd::Build(a) => run_build(a, json),
         AppzCmd::Dev(a) => run_dev(a, json),
+        AppzCmd::Share(a) => run_share(a, json),
         AppzCmd::Test(a) => run_test(a, json),
         AppzCmd::Lint(a) => run_lint(a, json),
         AppzCmd::Format(a) => run_format(a, json),

@@ -99,6 +99,8 @@ enum AppzCmd {
     Whoami,
     /// Store credentials in an encrypted vault used by `appz deploy`
     Env(EnvArgs),
+    /// Manage the encrypted credential vault used by `appz deploy`
+    Vault(VaultArgs),
     /// Write a GitHub Actions workflow that deploys this project
     Ci(CiArgs),
     /// Discover and install agent skills relevant to this project
@@ -167,13 +169,13 @@ enum AgentAction {
 }
 
 #[derive(Args)]
-struct EnvArgs {
+struct VaultArgs {
     #[command(subcommand)]
-    command: EnvCmd,
+    command: VaultCmd,
 }
 
 #[derive(Subcommand)]
-enum EnvCmd {
+enum VaultCmd {
     /// Store a secret (omit VALUE to be prompted, keeping it out of shell history)
     Set {
         name: String,
@@ -203,6 +205,18 @@ enum EnvCmd {
         #[arg(long)]
         global: bool,
     },
+}
+
+#[derive(Args)]
+struct EnvArgs {
+    #[command(subcommand)]
+    command: EnvCmd,
+}
+
+#[derive(Subcommand)]
+enum EnvCmd {
+    #[command(flatten)]
+    Vault(VaultCmd),
     /// Pull cloud environment variables from Cloudflare Edge into a local .env file
     Pull {
         /// Target file to write to (default: .env.local)
@@ -1428,6 +1442,7 @@ fn main() {
         AppzCmd::Logout => run_logout(json),
         AppzCmd::Whoami => run_whoami(json),
         AppzCmd::Env(a) => run_env(a, json),
+        AppzCmd::Vault(a) => run_vault_cmd(a.command, json),
         AppzCmd::Ci(a) => run_ci(a, json),
         AppzCmd::Skills(a) => run_skills(a, json),
         AppzCmd::Agents(a) => run_agents(a, json),
@@ -1585,30 +1600,32 @@ fn run_skills(args: SkillsArgs, json: bool) {
     }
 }
 
-fn run_env(args: EnvArgs, json: bool) {
-    let path =
-        |global: bool| secrets::vault_path(Path::new("."), global).unwrap_or_else(|e| error(&e));
-    match args.command {
-        EnvCmd::Set {
+fn vault_path_for(global: bool) -> PathBuf {
+    secrets::vault_path(Path::new("."), global).unwrap_or_else(|e| error(&e))
+}
+
+fn run_vault_cmd(cmd: VaultCmd, json: bool) {
+    match cmd {
+        VaultCmd::Set {
             name,
             value,
             global,
-        } => match secrets::set(&path(global), &name, value) {
+        } => match secrets::set(&vault_path_for(global), &name, value) {
             Ok(()) => success(&format!("stored {name}")),
             Err(e) => error(&e),
         },
-        EnvCmd::Ls { global } => match secrets::names(&path(global)) {
+        VaultCmd::Ls { global } => match secrets::names(&vault_path_for(global)) {
             Ok(names) if json => println!("{}", serde_json::to_string(&names).unwrap()),
             Ok(names) if names.is_empty() => info("no secrets stored"),
             Ok(names) => info(&names.join("\n")),
             Err(e) => error(&e),
         },
-        EnvCmd::Rm { name, global } => match secrets::remove(&path(global), &name) {
+        VaultCmd::Rm { name, global } => match secrets::remove(&vault_path_for(global), &name) {
             Ok(true) => success(&format!("removed {name}")),
             Ok(false) => error(&format!("{name} is not stored")),
             Err(e) => error(&e),
         },
-        EnvCmd::Unlock { global } => match secrets::unlock(&path(global)) {
+        VaultCmd::Unlock { global } => match secrets::unlock(&vault_path_for(global)) {
             Ok((_, true)) => success("vault unlocked"),
             Ok((_, false)) => warning(concat!(
                 "vault unlocked for this command only: the OS keyring is unavailable, ",
@@ -1617,10 +1634,16 @@ fn run_env(args: EnvArgs, json: bool) {
             )),
             Err(e) => error(&e),
         },
-        EnvCmd::Lock { global } => {
-            secrets::lock(&path(global));
+        VaultCmd::Lock { global } => {
+            secrets::lock(&vault_path_for(global));
             success("vault locked");
         }
+    }
+}
+
+fn run_env(args: EnvArgs, json: bool) {
+    match args.command {
+        EnvCmd::Vault(cmd) => run_vault_cmd(cmd, json),
         EnvCmd::Pull { file, target } => {
             if !json {
                 intro("appz env pull");
@@ -2722,5 +2745,30 @@ mod tests {
         );
         // `ci init --no-secrets` still refuses to be combined with --yes.
         assert!(AppzCli::try_parse_from(["appz", "ci", "init", "--no-secrets", "-y"]).is_err());
+    }
+
+    #[test]
+    fn vault_and_env_subcommands_parse_uniformly() {
+        for top in ["vault", "env"] {
+            assert!(matches!(
+                AppzCli::try_parse_from(["appz", top, "set", "VERCEL_TOKEN"])
+                    .unwrap()
+                    .command,
+                AppzCmd::Vault(_) | AppzCmd::Env(_)
+            ));
+            assert!(
+                AppzCli::try_parse_from(["appz", top, "set", "VERCEL_TOKEN", "val", "--global"])
+                    .is_ok()
+            );
+            assert!(AppzCli::try_parse_from(["appz", top, "ls", "--global"]).is_ok());
+            assert!(AppzCli::try_parse_from(["appz", top, "rm", "VERCEL_TOKEN"]).is_ok());
+            assert!(AppzCli::try_parse_from(["appz", top, "unlock", "--global"]).is_ok());
+            assert!(AppzCli::try_parse_from(["appz", top, "lock"]).is_ok());
+        }
+        assert!(AppzCli::try_parse_from(["appz", "env", "pull"]).is_ok());
+        assert!(AppzCli::try_parse_from(["appz", "env", "push"]).is_ok());
+        // Cloud .env sync stays under `appz env`, not `appz vault`.
+        assert!(AppzCli::try_parse_from(["appz", "vault", "pull"]).is_err());
+        assert!(AppzCli::try_parse_from(["appz", "vault", "push"]).is_err());
     }
 }

@@ -9,7 +9,7 @@ use hyper::upgrade::Upgraded;
 use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
 use tokio::sync::broadcast;
-use tokio_tungstenite::{tungstenite::Message, WebSocketStream};
+use tokio_tungstenite::{WebSocketStream, tungstenite::Message};
 
 pub async fn handle_websocket_upgrade(
     mut request: Request<hyper::body::Incoming>,
@@ -28,11 +28,11 @@ pub async fn handle_websocket_upgrade(
         .body(Full::new(Bytes::new()))?;
 
     let upgrade = hyper::upgrade::on(&mut request);
-  tokio::spawn(async move {
-            if let Ok(upgraded) = upgrade.await {
-                handle_websocket_connection(upgraded, change_receiver).await;
-            }
-        });
+    tokio::spawn(async move {
+        if let Ok(upgraded) = upgrade.await {
+            handle_websocket_connection(upgraded, change_receiver).await;
+        }
+    });
 
     Ok(response)
 }
@@ -85,7 +85,7 @@ async fn handle_websocket_connection(
                         format!(r#"{{"type":"reload","path":"{}"}}"#, path.display())
                     }
                 };
-                if ws_sender.send(Message::Text(message.into())).await.is_err() {
+                if ws_sender.send(Message::Text(message)).await.is_err() {
                     break;
                 }
             }

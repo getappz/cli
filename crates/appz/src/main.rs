@@ -18,9 +18,9 @@ mod init_source;
 mod mcp;
 mod secrets;
 mod share;
-mod static_serve;
 mod shield;
 mod skills;
+mod static_serve;
 mod update;
 
 // ── CLI ─────────────────────────────────────────────────────────
@@ -1027,7 +1027,11 @@ fn run_dev(args: DevArgs, json: bool) {
                 &cmds,
                 &canonical,
                 sharing,
-                appz_core::detect_dev_port(&canonical, &frameworks, cmds.first().map(String::as_str)),
+                appz_core::detect_dev_port(
+                    &canonical,
+                    &frameworks,
+                    cmds.first().map(String::as_str),
+                ),
                 static_dev_options(&cmds, args.no_reload, args.spa),
             );
             return;
@@ -1066,12 +1070,12 @@ fn run_dev(args: DevArgs, json: bool) {
     let sharing = start_dev_share(&args, &canonical, &frameworks, &cmds);
     step("starting dev server...");
     run_dev_commands(
-                &cmds,
-                &canonical,
-                sharing,
-                appz_core::detect_dev_port(&canonical, &frameworks, cmds.first().map(String::as_str)),
-                static_dev_options(&cmds, args.no_reload, args.spa),
-            );
+        &cmds,
+        &canonical,
+        sharing,
+        appz_core::detect_dev_port(&canonical, &frameworks, cmds.first().map(String::as_str)),
+        static_dev_options(&cmds, args.no_reload, args.spa),
+    );
 }
 
 /// `appz dev --share`: pick the tunnel backend now, while the terminal is
@@ -1109,15 +1113,14 @@ fn start_dev_share(
     Some(share::DevShare::start(backend, shield, args.inspect))
 }
 
-/// Run the dev commands to completion, then close the share tunnel (also
-/// when a command fails, which exits non-zero).
-
 fn static_dev_options(cmds: &[String], no_reload: bool, spa: bool) -> Option<(bool, bool)> {
     cmds.first()
         .filter(|c| static_serve::is_static_serve_command(c))
         .map(|_| (!no_reload, spa))
 }
 
+/// Run the dev commands to completion, then close the share tunnel (also
+/// when a command fails, which exits non-zero).
 fn run_dev_commands(
     cmds: &[String],
     dir: &Path,
@@ -1146,8 +1149,6 @@ fn run_dev_commands(
     outro("dev server stopped");
 }
 
-
-
 fn run_preview(args: PreviewArgs, json: bool) {
     let canonical = resolve_root(&args.dir);
     let toolchains = if args.skip_install {
@@ -1155,12 +1156,9 @@ fn run_preview(args: PreviewArgs, json: bool) {
     } else {
         do_full_install(&canonical)
     };
-    let serve_root = appz_core::resolve_preview_root(
-        &canonical,
-        &toolchains,
-        args.serve_dir.as_deref(),
-    )
-    .unwrap_or_else(|e| error(&e));
+    let serve_root =
+        appz_core::resolve_preview_root(&canonical, &toolchains, args.serve_dir.as_deref())
+            .unwrap_or_else(|e| error(&e));
 
     if json {
         json_out(&toolchains, "ok");

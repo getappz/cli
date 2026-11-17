@@ -67,12 +67,13 @@ async fn dispatch(
     let path = request.uri().path();
     let method = request.method();
 
-    if path == "/__hot_reload" && config.hot_reload {
-        if let Some(receiver) = change_receiver {
-            return handle_websocket_upgrade(request, receiver)
-                .await
-                .unwrap_or_else(|_| internal_error());
-        }
+    if path == "/__hot_reload"
+        && config.hot_reload
+        && let Some(receiver) = change_receiver
+    {
+        return handle_websocket_upgrade(request, receiver)
+            .await
+            .unwrap_or_else(|_| internal_error());
     }
 
     if *method != Method::GET && *method != Method::HEAD {
@@ -82,14 +83,9 @@ async fn dispatch(
             .unwrap_or_else(|_| internal_error());
     }
 
-    handle_static_file(
-        &config.root_dir,
-        path,
-        method,
-        config.spa_fallback,
-    )
-    .await
-    .unwrap_or_else(|_| internal_error())
+    handle_static_file(&config.root_dir, path, method, config.spa_fallback)
+        .await
+        .unwrap_or_else(|_| internal_error())
 }
 
 #[allow(dead_code)]

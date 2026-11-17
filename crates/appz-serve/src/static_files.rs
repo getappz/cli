@@ -1,7 +1,7 @@
 use crate::error::{Result, ServeError};
 use http_body_util::Full;
 use hyper::body::Bytes;
-use hyper::header::{HeaderValue, CACHE_CONTROL, CONTENT_TYPE, LOCATION};
+use hyper::header::{CACHE_CONTROL, CONTENT_TYPE, HeaderValue, LOCATION};
 use hyper::http::StatusCode;
 use hyper::{Method, Response};
 use mime_guess::from_path;
@@ -44,7 +44,7 @@ pub async fn handle_static_file(
             return respond_path(&fallback_path, method).await;
         }
 
-let index_path = path.join("index.html");
+        let index_path = path.join("index.html");
         if fs::metadata(&index_path).await.is_ok() {
             return respond_path(&index_path, method).await;
         }
@@ -83,7 +83,10 @@ async fn head_file(path: &Path) -> Result<Response<Full<Bytes>>> {
         .status(StatusCode::OK)
         .header(CONTENT_TYPE, HeaderValue::from_str(mime_type.as_ref())?)
         .header(CACHE_CONTROL, HeaderValue::from_static("no-cache"))
-        .header(hyper::header::CONTENT_LENGTH, HeaderValue::from_str(&len.to_string())?)
+        .header(
+            hyper::header::CONTENT_LENGTH,
+            HeaderValue::from_str(&len.to_string())?,
+        )
         .body(Full::new(Bytes::new()))?)
 }
 

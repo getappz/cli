@@ -7,7 +7,7 @@ mod server;
 mod static_files;
 mod watcher;
 
-pub use config::{find_available_port, ServerConfig};
+pub use config::{ServerConfig, find_available_port};
 pub use error::{Result, ServeError};
 pub use server::DevServer;
 

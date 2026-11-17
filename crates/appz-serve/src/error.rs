@@ -15,7 +15,7 @@ pub enum ServeError {
     #[error("File watcher error: {0}")]
     Notify(#[from] notify::Error),
     #[error("WebSocket error: {0}")]
-    WebSocket(#[from] tokio_tungstenite::tungstenite::Error),
+    WebSocket(#[from] Box<tokio_tungstenite::tungstenite::Error>),
     #[error("Invalid path: {0}")]
     InvalidPath(String),
     #[error("Configuration error: {0}")]

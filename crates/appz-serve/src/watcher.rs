@@ -19,11 +19,12 @@ impl FileWatcher {
         let (tx, rx) = broadcast::channel(100);
         let (watcher_tx, mut watcher_rx) = tokio::sync::mpsc::channel(100);
 
-        let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-            if let Ok(event) = res {
-                let _ = watcher_tx.try_send(event);
-            }
-        })?;
+        let mut watcher =
+            notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+                if let Ok(event) = res {
+                    let _ = watcher_tx.try_send(event);
+                }
+            })?;
 
         watcher.watch(&root_dir, notify::RecursiveMode::Recursive)?;
 
@@ -31,8 +32,7 @@ impl FileWatcher {
         let tx_clone = tx.clone();
         tokio::spawn(async move {
             let mut pending_events = Vec::new();
-            let mut debounce =
-                tokio::time::interval(tokio::time::Duration::from_millis(200));
+            let mut debounce = tokio::time::interval(tokio::time::Duration::from_millis(200));
 
             loop {
                 tokio::select! {

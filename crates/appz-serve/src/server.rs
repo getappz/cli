@@ -36,21 +36,35 @@ impl DevServer {
         let config = Arc::clone(&self.config);
         let reload_rx = self.change_receiver.as_ref().map(|r| r.resubscribe());
 
+        if let Some(mut invalidate_rx) = self.change_receiver.as_ref().map(|r| r.resubscribe()) {
+            // fire-and-forget: clear read cache when the file watcher reports changes
+            tokio::spawn(async move {
+                while invalidate_rx.recv().await.is_ok() {
+                    crate::file_cache::invalidate_all();
+                }
+            });
+        }
+
         loop {
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => break,
                 accept = listener.accept() => {
                     let (stream, _) = accept?;
+                    let _ = stream.set_nodelay(true);
                     let io = hyper_util::rt::TokioIo::new(stream);
                     let config_clone = Arc::clone(&config);
                     let change_receiver = reload_rx.as_ref().map(|r| r.resubscribe());
+                    // fire-and-forget: one task serves this connection until it closes
                     tokio::spawn(async move {
                         let service = service_fn(move |req| {
                             let cfg = Arc::clone(&config_clone);
                             let rx = change_receiver.as_ref().map(|r| r.resubscribe());
                             async move { Ok::<_, std::convert::Infallible>(dispatch(req, cfg, rx).await) }
                         });
-                        let _ = http1::Builder::new().serve_connection(io, service).await;
+                        let _ = http1::Builder::new()
+                            .keep_alive(true)
+                            .serve_connection(io, service)
+                            .await;
                     });
                 }
             }

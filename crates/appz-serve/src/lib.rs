@@ -2,6 +2,7 @@
 
 mod config;
 mod error;
+mod file_cache;
 mod reload;
 mod server;
 mod static_files;
@@ -22,3 +23,4 @@ pub fn run_blocking(config: ServerConfig) -> Result<()> {
         server.start().await
     })
 }
+

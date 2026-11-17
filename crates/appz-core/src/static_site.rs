@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use crate::detect::{CommandOverrides, DetectedToolchain};
-use crate::fs::DetectorFilesystem;
 use crate::frameworks;
+use crate::fs::DetectorFilesystem;
 
 /// Toolchain slug for root-level static HTML (no package manager manifest).
 pub const STATIC_HTML_SLUG: &str = "static-html";
@@ -40,8 +40,6 @@ pub fn looks_like_static_html(fs: &DetectorFilesystem) -> bool {
     !MANIFEST_MARKERS.iter().any(|p| fs.is_file(p))
 }
 
-
-
 /// Deploy output directory from detected toolchains (matches `appz deploy` resolution).
 pub fn primary_output_directory(toolchains: &[DetectedToolchain]) -> &'static str {
     toolchains
@@ -58,10 +56,7 @@ pub fn static_prebuild_ready(
     project: &Path,
     toolchains: &[DetectedToolchain],
 ) -> Result<Option<()>, String> {
-    if !toolchains
-        .iter()
-        .any(|tc| tc.slug == STATIC_HTML_SLUG)
-    {
+    if !toolchains.iter().any(|tc| tc.slug == STATIC_HTML_SLUG) {
         return Ok(None);
     }
     let out = project.join(primary_output_directory(toolchains));
@@ -138,11 +133,8 @@ pub fn resolve_preview_root(
         }
     }
 
-    Err(
-        "no serveable output found — run `appz build` or pass `--serve-dir <path>`".to_string(),
-    )
+    Err("no serveable output found — run `appz build` or pass `--serve-dir <path>`".to_string())
 }
-
 
 #[cfg(test)]
 mod tests {

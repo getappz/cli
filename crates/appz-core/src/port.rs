@@ -144,7 +144,6 @@ pub fn detect_dev_port(_root: &Path, framework_names: &[&str], dev_command: Opti
         return crate::static_site::STATIC_DEV_PORT;
     }
 
-
     // 3. Framework defaults
     let mut candidate_ports = Vec::new();
     for fw in framework_names {
@@ -243,11 +242,7 @@ mod tests {
     #[test]
     fn detect_dev_port_static_html_marker() {
         let temp = std::env::temp_dir();
-        let port = detect_dev_port(
-            &temp,
-            &["Static HTML"],
-            Some(crate::STATIC_SERVE_DEV_CMD),
-        );
+        let port = detect_dev_port(&temp, &["Static HTML"], Some(crate::STATIC_SERVE_DEV_CMD));
         assert_eq!(port, crate::static_site::STATIC_DEV_PORT);
     }
 }

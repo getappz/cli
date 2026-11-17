@@ -1,7 +1,7 @@
 use std::path::Path;
 
-use appz_core::{has_index_html, STATIC_SERVE_DEV_CMD};
-use appz_serve::{find_available_port, ServerConfig};
+use appz_core::{STATIC_SERVE_DEV_CMD, has_index_html};
+use appz_serve::{ServerConfig, find_available_port};
 
 pub fn is_static_serve_command(cmd: &str) -> bool {
     cmd == STATIC_SERVE_DEV_CMD
@@ -44,4 +44,3 @@ pub fn run_static_server(
     appz_serve::run_blocking(config).map_err(|e| e.to_string())?;
     Ok(port)
 }
-

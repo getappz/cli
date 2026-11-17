@@ -117,17 +117,34 @@ pub fn resolve_preview_root(
         return Ok(dir);
     }
 
+    let mut candidates: Vec<String> = Vec::new();
+    let mut push = |rel: &str| {
+        if !candidates.iter().any(|c| c == rel) {
+            candidates.push(rel.to_string());
+        }
+    };
     for tc in toolchains {
         if let Some(rel) = tc.output_directory {
-            let candidate = project.join(rel);
-            if has_index_html(&candidate) {
-                return Ok(candidate);
-            }
+            push(rel);
         }
     }
+    for rel in ["dist", "out", "public", "build"] {
+        push(rel);
+    }
+    // Plain static HTML has output `.`; preview still allows it, but only after build dirs.
+    push(".");
 
-    for rel in ["dist", "out", "public", "build", "."] {
-        let candidate = project.join(rel);
+    candidates.sort_by(|a, b| {
+        use std::cmp::Ordering;
+        match (a.as_str() == ".", b.as_str() == ".") {
+            (true, false) => Ordering::Greater,
+            (false, true) => Ordering::Less,
+            _ => Ordering::Equal,
+        }
+    });
+
+    for rel in candidates {
+        let candidate = project.join(&rel);
         if has_index_html(&candidate) {
             return Ok(candidate);
         }
@@ -180,4 +197,15 @@ mod tests {
         assert_eq!(primary_output_directory(&toolchains), ".");
         assert!(static_prebuild_ready(&dir, &toolchains).unwrap().is_some());
     }
+    #[test]
+    fn resolve_preview_root_prefers_dist_over_project_root() {
+        let dir = test_dir("preview-dist");
+        fs::write(dir.join("index.html"), "source").unwrap();
+        fs::create_dir_all(dir.join("dist")).unwrap();
+        fs::write(dir.join("dist/index.html"), "built").unwrap();
+        let toolchains = detect_toolchains(&dir).unwrap();
+        let root = resolve_preview_root(&dir, &toolchains, None).unwrap();
+        assert_eq!(root, dir.join("dist"));
+    }
+
 }

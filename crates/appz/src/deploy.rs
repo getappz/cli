@@ -305,11 +305,7 @@ pub fn run(project_dir: &Path, req: DeployRequest) -> Result<DeployOutput, Strin
     }
 
     let toolchains = appz_core::detect_toolchains(project_dir).map_err(|e| e.to_string())?;
-    let output_dir = toolchains
-        .iter()
-        .find_map(|tc| tc.output_directory)
-        .unwrap_or("dist")
-        .to_string();
+    let output_dir = appz_core::primary_output_directory(&toolchains).to_string();
     let frameworks: Vec<String> = toolchains
         .iter()
         .flat_map(|tc| tc.frameworks.iter())

@@ -37,7 +37,7 @@ const SERVER_MARKERS: [&str; 4] = ["server", "functions", "_worker.js", "_worker
 /// a plain static site (the caller falls back to `vercel pull` + `vercel build`).
 fn assemble_static_output(ctx: &DeployContext) -> Result<bool, String> {
     let src = ctx.output_path();
-    if !src.join("index.html").is_file() || SERVER_MARKERS.iter().any(|m| src.join(m).exists()) {
+    if !appz_core::has_index_html(&src) || SERVER_MARKERS.iter().any(|m| src.join(m).exists()) {
         return Ok(false);
     }
     let out = ctx.project_dir.join(".vercel").join("output");

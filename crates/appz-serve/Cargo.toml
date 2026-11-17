@@ -1,0 +1,20 @@
+[package]
+name = "appz-serve"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+description = "Local static file server for plain HTML sites (appz dev / preview)."
+
+[dependencies]
+futures-util = "0.3"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio", "server", "http1"] }
+mime_guess = "2"
+notify = "6"
+serde = { version = "1", features = ["derive"] }
+thiserror = "1"
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time", "fs", "io-util"] }
+tokio-tungstenite = "0.24"
+urlencoding = "2"

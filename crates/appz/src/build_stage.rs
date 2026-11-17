@@ -17,6 +17,10 @@ const STEP_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 pub fn run(ctx: &DeployContext) -> Result<bool, String> {
     let root = ctx.project_dir.clone();
     let toolchains = appz_core::detect_toolchains(&root)?;
+    if let Some(()) = appz_core::static_prebuild_ready(&root, &toolchains)? {
+        appz_core::write_state(&root, &toolchains)?;
+        return Ok(true);
+    }
     if !toolchains.iter().any(|tc| tc.build_command.is_some()) {
         return Ok(false);
     }

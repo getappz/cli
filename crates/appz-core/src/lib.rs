@@ -14,6 +14,7 @@ mod pkg;
 mod port;
 mod registry_cache;
 mod source;
+mod static_site;
 mod storage;
 mod tags;
 mod toolchain_registry;
@@ -39,6 +40,9 @@ pub use port::{
 };
 pub use registry_cache::{CachedPayload, load_cached};
 pub use source::{Host, InitSource, RemoteSource, archive_url, classify, parse_remote};
+pub use static_site::{
+    STATIC_DEV_PORT, STATIC_HTML_SLUG, STATIC_SERVE_DEV_CMD, has_index_html, primary_output_directory, resolve_preview_root, static_prebuild_ready,
+};
 pub use storage::{
     StateSnapshot, StoredToolchain, compute_input_hash, ensure_gitignored, inputs_unchanged,
     mise_config_path, read_latest_snapshot, read_latest_state, state_path, write_state,
@@ -49,3 +53,4 @@ pub use toolchain_registry::{
     cache_path, convert_to_framework, framework_to_spec, get_frameworks, load_frameworks_registry,
     parse_registry_toml, refresh_registry_cache,
 };
+

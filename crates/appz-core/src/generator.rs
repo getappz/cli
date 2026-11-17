@@ -75,6 +75,9 @@ fn build_tasks(toolchains: &[DetectedToolchain]) -> BTreeMap<&'static str, Gener
         let mut sources = Vec::new();
         let mut outputs = Vec::new();
         for tc in toolchains {
+        if tc.slug == crate::static_site::STATIC_HTML_SLUG {
+            continue;
+        }
             if let Some(cmd) = get_cmd(tc) {
                 run.push(cmd.clone());
                 if CACHED_KINDS.contains(name) {
@@ -119,6 +122,9 @@ fn build_tasks(toolchains: &[DetectedToolchain]) -> BTreeMap<&'static str, Gener
 fn build_groups<'a>(toolchains: &'a [DetectedToolchain]) -> BTreeMap<&'a str, GroupedEntry<'a>> {
     let mut groups: BTreeMap<&str, GroupedEntry> = BTreeMap::new();
     for tc in toolchains {
+        if tc.slug == crate::static_site::STATIC_HTML_SLUG {
+            continue;
+        }
         let entry = groups
             .entry(tc.mise_plugin)
             .or_insert_with(|| GroupedEntry {

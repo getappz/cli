@@ -447,6 +447,10 @@ pub fn detect_toolchains(root: &Path) -> Result<Vec<DetectedToolchain>, String> 
         });
     }
 
+    if detected.is_empty() && crate::static_site::looks_like_static_html(&fs) {
+        detected.push(crate::static_site::detected_static_html(&overrides));
+    }
+
     Ok(detected)
 }
 

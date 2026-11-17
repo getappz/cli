@@ -12,6 +12,7 @@ unused-ignored-advisory = "warn"
 ignore = [
     "RUSTSEC-2026-0457", # rmcp: OAuth client SSRF (unused; appz uses stdio transport)
     "RUSTSEC-2026-0462", # rmcp: Unbounded body buffering (unused; appz uses stdio transport)
+    "RUSTSEC-2026-0543", # chrono unmaintained; no drop-in upgrade yet (time/jiff migration tracked separately)
 ]
 
 [licenses]

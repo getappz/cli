@@ -24,7 +24,94 @@ const DEFAULT_IGNORES: &[&str] = &[
     "node_modules",
     ".DS_Store",
     "Thumbs.db",
+    ".appzignore",
+    ".vercelignore",
 ];
+
+/// Hidden directories that must be served (ACME challenges, security.txt, ...).
+const HIDDEN_DIR_ALLOWLIST: &[&str] = &[".well-known"];
+
+/// One line of an `.appzignore` / `.vercelignore` file (gitignore-style).
+struct IgnoreRule {
+    pattern: glob::Pattern,
+    negated: bool,
+    dir_only: bool,
+    /// Contains a `/`: matched against the whole path from the scan root
+    /// instead of against single path components.
+    anchored: bool,
+}
+
+/// User ignore rules read from the scan root: `.appzignore`, else `.vercelignore`.
+#[derive(Default)]
+struct IgnoreRules(Vec<IgnoreRule>);
+
+impl IgnoreRules {
+    fn load(root: &Path) -> Self {
+        let text = [".appzignore", ".vercelignore"]
+            .iter()
+            .find_map(|name| std::fs::read_to_string(root.join(name)).ok())
+            .unwrap_or_default();
+        Self::parse(&text)
+    }
+
+    fn parse(text: &str) -> Self {
+        let rules = text
+            .lines()
+            .filter_map(|line| {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') {
+                    return None;
+                }
+                let (negated, line) = match line.strip_prefix('!') {
+                    Some(rest) => (true, rest),
+                    None => (false, line),
+                };
+                let (dir_only, line) = match line.strip_suffix('/') {
+                    Some(rest) => (true, rest),
+                    None => (false, line),
+                };
+                let anchored = line.contains('/');
+                let line = line.trim_start_matches('/');
+                let pattern = glob::Pattern::new(line).ok()?;
+                Some(IgnoreRule {
+                    pattern,
+                    negated,
+                    dir_only,
+                    anchored,
+                })
+            })
+            .collect();
+        Self(rules)
+    }
+
+    /// `Some(true)` = ignore, `Some(false)` = explicitly kept (negation),
+    /// `None` = no rule matched. The last matching rule wins, as in gitignore.
+    fn decide(&self, rel: &str) -> Option<bool> {
+        let parts: Vec<&str> = rel.split(['/', '\\']).filter(|p| !p.is_empty()).collect();
+        let opts = glob::MatchOptions {
+            require_literal_separator: true,
+            ..Default::default()
+        };
+        let mut decision = None;
+        for rule in &self.0 {
+            let hit = (1..=parts.len()).any(|n| {
+                let is_dir = n < parts.len();
+                if rule.dir_only && !is_dir {
+                    return false;
+                }
+                if rule.anchored {
+                    rule.pattern.matches_with(&parts[..n].join("/"), opts)
+                } else {
+                    rule.pattern.matches_with(parts[n - 1], opts)
+                }
+            });
+            if hit {
+                decision = Some(!rule.negated);
+            }
+        }
+        decision
+    }
+}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ScannedFileEntry {
@@ -157,12 +244,20 @@ fn has_content_hash(path: &str) -> bool {
     })
 }
 
-/// Whether any path component is one of the ignored names. Whole components
-/// only: a substring match would also drop `.github/`, `.gitbook/` or
-/// `app.cache.js` from the deploy.
-fn is_ignored(rel: &str) -> bool {
-    rel.split(['/', '\\'])
-        .any(|part| DEFAULT_IGNORES.contains(&part))
+/// Whether a file is left out of the deploy. The user's ignore file is checked
+/// first (a `!negation` there overrides the defaults); then the built-in names
+/// and hidden directories (except `.well-known`). Whole components only: a
+/// substring match would also drop `app.cache.js`.
+fn is_ignored(rel: &str, rules: &IgnoreRules) -> bool {
+    if let Some(decision) = rules.decide(rel) {
+        return decision;
+    }
+    let parts: Vec<&str> = rel.split(['/', '\\']).collect();
+    let last = parts.len() - 1;
+    parts.iter().enumerate().any(|(i, part)| {
+        DEFAULT_IGNORES.contains(part)
+            || (i < last && part.starts_with('.') && !HIDDEN_DIR_ALLOWLIST.contains(part))
+    })
 }
 
 /// SHA-256 of a file, streamed with a 64KB buffer to minimize syscall overhead.
@@ -213,6 +308,7 @@ pub fn scan_output_dir(output_dir: &Path) -> Result<ScannedTree, String> {
     }
 
     let mut candidates = Vec::new();
+    let rules = IgnoreRules::load(output_dir);
 
     for entry in WalkDir::new(output_dir)
         .follow_links(false)
@@ -230,7 +326,7 @@ pub fn scan_output_dir(output_dir: &Path) -> Result<ScannedTree, String> {
         };
 
         let rel_lossy = rel.to_string_lossy();
-        if is_ignored(&rel_lossy) {
+        if is_ignored(&rel_lossy, &rules) {
             continue;
         }
 
@@ -242,7 +338,8 @@ pub fn scan_output_dir(output_dir: &Path) -> Result<ScannedTree, String> {
         let size = metadata.len() as usize;
         if size > MAX_FILE_SIZE {
             return Err(format!(
-                "File '{}' exceeds maximum allowed size of 25 MB (size: {} bytes)",
+                "File '{}' exceeds maximum allowed size of 25 MB (size: {} bytes). \
+                 Add it to .appzignore to leave it out of the deploy",
                 norm_path, size
             ));
         }
@@ -438,13 +535,60 @@ mod tests {
 
     #[test]
     fn ignores_whole_path_components_only() {
-        assert!(is_ignored(".git/config"));
-        assert!(is_ignored("sub\\node_modules\\x.js"));
-        assert!(is_ignored(".DS_Store"));
-        assert!(!is_ignored(".gitbook/assets/a.png"));
-        assert!(!is_ignored(".github/workflows/x.yml"));
-        assert!(!is_ignored("js/app.cache.js"));
-        assert!(!is_ignored("blog/next-steps.html"));
+        let none = IgnoreRules::default();
+        assert!(is_ignored(".git/config", &none));
+        assert!(is_ignored("sub\\node_modules\\x.js", &none));
+        assert!(is_ignored(".DS_Store", &none));
+        assert!(is_ignored(".gitbook/assets/a.png", &none));
+        assert!(is_ignored(".github/workflows/x.yml", &none));
+        assert!(is_ignored(".backups/site.zip", &none));
+        assert!(!is_ignored("js/app.cache.js", &none));
+        assert!(!is_ignored("blog/next-steps.html", &none));
+        // Hidden files (not directories) are still uploaded.
+        assert!(!is_ignored(".nojekyll", &none));
+        assert!(is_ignored(".appzignore", &none));
+        assert!(is_ignored(".vercelignore", &none));
+    }
+
+    #[test]
+    fn well_known_is_kept() {
+        assert!(!is_ignored(
+            ".well-known/security.txt",
+            &IgnoreRules::default()
+        ));
+    }
+
+    #[test]
+    fn negation_overrides_hidden_default() {
+        let rules = IgnoreRules::parse("# c\n!.hallmark\n*.log\ndrafts/\n/private/*.md\n");
+        assert!(!is_ignored(".hallmark/a.json", &rules));
+        assert!(is_ignored("x/debug.log", &rules));
+        assert!(is_ignored("drafts/a.html", &rules));
+        assert!(!is_ignored("drafts", &rules));
+        assert!(is_ignored("private/a.md", &rules));
+        assert!(!is_ignored("other/private/a.md", &rules));
+        assert!(is_ignored(".wrangler/x", &rules));
+    }
+
+    #[test]
+    fn appzignore_falls_back_to_vercelignore() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("index.html"), "hi").unwrap();
+        std::fs::write(dir.path().join("secret.txt"), "x").unwrap();
+        std::fs::write(dir.path().join(".vercelignore"), "secret.txt\n").unwrap();
+        let paths = |d: &Path| -> Vec<String> {
+            scan_output_dir(d)
+                .unwrap()
+                .files
+                .into_iter()
+                .map(|f| f.path)
+                .collect()
+        };
+        assert_eq!(paths(dir.path()), vec!["/index.html"]);
+
+        // .appzignore wins over .vercelignore.
+        std::fs::write(dir.path().join(".appzignore"), "index.html\n").unwrap();
+        assert_eq!(paths(dir.path()), vec!["/secret.txt"]);
     }
 
     #[test]
@@ -465,5 +609,6 @@ mod tests {
         let err = scan_output_dir(dir.path()).unwrap_err();
         assert!(err.contains("exceeds maximum allowed size of 25 MB"));
         assert!(err.contains("/large.bin"));
+        assert!(err.contains(".appzignore"));
     }
 }

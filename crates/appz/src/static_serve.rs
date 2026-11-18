@@ -44,3 +44,12 @@ pub fn run_static_server(
     appz_serve::run_blocking(config).map_err(|e| e.to_string())?;
     Ok(port)
 }
+
+/// Serve built output only — no file watcher or hot-reload WebSocket (`appz preview`).
+pub fn run_preview_server(
+    root: &Path,
+    preferred_port: u16,
+    spa_fallback: bool,
+) -> Result<u16, String> {
+    run_static_server(root, preferred_port, false, spa_fallback)
+}

@@ -36,7 +36,8 @@ impl FileWatcher {
 
             loop {
                 tokio::select! {
-                    Some(event) = watcher_rx.recv() => {
+                    event = watcher_rx.recv() => {
+                        let Some(event) = event else { break };
                         if should_ignore(&event, &root_for_task) {
                             continue;
                         }
@@ -58,6 +59,9 @@ impl FileWatcher {
                         }
                     }
                     _ = debounce.tick() => {
+                        if !pending_events.is_empty() {
+                            crate::file_cache::invalidate_all();
+                        }
                         for event in pending_events.drain(..) {
                             let _ = tx_clone.send(event);
                         }

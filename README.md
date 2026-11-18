@@ -53,12 +53,17 @@ Store its password with `appz vault set APPZ_BACKUP_PASSWORD` and run
 `appz vault unlock` before backing up, or set `APPZ_BACKUP_PASSWORD` for
 unattended runs. Run `appz backup` to create a snapshot and `appz backup list`
 to see snapshots. Run `appz backup prune` to apply retention to the entire repository.
+Rustic is lock-free. Run retention when no other process is backing up to or
+maintaining that repository.
 
 Restore into an empty directory with `appz backup restore latest <destination>`.
 The `worktree/` directory contains selected files at their project-relative paths.
-For a Git project, start with a checkout of the pushed history. If the backup
-includes local commits, locate `git/<digest>/local-commits.bundle` under the
-destination. From the checkout, verify the bundle and fetch its HEAD into a new branch.
+If the backup includes local commits, locate `git/<digest>/local-commits.bundle`
+under the destination. For a project with pushed history, clone the original
+repository and enter that checkout. For a project that was never pushed, create
+an empty checkout with `git init recovered-project` and enter it with
+`cd recovered-project`. From the checkout, verify the bundle and fetch its HEAD
+into a new branch.
 
 ```sh
 git bundle verify <absolute-path-to-bundle>
@@ -69,9 +74,11 @@ git switch recovered
 The bundle requires any pushed base commits listed by `git bundle verify`.
 If those commits are lost, the incremental bundle alone cannot rebuild the history.
 Working-tree environment files are excluded, but a bundle includes whatever
-was committed. Copy restored working files into the checkout. If a staged file
-differed from the working copy, its staged bytes are separately available at
-`git/index/<blob-id>/<project-relative-path>`.
+was committed. Copy restored working files into the checkout. For each changed
+stage-zero blob, `git/index/<blob-id>/<project-relative-path>` holds the staged
+bytes, even when they match the working copy. For a staged Git submodule entry
+(gitlink), `git/gitlinks/<commit-id>/<project-relative-path>` contains the
+submodule commit ID on a single line.
 
 ## Install
 

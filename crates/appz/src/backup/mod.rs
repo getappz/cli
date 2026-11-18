@@ -134,14 +134,25 @@ fn path_arg(path: &Path) -> Result<&str> {
 
 // Local repositories must be disjoint from the source, including through symlinks.
 fn repository_location(root: &Path, repo: &str) -> Result<String> {
-    let local = if let Some(path) = repo.strip_prefix("local:") {
-        path
-    } else if !Path::new(repo).is_absolute() && repo.split_once(':').is_some() {
+    let explicit_local = repo.strip_prefix("local:");
+    let local = Path::new(explicit_local.unwrap_or(repo));
+    if !local.is_absolute()
+        && matches!(
+            local.components().next(),
+            Some(std::path::Component::Prefix(_))
+        )
+    {
+        return Err("drive-relative backup repository path: use an absolute path with a drive and directory".into());
+    }
+    if explicit_local.is_none()
+        && !local.is_absolute()
+        && repo
+            .split_once(':')
+            .is_some_and(|(backend, _)| !backend.contains(std::path::is_separator))
+    {
         return Ok(repo.to_string());
-    } else {
-        repo
-    };
-    if local.is_empty() {
+    }
+    if local.as_os_str().is_empty() {
         return Err("empty local backup repository path".into());
     }
     let mut path = PathBuf::new();
@@ -164,7 +175,11 @@ fn repository_location(root: &Path, repo: &str) -> Result<String> {
     if path.starts_with(root) || root.starts_with(&path) {
         return Err("choose a dedicated backup repository outside the project".into());
     }
-    Ok(path_arg(&path)?.to_owned())
+    let path = path_arg(&path)?;
+    if cfg!(unix) && path.contains(':') {
+        return Ok(format!("local:{path}"));
+    }
+    Ok(path.to_owned())
 }
 
 fn create(cli: &impl Rustic, root: &Path, json_output: bool) -> Result<()> {
@@ -526,5 +541,37 @@ mod tests {
         }
         stage_file(&source, Path::new("src/file"), &target).unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), b"contents");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn drive_relative_repository_requires_an_absolute_path() {
+        let project = tempfile::tempdir().unwrap();
+        let root = appz_core::canonicalize(project.path()).unwrap();
+        for repo in ["C:backup", "C:", "local:C:backup"] {
+            let err = repository_location(&root, repo).unwrap_err();
+            assert!(err.to_string().contains("drive-relative"), "{repo}: {err}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn colon_in_local_repository_retains_local_backend() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let root = appz_core::canonicalize(&project).unwrap();
+        let repo = root.parent().unwrap().join("backup:archive");
+        for arg in [
+            "local:../backup:archive",
+            "../backup:archive",
+            repo.to_str().unwrap(),
+        ] {
+            assert_eq!(
+                repository_location(&root, arg).unwrap(),
+                format!("local:{}", repo.display())
+            );
+        }
+        assert!(repository_location(&root, "local:./backup:archive").is_err());
     }
 }

@@ -357,8 +357,10 @@ pub fn detect_toolchains(root: &Path) -> Result<Vec<DetectedToolchain>, String> 
                 .or_else(|| tc.commands.build.map(String::from));
             let install_cmd = over.install_command.clone().or_else(|| {
                 tc.commands.install.map(|cmd| {
-                    let cmd = match (tc.mise_plugin, cmd, package_manager) {
-                        ("node", "npm install" | "yarn install", Some(pm)) => pm_install_cmd(pm),
+                    // Any JS toolchain (node, turbo, ...) whose registry default is
+                    // npm/yarn follows the project's lockfile instead.
+                    let cmd = match (cmd, package_manager) {
+                        ("npm install" | "yarn install", Some(pm)) => pm_install_cmd(pm),
                         _ => cmd,
                     };
                     cmd.to_string()
@@ -714,5 +716,25 @@ mod tests {
         let frames = crate::frameworks::scan_cargo(content);
         assert!(frames.iter().any(|f| f.name == "Leptos"));
         assert!(frames.iter().any(|f| f.name == "SQLx"));
+    }
+
+    #[test]
+    fn test_install_command_follows_lockfile_for_turbo() {
+        let dir = test_dir("turbo-bun");
+        fs::write(
+            dir.join("package.json"),
+            r#"{"packageManager":"bun@1.3.12"}"#,
+        )
+        .unwrap();
+        fs::write(dir.join("bun.lock"), "").unwrap();
+        fs::write(dir.join("turbo.json"), "{}").unwrap();
+
+        let result = detect_toolchains(&dir).unwrap();
+        let installs: Vec<&str> = result
+            .iter()
+            .filter_map(|t| t.install_command.as_deref())
+            .collect();
+        assert!(!installs.is_empty(), "expected an install command");
+        assert!(installs.iter().all(|c| *c == "bun install"), "{installs:?}");
     }
 }

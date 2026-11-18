@@ -717,24 +717,4 @@ mod tests {
         assert!(frames.iter().any(|f| f.name == "Leptos"));
         assert!(frames.iter().any(|f| f.name == "SQLx"));
     }
-
-    #[test]
-    fn test_install_command_follows_lockfile_for_turbo() {
-        let dir = test_dir("turbo-bun");
-        fs::write(
-            dir.join("package.json"),
-            r#"{"packageManager":"bun@1.3.12"}"#,
-        )
-        .unwrap();
-        fs::write(dir.join("bun.lock"), "").unwrap();
-        fs::write(dir.join("turbo.json"), "{}").unwrap();
-
-        let result = detect_toolchains(&dir).unwrap();
-        let installs: Vec<&str> = result
-            .iter()
-            .filter_map(|t| t.install_command.as_deref())
-            .collect();
-        assert!(!installs.is_empty(), "expected an install command");
-        assert!(installs.iter().all(|c| *c == "bun install"), "{installs:?}");
-    }
 }

@@ -357,8 +357,10 @@ pub fn detect_toolchains(root: &Path) -> Result<Vec<DetectedToolchain>, String> 
                 .or_else(|| tc.commands.build.map(String::from));
             let install_cmd = over.install_command.clone().or_else(|| {
                 tc.commands.install.map(|cmd| {
-                    let cmd = match (tc.mise_plugin, cmd, package_manager) {
-                        ("node", "npm install" | "yarn install", Some(pm)) => pm_install_cmd(pm),
+                    // Any JS toolchain (node, turbo, ...) whose registry default is
+                    // npm/yarn follows the project's lockfile instead.
+                    let cmd = match (cmd, package_manager) {
+                        ("npm install" | "yarn install", Some(pm)) => pm_install_cmd(pm),
                         _ => cmd,
                     };
                     cmd.to_string()

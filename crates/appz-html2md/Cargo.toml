@@ -12,7 +12,13 @@ crate-type = ["rlib", "cdylib"]
 
 [dependencies]
 mdream = { version = "2.1.0", default-features = false, features = ["markdown", "text"] }
-url = "2"
+url = { version = "2", optional = true }
+
+[features]
+default = ["url"]
+# `url` gives the native `convert(&Url)` entry point; the wasm build drops it
+# (idna/ICU tables cost ~60 KB gz) and uses `convert_str`.
+url = ["dep:url"]
 
 [lints.rust]
 unsafe_code = "warn"

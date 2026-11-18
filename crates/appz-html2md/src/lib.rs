@@ -18,7 +18,6 @@ use mdream::{
     CleanConfig, FilterConfig, FrontmatterConfig, HtmlToMarkdownOptions, IsolateMainConfig,
     PluginConfig, TailwindConfig, html_to_markdown, html_to_text,
 };
-use url::Url;
 
 /// Largest HTML input accepted (2 MiB).
 pub const MAX_HTML_BYTES: usize = 2 * 1024 * 1024;
@@ -55,7 +54,13 @@ pub fn estimate_tokens(s: &str) -> usize {
 }
 
 /// Convert `html` (fetched from `origin`) to Markdown.
-pub fn convert(html: &[u8], origin: &Url) -> Result<Converted, ConvertError> {
+#[cfg(feature = "url")]
+pub fn convert(html: &[u8], origin: &url::Url) -> Result<Converted, ConvertError> {
+    convert_str(html, origin.as_str())
+}
+
+/// [`convert`] with the page URL as an absolute-URL string.
+pub fn convert_str(html: &[u8], origin: &str) -> Result<Converted, ConvertError> {
     if html.len() > MAX_HTML_BYTES {
         return Err(ConvertError::TooLarge);
     }
@@ -90,7 +95,7 @@ pub fn convert(html: &[u8], origin: &Url) -> Result<Converted, ConvertError> {
 
 /// The minimal preset alone, without the safety net. Test support.
 #[doc(hidden)]
-pub fn convert_minimal_only(html: &str, origin: &Url) -> String {
+pub fn convert_minimal_only(html: &str, origin: &str) -> String {
     run(html, origin, Variant::Minimal)
 }
 
@@ -100,13 +105,13 @@ enum Variant {
     FilterOnly,
 }
 
-fn run(html: &str, origin: &Url, variant: Variant) -> String {
+fn run(html: &str, origin: &str, variant: Variant) -> String {
     let exclude: &[&str] = match variant {
         Variant::Minimal => &["nav", "footer", "form"],
         Variant::FilterOnly => &["nav", "footer", "form", "aside", "header"],
     };
     let options = HtmlToMarkdownOptions {
-        origin: Some(origin.as_str().to_owned()),
+        origin: Some(origin.to_owned()),
         clean: Some(CleanConfig::all()),
         plugins: Some(PluginConfig {
             frontmatter: Some(FrontmatterConfig::default()),

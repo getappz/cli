@@ -2,7 +2,7 @@
 //! images, heading/sup tags inside link text, and a front matter block in
 //! Cloudflare's layout (`title`, `description`, `image`) with JSON-LD appended.
 
-use url::Url;
+use mdream::{HtmlToMarkdownOptions, html_to_markdown};
 
 /// Repairs on mdream's raw Markdown (front matter untouched).
 pub fn apply(md: String) -> String {
@@ -109,7 +109,7 @@ pub fn strip_front_matter(md: &str) -> &str {
 
 /// Swap mdream's front matter for `title` / `description` / `image` built from
 /// the page's meta tags (`name=` beats `og:`), then append JSON-LD blocks.
-pub fn finish(md: String, html: &str, origin: &Url) -> String {
+pub fn finish(md: String, html: &str, origin: &str) -> String {
     let title = front_matter_title(&md).map(str::to_owned);
     let body = strip_front_matter(&md).trim_start_matches('\n');
     let metas = meta_tags(html);
@@ -127,10 +127,7 @@ pub fn finish(md: String, html: &str, origin: &Url) -> String {
         fm.push_str(&format!("description: {}\n", yaml_quote(d)));
     }
     if let Some(i) = pick(&["image", "twitter:image", "og:image"]) {
-        let abs = origin
-            .join(i)
-            .map(|u| u.to_string())
-            .unwrap_or_else(|_| i.to_owned());
+        let abs = resolve(i, origin);
         fm.push_str(&format!("image: {}\n", yaml_quote(&abs)));
     }
 
@@ -148,6 +145,16 @@ pub fn finish(md: String, html: &str, origin: &Url) -> String {
         out.push_str("\n```\n");
     }
     out
+}
+
+/// Resolve `href` against `origin` with mdream's own resolver, so image URLs
+/// match the links in the body (and the wasm build needs no URL crate).
+fn resolve(href: &str, origin: &str) -> String {
+    let probe = format!("<a href=\"{}\">x</a>", href.replace('"', "&quot;"));
+    let md = html_to_markdown(&probe, HtmlToMarkdownOptions::default().with_origin(origin));
+    md.strip_prefix("[x](")
+        .and_then(|r| r.trim_end().strip_suffix(')'))
+        .map_or_else(|| href.to_owned(), str::to_owned)
 }
 
 fn front_matter_title(md: &str) -> Option<&str> {

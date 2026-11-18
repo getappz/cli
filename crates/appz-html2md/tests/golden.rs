@@ -24,7 +24,7 @@ fn landing_falls_back_when_isolate_truncates() {
     let got = convert(&html, &origin()).unwrap();
     assert_eq!(got.mode, Mode::Fallback);
     // forced-minimal output is just the banner
-    let forced = appz_html2md::convert_minimal_only(std::str::from_utf8(&html).unwrap(), &origin());
+    let forced = appz_html2md::convert_minimal_only(std::str::from_utf8(&html).unwrap(), origin().as_str());
     assert!(got.tokens > 4 * estimate_tokens(&forced), "{} vs {}", got.tokens, forced.len());
     assert!(got.markdown.contains("Feature 40"));
     assert!(!got.markdown.contains("Footer links"));

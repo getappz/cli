@@ -283,9 +283,10 @@ impl ProjectDomain {
         }
         let domain = self.domain.trim_end_matches('.');
         Some(format!(
-            "If {domain} is a subdomain, set its CNAME to cname.appz.to.\n\
+            "If {domain} is below your DNS zone apex, set its CNAME to cname.appz.to.\n\
              If {domain} is your DNS zone apex, add www.{domain} to this project, set its CNAME to \
-             cname.appz.to, and verify it before configuring an HTTPS redirect from {domain} to https://www.{domain}."
+             cname.appz.to, and verify it. Point {domain} to your redirect service using the DNS \
+             records it provides, enable TLS for {domain} there, and redirect to https://www.{domain}"
         ))
     }
 }
@@ -327,13 +328,13 @@ mod dns_hint_tests {
             }))
             .unwrap();
             let hint = dom.dns_setup_hint().unwrap();
-            assert!(
-                hint.contains("If example.co.uk is a subdomain, set its CNAME to cname.appz.to")
-            );
+            assert!(hint.contains(
+                "If example.co.uk is below your DNS zone apex, set its CNAME to cname.appz.to"
+            ));
             assert!(hint.contains("add www.example.co.uk to this project"));
-            assert!(
-                hint.contains("HTTPS redirect from example.co.uk to https://www.example.co.uk.")
-            );
+            assert!(hint.contains("Point example.co.uk to your redirect service"));
+            assert!(hint.contains("enable TLS for example.co.uk there"));
+            assert!(hint.ends_with("redirect to https://www.example.co.uk"));
         }
     }
 }

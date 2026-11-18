@@ -56,7 +56,9 @@ pub fn static_prebuild_ready(
     project: &Path,
     toolchains: &[DetectedToolchain],
 ) -> Result<Option<()>, String> {
-    if !toolchains.iter().any(|tc| tc.slug == STATIC_HTML_SLUG) {
+    if !toolchains.iter().any(|tc| tc.slug == STATIC_HTML_SLUG)
+        || toolchains.iter().any(|tc| tc.build_command.is_some())
+    {
         return Ok(None);
     }
     let out = project.join(primary_output_directory(toolchains));
@@ -117,16 +119,12 @@ pub fn resolve_preview_root(
         return Ok(dir);
     }
 
-    for tc in toolchains {
-        if let Some(rel) = tc.output_directory {
-            let candidate = project.join(rel);
-            if has_index_html(&candidate) {
-                return Ok(candidate);
-            }
-        }
-    }
-
-    for rel in ["dist", "out", "public", "build", "."] {
+    for rel in toolchains
+        .iter()
+        .filter_map(|tc| tc.output_directory)
+        .filter(|&rel| rel != ".")
+        .chain(["dist", "out", "public", "build", "."])
+    {
         let candidate = project.join(rel);
         if has_index_html(&candidate) {
             return Ok(candidate);
@@ -179,5 +177,27 @@ mod tests {
         let toolchains = detect_toolchains(&dir).unwrap();
         assert_eq!(primary_output_directory(&toolchains), ".");
         assert!(static_prebuild_ready(&dir, &toolchains).unwrap().is_some());
+    }
+    #[test]
+    fn configured_static_build_runs_even_with_an_index() {
+        let dir = test_dir("preview-build");
+        fs::write(dir.join("index.html"), "source").unwrap();
+        let mut toolchains = detect_toolchains(&dir).unwrap();
+        toolchains[0].build_command = Some("generate".into());
+        assert_eq!(static_prebuild_ready(&dir, &toolchains), Ok(None));
+        let config = crate::generator::generate_merged(None, &toolchains).unwrap();
+        assert!(config.contains("[tasks.build]"));
+        assert!(config.contains("run = \"generate\""));
+        assert!(!config.contains(STATIC_SERVE_DEV_CMD));
+    }
+    #[test]
+    fn resolve_preview_root_prefers_dist_over_project_root() {
+        let dir = test_dir("preview-dist");
+        fs::write(dir.join("index.html"), "source").unwrap();
+        fs::create_dir_all(dir.join("dist")).unwrap();
+        fs::write(dir.join("dist/index.html"), "built").unwrap();
+        let toolchains = detect_toolchains(&dir).unwrap();
+        let root = resolve_preview_root(&dir, &toolchains, None).unwrap();
+        assert_eq!(root, dir.join("dist"));
     }
 }

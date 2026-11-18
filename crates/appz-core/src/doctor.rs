@@ -16,24 +16,10 @@ pub struct DoctorReport {
     pub suggestions: Vec<String>,
 }
 
-fn detect_package_manager(root: &Path) -> Option<&'static str> {
-    if root.join("pnpm-lock.yaml").exists() {
-        Some("pnpm")
-    } else if root.join("yarn.lock").exists() {
-        Some("yarn")
-    } else if root.join("bun.lockb").exists() || root.join("bun.lock").exists() {
-        Some("bun")
-    } else if root.join("package-lock.json").exists() {
-        Some("npm")
-    } else {
-        None
-    }
-}
-
 pub fn run_doctor(root: &Path) -> DoctorReport {
     let toolchains = detect_toolchains(root).unwrap_or_default();
     let monorepo = detect_monorepo(root);
-    let pm = detect_package_manager(root).map(|s| s.to_string());
+    let pm = detect::detect_package_manager(root).map(|s| s.to_string());
 
     let mut suggestions: Vec<String> = Vec::new();
 

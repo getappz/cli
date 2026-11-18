@@ -767,20 +767,6 @@ fn run_cmd(program: &str, args: &[&str], dir: &std::path::Path) -> bool {
     }
 }
 
-fn detect_package_manager(root: &Path) -> Option<&'static str> {
-    if root.join("pnpm-lock.yaml").exists() {
-        Some("pnpm")
-    } else if root.join("yarn.lock").exists() {
-        Some("yarn")
-    } else if root.join("bun.lockb").exists() || root.join("bun.lock").exists() {
-        Some("bun")
-    } else if root.join("package-lock.json").exists() {
-        Some("npm")
-    } else {
-        None
-    }
-}
-
 fn do_detect_and_write(root: &Path) -> Vec<appz_core::DetectedToolchain> {
     let toolchains = with_spinner("detecting toolchains...", "toolchains detected", || {
         let tc =
@@ -813,18 +799,18 @@ fn do_detect_and_write(root: &Path) -> Vec<appz_core::DetectedToolchain> {
     toolchains
 }
 
-fn do_mise_install(root: &Path) {
+fn do_mise_install(root: &Path) -> bool {
     if let Err(e) = appz_core::ensure_mise(root) {
         warning(&e);
-        return;
+        return false;
     }
     if let Err(e) = appz_core::trust(root) {
         warning(&format!("mise trust: {e}"));
     }
 
     with_spinner("installing mise tools...", "mise tools ready", || {
-        run_cmd("mise", &["install"], root);
-    });
+        run_cmd("mise", &["install"], root)
+    })
 }
 
 fn do_pm_install(root: &Path, toolchains: &[appz_core::DetectedToolchain]) {
@@ -832,7 +818,7 @@ fn do_pm_install(root: &Path, toolchains: &[appz_core::DetectedToolchain]) {
     let has_rust = toolchains.iter().any(|t| t.slug == "rust");
 
     if has_node {
-        let pm = detect_package_manager(root).unwrap_or("npm");
+        let pm = appz_core::detect_package_manager(root).unwrap_or("npm");
         let cmd = appz_core::pm_install_cmd(pm);
         let parts: Vec<&str> = cmd.split(' ').collect();
         let (prog, args) = parts.split_first().unwrap_or((&"npm", &[]));
@@ -846,22 +832,50 @@ fn do_pm_install(root: &Path, toolchains: &[appz_core::DetectedToolchain]) {
 /// Like `do_pm_install` but through mise's cached `install` task, so an
 /// unchanged lockfile/manifest is not reinstalled on every run.
 fn do_cached_pm_install(root: &Path, toolchains: &[appz_core::DetectedToolchain]) {
-    if toolchains.iter().any(|t| t.install_command.is_some()) {
-        // The task cache can survive a deleted dependency directory.
-        let args: &[&str] = if toolchains
-            .iter()
-            .any(|t| t.slug == "node" && t.install_command.is_some())
-            && !root.join("node_modules").is_dir()
-            && !root.join(".pnp.cjs").is_file()
-            && !root.join(".pnp.js").is_file()
-        {
-            &["run", "--force", "install"]
-        } else {
-            &["run", "install"]
-        };
-        run_cmd("mise", args, root);
-    } else {
+    let mise_ready = do_mise_install(root);
+    install_dependencies(root, toolchains, mise_ready);
+}
+
+fn install_dependencies(
+    root: &Path,
+    toolchains: &[appz_core::DetectedToolchain],
+    mise_ready: bool,
+) {
+    let has_task = toolchains
+        .iter()
+        .any(|t| t.slug != appz_core::STATIC_HTML_SLUG && t.install_command.is_some());
+    if !has_task {
         do_pm_install(root, toolchains);
+    } else if mise_ready {
+        run_cmd("mise", cached_install_args(root, toolchains), root);
+    } else {
+        let mut seen = std::collections::HashSet::new();
+        for cmd in toolchains
+            .iter()
+            .filter_map(|t| t.install_command.as_deref())
+        {
+            if seen.insert(cmd) {
+                run_cmd(cmd, &[], root);
+            }
+        }
+    }
+}
+
+fn cached_install_args(
+    root: &Path,
+    toolchains: &[appz_core::DetectedToolchain],
+) -> &'static [&'static str] {
+    // The task cache can survive a deleted dependency directory.
+    if toolchains
+        .iter()
+        .any(|t| t.mise_plugin == "node" && t.install_command.is_some())
+        && !root.join("node_modules").is_dir()
+        && !root.join(".pnp.cjs").is_file()
+        && !root.join(".pnp.js").is_file()
+    {
+        &["run", "--force", "install"]
+    } else {
+        &["run", "install"]
     }
 }
 
@@ -947,7 +961,6 @@ fn run_build(args: BuildArgs, json: bool) {
         let canonical = resolve_root(&args.dir);
         let toolchains = do_detect_and_write(&canonical);
         if !args.skip_install {
-            do_mise_install(&canonical);
             do_cached_pm_install(&canonical, &toolchains);
         }
         json_out(&toolchains, "ok");
@@ -962,7 +975,6 @@ fn run_build(args: BuildArgs, json: bool) {
     // that anymore (see `appz_core::generator::generate_merged`).
     let toolchains = do_detect_and_write(&canonical);
     if !args.skip_install {
-        do_mise_install(&canonical);
         do_cached_pm_install(&canonical, &toolchains);
     }
 
@@ -1009,7 +1021,6 @@ fn run_dev(args: DevArgs, json: bool) {
     let canonical = resolve_root(&args.dir);
     let toolchains = do_detect_and_write(&canonical);
     if !args.skip_install {
-        do_mise_install(&canonical);
         do_cached_pm_install(&canonical, &toolchains);
     }
     if json {
@@ -2753,6 +2764,46 @@ fn run_logout(json: bool) {
 mod tests {
     use super::*;
     use clap::CommandFactory;
+
+    #[test]
+    fn framework_install_uses_lockfile_and_recovers_missing_dependencies() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("package.json"),
+            r#"{"dependencies":{"next":"1"}}"#,
+        )
+        .unwrap();
+        std::fs::write(root.join("pnpm-lock.yaml"), "").unwrap();
+        let detected = detect_toolchains(root).unwrap();
+        let next = detected.iter().find(|tc| tc.slug == "nextjs").unwrap();
+        assert_eq!(next.install_command.as_deref(), Some("pnpm install"));
+        assert_eq!(
+            cached_install_args(root, &detected),
+            ["run", "--force", "install"]
+        );
+        for marker in [".pnp.js", ".pnp.cjs"] {
+            std::fs::write(root.join(marker), "").unwrap();
+            assert_eq!(cached_install_args(root, &detected), ["run", "install"]);
+            std::fs::remove_file(root.join(marker)).unwrap();
+        }
+        std::fs::create_dir(root.join("node_modules")).unwrap();
+        assert_eq!(cached_install_args(root, &detected), ["run", "install"]);
+
+        std::fs::write(
+            root.join("appz.jsonc"),
+            r#"{"installCommand":"echo installed >> marker.txt"}"#,
+        )
+        .unwrap();
+        let detected = detect_toolchains(root).unwrap();
+        install_dependencies(root, &detected, false);
+        assert_eq!(
+            std::fs::read_to_string(root.join("marker.txt"))
+                .unwrap()
+                .trim(),
+            "installed"
+        );
+    }
 
     /// clap checks the whole command tree here (argument order, duplicate
     /// names and short flags, conflicting settings), so an invalid definition

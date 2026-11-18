@@ -1,4 +1,5 @@
 use crate::error::{Result, ServeError};
+use crate::file_cache;
 use http_body_util::Full;
 use hyper::body::Bytes;
 use hyper::header::{CACHE_CONTROL, CONTENT_TYPE, HeaderValue, LOCATION};
@@ -66,13 +67,17 @@ async fn respond_path(path: &Path, method: &Method) -> Result<Response<Full<Byte
 }
 
 async fn serve_file(path: &Path) -> Result<Response<Full<Bytes>>> {
-    let content = fs::read(path).await?;
     let mime_type = from_path(path).first_or_octet_stream();
+    let path = path.to_path_buf();
+    let content = tokio::task::spawn_blocking(move || file_cache::read_bytes(&path))
+        .await
+        .map_err(|_| ServeError::Io(std::io::Error::other("read task cancelled")))?
+        .map_err(ServeError::Io)?;
     Ok(Response::builder()
         .status(StatusCode::OK)
         .header(CONTENT_TYPE, HeaderValue::from_str(mime_type.as_ref())?)
         .header(CACHE_CONTROL, HeaderValue::from_static("no-cache"))
-        .body(Full::new(Bytes::from(content)))?)
+        .body(Full::new(content))?)
 }
 
 async fn head_file(path: &Path) -> Result<Response<Full<Bytes>>> {

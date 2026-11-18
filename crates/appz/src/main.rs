@@ -603,6 +603,8 @@ struct PreviewArgs {
     spa: bool,
     #[arg(long, help = "Skip detect/install before preview")]
     skip_install: bool,
+    #[arg(long, help = "Skip mise run build before serving")]
+    skip_build: bool,
 }
 
 // ── UI helpers ──────────────────────────────────────────────────
@@ -1149,6 +1151,15 @@ fn run_dev_commands(
     outro("dev server stopped");
 }
 
+fn run_preview_build(project: &std::path::Path, toolchains: &[appz_core::DetectedToolchain]) {
+    if !toolchains.iter().any(|tc| tc.build_command.is_some()) {
+        return;
+    }
+    step("building (mise run build)...");
+    if !run_cmd("mise", &["run", "build"], project) {
+        std::process::exit(1);
+    }
+}
 fn run_preview(args: PreviewArgs, json: bool) {
     let canonical = resolve_root(&args.dir);
     let toolchains = if args.skip_install {
@@ -1156,24 +1167,30 @@ fn run_preview(args: PreviewArgs, json: bool) {
     } else {
         do_full_install(&canonical)
     };
-    let serve_root =
-        appz_core::resolve_preview_root(&canonical, &toolchains, args.serve_dir.as_deref())
-            .unwrap_or_else(|e| error(&e));
 
     if json {
+        let serve_root =
+            appz_core::resolve_preview_root(&canonical, &toolchains, args.serve_dir.as_deref())
+                .unwrap_or_else(|e| error(&e));
         json_out(&toolchains, "ok");
         println!(
-            r#"{{"serve_root":"{}","port":{}}}"#,
-            serve_root.display(),
-            args.port
+            "{}",
+            serde_json::json!({"serve_root": serve_root.to_string_lossy(), "port": args.port, "hot_reload": false})
         );
         return;
     }
 
     intro("appz preview");
-    success(&format!("serving {}", serve_root.display()));
-    step("starting preview server...");
-    if static_serve::run_static_server(&serve_root, args.port, false, args.spa).is_err() {
+    if !args.skip_build {
+        step("preparing production-like output...");
+        run_preview_build(&canonical, &toolchains);
+    }
+    let serve_root =
+        appz_core::resolve_preview_root(&canonical, &toolchains, args.serve_dir.as_deref())
+            .unwrap_or_else(|e| error(&e));
+    success(&format!("serving built output {}", serve_root.display()));
+    step("starting preview server (no hot reload)...");
+    if static_serve::run_preview_server(&serve_root, args.port, args.spa).is_err() {
         std::process::exit(1);
     }
     outro("preview server stopped");

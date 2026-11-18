@@ -27,10 +27,13 @@ impl DevServer {
 
     pub async fn start(&mut self) -> Result<()> {
         let addr = self.config.bind_addr();
-        if self.config.hot_reload {
-            let (_watcher, receiver) = FileWatcher::new(self.config.root_dir.clone())?;
+        let _watcher = if self.config.hot_reload {
+            let (watcher, receiver) = FileWatcher::new(self.config.root_dir.clone())?;
             self.change_receiver = Some(receiver);
-        }
+            Some(watcher)
+        } else {
+            None
+        };
 
         let listener = TcpListener::bind(&addr).await?;
         let config = Arc::clone(&self.config);
@@ -41,16 +44,21 @@ impl DevServer {
                 _ = tokio::signal::ctrl_c() => break,
                 accept = listener.accept() => {
                     let (stream, _) = accept?;
+                    let _ = stream.set_nodelay(true);
                     let io = hyper_util::rt::TokioIo::new(stream);
                     let config_clone = Arc::clone(&config);
                     let change_receiver = reload_rx.as_ref().map(|r| r.resubscribe());
+                    // fire-and-forget: one task serves this connection until it closes
                     tokio::spawn(async move {
                         let service = service_fn(move |req| {
                             let cfg = Arc::clone(&config_clone);
                             let rx = change_receiver.as_ref().map(|r| r.resubscribe());
                             async move { Ok::<_, std::convert::Infallible>(dispatch(req, cfg, rx).await) }
                         });
-                        let _ = http1::Builder::new().serve_connection(io, service).await;
+                        let _ = http1::Builder::new()
+                            .keep_alive(true)
+                            .serve_connection(io, service)
+                            .await;
                     });
                 }
             }

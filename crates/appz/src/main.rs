@@ -2352,9 +2352,13 @@ fn run_domains(args: DomainsArgs, json: bool) {
                             .collect();
                         info(&recs.join("\n"));
                     }
+                    if let Some(hint) = dom.dns_setup_hint() {
+                        step("DNS routing at your provider");
+                        info(&hint);
+                    }
                     step("next steps");
                     info(&format!(
-                        "1. Configure the DNS records above at your domain registrar/DNS provider\n\
+                        "1. Configure the DNS records above\n\
                          2. Run `appz domains verify {}` once configured",
                         dom.domain
                     ));

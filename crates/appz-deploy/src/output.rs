@@ -269,9 +269,75 @@ impl ProjectDomain {
             "pending_verification"
         }
     }
+
+    /// Appz routing guidance for responses containing only ownership records.
+    pub fn dns_setup_hint(&self) -> Option<String> {
+        if self.cname.is_some()
+            || self.apex.is_some()
+            || self
+                .verification
+                .iter()
+                .any(|v| !v.r#type.eq_ignore_ascii_case("TXT"))
+        {
+            return None;
+        }
+        let domain = self.domain.trim_end_matches('.');
+        Some(format!(
+            "If {domain} is below your DNS zone apex, set its CNAME to cname.appz.to.\n\
+             If {domain} is your DNS zone apex, add www.{domain} to this project, set its CNAME to \
+             cname.appz.to, and verify it. Point {domain} to your redirect service using the DNS \
+             records it provides, enable TLS for {domain} there, and redirect to https://www.{domain}"
+        ))
+    }
 }
 
 pub type DomainVerifyResult = ProjectDomain;
+
+#[cfg(test)]
+mod dns_hint_tests {
+    use super::ProjectDomain;
+    use serde_json::json;
+
+    #[test]
+    fn api_targets_take_precedence() {
+        for (field, records) in [
+            (
+                "cname",
+                json!({"name":"www.example.com","target":"custom.example.net"}),
+            ),
+            ("apex", json!({"name":"example.com","ip":"192.0.2.1"})),
+            (
+                "verification",
+                json!([{"type":"CNAME","domain":"www.example.com","value":"custom.example.net"}]),
+            ),
+        ] {
+            let dom: ProjectDomain =
+                serde_json::from_value(json!({"domain":"example.com", (field):records})).unwrap();
+            assert!(dom.dns_setup_hint().is_none(), "{field}");
+        }
+    }
+
+    #[test]
+    fn missing_targets_get_subdomain_and_apex_instructions() {
+        for verification in [
+            json!([]),
+            json!([{"type":"txt","domain":"example.co.uk","value":"proof"}]),
+        ] {
+            let dom: ProjectDomain = serde_json::from_value(json!({
+                "domain":"example.co.uk.", "verification":verification
+            }))
+            .unwrap();
+            let hint = dom.dns_setup_hint().unwrap();
+            assert!(hint.contains(
+                "If example.co.uk is below your DNS zone apex, set its CNAME to cname.appz.to"
+            ));
+            assert!(hint.contains("add www.example.co.uk to this project"));
+            assert!(hint.contains("Point example.co.uk to your redirect service"));
+            assert!(hint.contains("enable TLS for example.co.uk there"));
+            assert!(hint.ends_with("redirect to https://www.example.co.uk"));
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

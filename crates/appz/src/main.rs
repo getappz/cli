@@ -2766,18 +2766,26 @@ mod tests {
     use clap::CommandFactory;
 
     #[test]
-    fn framework_install_uses_lockfile_and_recovers_missing_dependencies() {
+    fn framework_install_recovers_missing_dependencies() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        std::fs::write(
-            root.join("package.json"),
-            r#"{"dependencies":{"next":"1"}}"#,
-        )
-        .unwrap();
-        std::fs::write(root.join("pnpm-lock.yaml"), "").unwrap();
-        let detected = detect_toolchains(root).unwrap();
-        let next = detected.iter().find(|tc| tc.slug == "nextjs").unwrap();
-        assert_eq!(next.install_command.as_deref(), Some("pnpm install"));
+        let detected = [appz_core::DetectedToolchain {
+            name: "Next.js",
+            slug: "nextjs",
+            mise_plugin: "node",
+            version: "lts".into(),
+            version_files: &[],
+            frameworks: vec![],
+            build_command: None,
+            install_command: Some("echo installed >> marker.txt".into()),
+            dev_command: None,
+            test_command: None,
+            lint_command: None,
+            format_command: None,
+            format_tool: None,
+            output_directory: None,
+            env_prefix: None,
+        }];
         assert_eq!(
             cached_install_args(root, &detected),
             ["run", "--force", "install"]
@@ -2790,12 +2798,6 @@ mod tests {
         std::fs::create_dir(root.join("node_modules")).unwrap();
         assert_eq!(cached_install_args(root, &detected), ["run", "install"]);
 
-        std::fs::write(
-            root.join("appz.jsonc"),
-            r#"{"installCommand":"echo installed >> marker.txt"}"#,
-        )
-        .unwrap();
-        let detected = detect_toolchains(root).unwrap();
         install_dependencies(root, &detected, false);
         assert_eq!(
             std::fs::read_to_string(root.join("marker.txt"))

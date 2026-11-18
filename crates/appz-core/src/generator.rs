@@ -79,7 +79,10 @@ fn build_tasks(toolchains: &[DetectedToolchain]) -> BTreeMap<&'static str, Gener
                 continue;
             }
             if let Some(cmd) = get_cmd(tc) {
-                run.push(cmd.clone());
+                // Multiple Node frameworks can share one project-level install command.
+                if *name != "install" || !run.contains(cmd) {
+                    run.push(cmd.clone());
+                }
                 if CACHED_KINDS.contains(name) {
                     sources.extend(task_sources(tc));
                     // `output_directory` is the BUILD artifact location — only

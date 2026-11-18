@@ -14,7 +14,6 @@ pub use output::{
     ApexRecord, AuthState, CnameRecord, DeployOutput, DeployStatus, DeploymentInfo,
     DeploymentInspect, DetectedConfig, DnsRecordChallenge, DomainVerificationRecord,
     DomainVerifyResult, InspectFileEntry, PrerequisiteStatus, ProjectDomain, ProjectInfo,
-    dns_setup_hint, is_apex_domain,
 };
 pub use provider::{
     DEPLOY_TIMEOUT, DeployProvider, QUERY_TIMEOUT, available_provider_slugs,

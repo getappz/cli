@@ -269,64 +269,72 @@ impl ProjectDomain {
             "pending_verification"
         }
     }
+
+    /// Appz routing guidance for responses containing only ownership records.
+    pub fn dns_setup_hint(&self) -> Option<String> {
+        if self.cname.is_some()
+            || self.apex.is_some()
+            || self
+                .verification
+                .iter()
+                .any(|v| !v.r#type.eq_ignore_ascii_case("TXT"))
+        {
+            return None;
+        }
+        let domain = self.domain.trim_end_matches('.');
+        Some(format!(
+            "If {domain} is a subdomain, set its CNAME to cname.appz.to.\n\
+             If {domain} is your DNS zone apex, add www.{domain} to this project, set its CNAME to \
+             cname.appz.to, and verify it before configuring an HTTPS redirect from {domain} to https://www.{domain}."
+        ))
+    }
 }
 
 pub type DomainVerifyResult = ProjectDomain;
 
-/// Second-level labels that act as a public suffix under a 2-letter ccTLD
-/// (`example.co.uk`); a cheap stand-in for the public suffix list.
-const CC_SECOND_LEVEL: [&str; 7] = ["co", "com", "org", "net", "gov", "ac", "edu"];
-
-/// True when `domain` is a registrable apex (`example.com`, `example.co.uk`),
-/// not a subdomain such as `www.example.com`.
-pub fn is_apex_domain(domain: &str) -> bool {
-    let labels: Vec<&str> = domain.trim_end_matches('.').split('.').collect();
-    match labels.as_slice() {
-        [_, _] => true,
-        [_, sld, tld] => tld.len() == 2 && CC_SECOND_LEVEL.contains(sld),
-        _ => false,
-    }
-}
-
-/// DNS the user must set for a custom domain. appz serves the `www.` host (a
-/// bare apex can't CNAME at most DNS providers), so the apex only forwards.
-pub fn dns_setup_hint(domain: &str) -> Vec<String> {
-    let d = domain.trim_end_matches('.');
-    if is_apex_domain(d) {
-        vec![
-            format!("{:<8}  {:<36}  cname.appz.to", "CNAME", format!("www.{d}")),
-            format!(
-                "{d}: point an A record, or a redirect rule, at https://www.{d} \
-                 (a bare apex cannot CNAME at most DNS providers)"
-            ),
-        ]
-    } else {
-        vec![format!("{:<8}  {:<36}  cname.appz.to", "CNAME", d)]
-    }
-}
-
 #[cfg(test)]
 mod dns_hint_tests {
-    use super::*;
+    use super::ProjectDomain;
+    use serde_json::json;
 
     #[test]
-    fn apex_detection() {
-        assert!(is_apex_domain("brickfields.in"));
-        assert!(is_apex_domain("example.co.uk"));
-        assert!(!is_apex_domain("www.brickfields.in"));
-        assert!(!is_apex_domain("app.example.com"));
+    fn api_targets_take_precedence() {
+        for (field, records) in [
+            (
+                "cname",
+                json!({"name":"www.example.com","target":"custom.example.net"}),
+            ),
+            ("apex", json!({"name":"example.com","ip":"192.0.2.1"})),
+            (
+                "verification",
+                json!([{"type":"CNAME","domain":"www.example.com","value":"custom.example.net"}]),
+            ),
+        ] {
+            let dom: ProjectDomain =
+                serde_json::from_value(json!({"domain":"example.com", (field):records})).unwrap();
+            assert!(dom.dns_setup_hint().is_none(), "{field}");
+        }
     }
 
     #[test]
-    fn apex_hint_names_www_cname_and_redirect() {
-        let h = dns_setup_hint("gosysinfo.tech");
-        assert!(h[0].contains("www.gosysinfo.tech") && h[0].contains("cname.appz.to"));
-        assert!(h[1].contains("redirect") && h[1].contains("A record"));
-    }
-
-    #[test]
-    fn subdomain_hint_is_single_cname() {
-        assert_eq!(dns_setup_hint("www.brickfields.in").len(), 1);
+    fn missing_targets_get_subdomain_and_apex_instructions() {
+        for verification in [
+            json!([]),
+            json!([{"type":"txt","domain":"example.co.uk","value":"proof"}]),
+        ] {
+            let dom: ProjectDomain = serde_json::from_value(json!({
+                "domain":"example.co.uk.", "verification":verification
+            }))
+            .unwrap();
+            let hint = dom.dns_setup_hint().unwrap();
+            assert!(
+                hint.contains("If example.co.uk is a subdomain, set its CNAME to cname.appz.to")
+            );
+            assert!(hint.contains("add www.example.co.uk to this project"));
+            assert!(
+                hint.contains("HTTPS redirect from example.co.uk to https://www.example.co.uk.")
+            );
+        }
     }
 }
 

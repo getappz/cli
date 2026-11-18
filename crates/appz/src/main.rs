@@ -2352,8 +2352,10 @@ fn run_domains(args: DomainsArgs, json: bool) {
                             .collect();
                         info(&recs.join("\n"));
                     }
-                    step("DNS to set at your registrar/DNS provider:");
-                    info(&appz_deploy::dns_setup_hint(&dom.domain).join("\n"));
+                    if let Some(hint) = dom.dns_setup_hint() {
+                        step("DNS routing at your provider");
+                        info(&hint);
+                    }
                     step("next steps");
                     info(&format!(
                         "1. Configure the DNS records above\n\

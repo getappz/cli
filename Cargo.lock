@@ -178,6 +178,7 @@ name = "appz-deploy"
 version = "0.2.0"
 dependencies = [
  "appz-core",
+ "appz-html2md",
  "chrono",
  "command",
  "dirs",
@@ -189,6 +190,7 @@ dependencies = [
  "thiserror 2.0.19",
  "toml",
  "ureq",
+ "url",
  "walkdir",
 ]
 

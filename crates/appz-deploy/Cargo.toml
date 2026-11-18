@@ -2,7 +2,7 @@
 name = "appz-deploy"
 version = "0.2.0"
 edition = "2024"
-rust-version = "1.91"
+rust-version = "1.95"
 description = "Unified deploy front-end: drives each hosting platform's own CLI (Vercel, Netlify, ...)."
 license = "Apache-2.0"
 publish = false
@@ -20,9 +20,9 @@ sha2 = "0.10"
 ureq = { version = "2", features = ["json"] }
 walkdir = "2"
 glob = "0.3"
-
-[dev-dependencies]
+url = "2"
 tempfile = "3"
+appz-html2md = { path = "../appz-html2md" }
 
 [lints.rust]
 unsafe_code = "warn"

@@ -263,3 +263,25 @@ fn s3_passes_region_and_refuses_empty_output_before_sync_delete() {
         "{args}"
     );
 }
+
+#[test]
+fn appzdev_negotiate_payload_flags_only_when_markdown_enabled() {
+    use super::appzdev::negotiate_payload;
+    use crate::static_cas::ScannedFileEntry;
+    let files = vec![ScannedFileEntry {
+        path: "/index.html".into(),
+        hash: "abc".into(),
+        size: 3,
+        r#type: "text/html; charset=utf-8".into(),
+        immutable: None,
+    }];
+    let off = negotiate_payload("proj", "production", &files, false);
+    assert!(off.get("flags").is_none(), "{off}");
+    assert_eq!(off["projectId"], "proj");
+    assert_eq!(off["target"], "production");
+    assert_eq!(off["files"][0]["path"], "/index.html");
+
+    let on = negotiate_payload("proj", "preview", &files, true);
+    assert_eq!(on["flags"], serde_json::json!({ "markdown": true }));
+    assert_eq!(on["target"], "preview");
+}

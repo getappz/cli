@@ -847,7 +847,19 @@ fn do_pm_install(root: &Path, toolchains: &[appz_core::DetectedToolchain]) {
 /// unchanged lockfile/manifest is not reinstalled on every run.
 fn do_cached_pm_install(root: &Path, toolchains: &[appz_core::DetectedToolchain]) {
     if toolchains.iter().any(|t| t.install_command.is_some()) {
-        run_cmd("mise", &["run", "install"], root);
+        // The task cache can survive a deleted dependency directory.
+        let args: &[&str] = if toolchains
+            .iter()
+            .any(|t| t.slug == "node" && t.install_command.is_some())
+            && !root.join("node_modules").is_dir()
+            && !root.join(".pnp.cjs").is_file()
+            && !root.join(".pnp.js").is_file()
+        {
+            &["run", "--force", "install"]
+        } else {
+            &["run", "install"]
+        };
+        run_cmd("mise", args, root);
     } else {
         do_pm_install(root, toolchains);
     }
@@ -991,61 +1003,19 @@ fn run_build(args: BuildArgs, json: bool) {
 }
 
 fn run_dev(args: DevArgs, json: bool) {
+    if !json {
+        intro("appz dev");
+    }
+    let canonical = resolve_root(&args.dir);
+    let toolchains = do_detect_and_write(&canonical);
+    if !args.skip_install {
+        do_mise_install(&canonical);
+        do_cached_pm_install(&canonical, &toolchains);
+    }
     if json {
-        let canonical = resolve_root(&args.dir);
-        let toolchains = do_detect_and_write(&canonical);
-        if !args.skip_install {
-            do_mise_install(&canonical);
-            do_pm_install(&canonical, &toolchains);
-        }
         json_out(&toolchains, "ok");
         return;
     }
-    intro("appz dev");
-    let canonical = resolve_root(&args.dir);
-
-    // Cache hit
-    if args.command.is_none()
-        && !args.skip_install
-        && appz_core::inputs_unchanged(&canonical)
-        && let Some(snap) = appz_core::read_latest_snapshot(&canonical)
-    {
-        let cmds: Vec<String> = snap
-            .toolchains
-            .iter()
-            .filter_map(|t| t.dev_command.clone())
-            .collect();
-        if !cmds.is_empty() {
-            success("inputs unchanged — running cached dev command");
-            let frameworks: Vec<&str> = snap
-                .toolchains
-                .iter()
-                .flat_map(|t| t.frameworks.iter().map(String::as_str))
-                .collect();
-            let sharing = start_dev_share(&args, &canonical, &frameworks, &cmds);
-            run_dev_commands(
-                &cmds,
-                &canonical,
-                sharing,
-                appz_core::detect_dev_port(
-                    &canonical,
-                    &frameworks,
-                    cmds.first().map(String::as_str),
-                ),
-                static_dev_options(&cmds, args.no_reload, args.spa),
-            );
-            return;
-        }
-    }
-
-    // Full pipeline
-    let toolchains = {
-        if !args.skip_install {
-            do_full_install(&canonical)
-        } else {
-            do_detect_and_write(&canonical)
-        }
-    };
 
     let cmds: Vec<String> = match args.command.clone() {
         Some(c) => vec![c],

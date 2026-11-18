@@ -236,10 +236,13 @@ fn run_hook(ctx: &DeployContext, name: &str, argv: &[String]) -> Result<(), Stri
         .exec_live(bin, &args, appz_deploy::DEPLOY_TIMEOUT)
         .map_err(|e| format!("{name} hook: {e}"))?;
     if output.success {
-        Ok(())
-    } else {
-        Err(format!("{name} hook '{bin}' failed"))
+        return Ok(());
     }
+    // Hooks receive deployment credentials, so keep their captured output out of result JSON.
+    Err(match output.code {
+        Some(code) => format!("{name} hook '{bin}' failed with exit code {code}"),
+        None => format!("{name} hook '{bin}' terminated without an exit code"),
+    })
 }
 
 struct PreparedTarget {
@@ -1103,6 +1106,10 @@ mod tests {
                 .unwrap_err()
                 .contains("after_deploy hook")
         );
+        let bad_arg = vec![argv[0].clone(), "--appz-invalid-hook-argument".into()];
+        let error = run_hook(&ctx, "after_deploy", &bad_arg).unwrap_err();
+        assert!(error.contains("exit code"), "{error}");
+        assert!(!error.contains("appz-invalid-hook-argument"), "{error}");
         run_hook(&ctx, "before_deploy", &[]).unwrap();
         std::fs::remove_dir_all(dir).unwrap();
     }

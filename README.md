@@ -294,7 +294,7 @@ Render's remote-source deploy can overlap a local deploy, and dry-run probes
 can run in parallel. After hooks run in target order once all uploads finish.
 A hook that changes source triggers a fresh deploy next time. A failed after
 hook clears that target's success cache so the next deploy retries it.
-With `--json`, the command prints one JSON array with a
+With `--all --json`, the command prints one JSON array with a
 `{target, output?, error?}` entry per target; it exits non-zero if any target or
 hook failed.
 

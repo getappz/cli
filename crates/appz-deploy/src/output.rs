@@ -273,6 +273,63 @@ impl ProjectDomain {
 
 pub type DomainVerifyResult = ProjectDomain;
 
+/// Second-level labels that act as a public suffix under a 2-letter ccTLD
+/// (`example.co.uk`); a cheap stand-in for the public suffix list.
+const CC_SECOND_LEVEL: [&str; 7] = ["co", "com", "org", "net", "gov", "ac", "edu"];
+
+/// True when `domain` is a registrable apex (`example.com`, `example.co.uk`),
+/// not a subdomain such as `www.example.com`.
+pub fn is_apex_domain(domain: &str) -> bool {
+    let labels: Vec<&str> = domain.trim_end_matches('.').split('.').collect();
+    match labels.as_slice() {
+        [_, _] => true,
+        [_, sld, tld] => tld.len() == 2 && CC_SECOND_LEVEL.contains(sld),
+        _ => false,
+    }
+}
+
+/// DNS the user must set for a custom domain. appz serves the `www.` host (a
+/// bare apex can't CNAME at most DNS providers), so the apex only forwards.
+pub fn dns_setup_hint(domain: &str) -> Vec<String> {
+    let d = domain.trim_end_matches('.');
+    if is_apex_domain(d) {
+        vec![
+            format!("{:<8}  {:<36}  cname.appz.to", "CNAME", format!("www.{d}")),
+            format!(
+                "{d}: point an A record, or a redirect rule, at https://www.{d} \
+                 (a bare apex cannot CNAME at most DNS providers)"
+            ),
+        ]
+    } else {
+        vec![format!("{:<8}  {:<36}  cname.appz.to", "CNAME", d)]
+    }
+}
+
+#[cfg(test)]
+mod dns_hint_tests {
+    use super::*;
+
+    #[test]
+    fn apex_detection() {
+        assert!(is_apex_domain("brickfields.in"));
+        assert!(is_apex_domain("example.co.uk"));
+        assert!(!is_apex_domain("www.brickfields.in"));
+        assert!(!is_apex_domain("app.example.com"));
+    }
+
+    #[test]
+    fn apex_hint_names_www_cname_and_redirect() {
+        let h = dns_setup_hint("gosysinfo.tech");
+        assert!(h[0].contains("www.gosysinfo.tech") && h[0].contains("cname.appz.to"));
+        assert!(h[1].contains("redirect") && h[1].contains("A record"));
+    }
+
+    #[test]
+    fn subdomain_hint_is_single_cname() {
+        assert_eq!(dns_setup_hint("www.brickfields.in").len(), 1);
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectInfo {

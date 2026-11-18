@@ -2352,9 +2352,11 @@ fn run_domains(args: DomainsArgs, json: bool) {
                             .collect();
                         info(&recs.join("\n"));
                     }
+                    step("DNS to set at your registrar/DNS provider:");
+                    info(&appz_deploy::dns_setup_hint(&dom.domain).join("\n"));
                     step("next steps");
                     info(&format!(
-                        "1. Configure the DNS records above at your domain registrar/DNS provider\n\
+                        "1. Configure the DNS records above\n\
                          2. Run `appz domains verify {}` once configured",
                         dom.domain
                     ));

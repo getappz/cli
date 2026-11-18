@@ -9,10 +9,9 @@
 //!   appz-named [`ENV_REPOSITORY`] / [`ENV_PASSWORD`], which are translated
 //!   to the `RUSTIC_*` names for the child process.
 //! - init: `rustic init`
-//! - backup: `rustic backup [--json] [--host NAME] [--tag TAG[,TAG]...]
-//!   [--skip-if-unchanged] SOURCE...`. `--json` prints the snapshot object;
-//!   with `--skip-if-unchanged` and no changes the result has no snapshot ID.
-//!   appz stages selected files into one private source directory.
+//! - backup: `rustic backup --force --json --description DIGEST --as-path / SOURCE`.
+//!   appz compares the staged tree with the latest snapshot, then forces a full
+//!   content read if needed. `--json` prints the new snapshot including its ID.
 //! - list: `rustic snapshots --json` -> array of
 //!   `{ group_key: { hostname, label, paths }, snapshots: [{ id, time, tags,
 //!   summary: { data_added, total_bytes_processed, ... }, ... }] }`

@@ -13,6 +13,8 @@ name = "appz"
 path = "src/main.rs"
 
 [dependencies]
+cap-fs-ext = "4"
+cap-std = "4"
 clap = { version = "4", features = ["derive"] }
 cliclack = "0.3"
 console = "0.15"
@@ -38,4 +40,5 @@ zip = { version = "9", default-features = false, features = ["deflate"] }
 skill = { version = "0.8.3", default-features = false, features = ["network"] }
 tempfile = "3"
 
-
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

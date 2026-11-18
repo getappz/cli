@@ -9,9 +9,12 @@ pub mod select;
 
 use std::path::{Path, PathBuf};
 
+use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
+use cap_std::fs::Dir;
 use clap::{Args, Subcommand};
 use engine::{ENV_PASSWORD, ENV_REPOSITORY, Rustic, RusticCli};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 
 #[derive(Args)]
 #[command(
@@ -165,12 +168,13 @@ fn repository_location(root: &Path, repo: &str) -> Result<String> {
 }
 
 fn create(cli: &impl Rustic, root: &Path, json_output: bool) -> Result<()> {
+    let project = Dir::open_ambient_dir(root, cap_std::ambient_authority())?;
     let outputs: Vec<_> = appz_core::detect_toolchains(root)?
         .iter()
         .filter_map(|t| t.output_directory)
         .collect();
     let selection = select::select(root, &outputs)?;
-    let snapshot = write_snapshot(cli, root, &selection, json_output);
+    let snapshot = write_snapshot(cli, root, &project, &selection, json_output);
     if let Some(path) = &selection.bundle {
         select::remove_bundle(path);
     }
@@ -204,6 +208,7 @@ fn private_tempdir() -> std::io::Result<tempfile::TempDir> {
 fn write_snapshot(
     cli: &impl Rustic,
     root: &Path,
+    project: &Dir,
     selection: &select::Selection,
     json_output: bool,
 ) -> Result<Option<serde_json::Value>> {
@@ -212,40 +217,12 @@ fn write_snapshot(
     }
     let stage = private_tempdir()?;
     for rel in &selection.files {
-        let src = root.join(rel);
-        let dest = stage.path().join("worktree").join(rel);
-        std::fs::create_dir_all(dest.parent().unwrap())?;
-        let meta = std::fs::symlink_metadata(&src)?;
-        if meta.is_symlink() {
-            let target = std::fs::read_link(&src)?;
-            #[cfg(unix)]
-            std::os::unix::fs::symlink(target, &dest)?;
-            #[cfg(windows)]
-            {
-                use std::os::windows::fs::FileTypeExt;
-                if meta.file_type().is_symlink_dir() {
-                    std::os::windows::fs::symlink_dir(target, &dest)?;
-                } else {
-                    std::os::windows::fs::symlink_file(target, &dest)?;
-                }
-            }
-            let time = filetime::FileTime::from_last_modification_time(&meta);
-            filetime::set_symlink_file_times(&dest, time, time)?;
-        } else if meta.is_file() {
-            std::fs::copy(&src, &dest)?;
-            filetime::set_file_mtime(
-                &dest,
-                filetime::FileTime::from_last_modification_time(&meta),
-            )?;
-        } else {
-            return Err(format!("unsupported backup source: {}", src.display()).into());
-        }
+        stage_file(project, rel, &stage.path().join("worktree").join(rel))?;
     }
     for rel in &selection.staged {
         select::save_staged(root, rel, stage.path())?;
     }
     if let Some(bundle) = &selection.bundle {
-        use sha2::{Digest, Sha256};
         let mut hash = Sha256::new();
         std::io::copy(&mut std::fs::File::open(bundle)?, &mut hash)?;
         let dir = stage
@@ -257,11 +234,37 @@ fn write_snapshot(
         std::fs::copy(bundle, &dest)?;
         filetime::set_file_mtime(dest, std::time::UNIX_EPOCH.into())?;
     }
-    normalize_directories(stage.path())?;
+    let mut digest = Sha256::new();
+    let expected = fingerprint_tree(stage.path(), stage.path(), &mut digest)?;
+    let selected =
+        selection.files.len() + selection.staged.len() + usize::from(selection.bundle.is_some());
+    if expected != selected as u64 {
+        return Err(format!("staged {expected} files from {selected} selected sources").into());
+    }
+    let description = format!("appz-source-v1:{:x}", digest.finalize());
+    // Fresh staging inodes cannot identify unchanged content. Compare the latest
+    // snapshot's byte fingerprint, then force Rustic to read every changed tree.
+    match cli.run(&["snapshots", "--json", "latest"]) {
+        Ok(out) => {
+            let latest: serde_json::Value = serde_json::from_str(&out.stdout)?;
+            let snapshot = &latest[0]["snapshots"][0];
+            if snapshot["description"].as_str() == Some(&description)
+                && snapshot["summary"]["total_files_processed"].as_u64() == Some(expected)
+            {
+                return Ok(None);
+            }
+        }
+        Err(engine::EngineError::Failed(msg))
+            if msg.contains("No repository config file found")
+                || msg.contains("No snapshots found") => {}
+        Err(err) => return Err(err.into()),
+    }
     let out = cli.run(&[
         "backup",
         "--init",
-        "--skip-if-unchanged",
+        "--force",
+        "--description",
+        &description,
         "--json",
         "--as-path",
         "/",
@@ -277,31 +280,116 @@ fn write_snapshot(
     }
 
     let snapshot: serde_json::Value = serde_json::from_str(&out.stdout)?;
-    let expected =
-        selection.files.len() + selection.staged.len() + usize::from(selection.bundle.is_some());
     let count = snapshot
         .pointer("/summary/total_files_processed")
         .and_then(|v| v.as_u64());
-    if count != Some(expected as u64) {
+    if count != Some(expected) {
         let reported = count.map_or_else(|| "no count".into(), |n| n.to_string());
         return Err(format!(
             "incomplete backup (snapshot {}): expected {expected} files, Rustic reported {reported}. {}",
             snapshot["id"].as_str().unwrap_or("unsaved"), out.stderr.trim()
         ).into());
     }
-    // With --skip-if-unchanged Rustic may emit the candidate snapshot without an ID.
-    Ok(snapshot["id"].is_string().then_some(snapshot))
+    if !snapshot["id"].is_string() {
+        return Err("Rustic returned no ID for the new snapshot".into());
+    }
+    Ok(Some(snapshot))
 }
 
-// Synthetic directory mtimes must be stable for Rustic to skip an unchanged tree.
-fn normalize_directories(path: &Path) -> std::io::Result<()> {
-    for entry in std::fs::read_dir(path)? {
-        let entry = entry?;
-        if entry.file_type()?.is_dir() {
-            normalize_directories(&entry.path())?;
+fn stage_file(project: &Dir, rel: &Path, dest: &Path) -> Result<()> {
+    let mut parent = project.try_clone()?;
+    let mut components = rel.components().peekable();
+    let name = loop {
+        let Some(std::path::Component::Normal(name)) = components.next() else {
+            return Err(format!("invalid selected source: {}", rel.display()).into());
+        };
+        if components.peek().is_none() {
+            break name;
         }
+        parent = parent.open_dir_nofollow(name)?;
+    };
+    std::fs::create_dir_all(dest.parent().unwrap())?;
+    let meta = parent.symlink_metadata(name)?;
+    if meta.is_symlink() {
+        let target = parent.read_link_contents(name)?;
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(target, dest)?;
+        #[cfg(windows)]
+        {
+            use cap_std::fs::MetadataExt;
+            const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
+            if meta.file_attributes() & FILE_ATTRIBUTE_DIRECTORY != 0 {
+                std::os::windows::fs::symlink_dir(target, dest)?;
+            } else {
+                std::os::windows::fs::symlink_file(target, dest)?;
+            }
+        }
+        let time = meta.modified()?.into_std().into();
+        filetime::set_symlink_file_times(dest, time, time)?;
+    } else {
+        if !meta.is_file() {
+            return Err(format!("unsupported backup source: {}", rel.display()).into());
+        }
+        let mut options = cap_std::fs::OpenOptions::new();
+        options.read(true).follow(FollowSymlinks::No);
+        #[cfg(unix)]
+        {
+            use cap_std::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NONBLOCK);
+        }
+        let mut input = parent.open_with(name, &options)?.into_std();
+        let meta = input.metadata()?;
+        if !meta.is_file() {
+            return Err(format!("expected a regular file: {}", rel.display()).into());
+        }
+        let mut output = std::fs::File::create_new(dest)?;
+        std::io::copy(&mut input, &mut output)?;
+        output.set_modified(meta.modified()?)?;
+        output.set_permissions(meta.permissions())?;
     }
-    filetime::set_file_mtime(path, std::time::UNIX_EPOCH.into())
+    Ok(())
+}
+
+/// Fingerprint only restored metadata and bytes, independent of temporary names and inodes.
+fn fingerprint_tree(root: &Path, dir: &Path, hash: &mut Sha256) -> Result<u64> {
+    let mut entries = std::fs::read_dir(dir)?.collect::<std::io::Result<Vec<_>>>()?;
+    entries.sort_by_key(|entry| entry.file_name());
+    let mut count = 0;
+    for entry in entries {
+        let path = entry.path();
+        let meta = std::fs::symlink_metadata(&path)?;
+        if meta.is_dir() {
+            count += fingerprint_tree(root, &path, hash)?;
+            continue;
+        }
+        #[cfg(unix)]
+        let mode = std::os::unix::fs::PermissionsExt::mode(&meta.permissions());
+        #[cfg(not(unix))]
+        let mode = meta.permissions().readonly();
+        let modified = filetime::FileTime::from_last_modification_time(&meta);
+        serde_json::to_writer(
+            &mut *hash,
+            &(
+                path.strip_prefix(root)?.as_os_str().as_encoded_bytes(),
+                mode,
+                modified.unix_seconds(),
+                modified.nanoseconds(),
+                meta.is_symlink(),
+                meta.len(),
+            ),
+        )?;
+        if meta.is_symlink() {
+            serde_json::to_writer(
+                &mut *hash,
+                std::fs::read_link(&path)?.as_os_str().as_encoded_bytes(),
+            )?;
+        } else {
+            std::io::copy(&mut std::fs::File::open(&path)?, hash)?;
+        }
+        count += 1;
+    }
+    filetime::set_file_mtime(dir, std::time::UNIX_EPOCH.into())?;
+    Ok(count)
 }
 
 fn retention_policy(root: &Path) -> Result<retention::Retention> {
@@ -331,6 +419,10 @@ mod tests {
 
     impl Rustic for SnapshotFixture {
         fn run(&self, args: &[&str]) -> std::result::Result<RunOut, EngineError> {
+            if args == ["snapshots", "--json", "latest"] {
+                return Err(EngineError::Failed("No snapshots found".into()));
+            }
+            assert!(args.contains(&"--force"));
             self.0.set(self.0.get() + 1);
             let (_, paths) = args.split_at(args.iter().position(|arg| *arg == "--").unwrap() + 1);
             assert_eq!(paths.len(), 1);
@@ -390,5 +482,49 @@ mod tests {
             repository_location(&root, "rclone:remote:bucket").unwrap(),
             "rclone:remote:bucket"
         );
+    }
+    #[test]
+    fn fingerprint_tracks_bytes_with_identical_size_and_time_across_fresh_trees() {
+        fn fingerprint(bytes: &[u8]) -> Vec<u8> {
+            let tree = tempfile::tempdir().unwrap();
+            let path = tree.path().join("file");
+            std::fs::write(&path, bytes).unwrap();
+            filetime::set_file_mtime(&path, std::time::UNIX_EPOCH.into()).unwrap();
+            let mut digest = Sha256::new();
+            assert_eq!(
+                fingerprint_tree(tree.path(), tree.path(), &mut digest).unwrap(),
+                1
+            );
+            digest.finalize().to_vec()
+        }
+        assert_eq!(fingerprint(b"AAA"), fingerprint(b"AAA"));
+        assert_ne!(fingerprint(b"AAA"), fingerprint(b"BBB"));
+    }
+
+    #[test]
+    fn staging_rejects_parent_components_and_directory_links() {
+        let project = tempfile::tempdir().unwrap();
+        let stage = tempfile::tempdir().unwrap();
+        let source = Dir::open_ambient_dir(project.path(), cap_std::ambient_authority()).unwrap();
+        let target = stage.path().join("copy");
+        assert!(stage_file(&source, Path::new("../source"), &target).is_err());
+
+        std::fs::create_dir(project.path().join("src")).unwrap();
+        std::fs::write(project.path().join("src/file"), b"contents").unwrap();
+        #[cfg(unix)]
+        let linked = std::os::unix::fs::symlink("src", project.path().join("link"));
+        #[cfg(windows)]
+        let linked = std::os::windows::fs::symlink_dir("src", project.path().join("link"));
+        match linked {
+            Ok(()) => {
+                assert!(stage_file(&source, Path::new("link/file"), &target).is_err());
+                assert!(!target.exists());
+            }
+            #[cfg(windows)]
+            Err(e) if e.raw_os_error() == Some(1314) => {}
+            Err(e) => panic!("creating fixture directory link: {e}"),
+        }
+        stage_file(&source, Path::new("src/file"), &target).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"contents");
     }
 }

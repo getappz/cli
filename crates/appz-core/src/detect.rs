@@ -339,6 +339,7 @@ pub fn detect_toolchains(root: &Path) -> Result<Vec<DetectedToolchain>, String> 
     let root = crate::paths::canonicalize(root).map_err(|e| e.to_string())?;
     let fs = DetectorFilesystem::new(root.clone());
     let overrides = read_overrides(&root);
+    let package_manager = detect_package_manager(&root);
     let mut detected: Vec<DetectedToolchain> = Vec::new();
 
     // First pass: collect all matches
@@ -354,10 +355,15 @@ pub fn detect_toolchains(root: &Path) -> Result<Vec<DetectedToolchain>, String> 
                 .build_command
                 .clone()
                 .or_else(|| tc.commands.build.map(String::from));
-            let install_cmd = over
-                .install_command
-                .clone()
-                .or_else(|| tc.commands.install.map(String::from));
+            let install_cmd = over.install_command.clone().or_else(|| {
+                tc.commands.install.map(|cmd| {
+                    let cmd = match (tc.mise_plugin, cmd, package_manager) {
+                        ("node", "npm install" | "yarn install", Some(pm)) => pm_install_cmd(pm),
+                        _ => cmd,
+                    };
+                    cmd.to_string()
+                })
+            });
             let dev_cmd = over
                 .dev_command
                 .clone()
@@ -452,6 +458,20 @@ pub fn detect_toolchains(root: &Path) -> Result<Vec<DetectedToolchain>, String> 
     }
 
     Ok(detected)
+}
+
+pub fn detect_package_manager(root: &Path) -> Option<&'static str> {
+    if root.join("pnpm-lock.yaml").exists() {
+        Some("pnpm")
+    } else if root.join("yarn.lock").exists() {
+        Some("yarn")
+    } else if root.join("bun.lockb").exists() || root.join("bun.lock").exists() {
+        Some("bun")
+    } else if root.join("package-lock.json").exists() {
+        Some("npm")
+    } else {
+        None
+    }
 }
 
 /// Map a package manager slug to its install command prefix.

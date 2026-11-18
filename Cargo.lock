@@ -193,6 +193,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "appz-html2md"
+version = "0.1.0"
+dependencies = [
+ "mdream",
+ "url",
+]
+
+[[package]]
 name = "appz-serve"
 version = "0.1.0"
 dependencies = [
@@ -1592,6 +1600,12 @@ name = "maybe-owned"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4facc753ae494aeb6e3c22f839b158aebd4f9270f55cd3c79906c45476c47ab4"
+
+[[package]]
+name = "mdream"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5424a4181fc304424e4428181e874870481aef02ce685a0221cf51c4213d9d0a"
 
 [[package]]
 name = "memchr"

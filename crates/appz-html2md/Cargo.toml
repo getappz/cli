@@ -1,0 +1,18 @@
+[package]
+name = "appz-html2md"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+description = "HTML to Markdown converter (mdream minimal preset with a fallback) shared by the CLI and the edge worker."
+license = "Apache-2.0"
+publish = false
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+mdream = { version = "2.1.0", default-features = false, features = ["markdown", "text"] }
+url = "2"
+
+[lints.rust]
+unsafe_code = "warn"

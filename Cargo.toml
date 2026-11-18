@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/appz", "crates/appz-vault", "crates/appz-core", "crates/appz-deploy", "crates/appz-serve", "crates/command"]
+members = ["crates/appz", "crates/appz-vault", "crates/appz-core", "crates/appz-deploy", "crates/appz-html2md", "crates/appz-serve", "crates/command"]
 resolver = "2"
 
 [profile.release]
@@ -7,3 +7,12 @@ opt-level = 3
 lto = "thin"
 strip = true
 
+
+# Size-optimised build of crates/appz-html2md for wasm32 (scripts/check-html2md-wasm.sh).
+[profile.wasm]
+inherits = "release"
+opt-level = "z"
+panic = "abort"
+lto = true
+codegen-units = 1
+strip = true

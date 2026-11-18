@@ -9,11 +9,9 @@
 //!   appz-named [`ENV_REPOSITORY`] / [`ENV_PASSWORD`], which are translated
 //!   to the `RUSTIC_*` names for the child process.
 //! - init: `rustic init`
-//! - backup: `rustic backup [--json] [--host NAME] [--tag TAG[,TAG]...]
-//!   [--skip-if-unchanged] SOURCE...`. `--json` prints the snapshot object;
-//!   with `--skip-if-unchanged` and no changes rustic prints no JSON and
-//!   exits 0. There is **no** `--files-from`: every selected path is passed
-//!   as its own SOURCE argument.
+//! - backup: `rustic backup --force --json --description DIGEST --as-path / SOURCE`.
+//!   appz compares the staged tree with the latest snapshot, then forces a full
+//!   content read if needed. `--json` prints the new snapshot including its ID.
 //! - list: `rustic snapshots --json` -> array of
 //!   `{ group_key: { hostname, label, paths }, snapshots: [{ id, time, tags,
 //!   summary: { data_added, total_bytes_processed, ... }, ... }] }`
@@ -176,9 +174,8 @@ impl RusticCli {
     }
 
     /// Use the short timeout reserved for read-only queries.
-    pub fn with_query_timeout(mut self) -> Self {
-        self.timeout = QUERY_TIMEOUT;
-        self
+    pub fn with_query_timeout(self) -> Self {
+        self.with_timeout(QUERY_TIMEOUT)
     }
 
     /// Run with an explicit timeout.
@@ -216,7 +213,21 @@ impl RusticCli {
                 self.cwd.display()
             )));
         }
-        let (bin, all, env) = self.invocation(args);
+        // An absolute empty profile keeps Rustic from loading hooks from the project.
+        let profile = tempfile::Builder::new()
+            .suffix(".toml")
+            .tempfile()
+            .map_err(|e| {
+                EngineError::Failed(format!("cannot create a private Rustic profile: {e}"))
+            })?;
+        let profile_path = appz_core::canonicalize(profile.path())
+            .map_err(|e| EngineError::Failed(e.to_string()))?;
+        let profile_path = profile_path
+            .to_str()
+            .ok_or_else(|| EngineError::Failed("Rustic needs a UTF-8 profile path".into()))?;
+        let mut profiled_args = vec!["--use-profile", profile_path];
+        profiled_args.extend_from_slice(args);
+        let (bin, all, env) = self.invocation(&profiled_args);
         let borrowed: Vec<(&str, &str)> = env.iter().map(|(k, v)| (*k, v.as_str())).collect();
         let arg_refs: Vec<&str> = all.iter().map(String::as_str).collect();
 
@@ -304,7 +315,8 @@ fn looks_like_missing_binary(message: &str) -> bool {
 /// Locate `rustic` on PATH or in mise's bin dirs (shims are not always
 /// activated), with the same lookup `appz deploy` uses for platform CLIs.
 pub fn find_rustic(dir: &Path) -> Option<PathBuf> {
-    command::shell::find_command_with_paths("rustic", None, &mise_bin_paths(dir))
+    command::shell::find_command_on_path("rustic")
+        .or_else(|| command::shell::find_command_with_paths("rustic", None, &mise_bin_paths(dir)))
 }
 
 /// Return a usable `rustic` path, installing it through mise first when it is

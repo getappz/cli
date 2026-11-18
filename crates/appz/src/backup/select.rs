@@ -26,6 +26,8 @@ pub struct Selection {
     /// Source files (relative to `root`, sorted) that changed and need a
     /// snapshot.
     pub files: Vec<PathBuf>,
+    /// Changed stage-zero entries, including files normalized by Git clean filters.
+    pub staged: Vec<StagedEntry>,
     /// Variable names found in `.env*` files, sorted and deduped. Values are
     /// never read into this struct.
     pub env_names: Vec<String>,
@@ -38,6 +40,13 @@ pub struct Selection {
 }
 
 #[derive(Debug, Clone)]
+pub struct StagedEntry {
+    path: PathBuf,
+    object_id: String,
+    gitlink: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct GitInfo {
     /// `HEAD`, or empty in a repository with no commits yet.
     pub sha: String,
@@ -61,6 +70,7 @@ pub fn select(root: &Path, output_dirs: &[&str]) -> Result<Selection, String> {
             .collect();
         return Ok(Selection {
             files,
+            staged: Vec::new(),
             env_names,
             git: None,
             bundle: None,
@@ -74,9 +84,23 @@ pub fn select(root: &Path, output_dirs: &[&str]) -> Result<Selection, String> {
     let mut changed: BTreeSet<PathBuf> = BTreeSet::new();
     // Tracked changes and untracked files. `-z` keeps paths verbatim, so
     // spaces and non-ASCII names survive unchanged.
-    for (rel, tracked) in git_status(root)? {
-        if filter.keeps(&rel, !tracked) {
-            changed.insert(rel);
+    let mut staged_paths = BTreeSet::new();
+    for (rel, code) in git_status(root)? {
+        if !filter.keeps(&rel, code == *b"??") {
+            continue;
+        }
+        // AA and AU are unmerged index entries; neither has a stage-zero blob.
+        if matches!(code[0], b'A' | b'C' | b'M' | b'R' | b'T') && !matches!(&code, b"AA" | b"AU") {
+            staged_paths.insert(rel.clone());
+        }
+        if code[1] != b'D' && code[0] != b'D' {
+            match std::fs::symlink_metadata(root.join(&rel)) {
+                Ok(meta) if !meta.is_dir() => {
+                    changed.insert(rel);
+                }
+                Ok(_) => {}
+                Err(e) => return Err(format!("cannot read {}: {e}", rel.display())),
+            }
         }
     }
     // Ignored files are still source when they are not generated - e.g. a
@@ -86,6 +110,7 @@ pub fn select(root: &Path, output_dirs: &[&str]) -> Result<Selection, String> {
             changed.insert(rel);
         }
     }
+    let staged = staged_entries(root, staged_paths)?;
     let bundle = if state.ahead > 0 {
         Some(create_bundle(root)?)
     } else {
@@ -94,6 +119,7 @@ pub fn select(root: &Path, output_dirs: &[&str]) -> Result<Selection, String> {
 
     Ok(Selection {
         files: changed.into_iter().collect(),
+        staged,
         env_names,
         git: Some(state),
         bundle,
@@ -103,7 +129,7 @@ pub fn select(root: &Path, output_dirs: &[&str]) -> Result<Selection, String> {
 /// Decides which paths are source worth keeping. Built once per selection.
 struct Filter {
     /// Declared build output dirs, normalised to `a/b` form.
-    outputs: Vec<String>,
+    outputs: Vec<PathBuf>,
 }
 
 impl Filter {
@@ -113,6 +139,7 @@ impl Filter {
             .map(|d| d.replace('\\', "/"))
             .map(|d| d.trim_start_matches("./").trim_end_matches('/').to_string())
             .filter(|d| !d.is_empty())
+            .map(PathBuf::from)
             .collect();
         Self { outputs }
     }
@@ -121,31 +148,18 @@ impl Filter {
     /// state or logs; a tracked file is the user's own work, so only secrets
     /// and the declared output dirs are excluded for it.
     fn keeps(&self, rel: &Path, generated: bool) -> bool {
-        let name = rel
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        if is_secret_env(&name) {
+        let name = rel.file_name().unwrap_or_default().as_encoded_bytes();
+        if is_secret_env(name) {
             return false;
         }
-        let joined = rel
-            .components()
-            .map(|c| c.as_os_str().to_string_lossy())
-            .collect::<Vec<_>>()
-            .join("/");
-        if self.outputs.iter().any(|d| {
-            joined == *d
-                || joined
-                    .strip_prefix(d.as_str())
-                    .is_some_and(|rest| rest.starts_with('/'))
-        }) {
+        if self.outputs.iter().any(|d| rel.starts_with(d)) {
             return false;
         }
         if generated {
             let in_skip_dir = rel
                 .components()
-                .any(|c| SKIP_DIRS.contains(&c.as_os_str().to_string_lossy().as_ref()));
-            if in_skip_dir || is_generated_file(&name) {
+                .any(|c| SKIP_DIRS.iter().any(|d| c.as_os_str() == *d));
+            if in_skip_dir || is_generated_file(name) {
                 return false;
             }
         }
@@ -154,18 +168,18 @@ impl Filter {
 }
 
 /// `.env*` holds secrets; `.env.example` and friends only document names.
-fn is_secret_env(name: &str) -> bool {
-    name.starts_with(".env")
-        && ![".example", ".sample", ".template"]
+fn is_secret_env(name: &[u8]) -> bool {
+    name.starts_with(b".env")
+        && ![b".example".as_slice(), b".sample", b".template"]
             .iter()
             .any(|suffix| name.ends_with(suffix))
 }
 
-fn is_generated_file(name: &str) -> bool {
-    name.ends_with(".log")
-        || name.ends_with(".tsbuildinfo")
-        || name == ".DS_Store"
-        || name == "Thumbs.db"
+fn is_generated_file(name: &[u8]) -> bool {
+    name.ends_with(b".log")
+        || name.ends_with(b".tsbuildinfo")
+        || name == b".DS_Store"
+        || name == b"Thumbs.db"
 }
 
 fn git(root: &Path, args: &[&str]) -> Result<std::process::Output, String> {
@@ -179,11 +193,17 @@ fn git(root: &Path, args: &[&str]) -> Result<std::process::Output, String> {
 }
 
 fn git_ok(root: &Path, args: &[&str]) -> Result<String, String> {
+    Ok(String::from_utf8_lossy(&git_stdout(root, args)?)
+        .trim()
+        .to_string())
+}
+
+fn git_stdout(root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
     let out = git(root, args)?;
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    Ok(out.stdout)
 }
 
 /// `None` only when `root` is genuinely not inside a work tree. Any other git
@@ -267,9 +287,9 @@ fn has_git_dir(root: &Path) -> bool {
 }
 
 /// Paths git reports as modified/staged/untracked, relative to `root`, with
-/// whether the path is tracked.
-fn git_status(root: &Path) -> Result<Vec<(PathBuf, bool)>, String> {
-    let out = git(
+/// the two-column porcelain status.
+fn git_status(root: &Path) -> Result<Vec<(PathBuf, [u8; 2])>, String> {
+    let out = git_stdout(
         root,
         &[
             "status",
@@ -280,46 +300,48 @@ fn git_status(root: &Path) -> Result<Vec<(PathBuf, bool)>, String> {
             ".",
         ],
     )?;
-    if !out.status.success() {
-        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
-    }
     // Porcelain paths are repo-root relative; drop the prefix down to `root`.
-    let prefix = git_ok(root, &["rev-parse", "--show-prefix"])?;
+    let prefix = git_stdout(root, &["rev-parse", "--show-prefix"])?;
+    let prefix = prefix.strip_suffix(b"\n").unwrap_or(&prefix);
 
     let mut paths = Vec::new();
-    let mut entries = out.stdout.split(|b| *b == 0);
+    let mut entries = out.split(|b| *b == 0);
     while let Some(entry) = entries.next() {
         if entry.len() < 4 {
             continue;
         }
-        let code = &entry[..2];
+        let code = [entry[0], entry[1]];
         let path = &entry[3..];
         // A rename/copy entry is followed by the old path; skip it.
-        if code[0] == b'R' || code[0] == b'C' {
+        if code.iter().any(|c| matches!(c, b'R' | b'C')) {
             entries.next();
         }
-        // Deleted files cannot be snapshotted.
-        if code[0] == b'D' || code[1] == b'D' {
-            continue;
-        }
-        let raw = String::from_utf8_lossy(path).into_owned();
-        let rel = match raw.strip_prefix(&prefix) {
-            Some(rest) => PathBuf::from(rest),
-            None if prefix.is_empty() => PathBuf::from(raw),
-            None => continue,
-        };
-        if root.join(&rel).is_file() {
-            paths.push((rel, code != b"??"));
+        if let Some(rel) = path.strip_prefix(prefix) {
+            paths.push((git_path(rel)?.to_owned(), code));
         }
     }
     Ok(paths)
+}
+
+fn git_path(bytes: &[u8]) -> Result<&Path, String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        Ok(Path::new(std::ffi::OsStr::from_bytes(bytes)))
+    }
+    #[cfg(not(unix))]
+    {
+        std::str::from_utf8(bytes)
+            .map(Path::new)
+            .map_err(|_| "Git reported a non-UTF-8 backup path".to_string())
+    }
 }
 
 /// Individually ignored files (relative to `root`). `--directory` collapses an
 /// ignored directory to one `dir/` entry instead of listing (and walking) all
 /// of `node_modules`; those are skipped here as generated by convention.
 fn ignored_files(root: &Path) -> Result<Vec<PathBuf>, String> {
-    let out = git(
+    let out = git_stdout(
         root,
         &[
             "ls-files",
@@ -330,15 +352,71 @@ fn ignored_files(root: &Path) -> Result<Vec<PathBuf>, String> {
             "-z",
         ],
     )?;
-    if !out.status.success() {
-        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
-    }
-    Ok(out
-        .stdout
-        .split(|b| *b == 0)
+    out.split(|b| *b == 0)
         .filter(|p| !p.is_empty() && !p.ends_with(b"/"))
-        .map(|p| PathBuf::from(String::from_utf8_lossy(p).into_owned()))
-        .collect())
+        .map(|p| git_path(p).map(Path::to_owned))
+        .collect()
+}
+
+/// Resolve all selected paths against one index before streaming any objects.
+fn staged_entries(root: &Path, mut paths: BTreeSet<PathBuf>) -> Result<Vec<StagedEntry>, String> {
+    let mut entries = Vec::new();
+    if paths.is_empty() {
+        return Ok(entries);
+    }
+    let index = git_stdout(root, &["ls-files", "--stage", "-z", "--", "."])?;
+    for record in index.split(|&b| b == 0).filter(|r| !r.is_empty()) {
+        let tab = record
+            .iter()
+            .position(|&b| b == b'\t')
+            .ok_or("invalid git index record")?;
+        let path = git_path(&record[tab + 1..])?;
+        let header = std::str::from_utf8(&record[..tab]).map_err(|_| "invalid git index header")?;
+        let mut fields = header.split(' ');
+        let mode = fields.next().ok_or("missing git index mode")?;
+        let id = fields.next().ok_or("missing git object ID")?;
+        if fields.next() == Some("0") && paths.remove(path) {
+            entries.push(StagedEntry {
+                path: path.to_owned(),
+                object_id: id.to_string(),
+                gitlink: mode == "160000",
+            });
+        }
+    }
+    if let Some(path) = paths.first() {
+        return Err(format!(
+            "git index changed during backup: {}",
+            path.display()
+        ));
+    }
+    Ok(entries)
+}
+
+/// Gitlinks refer to commits in a separate repository; preserve their pins as text.
+pub fn save_staged(root: &Path, entry: &StagedEntry, stage: &Path) -> Result<(), String> {
+    let id = &entry.object_id;
+    let directory = if entry.gitlink {
+        "git/gitlinks"
+    } else {
+        "git/index"
+    };
+    let target = stage.join(directory).join(id).join(&entry.path);
+    std::fs::create_dir_all(target.parent().unwrap()).map_err(|e| e.to_string())?;
+    if entry.gitlink {
+        std::fs::write(&target, format!("{id}\n")).map_err(|e| e.to_string())?;
+    } else {
+        let file = std::fs::File::create(&target).map_err(|e| e.to_string())?;
+        let out = Command::new("git")
+            .args(["cat-file", "blob", id])
+            .current_dir(root)
+            .stdout(file)
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !out.status.success() {
+            return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+        }
+    }
+    filetime::set_file_mtime(target, std::time::UNIX_EPOCH.into()).map_err(|e| e.to_string())
 }
 
 const BUNDLE_DIR_PREFIX: &str = "appz-backup-";
@@ -349,9 +427,7 @@ const BUNDLE_FILE: &str = "local-commits.bundle";
 /// directory (unpredictable name, owner-only on Unix), never loose in the
 /// shared temp dir.
 fn create_bundle(root: &Path) -> Result<PathBuf, String> {
-    let dir = tempfile::Builder::new()
-        .prefix(BUNDLE_DIR_PREFIX)
-        .tempdir()
+    let dir = super::private_tempdir()
         .map_err(|e| format!("cannot create a private directory for the git bundle: {e}"))?;
     let path = dir.path().join(BUNDLE_FILE);
     let path_str = path.to_string_lossy().into_owned();
@@ -407,7 +483,7 @@ fn env_names(root: &Path, source: &[PathBuf]) -> Vec<String> {
         .iter()
         .filter(|p| {
             p.file_name()
-                .is_some_and(|n| n.to_string_lossy().starts_with(".env"))
+                .is_some_and(|n| n.as_encoded_bytes().starts_with(b".env"))
         })
         .cloned()
         .collect();
@@ -415,8 +491,8 @@ fn env_names(root: &Path, source: &[PathBuf]) -> Vec<String> {
     // names are still worth reporting.
     if let Ok(entries) = std::fs::read_dir(root) {
         for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if name.starts_with(".env") && entry.path().is_file() {
+            let name = entry.file_name();
+            if name.as_encoded_bytes().starts_with(b".env") && entry.path().is_file() {
                 candidates.insert(PathBuf::from(name));
             }
         }
@@ -763,5 +839,123 @@ mod tests {
         assert!(dir.is_dir());
         remove_bundle(&bundle);
         assert!(!dir.exists());
+    }
+
+    #[test]
+    fn staged_bytes_survive_an_edit_or_deletion_in_the_worktree() {
+        let repo = git_repo(&[("file", "base"), (".env", "OLD=secret")]);
+        let _remote = with_remote(&repo);
+        repo.write("file", "staged");
+        repo.write(".env", "TOKEN=before");
+        repo.git(&["add", "."]);
+        repo.write("file", "working");
+        repo.write(".env", "TOKEN=after");
+        let stage = tempfile::tempdir().unwrap();
+        let id = git_ok(repo.path(), &["rev-parse", ":file"]).unwrap();
+        for exists in [true, false] {
+            if !exists {
+                std::fs::remove_file(repo.path().join("file")).unwrap();
+            }
+            let selected = select(repo.path(), &[]).unwrap();
+            assert_eq!(selected.staged.len(), 1);
+            assert_eq!(selected.staged[0].path, Path::new("file"));
+            assert_eq!(selected.files.len(), usize::from(exists));
+            save_staged(repo.path(), &selected.staged[0], stage.path()).unwrap();
+            assert_eq!(
+                std::fs::read(stage.path().join("git/index").join(&id).join("file")).unwrap(),
+                b"staged"
+            );
+        }
+    }
+
+    #[test]
+    fn staged_blobs_keep_clean_filter_bytes_from_one_index_view() {
+        let repo = git_repo(&[
+            (".gitattributes", "*.txt text eol=crlf\n"),
+            ("a.txt", "base\n"),
+        ]);
+        let _remote = with_remote(&repo);
+        repo.write("a.txt", "one\r\n");
+        repo.write("b.txt", "two\r\n");
+        repo.git(&["add", "."]);
+        let selected = select(repo.path(), &[]).unwrap();
+        assert_eq!(rels(&selected.files), ["a.txt", "b.txt"]);
+        let ids = ["a.txt", "b.txt"]
+            .map(|name| git_ok(repo.path(), &["rev-parse", &format!(":{name}")]).unwrap());
+        repo.write("a.txt", "three\r\n");
+        repo.write("b.txt", "four\r\n");
+        repo.git(&["add", "."]);
+        let stage = tempfile::tempdir().unwrap();
+        for entry in &selected.staged {
+            save_staged(repo.path(), entry, stage.path()).unwrap();
+        }
+        for ((name, expected), id) in [("a.txt", "one\n"), ("b.txt", "two\n")]
+            .into_iter()
+            .zip(ids)
+        {
+            assert_eq!(
+                std::fs::read(stage.path().join("git/index").join(id).join(name)).unwrap(),
+                expected.as_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn staged_gitlink_saves_its_commit_reference() {
+        let repo = git_repo(&[("file", "one")]);
+        let _remote = with_remote(&repo);
+        let id = git_ok(repo.path(), &["rev-parse", "HEAD"]).unwrap();
+        repo.git(&[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{id},child"),
+        ]);
+        let selected = select(repo.path(), &[]).unwrap();
+        let stage = tempfile::tempdir().unwrap();
+        save_staged(repo.path(), &selected.staged[0], stage.path()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(stage.path().join("git/gitlinks").join(&id).join("child"))
+                .unwrap(),
+            format!("{id}\n")
+        );
+    }
+
+    #[test]
+    fn worktree_rename_consumes_the_source_field() {
+        let repo = git_repo(&[("old-script.txt", "contents")]);
+        let _remote = with_remote(&repo);
+        repo.git(&["config", "status.renames", "true"]);
+        std::fs::rename(
+            repo.path().join("old-script.txt"),
+            repo.path().join("new-script.txt"),
+        )
+        .unwrap();
+        repo.git(&["add", "-N", "new-script.txt"]);
+        assert_eq!(
+            rels(&select(repo.path(), &[]).unwrap().files),
+            ["new-script.txt"]
+        );
+    }
+
+    // Linux supports arbitrary filename bytes. The default macOS filesystem requires UTF-8.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn non_utf8_git_paths_are_filtered_losslessly() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let repo = git_repo(&[(".gitignore", ".env.ignored*\n")]);
+        let _remote = with_remote(&repo);
+        for bytes in [
+            b".env.ignored\xff".as_slice(),
+            b".env.untracked\xff",
+            b"source\xff",
+        ] {
+            std::fs::write(repo.path().join(OsStr::from_bytes(bytes)), "file").unwrap();
+        }
+        assert_eq!(
+            select(repo.path(), &[]).unwrap().files,
+            [PathBuf::from(OsStr::from_bytes(b"source\xff"))]
+        );
     }
 }

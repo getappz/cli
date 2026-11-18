@@ -40,12 +40,45 @@ appz dev       # start the dev server
 appz test      # run tests
 appz lint      # run the linter
 appz format    # run the formatter
+appz backup    # snapshot local source and unpushed commits with Rustic
 appz deploy    # deploy via the target platform's own CLI
 appz ci        # write a GitHub Actions deploy workflow
 appz doctor    # diagnose project stack, config, and suggestions
 appz mcp       # stdio MCP server exposing detect/doctor/run to AI agents
 appz skills add  # install the appz agent skill into detected AI agents (--global for user-wide)
 ```
+
+Set `APPZ_BACKUP_REPOSITORY` to a dedicated repository outside the project.
+Store its password with `appz vault set APPZ_BACKUP_PASSWORD` and run
+`appz vault unlock` before backing up, or set `APPZ_BACKUP_PASSWORD` for
+unattended runs. Run `appz backup` to create a snapshot and `appz backup list`
+to see snapshots. Run `appz backup prune` to apply retention to the entire repository.
+Rustic is lock-free. Run retention when no other process is backing up to or
+maintaining that repository.
+
+Restore into an empty directory with `appz backup restore latest <destination>`.
+The `worktree/` directory contains selected files at their project-relative paths.
+If the backup includes local commits, locate `git/<digest>/local-commits.bundle`
+under the destination. For a project with pushed history, clone the original
+repository and enter that checkout. For a project that was never pushed, create
+an empty checkout with `git init recovered-project` and enter it with
+`cd recovered-project`. From the checkout, verify the bundle and fetch its HEAD
+into a new branch.
+
+```sh
+git bundle verify <absolute-path-to-bundle>
+git fetch <absolute-path-to-bundle> HEAD:refs/heads/recovered
+git switch recovered
+```
+
+The bundle requires any pushed base commits listed by `git bundle verify`.
+If those commits are lost, the incremental bundle alone cannot rebuild the history.
+Working-tree environment files are excluded, but a bundle includes whatever
+was committed. Copy restored working files into the checkout. For each changed
+stage-zero blob, `git/index/<blob-id>/<project-relative-path>` holds the staged
+bytes, even when they match the working copy. For a staged Git submodule entry
+(gitlink), `git/gitlinks/<commit-id>/<project-relative-path>` contains the
+submodule commit ID on a single line.
 
 ## Install
 

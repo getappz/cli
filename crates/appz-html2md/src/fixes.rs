@@ -33,7 +33,9 @@ fn strip_data_images(line: &str) -> String {
         let Some(close) = after.find("](") else { break };
         let url_start = start + 2 + close + 2;
         let url_part = &rest[url_start..];
-        let Some(end) = matching_paren(url_part) else { break };
+        let Some(end) = matching_paren(url_part) else {
+            break;
+        };
         let url = &url_part[..end];
         if url.is_empty() || url.starts_with("data:") {
             out.push_str(&rest[..start]);
@@ -65,7 +67,9 @@ fn drop_empty_links(line: &str) -> String {
     let mut out = String::with_capacity(line.len());
     let mut rest = line;
     while let Some(i) = rest.find("[](") {
-        let Some(end) = matching_paren(&rest[i + 3..]) else { break };
+        let Some(end) = matching_paren(&rest[i + 3..]) else {
+            break;
+        };
         out.push_str(&rest[..i]);
         rest = &rest[i + 3 + end + 1..];
     }
@@ -109,7 +113,7 @@ pub fn strip_front_matter(md: &str) -> &str {
 
 /// Swap mdream's front matter for `title` / `description` / `image` built from
 /// the page's meta tags (`name=` beats `og:`), then append JSON-LD blocks.
-pub fn finish(md: String, html: &str, origin: &str) -> String {
+pub fn finish(md: String, html: &str, origin: Option<&str>) -> String {
     let title = front_matter_title(&md).map(str::to_owned);
     let body = strip_front_matter(&md).trim_start_matches('\n');
     let metas = meta_tags(html);
@@ -127,7 +131,7 @@ pub fn finish(md: String, html: &str, origin: &str) -> String {
         fm.push_str(&format!("description: {}\n", yaml_quote(d)));
     }
     if let Some(i) = pick(&["image", "twitter:image", "og:image"]) {
-        let abs = resolve(i, origin);
+        let abs = origin.map_or_else(|| i.to_owned(), |o| resolve(i, o));
         fm.push_str(&format!("image: {}\n", yaml_quote(&abs)));
     }
 
@@ -175,11 +179,14 @@ fn meta_tags(html: &str) -> Vec<(String, String)> {
     let mut pos = 0;
     while let Some(i) = lower[pos..end].find("<meta") {
         let start = pos + i + 5;
-        let Some(len) = lower[start..end].find('>') else { break };
+        let Some(len) = lower[start..end].find('>') else {
+            break;
+        };
         let attrs = parse_attrs(&html[start..start + len]);
         pos = start + len;
         let get = |k: &str| attrs.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
-        if let (Some(key), Some(content)) = (get("name").or_else(|| get("property")), get("content"))
+        if let (Some(key), Some(content)) =
+            (get("name").or_else(|| get("property")), get("content"))
         {
             out.push((key.to_ascii_lowercase(), decode_entities(&content)));
         }
@@ -252,9 +259,13 @@ fn json_ld_blocks(html: &str) -> Vec<String> {
     let mut pos = 0;
     while let Some(i) = lower[pos..].find("<script") {
         let tag_start = pos + i + 7;
-        let Some(gt) = lower[tag_start..].find('>') else { break };
+        let Some(gt) = lower[tag_start..].find('>') else {
+            break;
+        };
         let content_start = tag_start + gt + 1;
-        let Some(end) = lower[content_start..].find("</script") else { break };
+        let Some(end) = lower[content_start..].find("</script") else {
+            break;
+        };
         pos = content_start + end;
         if lower[tag_start..tag_start + gt].contains("ld+json") {
             let body = html[content_start..content_start + end].trim();

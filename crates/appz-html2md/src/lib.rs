@@ -61,6 +61,15 @@ pub fn convert(html: &[u8], origin: &url::Url) -> Result<Converted, ConvertError
 
 /// [`convert`] with the page URL as an absolute-URL string.
 pub fn convert_str(html: &[u8], origin: &str) -> Result<Converted, ConvertError> {
+    convert_with(html, Some(origin))
+}
+
+/// [`convert`] with no known host: links and images stay as written (relative).
+pub fn convert_relative(html: &[u8]) -> Result<Converted, ConvertError> {
+    convert_with(html, None)
+}
+
+fn convert_with(html: &[u8], origin: Option<&str>) -> Result<Converted, ConvertError> {
     if html.len() > MAX_HTML_BYTES {
         return Err(ConvertError::TooLarge);
     }
@@ -96,7 +105,7 @@ pub fn convert_str(html: &[u8], origin: &str) -> Result<Converted, ConvertError>
 /// The minimal preset alone, without the safety net. Test support.
 #[doc(hidden)]
 pub fn convert_minimal_only(html: &str, origin: &str) -> String {
-    run(html, origin, Variant::Minimal)
+    run(html, Some(origin), Variant::Minimal)
 }
 
 #[derive(Clone, Copy)]
@@ -105,13 +114,13 @@ enum Variant {
     FilterOnly,
 }
 
-fn run(html: &str, origin: &str, variant: Variant) -> String {
+fn run(html: &str, origin: Option<&str>, variant: Variant) -> String {
     let exclude: &[&str] = match variant {
         Variant::Minimal => &["nav", "footer", "form"],
         Variant::FilterOnly => &["nav", "footer", "form", "aside", "header"],
     };
     let options = HtmlToMarkdownOptions {
-        origin: Some(origin.to_owned()),
+        origin: origin.map(str::to_owned),
         clean: Some(CleanConfig::all()),
         plugins: Some(PluginConfig {
             frontmatter: Some(FrontmatterConfig::default()),

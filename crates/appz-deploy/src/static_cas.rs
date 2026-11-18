@@ -46,42 +46,53 @@ struct IgnoreRule {
 struct IgnoreRules(Vec<IgnoreRule>);
 
 impl IgnoreRules {
-    fn load(root: &Path) -> Self {
-        let text = [".appzignore", ".vercelignore"]
-            .iter()
-            .find_map(|name| std::fs::read_to_string(root.join(name)).ok())
-            .unwrap_or_default();
-        Self::parse(&text)
+    fn load(root: &Path) -> Result<(Self, &'static str), String> {
+        for name in [".appzignore", ".vercelignore"] {
+            let path = root.join(name);
+            match std::fs::symlink_metadata(&path) {
+                Ok(metadata) if !metadata.is_file() => continue,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(format!("Failed to inspect {}: {e}", path.display())),
+                Ok(_) => {}
+            }
+            let text = std::fs::read_to_string(&path)
+                .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
+            return Ok((Self::parse(name, &text)?, name));
+        }
+        Ok((Self::default(), ".appzignore"))
     }
 
-    fn parse(text: &str) -> Self {
-        let rules = text
-            .lines()
-            .filter_map(|line| {
-                let line = line.trim();
-                if line.is_empty() || line.starts_with('#') {
-                    return None;
-                }
-                let (negated, line) = match line.strip_prefix('!') {
-                    Some(rest) => (true, rest),
-                    None => (false, line),
-                };
-                let (dir_only, line) = match line.strip_suffix('/') {
-                    Some(rest) => (true, rest),
-                    None => (false, line),
-                };
-                let anchored = line.contains('/');
-                let line = line.trim_start_matches('/');
-                let pattern = glob::Pattern::new(line).ok()?;
-                Some(IgnoreRule {
-                    pattern,
-                    negated,
-                    dir_only,
-                    anchored,
-                })
-            })
-            .collect();
-        Self(rules)
+    fn parse(name: &str, text: &str) -> Result<Self, String> {
+        let mut rules = Vec::new();
+        for (index, line) in text.lines().enumerate() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let negated = line.starts_with('!');
+            let line = line.strip_prefix('!').unwrap_or(line);
+            let dir_only = line.ends_with('/');
+            let line = line.strip_suffix('/').unwrap_or(line);
+            let anchored = line.contains('/');
+            let line = line.trim_start_matches('/');
+            let number = index + 1;
+            if line.is_empty() {
+                return Err(format!("{name}:{number}: empty ignore pattern"));
+            }
+            if line.contains("**") {
+                return Err(format!(
+                    "{name}:{number}: recursive wildcard ** is unsupported"
+                ));
+            }
+            let pattern = glob::Pattern::new(line).map_err(|e| format!("{name}:{number}: {e}"))?;
+            rules.push(IgnoreRule {
+                pattern,
+                negated,
+                dir_only,
+                anchored,
+            });
+        }
+        Ok(Self(rules))
     }
 
     /// `Some(true)` = ignore, `Some(false)` = explicitly kept (negation),
@@ -90,7 +101,7 @@ impl IgnoreRules {
         let parts: Vec<&str> = rel.split(['/', '\\']).filter(|p| !p.is_empty()).collect();
         let opts = glob::MatchOptions {
             require_literal_separator: true,
-            ..Default::default()
+            ..glob::MatchOptions::new()
         };
         let mut decision = None;
         for rule in &self.0 {
@@ -308,7 +319,7 @@ pub fn scan_output_dir(output_dir: &Path) -> Result<ScannedTree, String> {
     }
 
     let mut candidates = Vec::new();
-    let rules = IgnoreRules::load(output_dir);
+    let (rules, ignore_file) = IgnoreRules::load(output_dir)?;
 
     for entry in WalkDir::new(output_dir)
         .follow_links(false)
@@ -338,9 +349,9 @@ pub fn scan_output_dir(output_dir: &Path) -> Result<ScannedTree, String> {
         let size = metadata.len() as usize;
         if size > MAX_FILE_SIZE {
             return Err(format!(
-                "File '{}' exceeds maximum allowed size of 25 MB (size: {} bytes). \
-                 Add it to .appzignore to leave it out of the deploy",
-                norm_path, size
+                "File '{norm_path}' exceeds maximum allowed size of 25 MB (size: {size} bytes). \
+                 Add this rule to {ignore_file} to leave it out of the deploy:\n{}",
+                glob::Pattern::escape(&norm_path)
             ));
         }
 
@@ -560,12 +571,17 @@ mod tests {
 
     #[test]
     fn negation_overrides_hidden_default() {
-        let rules = IgnoreRules::parse("# c\n!.hallmark\n*.log\ndrafts/\n/private/*.md\n");
+        let rules = IgnoreRules::parse(
+            ".appzignore",
+            "# c\n!.hallmark\n*.log\ndrafts/\n/private/*.md\n",
+        )
+        .unwrap();
         assert!(!is_ignored(".hallmark/a.json", &rules));
         assert!(is_ignored("x/debug.log", &rules));
         assert!(is_ignored("drafts/a.html", &rules));
         assert!(!is_ignored("drafts", &rules));
         assert!(is_ignored("private/a.md", &rules));
+        assert!(!is_ignored("Private/a.md", &rules));
         assert!(!is_ignored("other/private/a.md", &rules));
         assert!(is_ignored(".wrangler/x", &rules));
     }
@@ -586,9 +602,45 @@ mod tests {
         };
         assert_eq!(paths(dir.path()), vec!["/index.html"]);
 
+        let appzignore = dir.path().join(".appzignore");
+        std::fs::create_dir(&appzignore).unwrap();
+        assert_eq!(paths(dir.path()), vec!["/index.html"]);
+        std::fs::remove_dir(&appzignore).unwrap();
+
         // .appzignore wins over .vercelignore.
-        std::fs::write(dir.path().join(".appzignore"), "index.html\n").unwrap();
+        std::fs::write(appzignore, "index.html\n").unwrap();
         assert_eq!(paths(dir.path()), vec!["/secret.txt"]);
+    }
+
+    #[test]
+    fn invalid_ignore_file_aborts_the_scan() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join(".vercelignore"), "*.txt").unwrap();
+        let file = dir.path().join(".appzignore");
+        std::fs::write(&file, [0xff]).unwrap();
+        assert!(
+            scan_output_dir(dir.path())
+                .unwrap_err()
+                .contains(".appzignore")
+        );
+        for invalid in ["!/private/**/report.txt", "[unterminated"] {
+            std::fs::write(&file, format!("/private/\n{invalid}\n")).unwrap();
+            let err = scan_output_dir(dir.path()).unwrap_err();
+            assert!(err.contains(".appzignore:2"), "{err}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_ignore_file_is_skipped() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("outside-rules"), "index.html").unwrap();
+        std::os::unix::fs::symlink("outside-rules", dir.path().join(".appzignore")).unwrap();
+        std::fs::write(dir.path().join(".vercelignore"), "outside-rules").unwrap();
+        std::fs::write(dir.path().join("index.html"), "hi").unwrap();
+        let scan = scan_output_dir(dir.path()).unwrap();
+        assert_eq!(scan.files.len(), 1);
+        assert_eq!(scan.files[0].path, "/index.html");
     }
 
     #[test]
@@ -601,14 +653,26 @@ mod tests {
     #[test]
     fn test_scan_output_dir_rejects_oversized_file() {
         let dir = tempdir().unwrap();
-        let large_file = dir.path().join("large.bin");
+        let large_file = dir.path().join("[draft].bin");
         // Create sparse or truncated file simulating > 25 MB
         let f = std::fs::File::create(&large_file).unwrap();
         f.set_len((MAX_FILE_SIZE + 1024) as u64).unwrap();
 
         let err = scan_output_dir(dir.path()).unwrap_err();
         assert!(err.contains("exceeds maximum allowed size of 25 MB"));
-        assert!(err.contains("/large.bin"));
+        assert!(err.contains("/[draft].bin"));
         assert!(err.contains(".appzignore"));
+
+        let active = dir.path().join(".vercelignore");
+        std::fs::write(&active, "private.txt\n").unwrap();
+        std::fs::write(dir.path().join("private.txt"), "private").unwrap();
+        std::fs::write(dir.path().join("index.html"), "hi").unwrap();
+        let err = scan_output_dir(dir.path()).unwrap_err();
+        assert!(err.contains(".vercelignore"));
+        let rule = err.lines().last().unwrap();
+        std::fs::write(&active, format!("private.txt\n{rule}\n")).unwrap();
+        let scan = scan_output_dir(dir.path()).unwrap();
+        assert_eq!(scan.files.len(), 1);
+        assert_eq!(scan.files[0].path, "/index.html");
     }
 }

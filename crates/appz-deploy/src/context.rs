@@ -82,6 +82,29 @@ pub fn read_deploy_config(project_dir: &Path) -> DeployResult<Option<DeployConfi
     }
 }
 
+/// The `markdown` section of `appz.jsonc`: opt-in "Markdown for Agents".
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct MarkdownConfig {
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+/// Read `markdown` from `appz.jsonc`. A missing file or key means disabled;
+/// malformed JSON or a wrongly typed value is an error.
+pub fn read_markdown_config(project_dir: &Path) -> DeployResult<MarkdownConfig> {
+    let path = project_dir.join("appz.jsonc");
+    if !path.exists() {
+        return Ok(MarkdownConfig::default());
+    }
+    let content = std::fs::read_to_string(&path)?;
+    let cleaned = appz_core::strip_jsonc(&content);
+    let root: serde_json::Value = serde_json::from_str(&cleaned)?;
+    match root.get("markdown") {
+        Some(v) => Ok(serde_json::from_value(v.clone())?),
+        None => Ok(MarkdownConfig::default()),
+    }
+}
+
 pub struct DeployContext {
     pub project_dir: PathBuf,
     pub output_dir: String,

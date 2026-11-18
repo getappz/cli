@@ -14,16 +14,36 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use crate::context::DeployContext;
+use crate::context::{DeployContext, read_markdown_config};
 use crate::error::{DeployError, DeployResult};
+use crate::markdown::{HttpMarkdownConverter, add_markdown_siblings};
 use crate::output::{
     DeployOutput, DeployStatus, DeploymentInfo, DeploymentInspect, DetectedConfig,
     DomainVerifyResult, PrerequisiteStatus, ProjectDomain, ProjectInfo,
 };
 use crate::provider::DeployProvider;
-use crate::static_cas::scan_output_dir;
+use crate::static_cas::{ScannedFileEntry, scan_output_dir};
 
 pub struct AppzdevProvider;
+
+/// Body of `POST /api/v0/deployments`. `flags` is sent only when a feature is
+/// on, so deploys without opt-ins keep the exact pre-existing payload.
+pub(crate) fn negotiate_payload(
+    project_id: &str,
+    target: &str,
+    files: &[ScannedFileEntry],
+    markdown: bool,
+) -> serde_json::Value {
+    let mut payload = serde_json::json!({
+        "projectId": project_id,
+        "target": target,
+        "files": files,
+    });
+    if markdown {
+        payload["flags"] = serde_json::json!({ "markdown": true });
+    }
+    payload
+}
 
 const DEFAULT_API_URL: &str = "https://api.appz.dev";
 
@@ -774,7 +794,7 @@ impl AppzdevProvider {
         }
 
         let output_path = ctx.output_path();
-        let scanned = scan_output_dir(&output_path).map_err(|e| DeployError::DeployFailed {
+        let mut scanned = scan_output_dir(&output_path).map_err(|e| DeployError::DeployFailed {
             provider: self.name(),
             reason: e,
         })?;
@@ -794,11 +814,36 @@ impl AppzdevProvider {
         let token_opt = resolve_auth_token(Some(ctx));
         let target = if is_preview { "preview" } else { "production" };
 
-        let payload = serde_json::json!({
-            "projectId": project_id,
-            "target": target,
-            "files": scanned.files,
-        });
+        // Opt-in "Markdown for Agents": add a `.md` sibling per `.html`, converted
+        // by the hosted API. The guard owns the generated files, so it must
+        // outlive the uploads. Conversion problems only cost a page its
+        // sibling: they warn, they never fail the deploy.
+        let markdown_enabled = read_markdown_config(&ctx.project_dir)?.enabled;
+        let _markdown_siblings = if markdown_enabled {
+            // The project's primary host is not known to this provider yet, so
+            // links in the siblings stay relative.
+            let converter = HttpMarkdownConverter::new(&api_base, token_opt.as_deref());
+            match add_markdown_siblings(&output_path, &mut scanned, None, &converter) {
+                Ok(guard) => {
+                    if let Some(warning) = guard.warning()
+                        && !ctx.json_output
+                    {
+                        eprintln!("warning: {warning}");
+                    }
+                    Some(guard)
+                }
+                Err(e) => {
+                    if !ctx.json_output {
+                        eprintln!("warning: Markdown for Agents: skipped ({e})");
+                    }
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        let payload = negotiate_payload(&project_id, target, &scanned.files, markdown_enabled);
 
         // Step 1: POST /api/v0/deployments - Handshake & missing blob diff
         let create_url = format!("{}/api/v0/deployments", api_base);

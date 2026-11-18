@@ -769,20 +769,6 @@ fn run_cmd(program: &str, args: &[&str], dir: &std::path::Path) -> bool {
     }
 }
 
-fn detect_package_manager(root: &Path) -> Option<&'static str> {
-    if root.join("pnpm-lock.yaml").exists() {
-        Some("pnpm")
-    } else if root.join("yarn.lock").exists() {
-        Some("yarn")
-    } else if root.join("bun.lockb").exists() || root.join("bun.lock").exists() {
-        Some("bun")
-    } else if root.join("package-lock.json").exists() {
-        Some("npm")
-    } else {
-        None
-    }
-}
-
 fn do_detect_and_write(root: &Path) -> Vec<appz_core::DetectedToolchain> {
     let toolchains = with_spinner("detecting toolchains...", "toolchains detected", || {
         let tc =
@@ -815,18 +801,18 @@ fn do_detect_and_write(root: &Path) -> Vec<appz_core::DetectedToolchain> {
     toolchains
 }
 
-fn do_mise_install(root: &Path) {
+fn do_mise_install(root: &Path) -> bool {
     if let Err(e) = appz_core::ensure_mise(root) {
         warning(&e);
-        return;
+        return false;
     }
     if let Err(e) = appz_core::trust(root) {
         warning(&format!("mise trust: {e}"));
     }
 
     with_spinner("installing mise tools...", "mise tools ready", || {
-        run_cmd("mise", &["install"], root);
-    });
+        run_cmd("mise", &["install"], root)
+    })
 }
 
 fn do_pm_install(root: &Path, toolchains: &[appz_core::DetectedToolchain]) {
@@ -834,7 +820,7 @@ fn do_pm_install(root: &Path, toolchains: &[appz_core::DetectedToolchain]) {
     let has_rust = toolchains.iter().any(|t| t.slug == "rust");
 
     if has_node {
-        let pm = detect_package_manager(root).unwrap_or("npm");
+        let pm = appz_core::detect_package_manager(root).unwrap_or("npm");
         let cmd = appz_core::pm_install_cmd(pm);
         let parts: Vec<&str> = cmd.split(' ').collect();
         let (prog, args) = parts.split_first().unwrap_or((&"npm", &[]));
@@ -848,10 +834,48 @@ fn do_pm_install(root: &Path, toolchains: &[appz_core::DetectedToolchain]) {
 /// Like `do_pm_install` but through mise's cached `install` task, so an
 /// unchanged lockfile/manifest is not reinstalled on every run.
 fn do_cached_pm_install(root: &Path, toolchains: &[appz_core::DetectedToolchain]) {
-    if toolchains.iter().any(|t| t.install_command.is_some()) {
-        run_cmd("mise", &["run", "install"], root);
-    } else {
+    let mise_ready = do_mise_install(root);
+    install_dependencies(root, toolchains, mise_ready);
+}
+
+fn install_dependencies(
+    root: &Path,
+    toolchains: &[appz_core::DetectedToolchain],
+    mise_ready: bool,
+) {
+    let has_task = toolchains.iter().any(|t| t.install_command.is_some());
+    if !has_task {
         do_pm_install(root, toolchains);
+    } else if mise_ready {
+        run_cmd("mise", cached_install_args(root, toolchains), root);
+    } else {
+        let mut seen = std::collections::HashSet::new();
+        for cmd in toolchains
+            .iter()
+            .filter_map(|t| t.install_command.as_deref())
+        {
+            if seen.insert(cmd) {
+                run_cmd(cmd, &[], root);
+            }
+        }
+    }
+}
+
+fn cached_install_args(
+    root: &Path,
+    toolchains: &[appz_core::DetectedToolchain],
+) -> &'static [&'static str] {
+    // The task cache can survive a deleted dependency directory.
+    if toolchains
+        .iter()
+        .any(|t| t.mise_plugin == "node" && t.install_command.is_some())
+        && !root.join("node_modules").is_dir()
+        && !root.join(".pnp.cjs").is_file()
+        && !root.join(".pnp.js").is_file()
+    {
+        &["run", "--force", "install"]
+    } else {
+        &["run", "install"]
     }
 }
 
@@ -937,7 +961,6 @@ fn run_build(args: BuildArgs, json: bool) {
         let canonical = resolve_root(&args.dir);
         let toolchains = do_detect_and_write(&canonical);
         if !args.skip_install {
-            do_mise_install(&canonical);
             do_cached_pm_install(&canonical, &toolchains);
         }
         json_out(&toolchains, "ok");
@@ -952,7 +975,6 @@ fn run_build(args: BuildArgs, json: bool) {
     // that anymore (see `appz_core::generator::generate_merged`).
     let toolchains = do_detect_and_write(&canonical);
     if !args.skip_install {
-        do_mise_install(&canonical);
         do_cached_pm_install(&canonical, &toolchains);
     }
 
@@ -993,61 +1015,18 @@ fn run_build(args: BuildArgs, json: bool) {
 }
 
 fn run_dev(args: DevArgs, json: bool) {
+    if !json {
+        intro("appz dev");
+    }
+    let canonical = resolve_root(&args.dir);
+    let toolchains = do_detect_and_write(&canonical);
+    if !args.skip_install {
+        do_cached_pm_install(&canonical, &toolchains);
+    }
     if json {
-        let canonical = resolve_root(&args.dir);
-        let toolchains = do_detect_and_write(&canonical);
-        if !args.skip_install {
-            do_mise_install(&canonical);
-            do_pm_install(&canonical, &toolchains);
-        }
         json_out(&toolchains, "ok");
         return;
     }
-    intro("appz dev");
-    let canonical = resolve_root(&args.dir);
-
-    // Cache hit
-    if args.command.is_none()
-        && !args.skip_install
-        && appz_core::inputs_unchanged(&canonical)
-        && let Some(snap) = appz_core::read_latest_snapshot(&canonical)
-    {
-        let cmds: Vec<String> = snap
-            .toolchains
-            .iter()
-            .filter_map(|t| t.dev_command.clone())
-            .collect();
-        if !cmds.is_empty() {
-            success("inputs unchanged — running cached dev command");
-            let frameworks: Vec<&str> = snap
-                .toolchains
-                .iter()
-                .flat_map(|t| t.frameworks.iter().map(String::as_str))
-                .collect();
-            let sharing = start_dev_share(&args, &canonical, &frameworks, &cmds);
-            run_dev_commands(
-                &cmds,
-                &canonical,
-                sharing,
-                appz_core::detect_dev_port(
-                    &canonical,
-                    &frameworks,
-                    cmds.first().map(String::as_str),
-                ),
-                static_dev_options(&cmds, args.no_reload, args.spa),
-            );
-            return;
-        }
-    }
-
-    // Full pipeline
-    let toolchains = {
-        if !args.skip_install {
-            do_full_install(&canonical)
-        } else {
-            do_detect_and_write(&canonical)
-        }
-    };
 
     let cmds: Vec<String> = match args.command.clone() {
         Some(c) => vec![c],
@@ -2800,6 +2779,48 @@ fn run_logout(json: bool) {
 mod tests {
     use super::*;
     use clap::CommandFactory;
+
+    #[test]
+    fn framework_install_recovers_missing_dependencies() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let detected = [appz_core::DetectedToolchain {
+            name: "Next.js",
+            slug: "nextjs",
+            mise_plugin: "node",
+            version: "lts".into(),
+            version_files: &[],
+            frameworks: vec![],
+            build_command: None,
+            install_command: Some("echo installed >> marker.txt".into()),
+            dev_command: None,
+            test_command: None,
+            lint_command: None,
+            format_command: None,
+            format_tool: None,
+            output_directory: None,
+            env_prefix: None,
+        }];
+        assert_eq!(
+            cached_install_args(root, &detected),
+            ["run", "--force", "install"]
+        );
+        for marker in [".pnp.js", ".pnp.cjs"] {
+            std::fs::write(root.join(marker), "").unwrap();
+            assert_eq!(cached_install_args(root, &detected), ["run", "install"]);
+            std::fs::remove_file(root.join(marker)).unwrap();
+        }
+        std::fs::create_dir(root.join("node_modules")).unwrap();
+        assert_eq!(cached_install_args(root, &detected), ["run", "install"]);
+
+        install_dependencies(root, &detected, false);
+        assert_eq!(
+            std::fs::read_to_string(root.join("marker.txt"))
+                .unwrap()
+                .trim(),
+            "installed"
+        );
+    }
 
     /// clap checks the whole command tree here (argument order, duplicate
     /// names and short flags, conflicting settings), so an invalid definition

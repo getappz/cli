@@ -79,7 +79,10 @@ fn build_tasks(toolchains: &[DetectedToolchain]) -> BTreeMap<&'static str, Gener
                 if *name == "dev" && cmd == crate::static_site::STATIC_SERVE_DEV_CMD {
                     continue;
                 }
-                run.push(cmd.clone());
+                // Multiple Node frameworks can share one project-level install command.
+                if *name != "install" || !run.contains(cmd) {
+                    run.push(cmd.clone());
+                }
                 // A static site's source and output root coincide, so overrides must run uncached.
                 if CACHED_KINDS.contains(name) && tc.slug != crate::static_site::STATIC_HTML_SLUG {
                     sources.extend(task_sources(tc));

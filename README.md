@@ -288,12 +288,12 @@ resolved deployment environment and a 15-minute timeout. Hook output goes to
 stderr, or is captured with `--json` to keep the result parseable;
 `before_deploy` runs after the build and aborts the deploy on failure, and
 `after_deploy` failing is reported even though the deploy already went out.
-`appz deploy --all` prepares targets in order, then uploads in parallel when
-no prompt is needed. Builds and before hooks finish before uploads begin;
-after hooks wait until all uploads finish. A failed after hook clears the
-target's success cache so the next deploy retries it.
-Provider commands that may still build locally (including Wrangler custom
-builds and registry-defined providers) run before the parallel uploads.
+`appz deploy --all` uploads each local build before preparing the next target,
+so a build or hook can safely reuse the same output directory. Without prompts,
+Render's remote-source deploy can overlap a local deploy, and dry-run probes
+can run in parallel. After hooks run in target order once all uploads finish.
+A hook that changes source triggers a fresh deploy next time. A failed after
+hook clears that target's success cache so the next deploy retries it.
 With `--json`, the command prints one JSON array with a
 `{target, output?, error?}` entry per target; it exits non-zero if any target or
 hook failed.

@@ -201,37 +201,21 @@ fn autodetect_target(project_dir: &Path) -> Result<String, String> {
 /// target, the project name, and the `-e` / `-b` values. Only hashed into the
 /// fingerprint, never stored.
 fn fingerprint_extra(slug: &str, req: &DeployRequest, config: &DeployConfig) -> String {
-    let mut env = req.env.clone();
-    env.sort();
-    let mut build = req.build_env.clone();
-    build.sort();
-    let project = req
-        .project
-        .clone()
-        .or_else(|| {
-            config
-                .targets
-                .get(slug)?
-                .get("project")?
-                .as_str()
-                .map(String::from)
-        })
-        .unwrap_or_default();
-    // The whole target config (site, output settings, ...) also changes the deploy.
-    let target = config
-        .targets
-        .get(slug)
-        .map(|v| v.to_string())
-        .unwrap_or_default();
-    format!(
-        "{slug}
-{project}
-{}
-{}
-{target}",
-        env.join("\u{1f}"),
-        build.join("\u{1f}")
-    )
+    // The command uses the last value for repeated keys.
+    let effective_env = |flags: &[String]| {
+        flags
+            .iter()
+            .filter_map(|s| parse_kv(s))
+            .collect::<std::collections::BTreeMap<_, _>>()
+    };
+    serde_json::json!([
+        slug,
+        req.project,
+        config.targets.get(slug),
+        effective_env(&req.env),
+        effective_env(&req.build_env)
+    ])
+    .to_string()
 }
 
 /// Run a deploy lifecycle hook as an arg vector (no shell), in the project
@@ -268,8 +252,8 @@ struct PreparedTarget {
 
 pub fn run(project_dir: &Path, req: DeployRequest) -> Result<DeployOutput, String> {
     let target = prepare_target(project_dir, req)?;
-    let output = upload_target(&target)?;
-    match finish_target(&target, &output) {
+    let (output, fingerprint) = upload_target(&target)?;
+    match finish_target(&target, &output, fingerprint.as_deref()) {
         Some(error) => Err(format!(
             "deployed ({}) but {error}",
             output.url.as_deref().unwrap_or("url unknown")
@@ -279,7 +263,7 @@ pub fn run(project_dir: &Path, req: DeployRequest) -> Result<DeployOutput, Strin
 }
 
 fn prepare_target(project_dir: &Path, req: DeployRequest) -> Result<PreparedTarget, String> {
-    let config = read_deploy_config(project_dir)
+    let mut config = read_deploy_config(project_dir)
         .map_err(|e| e.to_string())?
         .unwrap_or_default();
 
@@ -288,6 +272,16 @@ fn prepare_target(project_dir: &Path, req: DeployRequest) -> Result<PreparedTarg
         None => autodetect_target(project_dir)?,
     };
 
+    if let Some(project) = &req.project {
+        let target = config
+            .targets
+            .entry(slug.clone())
+            .or_insert_with(|| serde_json::json!({}));
+        target
+            .as_object_mut()
+            .ok_or_else(|| format!("deploy.targets.{slug} must be an object"))?
+            .insert("project".into(), serde_json::Value::String(project.clone()));
+    }
     let provider = get_provider(&slug).map_err(|e| e.to_string())?;
     let mut ctx = DeployContext::new(project_dir.to_path_buf(), "dist".into());
 
@@ -356,13 +350,6 @@ fn prepare_target(project_dir: &Path, req: DeployRequest) -> Result<PreparedTarg
     ctx.json_output = req.json;
     ctx.framework = framework;
     ctx.deploy_config = config;
-    if let Some(project) = &req.project {
-        ctx.deploy_config
-            .targets
-            .entry(slug.clone())
-            .or_insert_with(|| serde_json::json!({}))["project"] =
-            serde_json::Value::String(project.clone());
-    }
     ctx.extra_path = extra_path;
     // Runtime env for the provider CLI. Precedence (lowest → highest):
     // `deploy.environments.<env>` < vault secrets < real process env < `-e`.
@@ -423,9 +410,6 @@ fn prepare_target(project_dir: &Path, req: DeployRequest) -> Result<PreparedTarg
         )?;
     }
 
-    if !req.dry_run {
-        provider.prepare_deploy(&ctx).map_err(|e| e.to_string())?;
-    }
     Ok(PreparedTarget {
         ctx,
         provider,
@@ -435,13 +419,18 @@ fn prepare_target(project_dir: &Path, req: DeployRequest) -> Result<PreparedTarg
     })
 }
 
-fn upload_target(target: &PreparedTarget) -> Result<DeployOutput, String> {
+fn upload_target(target: &PreparedTarget) -> Result<(DeployOutput, Option<String>), String> {
     if let Some(output) = &target.cached {
-        return Ok(output.clone());
+        return Ok((output.clone(), None));
     }
     let ctx = &target.ctx;
     let provider = &target.provider;
-    let mut output = provider.deploy_prepared(ctx).map_err(|e| e.to_string())?;
+    let mut output = if ctx.is_preview {
+        provider.deploy_preview(ctx)
+    } else {
+        provider.deploy(ctx)
+    }
+    .map_err(|e| e.to_string())?;
     output.setup_files = target.setup_names.clone();
     output.link_needed = ctx.dry_run && !provider.is_linked(ctx);
     if ctx.dry_run {
@@ -451,10 +440,25 @@ fn upload_target(target: &PreparedTarget) -> Result<DeployOutput, String> {
             output.cli_missing = true;
         }
     }
-    Ok(output)
+    // Capture the uploaded revision before another target builds or any after hook runs.
+    let slug = provider.slug();
+    let fingerprint = if !ctx.dry_run && slug != "render" && output.url.is_some() {
+        crate::deploy_state::fingerprint(
+            &ctx.project_dir,
+            &fingerprint_extra(slug, &target.req, &ctx.deploy_config),
+        )
+        .ok()
+    } else {
+        None
+    };
+    Ok((output, fingerprint))
 }
 
-fn finish_target(target: &PreparedTarget, output: &DeployOutput) -> Option<String> {
+fn finish_target(
+    target: &PreparedTarget,
+    output: &DeployOutput,
+    fingerprint: Option<&str>,
+) -> Option<String> {
     let ctx = &target.ctx;
     if ctx.dry_run || target.cached.is_some() {
         return None;
@@ -465,17 +469,8 @@ fn finish_target(target: &PreparedTarget, output: &DeployOutput) -> Option<Strin
         crate::deploy_state::forget(&ctx.project_dir, slug, target.req.prod);
         return Some(error);
     }
-    // Render deploys its connected remote, whose revision isn't in the fingerprint.
-    // Fingerprint after the deploy: the run itself may have written config
-    // (wrangler.jsonc, a .gitignore line) that is part of the project now.
-    if slug != "render"
-        && let Some(url) = &output.url
-        && let Ok(fp) = crate::deploy_state::fingerprint(
-            &ctx.project_dir,
-            &fingerprint_extra(slug, &target.req, &ctx.deploy_config),
-        )
-    {
-        crate::deploy_state::record(&ctx.project_dir, slug, target.req.prod, &fp, url);
+    if let (Some(fp), Some(url)) = (fingerprint, &output.url) {
+        crate::deploy_state::record(&ctx.project_dir, slug, target.req.prod, fp, url);
     }
     None
 }
@@ -494,9 +489,8 @@ pub struct TargetResult {
 
 /// Deploy every configured target (`deploy.targets` keys in appz.jsonc) and
 /// return one result per target, in sorted slug order, so a failure does not
-/// hide the targets that went out. Targets deploy in parallel unless a prompt
-/// (install / link / login consent = Ask) could be needed: prompts from
-/// concurrent deploys would interleave on one terminal, so those run in order.
+/// hide successful uploads. Remote-source uploads and dry-run probes can
+/// overlap when no prompt is needed.
 pub fn run_all(project_dir: &Path, req: DeployRequest) -> Result<Vec<TargetResult>, String> {
     let config = read_deploy_config(project_dir)
         .map_err(|e| e.to_string())?
@@ -524,66 +518,47 @@ fn run_targets(
     parallel: bool,
     mut prepare: impl FnMut(&str) -> Result<PreparedTarget, String>,
 ) -> Vec<TargetResult> {
-    // Finish every shared-directory build and before hook before any upload.
-    let prepared: Vec<_> = slugs.iter().map(|slug| prepare(slug)).collect();
-    let upload = |target: &Result<PreparedTarget, String>| match target {
-        Ok(target) => upload_target(target),
-        Err(error) => Err(error.clone()),
+    let upload = |target: PreparedTarget| {
+        let uploaded = upload_target(&target)?;
+        Ok((target, uploaded))
     };
-    let outputs: Vec<_> = if parallel && slugs.len() > 1 {
-        // Unknown CLI steps may build locally. Finish them before upload-only CLIs.
-        let mut outputs: Vec<_> = prepared
-            .iter()
-            .map(|target| match target {
-                Ok(target)
-                    if !target.ctx.dry_run
-                        && target.cached.is_none()
-                        && !target.provider.parallel_upload_safe(&target.ctx) =>
-                {
-                    Some(upload_target(target))
+    let mut order = slugs;
+    // Launch Render's remote-source deploy first so it can overlap a local upload.
+    if parallel {
+        order.sort_by_key(|slug| slug != "render");
+    }
+    let mut uploads = std::thread::scope(|scope| {
+        let mut uploads = Vec::new();
+        let mut workers = Vec::new();
+        for slug in order {
+            match prepare(&slug) {
+                Ok(target) if parallel && (target.ctx.dry_run || slug == "render") => {
+                    workers.push((slug, scope.spawn(move || upload(target))));
                 }
-                _ => None,
-            })
-            .collect();
-        std::thread::scope(|scope| {
-            let handles: Vec<_> = prepared
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| outputs[*i].is_none())
-                .map(|(i, target)| (i, scope.spawn(move || upload(target))))
-                .collect();
-            for (i, handle) in handles {
-                outputs[i] = Some(
-                    handle
-                        .join()
-                        .unwrap_or_else(|_| Err("deploy thread panicked".into())),
-                );
+                prepared => uploads.push((slug, prepared.and_then(upload))),
             }
-        });
-        outputs
-            .into_iter()
-            .map(|output| output.expect("every target ran"))
-            .collect()
-    } else {
-        prepared.iter().map(upload).collect()
-    };
-    // After hooks can mutate build output too: wait for ALL uploads to finish.
-    slugs
+        }
+        for (slug, worker) in workers {
+            uploads.push((
+                slug,
+                worker
+                    .join()
+                    .unwrap_or_else(|_| Err("deploy thread panicked".into())),
+            ));
+        }
+        uploads
+    });
+    uploads.sort_by(|a, b| a.0.cmp(&b.0));
+    uploads
         .into_iter()
-        .zip(prepared)
-        .zip(outputs)
-        .map(|((slug, target), output)| match output {
-            Ok(output) => {
-                let error =
-                    finish_target(target.as_ref().expect("successful preparation"), &output);
-                TargetResult {
-                    target: slug,
-                    output: Some(output),
-                    error,
-                }
-            }
+        .map(|(target, result)| match result {
+            Ok((prepared, (output, fingerprint))) => TargetResult {
+                error: finish_target(&prepared, &output, fingerprint.as_deref()),
+                target,
+                output: Some(output),
+            },
             Err(error) => TargetResult {
-                target: slug,
+                target,
                 output: None,
                 error: Some(error),
             },
@@ -893,20 +868,16 @@ mod tests {
     };
 
     struct UploadProbe {
-        exclusive: bool,
-        prepared: Arc<AtomicUsize>,
+        slug: &'static str,
         started: Arc<AtomicUsize>,
     }
 
     impl DeployProvider for UploadProbe {
-        fn parallel_upload_safe(&self, _: &DeployContext) -> bool {
-            !self.exclusive
-        }
         fn name(&self) -> &'static str {
             "test"
         }
         fn slug(&self) -> &'static str {
-            "test"
+            self.slug
         }
         fn cli_tool(&self) -> &'static str {
             "test"
@@ -932,38 +903,30 @@ mod tests {
             unreachable!()
         }
         fn deploy(&self, ctx: &DeployContext) -> appz_deploy::DeployResult<DeployOutput> {
-            assert_eq!(
-                self.prepared.load(Ordering::SeqCst),
-                3,
-                "upload started during preparation"
-            );
-            if self.exclusive {
-                std::fs::write(ctx.project_dir.join("a"), "prepared").unwrap();
-                std::fs::write(ctx.project_dir.join("b"), "prepared").unwrap();
-                std::fs::write(ctx.project_dir.join("exclusive-finished"), "done").unwrap();
-                return Ok(DeployOutput::dry_run("test", false));
+            if self.slug != "render" {
+                assert_eq!(
+                    std::fs::read_to_string(ctx.project_dir.join("artifact")).unwrap(),
+                    self.slug
+                );
             }
-            assert!(ctx.project_dir.join("exclusive-finished").exists());
             self.started.fetch_add(1, Ordering::SeqCst);
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
             while self.started.load(Ordering::SeqCst) < 2 && std::time::Instant::now() < deadline {
                 std::thread::sleep(std::time::Duration::from_millis(5));
             }
-            assert_eq!(
-                self.started.load(Ordering::SeqCst),
-                2,
-                "uploads did not overlap"
-            );
-            assert_eq!(
-                std::fs::read_to_string(ctx.output_path()).unwrap(),
-                "prepared"
+            assert!(
+                self.started.load(Ordering::SeqCst) >= 2,
+                "remote and local uploads did not overlap"
             );
             std::fs::write(
-                ctx.project_dir.join(format!("uploaded-{}", ctx.output_dir)),
+                ctx.project_dir
+                    .join(format!(".appz/uploaded-{}", self.slug)),
                 "done",
             )
             .unwrap();
-            Ok(DeployOutput::dry_run("test", false))
+            let mut output = DeployOutput::dry_run(self.slug, false);
+            output.url = Some("https://example.com".into());
+            Ok(output)
         }
         fn deploy_preview(&self, ctx: &DeployContext) -> appz_deploy::DeployResult<DeployOutput> {
             self.deploy(ctx)
@@ -976,25 +939,29 @@ mod tests {
             return;
         };
         let root = Path::new(&root);
-        assert!(root.join("uploaded-a").exists());
-        assert!(root.join("uploaded-b").exists());
-        std::fs::write(root.join("a"), "after hook changed output").unwrap();
-        std::fs::write(root.join("b"), "after hook changed output").unwrap();
+        assert!(root.join(".appz/uploaded-a").exists());
+        assert!(root.join(".appz/uploaded-b").exists());
+        assert!(root.join(".appz/uploaded-render").exists());
+        std::fs::write(root.join("artifact"), "after hook changed output").unwrap();
     }
 
     #[test]
-    fn batch_prepares_before_parallel_uploads_and_runs_after_hooks_last() {
+    fn batch_uploads_each_local_build_before_preparing_the_next_and_fingerprints_before_hooks() {
         let dir = tempfile::tempdir().unwrap();
-        let prepared = Arc::new(AtomicUsize::new(0));
+        std::fs::create_dir(dir.path().join(".appz")).unwrap();
         let started = Arc::new(AtomicUsize::new(0));
         let results = run_targets(
-            vec!["a".into(), "serial".into(), "b".into()],
+            vec!["a".into(), "b".into(), "render".into()],
             true,
             |slug| {
                 // Model a build that clears and rewrites the shared output.
-                std::fs::write(dir.path().join("a"), "preparing").unwrap();
-                std::fs::write(dir.path().join("b"), "preparing").unwrap();
-                prepared.fetch_add(1, Ordering::SeqCst);
+                let slug = match slug {
+                    "a" => "a",
+                    "b" => "b",
+                    "render" => "render",
+                    _ => unreachable!(),
+                };
+                std::fs::write(dir.path().join("artifact"), slug).unwrap();
                 let mut ctx = DeployContext::new(dir.path().to_path_buf(), slug.into());
                 ctx.json_output = true;
                 ctx.run_env.insert(
@@ -1012,8 +979,7 @@ mod tests {
                 Ok(PreparedTarget {
                     ctx,
                     provider: Box::new(UploadProbe {
-                        exclusive: slug == "serial",
-                        prepared: prepared.clone(),
+                        slug,
                         started: started.clone(),
                     }),
                     req: req(&[], &[], None),
@@ -1022,14 +988,39 @@ mod tests {
                 })
             },
         );
-        assert_eq!(results.len(), 3);
-        for result in results {
-            assert!(result.error.is_none(), "{result:?}");
-        }
         assert_eq!(
-            std::fs::read_to_string(dir.path().join("a")).unwrap(),
+            results
+                .iter()
+                .map(|r| r.target.as_str())
+                .collect::<Vec<_>>(),
+            ["a", "b", "render"]
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("artifact")).unwrap(),
             "after hook changed output"
         );
+        for result in results {
+            assert!(result.error.is_none(), "{result:?}");
+            if result.target != "render" {
+                let extra = fingerprint_extra(
+                    &result.target,
+                    &req(&[], &[], None),
+                    &DeployConfig::default(),
+                );
+                std::fs::write(dir.path().join("artifact"), "after hook changed output").unwrap();
+                let fingerprint = crate::deploy_state::fingerprint(dir.path(), &extra).unwrap();
+                assert!(
+                    crate::deploy_state::unchanged(dir.path(), &result.target, false, &fingerprint)
+                        .is_none()
+                );
+                std::fs::write(dir.path().join("artifact"), &result.target).unwrap();
+                let uploaded = crate::deploy_state::fingerprint(dir.path(), &extra).unwrap();
+                assert!(
+                    crate::deploy_state::unchanged(dir.path(), &result.target, false, &uploaded)
+                        .is_some()
+                );
+            }
+        }
     }
 
     #[test]
@@ -1061,11 +1052,11 @@ mod tests {
             output.url.as_ref().unwrap(),
         );
         for _ in 0..2 {
-            assert!(finish_target(&target, &output).is_some());
+            assert!(finish_target(&target, &output, Some(&fp)).is_some());
             assert!(crate::deploy_state::unchanged(dir.path(), "vercel", false, &fp).is_none());
         }
         target.ctx.deploy_config.hooks.after_deploy.clear();
-        assert!(finish_target(&target, &output).is_none());
+        assert!(finish_target(&target, &output, Some(&fp)).is_none());
         assert!(crate::deploy_state::unchanged(dir.path(), "vercel", false, &fp).is_some());
     }
 
@@ -1188,6 +1179,10 @@ mod tests {
         assert_eq!(
             base,
             fingerprint_extra("vercel", &req(&["B=2", "A=1"], &["X=1"], None), &cfg)
+        );
+        assert_ne!(
+            fingerprint_extra("vercel", &req(&["A=1", "A=2"], &[], None), &cfg),
+            fingerprint_extra("vercel", &req(&["A=2", "A=1"], &[], None), &cfg)
         );
         // A changed -e, -b, project or target does.
         assert_ne!(

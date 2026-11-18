@@ -938,7 +938,8 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
+    // Linux supports arbitrary filename bytes. The default macOS filesystem requires UTF-8.
+    #[cfg(target_os = "linux")]
     #[test]
     fn non_utf8_git_paths_are_filtered_losslessly() {
         use std::ffi::OsStr;

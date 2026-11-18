@@ -233,9 +233,18 @@ fn forget_ids(engine: &impl Rustic, ids: &[&str]) -> Result<usize, EngineError> 
         .count())
 }
 
+struct MaintenanceLock(std::fs::File);
+
+impl Drop for MaintenanceLock {
+    fn drop(&mut self) {
+        // A concurrently forked child can briefly retain a duplicate descriptor.
+        let _ = self.0.unlock();
+    }
+}
+
 // All appz pruners of a local repository share the same OS lock, across projects.
 // Remote repositories require coordination with other machines and direct Rustic users.
-fn maintenance_lock(project: &Path, repository: &str) -> std::io::Result<std::fs::File> {
+fn maintenance_lock(project: &Path, repository: &str) -> std::io::Result<MaintenanceLock> {
     let local = Path::new(repository.strip_prefix("local:").unwrap_or(repository));
     let lock_path = if local.is_absolute() {
         local.join(".appz-prune.lock")
@@ -252,7 +261,7 @@ fn maintenance_lock(project: &Path, repository: &str) -> std::io::Result<std::fs
         .truncate(false)
         .open(lock_path)?;
     file.try_lock().map_err(std::io::Error::from)?;
-    Ok(file)
+    Ok(MaintenanceLock(file))
 }
 
 /// Apply retention policy to a rustic backup repository.

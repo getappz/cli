@@ -33,6 +33,8 @@ pub fn framework_default_port(framework_name: &str) -> Option<u16> {
         Some(8080)
     } else if lower.contains("flask") {
         Some(5000)
+    } else if lower.contains("static") {
+        Some(crate::static_site::STATIC_DEV_PORT)
     } else if lower.contains("phoenix") || lower.contains("elixir") {
         Some(4000)
     } else {
@@ -138,6 +140,10 @@ pub fn detect_dev_port(_root: &Path, framework_names: &[&str], dev_command: Opti
         return p;
     }
 
+    if dev_command == Some(crate::STATIC_SERVE_DEV_CMD) {
+        return crate::static_site::STATIC_DEV_PORT;
+    }
+
     // 3. Framework defaults
     let mut candidate_ports = Vec::new();
     for fw in framework_names {
@@ -231,5 +237,12 @@ mod tests {
         let temp = std::env::temp_dir();
         let port = detect_dev_port(&temp, &["Next.js"], Some("next dev -p 3005"));
         assert_eq!(port, 3005);
+    }
+
+    #[test]
+    fn detect_dev_port_static_html_marker() {
+        let temp = std::env::temp_dir();
+        let port = detect_dev_port(&temp, &["Static HTML"], Some(crate::STATIC_SERVE_DEV_CMD));
+        assert_eq!(port, crate::static_site::STATIC_DEV_PORT);
     }
 }

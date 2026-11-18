@@ -20,6 +20,7 @@ mod secrets;
 mod share;
 mod shield;
 mod skills;
+mod static_serve;
 mod update;
 
 // ── CLI ─────────────────────────────────────────────────────────
@@ -55,6 +56,8 @@ enum AppzCmd {
     Build(BuildArgs),
     /// Start the dev server
     Dev(DevArgs),
+    /// Serve build output or a static directory locally
+    Preview(PreviewArgs),
     /// Share a local port publicly over a secure tunnel
     #[command(alias = "tunnel")]
     Share(share::ShareArgs),
@@ -99,6 +102,8 @@ enum AppzCmd {
     Whoami,
     /// Store credentials in an encrypted vault used by `appz deploy`
     Env(EnvArgs),
+    /// Manage the encrypted credential vault used by `appz deploy`
+    Vault(VaultArgs),
     /// Write a GitHub Actions workflow that deploys this project
     Ci(CiArgs),
     /// Discover and install agent skills relevant to this project
@@ -167,13 +172,13 @@ enum AgentAction {
 }
 
 #[derive(Args)]
-struct EnvArgs {
+struct VaultArgs {
     #[command(subcommand)]
-    command: EnvCmd,
+    command: VaultCmd,
 }
 
 #[derive(Subcommand)]
-enum EnvCmd {
+enum VaultCmd {
     /// Store a secret (omit VALUE to be prompted, keeping it out of shell history)
     Set {
         name: String,
@@ -203,6 +208,18 @@ enum EnvCmd {
         #[arg(long)]
         global: bool,
     },
+}
+
+#[derive(Args)]
+struct EnvArgs {
+    #[command(subcommand)]
+    command: EnvCmd,
+}
+
+#[derive(Subcommand)]
+enum EnvCmd {
+    #[command(flatten)]
+    Vault(VaultCmd),
     /// Pull cloud environment variables from Cloudflare Edge into a local .env file
     Pull {
         /// Target file to write to (default: .env.local)
@@ -566,6 +583,26 @@ struct DevArgs {
     /// With --share: print each request that comes in through the tunnel
     #[arg(long)]
     inspect: bool,
+    /// Serve extensionless routes from root index.html (SPA mode)
+    #[arg(long)]
+    spa: bool,
+    /// Disable file watching / hot-reload WebSocket for static HTML sites
+    #[arg(long)]
+    no_reload: bool,
+}
+
+#[derive(Args)]
+struct PreviewArgs {
+    #[arg(default_value = ".")]
+    dir: PathBuf,
+    #[arg(long, value_name = "PATH")]
+    serve_dir: Option<PathBuf>,
+    #[arg(short, long, default_value_t = 4321)]
+    port: u16,
+    #[arg(long, help = "SPA fallback to index.html")]
+    spa: bool,
+    #[arg(long, help = "Skip detect/install before preview")]
+    skip_install: bool,
 }
 
 // ── UI helpers ──────────────────────────────────────────────────
@@ -927,6 +964,20 @@ fn run_build(args: BuildArgs, json: bool) {
             }
         }
         None => {
+            if toolchains
+                .iter()
+                .any(|tc| tc.slug == appz_core::STATIC_HTML_SLUG)
+            {
+                match appz_core::static_prebuild_ready(&canonical, &toolchains) {
+                    Ok(Some(())) => {
+                        success("static HTML — output already on disk (no build step)");
+                        outro("build complete");
+                        return;
+                    }
+                    Ok(None) => {}
+                    Err(e) => error(&e),
+                }
+            }
             if !toolchains.iter().any(|tc| tc.build_command.is_some()) {
                 error("no build command detected — use --command to specify one");
             }
@@ -972,7 +1023,17 @@ fn run_dev(args: DevArgs, json: bool) {
                 .flat_map(|t| t.frameworks.iter().map(String::as_str))
                 .collect();
             let sharing = start_dev_share(&args, &canonical, &frameworks, &cmds);
-            run_dev_commands(&cmds, &canonical, sharing);
+            run_dev_commands(
+                &cmds,
+                &canonical,
+                sharing,
+                appz_core::detect_dev_port(
+                    &canonical,
+                    &frameworks,
+                    cmds.first().map(String::as_str),
+                ),
+                static_dev_options(&cmds, args.no_reload, args.spa),
+            );
             return;
         }
     }
@@ -1008,7 +1069,13 @@ fn run_dev(args: DevArgs, json: bool) {
         .collect();
     let sharing = start_dev_share(&args, &canonical, &frameworks, &cmds);
     step("starting dev server...");
-    run_dev_commands(&cmds, &canonical, sharing);
+    run_dev_commands(
+        &cmds,
+        &canonical,
+        sharing,
+        appz_core::detect_dev_port(&canonical, &frameworks, cmds.first().map(String::as_str)),
+        static_dev_options(&cmds, args.no_reload, args.spa),
+    );
 }
 
 /// `appz dev --share`: pick the tunnel backend now, while the terminal is
@@ -1046,14 +1113,33 @@ fn start_dev_share(
     Some(share::DevShare::start(backend, shield, args.inspect))
 }
 
+fn static_dev_options(cmds: &[String], no_reload: bool, spa: bool) -> Option<(bool, bool)> {
+    cmds.first()
+        .filter(|c| static_serve::is_static_serve_command(c))
+        .map(|_| (!no_reload, spa))
+}
+
 /// Run the dev commands to completion, then close the share tunnel (also
 /// when a command fails, which exits non-zero).
-fn run_dev_commands(cmds: &[String], dir: &Path, sharing: Option<share::DevShare>) {
-    let ok = cmds.iter().all(|cmd| {
-        let parts: Vec<&str> = cmd.split(' ').collect();
-        let (prog, args) = parts.split_first().unwrap_or((&"npm", &[]));
-        run_cmd(prog, args, dir)
-    });
+fn run_dev_commands(
+    cmds: &[String],
+    dir: &Path,
+    sharing: Option<share::DevShare>,
+    port: u16,
+    static_dev: Option<(bool, bool)>,
+) {
+    let ok = if cmds.len() == 1
+        && static_serve::is_static_serve_command(&cmds[0])
+        && let Some((hot_reload, spa)) = static_dev
+    {
+        static_serve::run_static_server(dir, port, hot_reload, spa).is_ok()
+    } else {
+        cmds.iter().all(|cmd| {
+            let parts: Vec<&str> = cmd.split(' ').collect();
+            let (prog, args) = parts.split_first().unwrap_or((&"npm", &[]));
+            run_cmd(prog, args, dir)
+        })
+    };
     if let Some(sharing) = sharing {
         sharing.stop();
     }
@@ -1061,6 +1147,36 @@ fn run_dev_commands(cmds: &[String], dir: &Path, sharing: Option<share::DevShare
         std::process::exit(1);
     }
     outro("dev server stopped");
+}
+
+fn run_preview(args: PreviewArgs, json: bool) {
+    let canonical = resolve_root(&args.dir);
+    let toolchains = if args.skip_install {
+        do_detect_and_write(&canonical)
+    } else {
+        do_full_install(&canonical)
+    };
+    let serve_root =
+        appz_core::resolve_preview_root(&canonical, &toolchains, args.serve_dir.as_deref())
+            .unwrap_or_else(|e| error(&e));
+
+    if json {
+        json_out(&toolchains, "ok");
+        println!(
+            r#"{{"serve_root":"{}","port":{}}}"#,
+            serve_root.display(),
+            args.port
+        );
+        return;
+    }
+
+    intro("appz preview");
+    success(&format!("serving {}", serve_root.display()));
+    step("starting preview server...");
+    if static_serve::run_static_server(&serve_root, args.port, false, args.spa).is_err() {
+        std::process::exit(1);
+    }
+    outro("preview server stopped");
 }
 
 fn run_share(args: share::ShareArgs, json: bool) {
@@ -1135,6 +1251,8 @@ fn run_share(args: share::ShareArgs, json: bool) {
                         auth: args.auth,
                         subdomain: args.subdomain,
                         inspect: args.inspect,
+                        spa: false,
+                        no_reload: false,
                     },
                     false,
                 );
@@ -1404,6 +1522,7 @@ fn main() {
         AppzCmd::Install(a) => run_install(a, json),
         AppzCmd::Build(a) => run_build(a, json),
         AppzCmd::Dev(a) => run_dev(a, json),
+        AppzCmd::Preview(a) => run_preview(a, json),
         AppzCmd::Share(a) => run_share(a, json),
         AppzCmd::Test(a) => run_test(a, json),
         AppzCmd::Lint(a) => run_lint(a, json),
@@ -1428,6 +1547,7 @@ fn main() {
         AppzCmd::Logout => run_logout(json),
         AppzCmd::Whoami => run_whoami(json),
         AppzCmd::Env(a) => run_env(a, json),
+        AppzCmd::Vault(a) => run_vault_cmd(a.command, json),
         AppzCmd::Ci(a) => run_ci(a, json),
         AppzCmd::Skills(a) => run_skills(a, json),
         AppzCmd::Agents(a) => run_agents(a, json),
@@ -1585,30 +1705,32 @@ fn run_skills(args: SkillsArgs, json: bool) {
     }
 }
 
-fn run_env(args: EnvArgs, json: bool) {
-    let path =
-        |global: bool| secrets::vault_path(Path::new("."), global).unwrap_or_else(|e| error(&e));
-    match args.command {
-        EnvCmd::Set {
+fn vault_path_for(global: bool) -> PathBuf {
+    secrets::vault_path(Path::new("."), global).unwrap_or_else(|e| error(&e))
+}
+
+fn run_vault_cmd(cmd: VaultCmd, json: bool) {
+    match cmd {
+        VaultCmd::Set {
             name,
             value,
             global,
-        } => match secrets::set(&path(global), &name, value) {
+        } => match secrets::set(&vault_path_for(global), &name, value) {
             Ok(()) => success(&format!("stored {name}")),
             Err(e) => error(&e),
         },
-        EnvCmd::Ls { global } => match secrets::names(&path(global)) {
+        VaultCmd::Ls { global } => match secrets::names(&vault_path_for(global)) {
             Ok(names) if json => println!("{}", serde_json::to_string(&names).unwrap()),
             Ok(names) if names.is_empty() => info("no secrets stored"),
             Ok(names) => info(&names.join("\n")),
             Err(e) => error(&e),
         },
-        EnvCmd::Rm { name, global } => match secrets::remove(&path(global), &name) {
+        VaultCmd::Rm { name, global } => match secrets::remove(&vault_path_for(global), &name) {
             Ok(true) => success(&format!("removed {name}")),
             Ok(false) => error(&format!("{name} is not stored")),
             Err(e) => error(&e),
         },
-        EnvCmd::Unlock { global } => match secrets::unlock(&path(global)) {
+        VaultCmd::Unlock { global } => match secrets::unlock(&vault_path_for(global)) {
             Ok((_, true)) => success("vault unlocked"),
             Ok((_, false)) => warning(concat!(
                 "vault unlocked for this command only: the OS keyring is unavailable, ",
@@ -1617,10 +1739,16 @@ fn run_env(args: EnvArgs, json: bool) {
             )),
             Err(e) => error(&e),
         },
-        EnvCmd::Lock { global } => {
-            secrets::lock(&path(global));
+        VaultCmd::Lock { global } => {
+            secrets::lock(&vault_path_for(global));
             success("vault locked");
         }
+    }
+}
+
+fn run_env(args: EnvArgs, json: bool) {
+    match args.command {
+        EnvCmd::Vault(cmd) => run_vault_cmd(cmd, json),
         EnvCmd::Pull { file, target } => {
             if !json {
                 intro("appz env pull");
@@ -2737,5 +2865,30 @@ mod tests {
         );
         // `ci init --no-secrets` still refuses to be combined with --yes.
         assert!(AppzCli::try_parse_from(["appz", "ci", "init", "--no-secrets", "-y"]).is_err());
+    }
+
+    #[test]
+    fn vault_and_env_subcommands_parse_uniformly() {
+        for top in ["vault", "env"] {
+            assert!(matches!(
+                AppzCli::try_parse_from(["appz", top, "set", "VERCEL_TOKEN"])
+                    .unwrap()
+                    .command,
+                AppzCmd::Vault(_) | AppzCmd::Env(_)
+            ));
+            assert!(
+                AppzCli::try_parse_from(["appz", top, "set", "VERCEL_TOKEN", "val", "--global"])
+                    .is_ok()
+            );
+            assert!(AppzCli::try_parse_from(["appz", top, "ls", "--global"]).is_ok());
+            assert!(AppzCli::try_parse_from(["appz", top, "rm", "VERCEL_TOKEN"]).is_ok());
+            assert!(AppzCli::try_parse_from(["appz", top, "unlock", "--global"]).is_ok());
+            assert!(AppzCli::try_parse_from(["appz", top, "lock"]).is_ok());
+        }
+        assert!(AppzCli::try_parse_from(["appz", "env", "pull"]).is_ok());
+        assert!(AppzCli::try_parse_from(["appz", "env", "push"]).is_ok());
+        // Cloud .env sync stays under `appz env`, not `appz vault`.
+        assert!(AppzCli::try_parse_from(["appz", "vault", "pull"]).is_err());
+        assert!(AppzCli::try_parse_from(["appz", "vault", "push"]).is_err());
     }
 }

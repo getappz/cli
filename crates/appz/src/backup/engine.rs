@@ -11,8 +11,8 @@
 //! - init: `rustic init`
 //! - backup: `rustic backup [--json] [--host NAME] [--tag TAG[,TAG]...]
 //!   [--skip-if-unchanged] SOURCE...`. `--json` prints the snapshot object;
-//!   with `--skip-if-unchanged` and no changes rustic prints no JSON and
-//!   exits 0. There is **no** `--files-from`: every selected path is passed
+//!   with `--skip-if-unchanged` and no changes the result has no snapshot ID.
+//!   There is **no** `--files-from`: every selected path is passed
 //!   as its own SOURCE argument.
 //! - list: `rustic snapshots --json` -> array of
 //!   `{ group_key: { hostname, label, paths }, snapshots: [{ id, time, tags,
@@ -176,9 +176,8 @@ impl RusticCli {
     }
 
     /// Use the short timeout reserved for read-only queries.
-    pub fn with_query_timeout(mut self) -> Self {
-        self.timeout = QUERY_TIMEOUT;
-        self
+    pub fn with_query_timeout(self) -> Self {
+        self.with_timeout(QUERY_TIMEOUT)
     }
 
     /// Run with an explicit timeout.
@@ -304,7 +303,8 @@ fn looks_like_missing_binary(message: &str) -> bool {
 /// Locate `rustic` on PATH or in mise's bin dirs (shims are not always
 /// activated), with the same lookup `appz deploy` uses for platform CLIs.
 pub fn find_rustic(dir: &Path) -> Option<PathBuf> {
-    command::shell::find_command_with_paths("rustic", None, &mise_bin_paths(dir))
+    command::shell::find_command_on_path("rustic")
+        .or_else(|| command::shell::find_command_with_paths("rustic", None, &mise_bin_paths(dir)))
 }
 
 /// Return a usable `rustic` path, installing it through mise first when it is

@@ -37,7 +37,7 @@ pub struct Selection {
     pub bundle: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct GitInfo {
     /// `HEAD`, or empty in a repository with no commits yet.
     pub sha: String,

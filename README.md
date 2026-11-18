@@ -40,12 +40,20 @@ appz dev       # start the dev server
 appz test      # run tests
 appz lint      # run the linter
 appz format    # run the formatter
+appz backup    # snapshot local source and unpushed commits with Rustic
 appz deploy    # deploy via the target platform's own CLI
 appz ci        # write a GitHub Actions deploy workflow
 appz doctor    # diagnose project stack, config, and suggestions
 appz mcp       # stdio MCP server exposing detect/doctor/run to AI agents
 appz skills add  # install the appz agent skill into detected AI agents (--global for user-wide)
 ```
+
+Set `APPZ_BACKUP_REPOSITORY` to a dedicated repository outside the project.
+Set its password with `appz vault set APPZ_BACKUP_PASSWORD` or the
+`APPZ_BACKUP_PASSWORD` environment variable. Run `appz backup` to create
+a snapshot, `appz backup list` to see snapshots, and
+`appz backup restore latest <destination>` to recover one. Run
+`appz backup prune` to apply the project's retention policy to that repository.
 
 ## Install
 

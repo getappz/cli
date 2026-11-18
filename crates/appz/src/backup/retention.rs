@@ -288,7 +288,7 @@ pub fn apply(
     let str_args: Vec<&str> = f_args.iter().map(|s| s.as_str()).collect();
     engine.run(&str_args)?;
 
-    let mut current_size = query_repo_size(engine).unwrap_or(0);
+    let mut current_size = query_repo_size(engine)?;
     let mut removed = 0;
     let mut over_cap = false;
 
@@ -304,7 +304,7 @@ pub fn apply(
             let oldest = snapshots.remove(0);
             engine.run(&["forget", &oldest.id, "--prune"])?;
             removed += 1;
-            current_size = query_repo_size(engine).unwrap_or(current_size);
+            current_size = query_repo_size(engine)?;
         }
 
         if current_size > max_bytes && snapshots.len() <= retention.min_keep as usize {
@@ -314,7 +314,12 @@ pub fn apply(
 
     state.last_retention = Some(today);
     state.last_size = Some(current_size);
-    let _ = write_state(&state_file, &state);
+    write_state(&state_file, &state).map_err(|e| {
+        EngineError::Failed(format!(
+            "retention applied but could not save {}: {e}",
+            state_file.display()
+        ))
+    })?;
 
     Ok(RetentionReport {
         ran: true,

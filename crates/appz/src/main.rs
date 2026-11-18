@@ -6,8 +6,6 @@ use std::time::{Duration, Instant};
 use appz_core::{detect_toolchains, generate_claude_md, run_doctor};
 
 mod agents;
-// Scaffolding: `appz backup` subcommands are wired up in a later task.
-#[allow(dead_code)]
 mod backup;
 mod build_stage;
 mod ci;
@@ -69,6 +67,8 @@ enum AppzCmd {
     Format(FormatArgs),
     /// Remove build/cache output for this project (dry-run unless --force)
     Clean(CleanArgs),
+    /// Snapshot local project source in a Rustic repository
+    Backup(backup::BackupArgs),
     /// Diagnose project stack, config, and suggestions
     Doctor(DoctorArgs),
     /// Build the checkout and install it over the running `appz` binary
@@ -1524,6 +1524,11 @@ fn main() {
         AppzCmd::Lint(a) => run_lint(a, json),
         AppzCmd::Format(a) => run_format(a, json),
         AppzCmd::Clean(a) => run_clean(a, json),
+        AppzCmd::Backup(a) => {
+            if let Err(e) = backup::run(a, json) {
+                error(&e.to_string());
+            }
+        }
         AppzCmd::Doctor(a) => run_doctor_cmd(a, json),
         AppzCmd::DevInstall(a) => dev_install::run(!a.debug, a.dry_run),
         AppzCmd::Mcp => {

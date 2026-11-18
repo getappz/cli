@@ -1977,23 +1977,44 @@ fn run_deploy(args: DeployArgs, json: bool) {
     }
     if all {
         match deploy::run_all(&canonical, req) {
-            Ok(outputs) => {
+            Ok(results) => {
+                let failed = results.iter().filter(|r| r.error.is_some()).count();
                 if json {
-                    println!("{}", serde_json::to_string_pretty(&outputs).unwrap());
+                    println!("{}", serde_json::to_string_pretty(&results).unwrap());
                 } else {
-                    for output in &outputs {
-                        let target = if output.is_preview {
-                            "preview"
-                        } else {
-                            "production"
-                        };
-                        success(&format!(
-                            "{} ({target}): {}",
-                            output.provider,
-                            output.url.as_deref().unwrap_or("deployed (url unknown)")
-                        ));
+                    for r in &results {
+                        if let (Some(_), Some(e)) = (&r.output, &r.error) {
+                            eprintln!("{}: deployed, but a hook failed: {e}", r.target);
+                        }
+                        match (&r.output, &r.error) {
+                            (Some(o), _) if args.dry_run => print_deploy_dry_run(o),
+                            (Some(o), _) if o.unchanged => {
+                                info(&format!("{}: unchanged, skipped", r.target))
+                            }
+                            (Some(o), _) => success(&format!(
+                                "{} ({}): {}",
+                                r.target,
+                                if o.is_preview {
+                                    "preview"
+                                } else {
+                                    "production"
+                                },
+                                o.url.as_deref().unwrap_or("deployed (url unknown)")
+                            )),
+                            (_, Some(e)) => eprintln!("{}: failed: {e}", r.target),
+                            _ => {}
+                        }
                     }
-                    outro("deploy complete");
+                    outro(if args.dry_run {
+                        "nothing was deployed"
+                    } else if failed == 0 {
+                        "deploy complete"
+                    } else {
+                        "deploy finished with failures"
+                    });
+                }
+                if failed > 0 {
+                    std::process::exit(1);
                 }
             }
             Err(e) => error(&e),
@@ -2005,38 +2026,7 @@ fn run_deploy(args: DeployArgs, json: bool) {
             if json {
                 println!("{}", serde_json::to_string_pretty(&output).unwrap());
             } else if args.dry_run {
-                success(&format!(
-                    "dry run: would deploy to {} ({})",
-                    output.provider,
-                    if output.is_preview {
-                        "preview"
-                    } else {
-                        "production"
-                    }
-                ));
-                if output.unchanged {
-                    info(
-                        "unchanged since the last deploy: nothing would be redeployed (--force to deploy anyway)",
-                    );
-                }
-                if output.cli_missing {
-                    info("cli: not installed (a real deploy installs it with mise)");
-                }
-                if output.link_needed {
-                    info("project: not linked (a real deploy asks to create/link one)");
-                }
-                for f in &output.setup_files {
-                    info(&format!("would create {f} (the project has none)"));
-                }
-                if let Some(auth) = output.auth {
-                    info(match auth {
-                        appz_deploy::AuthState::Authenticated => "auth: signed in",
-                        appz_deploy::AuthState::NotAuthenticated => {
-                            "auth: not signed in (a real deploy would offer to log in)"
-                        }
-                        appz_deploy::AuthState::Unknown => "auth: could not be checked",
-                    });
-                }
+                print_deploy_dry_run(&output);
                 outro("nothing was deployed");
             } else {
                 if output.unchanged {
@@ -2065,6 +2055,41 @@ fn run_deploy(args: DeployArgs, json: bool) {
             }
         }
         Err(e) => error(&e),
+    }
+}
+
+fn print_deploy_dry_run(output: &appz_deploy::DeployOutput) {
+    success(&format!(
+        "dry run: would deploy to {} ({})",
+        output.provider,
+        if output.is_preview {
+            "preview"
+        } else {
+            "production"
+        }
+    ));
+    if output.unchanged {
+        info(
+            "unchanged since the last deploy: nothing would be redeployed (--force to deploy anyway)",
+        );
+    }
+    if output.cli_missing {
+        info("cli: not installed (a real deploy installs it with mise)");
+    }
+    if output.link_needed {
+        info("project: not linked (a real deploy asks to create/link one)");
+    }
+    for f in &output.setup_files {
+        info(&format!("would create {f} (the project has none)"));
+    }
+    if let Some(auth) = &output.auth {
+        info(match auth {
+            appz_deploy::AuthState::Authenticated => "auth: signed in",
+            appz_deploy::AuthState::NotAuthenticated => {
+                "auth: not signed in (a real deploy would offer to log in)"
+            }
+            appz_deploy::AuthState::Unknown => "auth: could not be checked",
+        });
     }
 }
 

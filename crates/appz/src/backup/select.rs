@@ -26,6 +26,8 @@ pub struct Selection {
     /// Source files (relative to `root`, sorted) that changed and need a
     /// snapshot.
     pub files: Vec<PathBuf>,
+    /// Index entries whose staged bytes differ from the working copy.
+    pub staged: Vec<PathBuf>,
     /// Variable names found in `.env*` files, sorted and deduped. Values are
     /// never read into this struct.
     pub env_names: Vec<String>,
@@ -61,6 +63,7 @@ pub fn select(root: &Path, output_dirs: &[&str]) -> Result<Selection, String> {
             .collect();
         return Ok(Selection {
             files,
+            staged: Vec::new(),
             env_names,
             git: None,
             bundle: None,
@@ -74,9 +77,22 @@ pub fn select(root: &Path, output_dirs: &[&str]) -> Result<Selection, String> {
     let mut changed: BTreeSet<PathBuf> = BTreeSet::new();
     // Tracked changes and untracked files. `-z` keeps paths verbatim, so
     // spaces and non-ASCII names survive unchanged.
-    for (rel, tracked) in git_status(root)? {
-        if filter.keeps(&rel, !tracked) {
-            changed.insert(rel);
+    let mut staged = Vec::new();
+    for (rel, code) in git_status(root)? {
+        if !filter.keeps(&rel, code == *b"??") {
+            continue;
+        }
+        if matches!(code[0], b'A' | b'C' | b'M' | b'R' | b'T') && code[1] != b' ' {
+            staged.push(rel.clone());
+        }
+        if code[1] != b'D' && code[0] != b'D' {
+            match std::fs::symlink_metadata(root.join(&rel)) {
+                Ok(meta) if !meta.is_dir() => {
+                    changed.insert(rel);
+                }
+                Ok(_) => {}
+                Err(e) => return Err(format!("cannot read {}: {e}", rel.display())),
+            }
         }
     }
     // Ignored files are still source when they are not generated - e.g. a
@@ -94,6 +110,7 @@ pub fn select(root: &Path, output_dirs: &[&str]) -> Result<Selection, String> {
 
     Ok(Selection {
         files: changed.into_iter().collect(),
+        staged,
         env_names,
         git: Some(state),
         bundle,
@@ -267,8 +284,8 @@ fn has_git_dir(root: &Path) -> bool {
 }
 
 /// Paths git reports as modified/staged/untracked, relative to `root`, with
-/// whether the path is tracked.
-fn git_status(root: &Path) -> Result<Vec<(PathBuf, bool)>, String> {
+/// the two-column porcelain status.
+fn git_status(root: &Path) -> Result<Vec<(PathBuf, [u8; 2])>, String> {
     let out = git(
         root,
         &[
@@ -292,25 +309,19 @@ fn git_status(root: &Path) -> Result<Vec<(PathBuf, bool)>, String> {
         if entry.len() < 4 {
             continue;
         }
-        let code = &entry[..2];
+        let code = [entry[0], entry[1]];
         let path = &entry[3..];
         // A rename/copy entry is followed by the old path; skip it.
         if code[0] == b'R' || code[0] == b'C' {
             entries.next();
         }
-        // Deleted files cannot be snapshotted.
-        if code[0] == b'D' || code[1] == b'D' {
-            continue;
-        }
-        let raw = String::from_utf8_lossy(path).into_owned();
+        let raw = std::str::from_utf8(path).map_err(|_| "Git reported a non-UTF-8 backup path")?;
         let rel = match raw.strip_prefix(&prefix) {
             Some(rest) => PathBuf::from(rest),
             None if prefix.is_empty() => PathBuf::from(raw),
             None => continue,
         };
-        if root.join(&rel).is_file() {
-            paths.push((rel, code != b"??"));
-        }
+        paths.push((rel, code));
     }
     Ok(paths)
 }
@@ -333,12 +344,40 @@ fn ignored_files(root: &Path) -> Result<Vec<PathBuf>, String> {
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
-    Ok(out
-        .stdout
+    out.stdout
         .split(|b| *b == 0)
         .filter(|p| !p.is_empty() && !p.ends_with(b"/"))
-        .map(|p| PathBuf::from(String::from_utf8_lossy(p).into_owned()))
-        .collect())
+        .map(|p| {
+            std::str::from_utf8(p)
+                .map(PathBuf::from)
+                .map_err(|_| "Git reported a non-UTF-8 backup path".to_string())
+        })
+        .collect()
+}
+
+/// Save the exact staged blob, even when the working copy was removed after staging.
+pub fn save_staged(root: &Path, rel: &Path, stage: &Path) -> Result<(), String> {
+    let spec = format!(
+        ":./{}",
+        rel.iter()
+            .map(|part| part.to_str().ok_or("non-UTF-8 staged path"))
+            .collect::<Result<Vec<_>, _>>()?
+            .join("/")
+    );
+    let id = git_ok(root, &["rev-parse", "--verify", &spec])?;
+    let target = stage.join("git/index").join(&id).join(rel);
+    std::fs::create_dir_all(target.parent().unwrap()).map_err(|e| e.to_string())?;
+    let file = std::fs::File::create(&target).map_err(|e| e.to_string())?;
+    let out = Command::new("git")
+        .args(["cat-file", "blob", &id])
+        .current_dir(root)
+        .stdout(file)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    filetime::set_file_mtime(target, std::time::UNIX_EPOCH.into()).map_err(|e| e.to_string())
 }
 
 const BUNDLE_DIR_PREFIX: &str = "appz-backup-";
@@ -349,9 +388,7 @@ const BUNDLE_FILE: &str = "local-commits.bundle";
 /// directory (unpredictable name, owner-only on Unix), never loose in the
 /// shared temp dir.
 fn create_bundle(root: &Path) -> Result<PathBuf, String> {
-    let dir = tempfile::Builder::new()
-        .prefix(BUNDLE_DIR_PREFIX)
-        .tempdir()
+    let dir = super::private_tempdir()
         .map_err(|e| format!("cannot create a private directory for the git bundle: {e}"))?;
     let path = dir.path().join(BUNDLE_FILE);
     let path_str = path.to_string_lossy().into_owned();
@@ -763,5 +800,31 @@ mod tests {
         assert!(dir.is_dir());
         remove_bundle(&bundle);
         assert!(!dir.exists());
+    }
+
+    #[test]
+    fn staged_bytes_survive_an_edit_or_deletion_in_the_worktree() {
+        let repo = git_repo(&[("file", "base"), (".env", "OLD=secret")]);
+        let _remote = with_remote(&repo);
+        repo.write("file", "staged");
+        repo.write(".env", "TOKEN=before");
+        repo.git(&["add", "."]);
+        repo.write("file", "working");
+        repo.write(".env", "TOKEN=after");
+        let stage = tempfile::tempdir().unwrap();
+        let id = git_ok(repo.path(), &["rev-parse", ":file"]).unwrap();
+        for exists in [true, false] {
+            if !exists {
+                std::fs::remove_file(repo.path().join("file")).unwrap();
+            }
+            let selected = select(repo.path(), &[]).unwrap();
+            assert_eq!(rels(&selected.staged), ["file"]);
+            assert_eq!(selected.files.len(), usize::from(exists));
+            save_staged(repo.path(), &selected.staged[0], stage.path()).unwrap();
+            assert_eq!(
+                std::fs::read(stage.path().join("git/index").join(&id).join("file")).unwrap(),
+                b"staged"
+            );
+        }
     }
 }

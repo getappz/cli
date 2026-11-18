@@ -1,12 +1,12 @@
 //! Retention policy enforcement for rustic backup repositories.
 //!
 //! Applies retention rules by count, date, and repository size.
-//! Retention is applied at most once a day per project unless forced,
-//! recording the execution date in `<root>/.appz/backup.json`.
+//! Retention is applied at most once a day per project and repository.
 
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use super::engine::{EngineError, Rustic};
 
@@ -81,7 +81,7 @@ pub struct RetentionReport {
     pub removed: usize,
 }
 
-/// Persistent backup metadata in `<root>/.appz/backup.json`.
+/// Persistent backup metadata for one repository.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BackupState {
     pub last_retention: Option<String>,
@@ -131,9 +131,10 @@ pub fn parse_size(input: &str) -> Result<u64, String> {
 /// Build rustic forget CLI arguments based on retention policy.
 pub fn forget_args(retention: &Retention) -> Vec<String> {
     let mut args = vec!["forget".to_string()];
-    if retention.keep_last > 0 {
+    let keep_last = retention.keep_last.max(retention.min_keep);
+    if keep_last > 0 {
         args.push("--keep-last".to_string());
-        args.push(retention.keep_last.to_string());
+        args.push(keep_last.to_string());
     }
     if retention.keep_daily > 0 {
         args.push("--keep-daily".to_string());
@@ -144,15 +145,13 @@ pub fn forget_args(retention: &Retention) -> Vec<String> {
         args.push(retention.keep_weekly.to_string());
     }
     args.push("--prune".to_string());
+    args.push("--json".to_string());
     args
 }
 
-fn resolve_state_file(path: &Path) -> PathBuf {
-    if path.extension().and_then(|e| e.to_str()) == Some("json") {
-        path.to_path_buf()
-    } else {
-        path.join(".appz").join("backup.json")
-    }
+fn state_file(project: &Path, repository: &str) -> PathBuf {
+    let key = Sha256::digest(repository.as_bytes());
+    project.join(".appz").join(format!("backup-{key:x}.json"))
 }
 
 fn read_state(state_file: &Path) -> BackupState {
@@ -167,97 +166,47 @@ fn write_state(state_file: &Path, state: &BackupState) -> std::io::Result<()> {
     if let Some(parent) = state_file.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let data = serde_json::to_string_pretty(state)?;
-    std::fs::write(state_file, data)
+    let file = tempfile::NamedTempFile::new_in(state_file.parent().unwrap())?;
+    serde_json::to_writer_pretty(file.as_file(), state)?;
+    file.persist(state_file)?;
+    Ok(())
 }
 
 fn today_utc() -> String {
     chrono::Utc::now().format("%Y-%m-%d").to_string()
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Deserialize)]
 struct SnapshotEntry {
     id: String,
-    #[serde(default)]
-    time: Option<String>,
+    time: chrono::DateTime<chrono::FixedOffset>,
 }
 
-fn parse_snapshots(json_str: &str) -> Vec<SnapshotEntry> {
-    let val: serde_json::Value = match serde_json::from_str(json_str) {
-        Ok(v) => v,
-        Err(_) => return Vec::new(),
-    };
-
-    let mut out = Vec::new();
-    if let Some(arr) = val.as_array() {
-        for item in arr {
-            if let Some(snaps) = item.get("snapshots").and_then(|s| s.as_array()) {
-                for s in snaps {
-                    if let Some(id) = s.get("id").and_then(|i| i.as_str()) {
-                        out.push(SnapshotEntry {
-                            id: id.to_string(),
-                            time: s
-                                .get("time")
-                                .and_then(|t| t.as_str())
-                                .map(|t| t.to_string()),
-                        });
-                    }
-                }
-            } else if let Some(id) = item.get("id").and_then(|i| i.as_str()) {
-                out.push(SnapshotEntry {
-                    id: id.to_string(),
-                    time: item
-                        .get("time")
-                        .and_then(|t| t.as_str())
-                        .map(|t| t.to_string()),
-                });
-            }
+fn parse_snapshots(output: &str) -> Result<Vec<SnapshotEntry>, EngineError> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Entry {
+        Group { snapshots: Vec<SnapshotEntry> },
+        Single(SnapshotEntry),
+    }
+    let entries: Vec<Entry> = parse_output("snapshots", output)?;
+    let mut snapshots = Vec::new();
+    for entry in entries {
+        match entry {
+            Entry::Group { snapshots: group } => snapshots.extend(group),
+            Entry::Single(snapshot) => snapshots.push(snapshot),
         }
     }
-
-    out.sort_by(|a, b| match (&a.time, &b.time) {
-        (Some(ta), Some(tb)) => ta.cmp(tb),
-        (Some(_), None) => std::cmp::Ordering::Less,
-        (None, Some(_)) => std::cmp::Ordering::Greater,
-        (None, None) => std::cmp::Ordering::Equal,
-    });
-
-    out
+    snapshots.sort_by_key(|snapshot| std::cmp::Reverse(snapshot.time));
+    Ok(snapshots)
 }
 
-fn parse_repo_size(json_str: &str) -> u64 {
-    let val: serde_json::Value = match serde_json::from_str(json_str) {
-        Ok(v) => v,
-        Err(_) => return 0,
-    };
-
-    if let Some(repo_arr) = val
-        .get("files")
-        .and_then(|f| f.get("repo"))
-        .and_then(|r| r.as_array())
-    {
-        let total: u64 = repo_arr
-            .iter()
-            .filter_map(|entry| entry.get("size").and_then(|s| s.as_u64()))
-            .sum();
-        if total > 0 {
-            return total;
-        }
-    }
-
-    if let Some(sz) = val.get("total_size").and_then(|s| s.as_u64()) {
-        return sz;
-    }
-
-    if let Some(sz) = val.get("repo_size").and_then(|s| s.as_u64()) {
-        return sz;
-    }
-
-    if let Some(sz) = val.get("size").and_then(|s| s.as_u64()) {
-        return sz;
-    }
-
-    0
+fn parse_output<T: serde::de::DeserializeOwned>(
+    command: &str,
+    output: &str,
+) -> Result<T, EngineError> {
+    serde_json::from_str(output)
+        .map_err(|e| EngineError::Failed(format!("invalid Rustic {command} output: {e}")))
 }
 
 /// Apply retention policy to a rustic backup repository.
@@ -268,40 +217,55 @@ fn parse_repo_size(json_str: &str) -> u64 {
 pub fn apply(
     engine: &impl Rustic,
     retention: &Retention,
-    state_target: impl AsRef<Path>,
+    project: &Path,
+    repository: &str,
 ) -> Result<RetentionReport, EngineError> {
-    let state_file = resolve_state_file(state_target.as_ref());
+    let state_file = state_file(project, repository);
     let mut state = read_state(&state_file);
     let today = today_utc();
+    let max_bytes = retention
+        .max_size
+        .as_deref()
+        .map(parse_size)
+        .transpose()
+        .map_err(EngineError::Failed)?;
 
     if state.last_retention.as_deref() == Some(&today) {
-        let size = query_repo_size(engine).unwrap_or(state.last_size.unwrap_or(0));
+        let size = query_repo_size(engine)?;
         return Ok(RetentionReport {
             ran: false,
             size,
-            over_cap: false,
+            over_cap: max_bytes.is_some_and(|cap| size > cap),
             removed: 0,
         });
     }
 
     let f_args = forget_args(retention);
     let str_args: Vec<&str> = f_args.iter().map(|s| s.as_str()).collect();
-    engine.run(&str_args)?;
-
+    #[derive(Deserialize)]
+    struct ForgetGroup {
+        items: Vec<ForgetItem>,
+    }
+    #[derive(Deserialize)]
+    struct ForgetItem {
+        keep: bool,
+    }
+    let forgotten = engine.run(&str_args)?;
+    let groups: Vec<ForgetGroup> = parse_output("forget", &forgotten.stdout)?;
+    let mut removed = groups
+        .into_iter()
+        .flat_map(|group| group.items)
+        .filter(|item| !item.keep)
+        .count();
     let mut current_size = query_repo_size(engine)?;
-    let mut removed = 0;
     let mut over_cap = false;
 
-    if let Some(max_bytes) = retention
-        .max_size
-        .as_deref()
-        .and_then(|s| parse_size(s).ok())
-    {
+    if let Some(max_bytes) = max_bytes.filter(|&cap| current_size > cap) {
         let snaps_out = engine.run(&["snapshots", "--json"])?;
-        let mut snapshots = parse_snapshots(&snaps_out.stdout);
+        let mut snapshots = parse_snapshots(&snaps_out.stdout)?;
 
         while current_size > max_bytes && snapshots.len() > retention.min_keep as usize {
-            let oldest = snapshots.remove(0);
+            let oldest = snapshots.pop().expect("length exceeds min_keep");
             engine.run(&["forget", &oldest.id, "--prune"])?;
             removed += 1;
             current_size = query_repo_size(engine)?;
@@ -331,7 +295,32 @@ pub fn apply(
 
 fn query_repo_size(engine: &impl Rustic) -> Result<u64, EngineError> {
     let out = engine.run(&["repoinfo", "--json"])?;
-    Ok(parse_repo_size(&out.stdout))
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Info {
+        Files {
+            files: Files,
+        },
+        Total {
+            #[serde(alias = "repo_size", alias = "size")]
+            total_size: u64,
+        },
+    }
+    #[derive(Deserialize)]
+    struct Files {
+        repo: Vec<FileStats>,
+    }
+    #[derive(Deserialize)]
+    struct FileStats {
+        size: u64,
+    }
+    match parse_output("repoinfo", &out.stdout)? {
+        Info::Total { total_size } => Ok(total_size),
+        Info::Files { files } => files.repo.into_iter().try_fold(0_u64, |sum, entry| {
+            sum.checked_add(entry.size)
+                .ok_or_else(|| EngineError::Failed("Rustic repository size exceeds u64".into()))
+        }),
+    }
 }
 
 #[cfg(test)]
@@ -408,6 +397,12 @@ mod tests {
                 });
             }
 
+            if args.starts_with(&["forget", "--keep-last"]) {
+                return Ok(RunOut {
+                    stdout: r#"[{"items":[{"keep":true}]}]"#.into(),
+                    stderr: String::new(),
+                });
+            }
             if args.len() >= 3 && args[0] == "forget" && args[2] == "--prune" {
                 let id = args[1];
                 self.snapshots.borrow_mut().retain(|(i, _)| i != id);
@@ -425,6 +420,13 @@ mod tests {
                 stderr: String::new(),
             })
         }
+    }
+
+    #[test]
+    fn snapshot_order_uses_the_instant_across_time_zones() {
+        let output = r#"[{"snapshots":[{"id":"older","time":"2026-01-02T00:00:00+05:30"},{"id":"newer","time":"2026-01-01T23:00:00Z"}]}]"#;
+        assert_eq!(parse_snapshots(output).unwrap().pop().unwrap().id, "older");
+        assert!(parse_snapshots(r#"[{"id":"missing-time"}]"#).is_err());
     }
 
     #[test]
@@ -468,14 +470,14 @@ mod tests {
         let engine = FakeRustic::new(1000, vec![("snap1", "2026-01-01T00:00:00Z")]);
         let retention = Retention::default();
 
-        let report1 = apply(&engine, &retention, dir.path()).unwrap();
+        let report1 = apply(&engine, &retention, dir.path(), "repo-a").unwrap();
         assert!(report1.ran);
         assert_eq!(report1.size, 1000);
         assert_eq!(report1.removed, 0);
 
         let initial_calls = engine.calls.borrow().len();
 
-        let report2 = apply(&engine, &retention, dir.path()).unwrap();
+        let report2 = apply(&engine, &retention, dir.path(), "repo-a").unwrap();
         assert!(!report2.ran);
         assert_eq!(report2.size, 1000);
         assert_eq!(report2.removed, 0);
@@ -486,6 +488,17 @@ mod tests {
             !calls_after[initial_calls..]
                 .iter()
                 .any(|call| call.first().map(|s| s.as_str()) == Some("forget"))
+        );
+        drop(calls_after);
+        assert!(
+            apply(&engine, &retention, dir.path(), "repo-b")
+                .unwrap()
+                .ran
+        );
+        assert!(
+            !apply(&engine, &retention, dir.path(), "repo-a")
+                .unwrap()
+                .ran
         );
     }
 
@@ -516,7 +529,7 @@ mod tests {
             ..Default::default()
         };
 
-        let report = apply(&engine, &retention, dir.path()).unwrap();
+        let report = apply(&engine, &retention, dir.path(), "repo").unwrap();
         assert!(report.ran);
         assert_eq!(report.removed, 2);
         assert!(!report.over_cap);
@@ -553,15 +566,26 @@ mod tests {
 
         let retention = Retention {
             max_size: Some("2GiB".to_string()),
+            keep_last: 1,
             min_keep: 3,
             ..Default::default()
         };
 
-        let report = apply(&engine, &retention, dir.path()).unwrap();
+        let report = apply(&engine, &retention, dir.path(), "repo").unwrap();
+        assert!(
+            engine.calls.borrow()[0]
+                .windows(2)
+                .any(|args| args == ["--keep-last", "3"])
+        );
         assert!(report.ran);
         // Only 1 snapshot can be removed before hitting min_keep (4 -> 3)
         assert_eq!(report.removed, 1);
         assert!(report.over_cap);
         assert!(report.size > 2 * one_gib);
+        assert!(
+            apply(&engine, &retention, dir.path(), "repo")
+                .unwrap()
+                .over_cap
+        );
     }
 }

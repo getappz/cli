@@ -49,11 +49,29 @@ appz skills add  # install the appz agent skill into detected AI agents (--globa
 ```
 
 Set `APPZ_BACKUP_REPOSITORY` to a dedicated repository outside the project.
-Set its password with `appz vault set APPZ_BACKUP_PASSWORD` or the
-`APPZ_BACKUP_PASSWORD` environment variable. Run `appz backup` to create
-a snapshot, `appz backup list` to see snapshots, and
-`appz backup restore latest <destination>` to recover one. Run
-`appz backup prune` to apply the project's retention policy to that repository.
+Store its password with `appz vault set APPZ_BACKUP_PASSWORD` and run
+`appz vault unlock` before backing up, or set `APPZ_BACKUP_PASSWORD` for
+unattended runs. Run `appz backup` to create a snapshot and `appz backup list`
+to see snapshots. Run `appz backup prune` to apply retention to the entire repository.
+
+Restore into an empty directory with `appz backup restore latest <destination>`.
+The `worktree/` directory contains selected files at their project-relative paths.
+For a Git project, start with a checkout of the pushed history. If the backup
+includes local commits, locate `git/<digest>/local-commits.bundle` under the
+destination. From the checkout, verify the bundle and fetch its HEAD into a new branch.
+
+```sh
+git bundle verify <absolute-path-to-bundle>
+git fetch <absolute-path-to-bundle> HEAD:refs/heads/recovered
+git switch recovered
+```
+
+The bundle requires any pushed base commits listed by `git bundle verify`.
+If those commits are lost, the incremental bundle alone cannot rebuild the history.
+Working-tree environment files are excluded, but a bundle includes whatever
+was committed. Copy restored working files into the checkout. If a staged file
+differed from the working copy, its staged bytes are separately available at
+`git/index/<blob-id>/<project-relative-path>`.
 
 ## Install
 

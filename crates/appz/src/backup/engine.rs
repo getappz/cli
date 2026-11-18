@@ -12,8 +12,7 @@
 //! - backup: `rustic backup [--json] [--host NAME] [--tag TAG[,TAG]...]
 //!   [--skip-if-unchanged] SOURCE...`. `--json` prints the snapshot object;
 //!   with `--skip-if-unchanged` and no changes the result has no snapshot ID.
-//!   There is **no** `--files-from`: every selected path is passed
-//!   as its own SOURCE argument.
+//!   appz stages selected files into one private source directory.
 //! - list: `rustic snapshots --json` -> array of
 //!   `{ group_key: { hostname, label, paths }, snapshots: [{ id, time, tags,
 //!   summary: { data_added, total_bytes_processed, ... }, ... }] }`
@@ -215,7 +214,21 @@ impl RusticCli {
                 self.cwd.display()
             )));
         }
-        let (bin, all, env) = self.invocation(args);
+        // An absolute empty profile keeps Rustic from loading hooks from the project.
+        let profile = tempfile::Builder::new()
+            .suffix(".toml")
+            .tempfile()
+            .map_err(|e| {
+                EngineError::Failed(format!("cannot create a private Rustic profile: {e}"))
+            })?;
+        let profile_path = appz_core::canonicalize(profile.path())
+            .map_err(|e| EngineError::Failed(e.to_string()))?;
+        let profile_path = profile_path
+            .to_str()
+            .ok_or_else(|| EngineError::Failed("Rustic needs a UTF-8 profile path".into()))?;
+        let mut profiled_args = vec!["--use-profile", profile_path];
+        profiled_args.extend_from_slice(args);
+        let (bin, all, env) = self.invocation(&profiled_args);
         let borrowed: Vec<(&str, &str)> = env.iter().map(|(k, v)| (*k, v.as_str())).collect();
         let arg_refs: Vec<&str> = all.iter().map(String::as_str).collect();
 

@@ -1,7 +1,7 @@
 //! Source backups through the `rustic` CLI.
 //!
 //! Only the source that cannot be rebuilt is snapshotted (see [`select`]);
-//! environment values live in the vault, never in a snapshot.
+//! working-tree environment files are excluded. Git bundles preserve committed history.
 
 pub mod engine;
 pub mod retention;
@@ -15,7 +15,7 @@ use serde_json::json;
 
 #[derive(Args)]
 #[command(
-    after_help = "Set APPZ_BACKUP_REPOSITORY to a dedicated Rustic repository outside the project. Set APPZ_BACKUP_PASSWORD or store it with `appz vault set APPZ_BACKUP_PASSWORD`."
+    after_help = "Set APPZ_BACKUP_REPOSITORY to a dedicated Rustic repository outside the project. Set APPZ_BACKUP_PASSWORD or store it with `appz vault set APPZ_BACKUP_PASSWORD` and run `appz vault unlock` before backup."
 )]
 pub struct BackupArgs {
     /// Project directory (relative repository and restore paths resolve here)
@@ -52,6 +52,7 @@ pub fn run(args: BackupArgs, json_output: bool) -> Result<()> {
     }
     let repo = engine::env_repository()
         .ok_or_else(|| format!("set {ENV_REPOSITORY} to the backup repository"))?;
+    let repo = repository_location(&root, path_arg(&repo)?)?;
     let password = match engine::env_password()? {
         Some(value) => value,
         None => crate::secrets::deploy_env(&root, &[ENV_PASSWORD.to_string()])?
@@ -68,7 +69,7 @@ pub fn run(args: BackupArgs, json_output: bool) -> Result<()> {
         crate::deploy::Consent::Never
     };
     let bin = engine::ensure_installed(&root, consent)?;
-    let cli = RusticCli::new(bin, repo, password, &root);
+    let cli = RusticCli::new(bin, &repo, password, &root);
     match args.command.unwrap_or(BackupCmd::Create) {
         BackupCmd::Create => create(&cli, &root, json_output)?,
         BackupCmd::Init => {
@@ -100,7 +101,7 @@ pub fn run(args: BackupArgs, json_output: bool) -> Result<()> {
         }
         BackupCmd::Prune => {
             let policy = retention_policy(&root)?;
-            let result = retention::apply(&cli, &policy, root.join(".appz/backup.json"))?;
+            let result = retention::apply(&cli, &policy, &root, &repo)?;
             let message = if result.ran {
                 "Retention applied"
             } else {
@@ -128,20 +129,48 @@ fn path_arg(path: &Path) -> Result<&str> {
         .ok_or_else(|| format!("Rustic requires a UTF-8 path: {}", path.display()).into())
 }
 
+// Local repositories must be disjoint from the source, including through symlinks.
+fn repository_location(root: &Path, repo: &str) -> Result<String> {
+    let local = if let Some(path) = repo.strip_prefix("local:") {
+        path
+    } else if !Path::new(repo).is_absolute() && repo.split_once(':').is_some() {
+        return Ok(repo.to_string());
+    } else {
+        repo
+    };
+    if local.is_empty() {
+        return Err("empty local backup repository path".into());
+    }
+    let mut path = PathBuf::new();
+    for component in root.join(local).components() {
+        match component {
+            std::path::Component::ParentDir => {
+                path.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => path.push(other.as_os_str()),
+        }
+        if path.is_absolute() {
+            match appz_core::canonicalize(&path) {
+                Ok(resolved) => path = resolved,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
+    }
+    if path.starts_with(root) || root.starts_with(&path) {
+        return Err("choose a dedicated backup repository outside the project".into());
+    }
+    Ok(path_arg(&path)?.to_owned())
+}
+
 fn create(cli: &impl Rustic, root: &Path, json_output: bool) -> Result<()> {
     let outputs: Vec<_> = appz_core::detect_toolchains(root)?
         .iter()
         .filter_map(|t| t.output_directory)
         .collect();
     let selection = select::select(root, &outputs)?;
-    // Rustic 0.11 can panic on multiple relative sources at the project root.
-    let paths: Vec<_> = selection
-        .files
-        .iter()
-        .map(|p| root.join(p))
-        .chain(selection.bundle.iter().cloned())
-        .collect();
-    let snapshot = write_snapshot(cli, &paths, json_output);
+    let snapshot = write_snapshot(cli, root, &selection, json_output);
     if let Some(path) = &selection.bundle {
         select::remove_bundle(path);
     }
@@ -161,28 +190,118 @@ fn create(cli: &impl Rustic, root: &Path, json_output: bool) -> Result<()> {
     Ok(())
 }
 
+fn private_tempdir() -> std::io::Result<tempfile::TempDir> {
+    let mut builder = tempfile::Builder::new();
+    builder.prefix("appz-backup-");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        builder.permissions(std::fs::Permissions::from_mode(0o700));
+    }
+    builder.tempdir()
+}
+
 fn write_snapshot(
     cli: &impl Rustic,
-    paths: &[PathBuf],
+    root: &Path,
+    selection: &select::Selection,
     json_output: bool,
 ) -> Result<Option<serde_json::Value>> {
-    if paths.is_empty() {
+    if selection.files.is_empty() && selection.staged.is_empty() && selection.bundle.is_none() {
         return Ok(None);
     }
-    let mut args = vec!["backup", "--init", "--skip-if-unchanged", "--json", "--"];
-    for path in paths {
-        args.push(path_arg(path)?);
+    let stage = private_tempdir()?;
+    for rel in &selection.files {
+        let src = root.join(rel);
+        let dest = stage.path().join("worktree").join(rel);
+        std::fs::create_dir_all(dest.parent().unwrap())?;
+        let meta = std::fs::symlink_metadata(&src)?;
+        if meta.is_symlink() {
+            let target = std::fs::read_link(&src)?;
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(target, &dest)?;
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::FileTypeExt;
+                if meta.file_type().is_symlink_dir() {
+                    std::os::windows::fs::symlink_dir(target, &dest)?;
+                } else {
+                    std::os::windows::fs::symlink_file(target, &dest)?;
+                }
+            }
+            let time = filetime::FileTime::from_last_modification_time(&meta);
+            filetime::set_symlink_file_times(&dest, time, time)?;
+        } else if meta.is_file() {
+            std::fs::copy(&src, &dest)?;
+            filetime::set_file_mtime(
+                &dest,
+                filetime::FileTime::from_last_modification_time(&meta),
+            )?;
+        } else {
+            return Err(format!("unsupported backup source: {}", src.display()).into());
+        }
     }
-    let out = cli.run(&args)?;
+    for rel in &selection.staged {
+        select::save_staged(root, rel, stage.path())?;
+    }
+    if let Some(bundle) = &selection.bundle {
+        use sha2::{Digest, Sha256};
+        let mut hash = Sha256::new();
+        std::io::copy(&mut std::fs::File::open(bundle)?, &mut hash)?;
+        let dir = stage
+            .path()
+            .join("git")
+            .join(format!("{:x}", hash.finalize()));
+        std::fs::create_dir_all(&dir)?;
+        let dest = dir.join("local-commits.bundle");
+        std::fs::copy(bundle, &dest)?;
+        filetime::set_file_mtime(dest, std::time::UNIX_EPOCH.into())?;
+    }
+    normalize_directories(stage.path())?;
+    let out = cli.run(&[
+        "backup",
+        "--init",
+        "--skip-if-unchanged",
+        "--json",
+        "--as-path",
+        "/",
+        "--set-ctime",
+        "no",
+        "--set-devid",
+        "no",
+        "--",
+        path_arg(stage.path())?,
+    ])?;
     if !json_output {
         eprint!("{}", out.stderr);
     }
-    if out.stdout.trim().is_empty() {
-        return Ok(None);
-    }
+
     let snapshot: serde_json::Value = serde_json::from_str(&out.stdout)?;
+    let expected =
+        selection.files.len() + selection.staged.len() + usize::from(selection.bundle.is_some());
+    let count = snapshot
+        .pointer("/summary/total_files_processed")
+        .and_then(|v| v.as_u64());
+    if count != Some(expected as u64) {
+        let reported = count.map_or_else(|| "no count".into(), |n| n.to_string());
+        return Err(format!(
+            "incomplete backup (snapshot {}): expected {expected} files, Rustic reported {reported}. {}",
+            snapshot["id"].as_str().unwrap_or("unsaved"), out.stderr.trim()
+        ).into());
+    }
     // With --skip-if-unchanged Rustic may emit the candidate snapshot without an ID.
     Ok(snapshot["id"].is_string().then_some(snapshot))
+}
+
+// Synthetic directory mtimes must be stable for Rustic to skip an unchanged tree.
+fn normalize_directories(path: &Path) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            normalize_directories(&entry.path())?;
+        }
+    }
+    filetime::set_file_mtime(path, std::time::UNIX_EPOCH.into())
 }
 
 fn retention_policy(root: &Path) -> Result<retention::Retention> {
@@ -208,7 +327,7 @@ mod tests {
     use engine::{EngineError, RunOut};
 
     #[derive(Default)]
-    struct SnapshotFixture(std::cell::Cell<u32>);
+    struct SnapshotFixture(std::cell::Cell<u32>, bool);
 
     impl Rustic for SnapshotFixture {
         fn run(&self, args: &[&str]) -> std::result::Result<RunOut, EngineError> {
@@ -216,9 +335,15 @@ mod tests {
             let (_, paths) = args.split_at(args.iter().position(|arg| *arg == "--").unwrap() + 1);
             assert_eq!(paths.len(), 1);
             assert!(Path::new(paths[0]).is_absolute());
-            assert!(Path::new(paths[0]).ends_with("two words.txt"));
+            assert_eq!(
+                std::fs::read(Path::new(paths[0]).join("worktree/two words.txt")).unwrap(),
+                b"work"
+            );
+            assert!(!Path::new(paths[0]).join("worktree/.env").exists());
             Ok(RunOut {
-                stdout: r#"{"id":"fixture"}"#.into(),
+                stdout:
+                    json!({"id":"fixture","summary":{"total_files_processed":u64::from(!self.1)}})
+                        .to_string(),
                 stderr: String::new(),
             })
         }
@@ -234,5 +359,36 @@ mod tests {
         std::fs::write(project.path().join("two words.txt"), "work").unwrap();
         create(&engine, project.path(), true).unwrap();
         assert_eq!(engine.0.get(), 1);
+    }
+
+    #[test]
+    fn incomplete_snapshot_reports_its_id() {
+        let project = tempfile::tempdir().unwrap();
+        std::fs::write(project.path().join("two words.txt"), "work").unwrap();
+        let engine = SnapshotFixture(Default::default(), true);
+        let err = create(&engine, project.path(), true).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("incomplete backup (snapshot fixture)")
+        );
+    }
+
+    #[test]
+    fn local_repository_cannot_overlap_the_project() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let root = appz_core::canonicalize(&project).unwrap();
+        for repo in [".", "..", "local:./state/future", "../project/backup"] {
+            assert!(repository_location(&root, repo).is_err(), "{repo}");
+        }
+        assert_eq!(
+            repository_location(&root, "local:../repo").unwrap(),
+            root.parent().unwrap().join("repo").to_str().unwrap()
+        );
+        assert_eq!(
+            repository_location(&root, "rclone:remote:bucket").unwrap(),
+            "rclone:remote:bucket"
+        );
     }
 }

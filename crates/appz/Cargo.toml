@@ -28,6 +28,7 @@ rmcp = { version = "2", features = ["server", "macros", "transport-io"] }
 tokio = { version = "1", features = ["rt-multi-thread", "io-std", "macros"] }
 chrono = "0.4"
 dirs = "6"
+filetime = "0.2"
 flate2 = "1"
 semver = "1"
 sha2 = "0.10"

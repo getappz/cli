@@ -46,20 +46,24 @@ struct IgnoreRule {
 struct IgnoreRules(Vec<IgnoreRule>);
 
 impl IgnoreRules {
-    fn load(root: &Path) -> Result<(Self, &'static str), String> {
+    fn load(root: &Path) -> Result<(Self, Option<&'static str>), String> {
+        let mut available = None;
         for name in [".appzignore", ".vercelignore"] {
             let path = root.join(name);
             match std::fs::symlink_metadata(&path) {
                 Ok(metadata) if !metadata.is_file() => continue,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    available.get_or_insert(name);
+                    continue;
+                }
                 Err(e) => return Err(format!("Failed to inspect {}: {e}", path.display())),
                 Ok(_) => {}
             }
             let text = std::fs::read_to_string(&path)
                 .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
-            return Ok((Self::parse(name, &text)?, name));
+            return Ok((Self::parse(name, &text)?, Some(name)));
         }
-        Ok((Self::default(), ".appzignore"))
+        Ok((Self::default(), available))
     }
 
     fn parse(name: &str, text: &str) -> Result<Self, String> {
@@ -310,6 +314,27 @@ struct Candidate {
     immutable: bool,
 }
 
+fn oversized_file_error(path: &str, size: usize, ignore_file: Option<&str>) -> String {
+    let message =
+        format!("File {path:?} exceeds maximum allowed size of 25 MB (size: {size} bytes).");
+    if path.contains(['\r', '\n']) {
+        return format!(
+            "{message} Rename the file to remove line breaks or move it outside the output directory."
+        );
+    }
+    let Some(name) = ignore_file else {
+        return format!(
+            "{message} Move this file outside the output directory, or replace the non-regular .appzignore entry with a regular ignore file."
+        );
+    };
+    let mut rule = glob::Pattern::escape(path);
+    if rule.ends_with(char::is_whitespace) {
+        let last = rule.pop().unwrap();
+        rule.push_str(&format!("[{last}]"));
+    }
+    format!("{message} Add this rule to {name} to leave it out of the deploy:\n{rule}")
+}
+
 pub fn scan_output_dir(output_dir: &Path) -> Result<ScannedTree, String> {
     if !output_dir.is_dir() {
         return Err(format!(
@@ -348,11 +373,7 @@ pub fn scan_output_dir(output_dir: &Path) -> Result<ScannedTree, String> {
             .map_err(|e| format!("Failed to read metadata for {}: {e}", abs_path.display()))?;
         let size = metadata.len() as usize;
         if size > MAX_FILE_SIZE {
-            return Err(format!(
-                "File '{norm_path}' exceeds maximum allowed size of 25 MB (size: {size} bytes). \
-                 Add this rule to {ignore_file} to leave it out of the deploy:\n{}",
-                glob::Pattern::escape(&norm_path)
-            ));
+            return Err(oversized_file_error(&norm_path, size, ignore_file));
         }
 
         let mime = guess_mime(&norm_path);
@@ -651,6 +672,22 @@ mod tests {
     }
 
     #[test]
+    fn oversized_rule_preserves_whitespace_and_handles_multiline_paths() {
+        for path in ["/[draft]  ", "/draft\t", "/draft\u{a0}"] {
+            let err = oversized_file_error(path, MAX_FILE_SIZE + 1, Some(".appzignore"));
+            let rule = err.lines().last().unwrap();
+            let parsed = IgnoreRules::parse(".appzignore", rule).unwrap();
+            assert!(is_ignored(path, &parsed));
+            assert!(!is_ignored(path.trim_end(), &parsed));
+        }
+        for path in ["/draft\n.bin", "/draft\r.bin"] {
+            let err = oversized_file_error(path, MAX_FILE_SIZE + 1, Some(".appzignore"));
+            assert!(err.contains("Rename"));
+            assert_eq!(err.lines().count(), 1);
+        }
+    }
+
+    #[test]
     fn test_scan_output_dir_rejects_oversized_file() {
         let dir = tempdir().unwrap();
         let large_file = dir.path().join("[draft].bin");
@@ -664,6 +701,13 @@ mod tests {
         assert!(err.contains(".appzignore"));
 
         let active = dir.path().join(".vercelignore");
+        std::fs::create_dir(dir.path().join(".appzignore")).unwrap();
+        let err = scan_output_dir(dir.path()).unwrap_err();
+        assert!(err.contains("Add this rule to .vercelignore"));
+        std::fs::create_dir(&active).unwrap();
+        let err = scan_output_dir(dir.path()).unwrap_err();
+        assert!(err.contains("replace the non-regular .appzignore"));
+        std::fs::remove_dir(&active).unwrap();
         std::fs::write(&active, "private.txt\n").unwrap();
         std::fs::write(dir.path().join("private.txt"), "private").unwrap();
         std::fs::write(dir.path().join("index.html"), "hi").unwrap();

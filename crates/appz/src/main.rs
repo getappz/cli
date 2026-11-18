@@ -1151,21 +1151,7 @@ fn run_dev_commands(
     outro("dev server stopped");
 }
 
-
 fn run_preview_build(project: &std::path::Path, toolchains: &[appz_core::DetectedToolchain]) {
-    if toolchains
-        .iter()
-        .any(|tc| tc.slug == appz_core::STATIC_HTML_SLUG)
-    {
-        match appz_core::static_prebuild_ready(project, toolchains) {
-            Ok(Some(())) => {
-                success("static HTML — output on disk (no build step)");
-                return;
-            }
-            Ok(None) => {}
-            Err(e) => error(&e),
-        }
-    }
     if !toolchains.iter().any(|tc| tc.build_command.is_some()) {
         return;
     }
@@ -1188,9 +1174,8 @@ fn run_preview(args: PreviewArgs, json: bool) {
                 .unwrap_or_else(|e| error(&e));
         json_out(&toolchains, "ok");
         println!(
-            r#"{{"serve_root":"{}","port":{},"hot_reload":false}}"#,
-            serve_root.display(),
-            args.port
+            "{}",
+            serde_json::json!({"serve_root": serve_root.to_string_lossy(), "port": args.port, "hot_reload": false})
         );
         return;
     }

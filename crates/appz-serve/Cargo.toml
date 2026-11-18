@@ -7,7 +7,6 @@ publish = false
 description = "Local static file server for plain HTML sites (appz dev / preview)."
 
 [dependencies]
-bytes = "1"
 futures-util = "0.3"
 http-body-util = "0.1"
 hyper = { version = "1", features = ["server", "http1"] }

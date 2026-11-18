@@ -23,4 +23,3 @@ pub fn run_blocking(config: ServerConfig) -> Result<()> {
         server.start().await
     })
 }
-

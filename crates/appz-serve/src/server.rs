@@ -27,23 +27,17 @@ impl DevServer {
 
     pub async fn start(&mut self) -> Result<()> {
         let addr = self.config.bind_addr();
-        if self.config.hot_reload {
-            let (_watcher, receiver) = FileWatcher::new(self.config.root_dir.clone())?;
+        let _watcher = if self.config.hot_reload {
+            let (watcher, receiver) = FileWatcher::new(self.config.root_dir.clone())?;
             self.change_receiver = Some(receiver);
-        }
+            Some(watcher)
+        } else {
+            None
+        };
 
         let listener = TcpListener::bind(&addr).await?;
         let config = Arc::clone(&self.config);
         let reload_rx = self.change_receiver.as_ref().map(|r| r.resubscribe());
-
-        if let Some(mut invalidate_rx) = self.change_receiver.as_ref().map(|r| r.resubscribe()) {
-            // fire-and-forget: clear read cache when the file watcher reports changes
-            tokio::spawn(async move {
-                while invalidate_rx.recv().await.is_ok() {
-                    crate::file_cache::invalidate_all();
-                }
-            });
-        }
 
         loop {
             tokio::select! {

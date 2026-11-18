@@ -1,6 +1,6 @@
 //! Small-file read cache (cpeak-style): per-thread memory, version checks, global invalidation on hot reload.
 
-use bytes::Bytes;
+use hyper::body::Bytes;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io;
@@ -10,6 +10,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 const MAX_CACHED_FILE_SIZE: u64 = 1024 * 1024;
 const MAX_CACHED_BYTES: usize = 32 * 1024 * 1024;
+const MAX_ENTRIES: usize = 4096;
+const MAX_AGE: Duration = Duration::from_secs(2);
 const CHECK_INTERVAL: Duration = Duration::from_millis(100);
 const SETTLE_TIME: Duration = Duration::from_secs(2);
 
@@ -49,6 +51,7 @@ impl Version {
 struct Cached {
     content: Bytes,
     version: Version,
+    loaded_at: Instant,
     checked_at: Instant,
 }
 
@@ -85,7 +88,9 @@ pub fn read_bytes(path: &Path) -> io::Result<Bytes> {
         cache
             .files
             .get(path)
-            .filter(|cached| cached.checked_at.elapsed() < CHECK_INTERVAL)
+            .filter(|cached| {
+                cached.checked_at.elapsed() < CHECK_INTERVAL && cached.loaded_at.elapsed() < MAX_AGE
+            })
             .map(|cached| cached.content.clone())
     });
     if let Some(content) = recently_checked {
@@ -106,15 +111,10 @@ pub fn read_bytes(path: &Path) -> io::Result<Bytes> {
     let version = Version::of(&metadata);
     let cached = CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
-        if cache.generation != generation {
-            cache.generation = generation;
-            cache.files.clear();
-            cache.bytes = 0;
-        }
         let cached = cache
             .files
             .get_mut(path)
-            .filter(|cached| cached.version == version && version.settled())?;
+            .filter(|cached| cached.version == version && cached.loaded_at.elapsed() < MAX_AGE)?;
         cached.checked_at = Instant::now();
         Some(cached.content.clone())
     });
@@ -124,15 +124,10 @@ pub fn read_bytes(path: &Path) -> io::Result<Bytes> {
 
     let content = Bytes::from(std::fs::read(path)?);
     let unchanged = std::fs::metadata(path).is_ok_and(|after| Version::of(&after) == version);
-    if unchanged && version.settled() {
+    if unchanged && version.settled() && content.len() as u64 == version.len {
         CACHE.with(|cache| {
             let mut cache = cache.borrow_mut();
-            if cache.generation != generation {
-                cache.generation = generation;
-                cache.files.clear();
-                cache.bytes = 0;
-            }
-            if cache.bytes + content.len() > MAX_CACHED_BYTES {
+            if cache.files.len() >= MAX_ENTRIES || cache.bytes + content.len() > MAX_CACHED_BYTES {
                 cache.files.clear();
                 cache.bytes = 0;
             }
@@ -142,6 +137,7 @@ pub fn read_bytes(path: &Path) -> io::Result<Bytes> {
                 Cached {
                     content: content.clone(),
                     version,
+                    loaded_at: Instant::now(),
                     checked_at: Instant::now(),
                 },
             ) {
@@ -150,4 +146,36 @@ pub fn read_bytes(path: &Path) -> io::Result<Bytes> {
         });
     }
     Ok(content)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::{self, File};
+
+    #[test]
+    fn same_metadata_rewrite_expires_even_after_a_cache_hit() {
+        let path = std::env::temp_dir().join(format!("appz-cache-{}", std::process::id()));
+        let modified = SystemTime::now() - Duration::from_secs(30);
+        fs::write(&path, b"old").unwrap();
+        File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+        assert_eq!(read_bytes(&path).unwrap().as_ref(), b"old");
+        fs::write(&path, b"new").unwrap();
+        File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+        CACHE.with(|cache| cache.borrow_mut().files.get_mut(&path).unwrap().loaded_at -= MAX_AGE);
+        assert_eq!(read_bytes(&path).unwrap().as_ref(), b"new");
+        invalidate_all();
+        fs::remove_file(&path).unwrap();
+        assert!(read_bytes(&path).is_err());
+    }
 }

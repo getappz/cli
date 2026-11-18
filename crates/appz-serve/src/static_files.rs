@@ -68,7 +68,6 @@ async fn respond_path(path: &Path, method: &Method) -> Result<Response<Full<Byte
 
 async fn serve_file(path: &Path) -> Result<Response<Full<Bytes>>> {
     let mime_type = from_path(path).first_or_octet_stream();
-    let content_type = mime_type.as_ref().to_string();
     let path = path.to_path_buf();
     let content = tokio::task::spawn_blocking(move || file_cache::read_bytes(&path))
         .await
@@ -76,7 +75,7 @@ async fn serve_file(path: &Path) -> Result<Response<Full<Bytes>>> {
         .map_err(ServeError::Io)?;
     Ok(Response::builder()
         .status(StatusCode::OK)
-        .header(CONTENT_TYPE, HeaderValue::from_str(&content_type)?)
+        .header(CONTENT_TYPE, HeaderValue::from_str(mime_type.as_ref())?)
         .header(CACHE_CONTROL, HeaderValue::from_static("no-cache"))
         .body(Full::new(content))?)
 }

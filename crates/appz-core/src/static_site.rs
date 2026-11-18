@@ -56,7 +56,9 @@ pub fn static_prebuild_ready(
     project: &Path,
     toolchains: &[DetectedToolchain],
 ) -> Result<Option<()>, String> {
-    if !toolchains.iter().any(|tc| tc.slug == STATIC_HTML_SLUG) {
+    if !toolchains.iter().any(|tc| tc.slug == STATIC_HTML_SLUG)
+        || toolchains.iter().any(|tc| tc.build_command.is_some())
+    {
         return Ok(None);
     }
     let out = project.join(primary_output_directory(toolchains));
@@ -117,34 +119,13 @@ pub fn resolve_preview_root(
         return Ok(dir);
     }
 
-    let mut candidates: Vec<String> = Vec::new();
-    let mut push = |rel: &str| {
-        if !candidates.iter().any(|c| c == rel) {
-            candidates.push(rel.to_string());
-        }
-    };
-    for tc in toolchains {
-        if let Some(rel) = tc.output_directory {
-            push(rel);
-        }
-    }
-    for rel in ["dist", "out", "public", "build"] {
-        push(rel);
-    }
-    // Plain static HTML has output `.`; preview still allows it, but only after build dirs.
-    push(".");
-
-    candidates.sort_by(|a, b| {
-        use std::cmp::Ordering;
-        match (a.as_str() == ".", b.as_str() == ".") {
-            (true, false) => Ordering::Greater,
-            (false, true) => Ordering::Less,
-            _ => Ordering::Equal,
-        }
-    });
-
-    for rel in candidates {
-        let candidate = project.join(&rel);
+    for rel in toolchains
+        .iter()
+        .filter_map(|tc| tc.output_directory)
+        .filter(|&rel| rel != ".")
+        .chain(["dist", "out", "public", "build", "."])
+    {
+        let candidate = project.join(rel);
         if has_index_html(&candidate) {
             return Ok(candidate);
         }
@@ -198,6 +179,18 @@ mod tests {
         assert!(static_prebuild_ready(&dir, &toolchains).unwrap().is_some());
     }
     #[test]
+    fn configured_static_build_runs_even_with_an_index() {
+        let dir = test_dir("preview-build");
+        fs::write(dir.join("index.html"), "source").unwrap();
+        let mut toolchains = detect_toolchains(&dir).unwrap();
+        toolchains[0].build_command = Some("generate".into());
+        assert_eq!(static_prebuild_ready(&dir, &toolchains), Ok(None));
+        let config = crate::generator::generate_merged(None, &toolchains).unwrap();
+        assert!(config.contains("[tasks.build]"));
+        assert!(config.contains("run = \"generate\""));
+        assert!(!config.contains(STATIC_SERVE_DEV_CMD));
+    }
+    #[test]
     fn resolve_preview_root_prefers_dist_over_project_root() {
         let dir = test_dir("preview-dist");
         fs::write(dir.join("index.html"), "source").unwrap();
@@ -207,5 +200,4 @@ mod tests {
         let root = resolve_preview_root(&dir, &toolchains, None).unwrap();
         assert_eq!(root, dir.join("dist"));
     }
-
 }

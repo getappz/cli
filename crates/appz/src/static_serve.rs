@@ -53,4 +53,3 @@ pub fn run_preview_server(
 ) -> Result<u16, String> {
     run_static_server(root, preferred_port, false, spa_fallback)
 }
-

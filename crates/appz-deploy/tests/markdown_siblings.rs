@@ -131,11 +131,11 @@ fn enabled_adds_md_for_each_html() {
 
 #[test]
 fn page_url_is_passed_to_the_converter_when_origin_is_known() {
-    let (a, b, c) = (page("a"), page("b"), page("c"));
+    let a = page("same");
     let dir = site(&[
         ("index.html", &a),
-        ("about/index.html", &b),
-        ("pricing.html", &c),
+        ("about/index.html", &a),
+        ("pricing.html", &a),
     ]);
     let mut with = scan_output_dir(dir.path()).unwrap();
     let _g1 =

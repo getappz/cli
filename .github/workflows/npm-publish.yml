@@ -51,12 +51,15 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           package-manager-cache: false
 
+      # Trusted publishing (OIDC) needs npm 11.5.1 or newer; Node 22 ships npm 10.
+      - name: Update npm
+        run: npm install -g npm@11
+
       - name: Publish npm packages
         env:
           APPZ_VERSION: ${{ steps.version.outputs.version }}
           RELEASE_DIR: ${{ runner.temp }}/release
           DRY_RUN: ${{ steps.version.outputs.dry }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p "$RELEASE_DIR"

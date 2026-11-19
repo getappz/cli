@@ -7,9 +7,9 @@ use std::io::{IsTerminal, Read};
 use std::path::{Path, PathBuf};
 
 use appz_vault::{
-    SecretExpiry, VaultError, VaultPaths, create_vault, get_secret_value, open_vault,
-    open_vault_with_dek, read_vault_body, remove_secret_value, secret_expiries, set_secret_expiry,
-    set_secret_value, update_vault_body,
+    ExpiryStatus, SecretEntry, SecretExpiry, VaultError, VaultPaths, create_vault,
+    get_secret_value, open_vault, open_vault_with_dek, read_vault_body, remove_secret_value,
+    secret_expiries, set_secret_expiry, set_secret_value, update_vault_body,
 };
 
 const APP: &str = "appz";
@@ -229,11 +229,39 @@ pub fn deploy_env(project_dir: &Path, allowed: &[String]) -> Result<VaultEnv, St
         let body = read_vault_body(&path).map_err(|e| e.to_string())?;
         for name in allowed {
             if let Some(v) = get_secret_value(&body, &dek, name).map_err(|e| e.to_string())? {
+                if !out.vars.contains_key(name)
+                    && let Some(notice) = body
+                        .get(name)
+                        .and_then(|e| expiry_notice(name, e, Utc::now()))
+                {
+                    crate::warning(&notice);
+                }
                 out.vars.insert(name.clone(), v.to_string());
             }
         }
     }
     Ok(out)
+}
+
+/// How soon before expiry a stored secret starts to warn when it is used.
+const USE_WARN_WINDOW_DAYS: i64 = 14;
+
+/// The warning to print when `entry` is about to be used, if it is expired or
+/// expiring soon.
+fn expiry_notice(name: &str, entry: &SecretEntry, now: DateTime<Utc>) -> Option<String> {
+    let at = entry.expires_at?;
+    match entry.expiry_status(now, Duration::days(USE_WARN_WINDOW_DAYS)) {
+        ExpiryStatus::Expired => Some(format!(
+            "{name} expired on {}: the provider will likely reject it. Rotate it, then `appz vault set {name} --expires YYYY-MM-DD`",
+            at.format("%Y-%m-%d")
+        )),
+        ExpiryStatus::Expiring => Some(format!(
+            "{name} expires in {}d ({}): rotate it soon, then `appz vault set {name} --expires YYYY-MM-DD`",
+            (at - now).num_days(),
+            at.format("%Y-%m-%d")
+        )),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -315,8 +343,6 @@ mod tests {
         assert_eq!(gi, "target\n# appz local state (not shared)\n.appz/\n");
     }
 
-    use appz_vault::ExpiryStatus;
-
     #[test]
     fn expiry_flags_parse_and_conflict() {
         let now = DateTime::parse_from_rfc3339("2026-11-19T12:00:00Z")
@@ -366,5 +392,31 @@ mod tests {
             rows.iter().find(|r| r.name == "NPM_TOKEN").unwrap().status,
             ExpiryStatus::Untracked
         );
+    }
+
+    #[test]
+    fn using_a_secret_near_or_past_expiry_warns_but_a_healthy_one_does_not() {
+        let now = Utc::now();
+        let entry = |at: Option<DateTime<Utc>>| SecretEntry {
+            value: vec![],
+            added_at: now,
+            rotated_at: None,
+            aad: true,
+            expires_at: at,
+        };
+        assert_eq!(expiry_notice("T", &entry(None), now), None);
+        assert_eq!(
+            expiry_notice("T", &entry(Some(now + Duration::days(90))), now),
+            None
+        );
+        let soon = expiry_notice(
+            "T",
+            &entry(Some(now + Duration::days(3) + Duration::hours(1))),
+            now,
+        )
+        .unwrap();
+        assert!(soon.starts_with("T expires in 3d"), "{soon}");
+        let gone = expiry_notice("T", &entry(Some(now - Duration::days(2))), now).unwrap();
+        assert!(gone.starts_with("T expired on"), "{gone}");
     }
 }

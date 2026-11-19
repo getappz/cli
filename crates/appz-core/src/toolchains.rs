@@ -1,5 +1,4 @@
-/// Unified framework list adopted from Vercel's `frameworks.ts` — all 75+ entries.
-/// Each has detectors + commands inline (Vercel's `settings` pattern).
+/// Core runtimes and package managers supplemented by the framework registry.
 macro_rules! d {
     ($path:expr) => {
         Detector {

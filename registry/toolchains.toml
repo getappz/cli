@@ -181,6 +181,7 @@ dev = "astro dev --port $PORT"
 [[frameworks]]
 name = "Hexo"
 slug = "hexo"
+output_directory = "public"
 mise_plugin = "node"
 version_files = []
 default_version = "lts"
@@ -202,6 +203,7 @@ dev = "hexo server --port $PORT"
 [[frameworks]]
 name = "Eleventy"
 slug = "eleventy"
+output_directory = "_site"
 mise_plugin = "node"
 version_files = []
 default_version = "lts"
@@ -223,6 +225,7 @@ dev = "npx @11ty/eleventy --serve --watch --port $PORT"
 [[frameworks]]
 name = "Docusaurus (v2+)"
 slug = "docusaurus-2"
+output_directory = "build"
 mise_plugin = "node"
 version_files = []
 default_version = "lts"
@@ -244,6 +247,7 @@ dev = "docusaurus start --port $PORT"
 [[frameworks]]
 name = "Docusaurus (v1)"
 slug = "docusaurus"
+output_directory = "build"
 mise_plugin = "node"
 version_files = []
 default_version = "lts"
@@ -341,6 +345,7 @@ dev = "solid-start dev"
 [[frameworks]]
 name = "Dojo"
 slug = "dojo"
+output_directory = "output/dist"
 mise_plugin = "node"
 version_files = []
 default_version = "lts"
@@ -365,6 +370,7 @@ dev = "dojo build -m dev -w -s -p $PORT"
 [[frameworks]]
 name = "Ember.js"
 slug = "ember"
+output_directory = "dist"
 mise_plugin = "node"
 version_files = []
 default_version = "lts"
@@ -413,6 +419,7 @@ dev = "vue-cli-service serve --port $PORT"
 [[frameworks]]
 name = "Scully"
 slug = "scully"
+output_directory = "dist/static"
 mise_plugin = "node"
 version_files = []
 default_version = "lts"
@@ -434,6 +441,7 @@ dev = "ng serve --port $PORT"
 [[frameworks]]
 name = "Ionic Angular"
 slug = "ionic-angular"
+output_directory = "www"
 mise_plugin = "node"
 version_files = []
 default_version = "lts"
@@ -477,6 +485,7 @@ dev = "ng serve --port $PORT"
 [[frameworks]]
 name = "Polymer"
 slug = "polymer"
+output_directory = "build"
 mise_plugin = "node"
 version_files = []
 default_version = "lts"
@@ -564,6 +573,29 @@ install = "npm install"
 dev = "vite dev --port $PORT"
 
 [[frameworks]]
+name = "SvelteKit (static adapter)"
+slug = "sveltekit-static"
+mise_plugin = "node"
+default_version = "lts"
+supersedes = ["sveltekit", "sveltekit-1", "svelte", "vite"]
+detection_confidence = "strong"
+output_directory = "build"
+env_prefix = "PUBLIC_"
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "@sveltejs/kit"
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "@sveltejs/adapter-static"
+
+[frameworks.commands]
+build = "vite build"
+install = "npm install"
+dev = "vite dev --port $PORT"
+
+[[frameworks]]
 name = "Ionic React"
 slug = "ionic-react"
 mise_plugin = "node"
@@ -615,6 +647,7 @@ dev = "react-scripts start"
 [[frameworks]]
 name = "Gridsome"
 slug = "gridsome"
+output_directory = "dist"
 mise_plugin = "node"
 version_files = []
 default_version = "lts"
@@ -636,6 +669,7 @@ dev = "gridsome develop -p $PORT"
 [[frameworks]]
 name = "UmiJS"
 slug = "umijs"
+output_directory = "dist"
 mise_plugin = "node"
 version_files = []
 default_version = "lts"
@@ -657,6 +691,7 @@ dev = "umi dev --port $PORT"
 [[frameworks]]
 name = "Sapper"
 slug = "sapper"
+output_directory = "__sapper__/export"
 mise_plugin = "node"
 version_files = []
 default_version = "lts"
@@ -678,6 +713,7 @@ dev = "sapper dev --port $PORT"
 [[frameworks]]
 name = "Saber"
 slug = "saber"
+output_directory = "public"
 mise_plugin = "node"
 version_files = []
 default_version = "lts"
@@ -699,6 +735,7 @@ dev = "saber --port $PORT"
 [[frameworks]]
 name = "Stencil"
 slug = "stencil"
+output_directory = "www"
 mise_plugin = "node"
 version_files = []
 default_version = "lts"
@@ -777,7 +814,8 @@ dev = "yarn rw dev"
 [[frameworks]]
 name = "Hugo"
 slug = "hugo"
-mise_plugin = "go"
+output_directory = "public"
+mise_plugin = "hugo"
 version_files = []
 default_version = "latest"
 supersedes = []
@@ -798,6 +836,15 @@ match_content = "baseURL"
 path = "config.json"
 match_content = "baseURL"
 
+[[frameworks.detectors.some]]
+path = "hugo.toml"
+
+[[frameworks.detectors.some]]
+path = "hugo.yaml"
+
+[[frameworks.detectors.some]]
+path = "hugo.json"
+
 [frameworks.commands]
 build = "hugo --gc"
 dev = "hugo server -D -w -p $PORT"
@@ -805,6 +852,7 @@ dev = "hugo server -D -w -p $PORT"
 [[frameworks]]
 name = "Jekyll"
 slug = "jekyll"
+output_directory = "_site"
 mise_plugin = "ruby"
 version_files = []
 default_version = "latest"
@@ -825,6 +873,7 @@ dev = "bundle exec jekyll serve --watch --port $PORT"
 [[frameworks]]
 name = "Brunch"
 slug = "brunch"
+output_directory = "public"
 mise_plugin = "node"
 version_files = []
 default_version = "lts"
@@ -849,6 +898,7 @@ dev = "brunch watch --server --port $PORT"
 [[frameworks]]
 name = "Middleman"
 slug = "middleman"
+output_directory = "build"
 mise_plugin = "ruby"
 version_files = []
 default_version = "latest"
@@ -869,21 +919,26 @@ dev = "bundle exec middleman server -p $PORT"
 [[frameworks]]
 name = "Zola"
 slug = "zola"
+output_directory = "public"
 mise_plugin = "zola"
-version_files = []
+version_files = [".zola-version"]
 default_version = "latest"
 supersedes = []
 detection_confidence = "strong"
 
 [frameworks.detectors]
-some = []
+every = []
 
-[[frameworks.detectors.every]]
+[[frameworks.detectors.some]]
+path = "zola.toml"
+
+[[frameworks.detectors.some]]
 path = "config.toml"
+match_content = '(?m)^\s*base_url\s*='
 
 [frameworks.commands]
 build = "zola build"
-dev = "zola serve --port $PORT"
+dev = "zola serve"
 
 [[frameworks]]
 name = "Hydrogen (v1)"
@@ -933,31 +988,67 @@ dev = "vite dev --port $PORT"
 [[frameworks]]
 name = "TanStack Start"
 slug = "tanstack-start"
+output_directory = "dist"
 mise_plugin = "node"
 version_files = []
 default_version = "lts"
-supersedes = []
+supersedes = ["vite", "ionic-react"]
 detection_confidence = "strong"
 
 [frameworks.detectors]
-some = []
+every = []
 
-[[frameworks.detectors.every]]
+[[frameworks.detectors.some]]
 path = "package.json"
 match_package = "@tanstack/start"
 
+[[frameworks.detectors.some]]
+path = "package.json"
+match_package = "@tanstack/react-start"
+
+[[frameworks.detectors.some]]
+path = "package.json"
+match_package = "@tanstack/solid-start"
+
 [frameworks.commands]
-build = "npm run build"
+build = "vite build"
 install = "npm install"
-dev = "npm run dev"
+dev = "vite dev --port $PORT"
+
+[[frameworks]]
+name = "TanStack Start (Lovable)"
+slug = "tanstack-start-lovable"
+mise_plugin = "node"
+default_version = "lts"
+supersedes = ["tanstack-start", "vite", "ionic-react"]
+detection_confidence = "strong"
+output_directory = "dist"
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "@lovable.dev/vite-tanstack-config"
+
+[[frameworks.detectors.some]]
+path = "package.json"
+match_package = "@tanstack/react-start"
+
+[[frameworks.detectors.some]]
+path = "package.json"
+match_package = "@tanstack/solid-start"
+
+[frameworks.commands]
+build = "vite build"
+install = "npm install"
+dev = "vite dev --port $PORT"
 
 [[frameworks]]
 name = "VitePress"
 slug = "vitepress"
+output_directory = ".vitepress/dist"
 mise_plugin = "node"
 version_files = []
 default_version = "lts"
-supersedes = []
+supersedes = ["vite"]
 detection_confidence = "strong"
 
 [frameworks.detectors]
@@ -973,8 +1064,31 @@ install = "npm install"
 dev = "vitepress dev --port $PORT"
 
 [[frameworks]]
+name = "VitePress (docs directory)"
+slug = "vitepress-docs"
+mise_plugin = "node"
+default_version = "lts"
+supersedes = ["vitepress", "vite"]
+detection_confidence = "strong"
+output_directory = "docs/.vitepress/dist"
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "vitepress"
+
+[[frameworks.detectors.every]]
+path = "docs/.vitepress/config.*"
+is_glob = true
+
+[frameworks.commands]
+build = "vitepress build docs"
+install = "npm install"
+dev = "vitepress dev docs --port $PORT"
+
+[[frameworks]]
 name = "VuePress"
 slug = "vuepress"
+output_directory = ".vuepress/dist"
 mise_plugin = "node"
 version_files = []
 default_version = "lts"
@@ -994,8 +1108,31 @@ install = "npm install"
 dev = "vuepress dev --port $PORT"
 
 [[frameworks]]
+name = "VuePress (src directory)"
+slug = "vuepress-src"
+mise_plugin = "node"
+default_version = "lts"
+supersedes = ["vuepress", "vite"]
+detection_confidence = "strong"
+output_directory = "src/.vuepress/dist"
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "vuepress"
+
+[[frameworks.detectors.every]]
+path = "src/.vuepress/config.*"
+is_glob = true
+
+[frameworks.commands]
+build = "vuepress build src"
+install = "npm install"
+dev = "vuepress dev src --port $PORT"
+
+[[frameworks]]
 name = "Parcel"
 slug = "parcel"
+output_directory = "dist"
 mise_plugin = "node"
 version_files = []
 default_version = "lts"
@@ -1117,13 +1254,53 @@ install = "mix deps.get"
 dev = "mix phx.server"
 
 [[frameworks]]
+name = "Ash (Vercel)"
+slug = "ash-js"
+mise_plugin = "node"
+default_version = "lts"
+detection_confidence = "strong"
+output_directory = ".output"
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "experimental-ash"
+
+[frameworks.commands]
+build = "ash build"
+install = "npm install"
+dev = "ash dev"
+
+[[frameworks]]
+name = "Factory (Eve)"
+slug = "factory-eve"
+mise_plugin = "node"
+default_version = "lts"
+supersedes = ["eve"]
+detection_confidence = "strong"
+output_directory = ".output"
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "eve"
+
+[[frameworks.detectors.every]]
+path = "package.json"
+match_package = "@vercel/factory"
+
+[frameworks.commands]
+build = "eve build"
+install = "npm install"
+dev = "eve dev"
+
+[[frameworks]]
 name = "eve"
 slug = "eve"
-mise_plugin = "python"
+mise_plugin = "node"
 version_files = []
-default_version = "latest"
+default_version = "lts"
 supersedes = []
 detection_confidence = "strong"
+output_directory = ".output"
 
 [frameworks.detectors]
 some = []
@@ -1133,7 +1310,9 @@ path = "package.json"
 match_package = "eve"
 
 [frameworks.commands]
-install = "pip install -r requirements.txt"
+build = "eve build"
+install = "npm install"
+dev = "eve dev"
 
 [[frameworks]]
 name = "Nitro"
@@ -1299,6 +1478,7 @@ install = "npm install"
 [[frameworks]]
 name = "Sanity"
 slug = "sanity"
+output_directory = "dist"
 mise_plugin = "node"
 version_files = []
 default_version = "lts"
@@ -1321,6 +1501,7 @@ dev = "npm run dev"
 [[frameworks]]
 name = "Sanity (v2 - legacy)"
 slug = "sanity-v2-legacy"
+output_directory = "dist"
 mise_plugin = "node"
 version_files = []
 default_version = "lts"
@@ -1343,6 +1524,7 @@ dev = "sanity start --port $PORT"
 [[frameworks]]
 name = "Storybook"
 slug = "storybook"
+output_directory = "storybook-static"
 mise_plugin = "node"
 version_files = []
 default_version = "lts"
@@ -1354,16 +1536,17 @@ some = []
 
 [[frameworks.detectors.every]]
 path = "package.json"
-match_package = "@storybook/react"
+match_package = "storybook"
 
 [frameworks.commands]
-build = "build-storybook"
+build = "storybook build"
 install = "npm install"
 dev = "storybook dev --port $PORT"
 
 [[frameworks]]
 name = "xmcp"
 slug = "xmcp"
+output_directory = "dist"
 mise_plugin = "node"
 version_files = []
 default_version = "lts"
@@ -1374,10 +1557,19 @@ detection_confidence = "strong"
 every = []
 
 [[frameworks.detectors.some]]
-path = "mcp.json"
+path = "xmcp.config.ts"
+
+[[frameworks.detectors.some]]
+path = "xmcp.config.js"
+
+[[frameworks.detectors.some]]
+path = "package.json"
+match_package = "xmcp"
 
 [frameworks.commands]
+build = "xmcp build"
 install = "npm install"
+dev = "xmcp dev"
 
 [[frameworks]]
 name = "Axum"
@@ -1848,6 +2040,7 @@ path = "sentinel.conf"
 [[frameworks]]
 name = "Mastra"
 slug = "mastra"
+output_directory = ".mastra"
 mise_plugin = "node"
 version_files = []
 default_version = "lts"

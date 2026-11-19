@@ -290,6 +290,24 @@ fn prepare_target(project_dir: &Path, req: DeployRequest) -> Result<PreparedTarg
             .insert("project".into(), serde_json::Value::String(project.clone()));
     }
     let provider = get_provider(&slug).map_err(|e| e.to_string())?;
+    let prebuilt_output = if slug == "github-pages" {
+        config
+            .targets
+            .get(&slug)
+            .and_then(|target| target.get("outputDir"))
+            .map(|value| {
+                value
+                    .as_str()
+                    .filter(|path| !path.trim().is_empty())
+                    .map(str::to_owned)
+                    .ok_or(
+                        "deploy.targets.github-pages.outputDir must be a non-empty directory path",
+                    )
+            })
+            .transpose()?
+    } else {
+        None
+    };
     let mut ctx = DeployContext::new(project_dir.to_path_buf(), "dist".into());
 
     // Nothing changed since the last deploy of this target: do not install,
@@ -297,7 +315,8 @@ fn prepare_target(project_dir: &Path, req: DeployRequest) -> Result<PreparedTarg
     // The check is only an optimization: if the project cannot be fingerprinted
     // the deploy goes ahead.
     // Render deploys its connected remote, whose revision isn't in this hash.
-    let cache_local_files = slug != "render";
+    // An explicitly supplied build may live outside the source fingerprint.
+    let cache_local_files = slug != "render" && prebuilt_output.is_none();
     if cache_local_files
         && !req.force
         && let Ok(fp) =
@@ -331,8 +350,11 @@ fn prepare_target(project_dir: &Path, req: DeployRequest) -> Result<PreparedTarg
         }
     }
 
-    let toolchains = appz_core::detect_toolchains(project_dir).map_err(|e| e.to_string())?;
-    let output_dir = appz_core::primary_output_directory(&toolchains).to_string();
+    let toolchains = if prebuilt_output.is_some() {
+        Vec::new()
+    } else {
+        appz_core::detect_toolchains(project_dir).map_err(|e| e.to_string())?
+    };
     let frameworks: Vec<String> = toolchains
         .iter()
         .flat_map(|tc| tc.frameworks.iter())
@@ -351,7 +373,9 @@ fn prepare_target(project_dir: &Path, req: DeployRequest) -> Result<PreparedTarg
         crate::info("note: vault is locked; run `appz env unlock` to use stored credentials");
     }
 
-    ctx.output_dir = output_dir;
+    ctx.prebuilt = prebuilt_output.is_some();
+    ctx.output_dir = prebuilt_output
+        .unwrap_or_else(|| appz_core::primary_output_directory(&toolchains).to_string());
     ctx.is_preview = !req.prod;
     ctx.dry_run = req.dry_run;
     ctx.json_output = req.json;
@@ -398,7 +422,7 @@ fn prepare_target(project_dir: &Path, req: DeployRequest) -> Result<PreparedTarg
 
     // Install + build through mise's cached tasks (skipped when unchanged);
     // providers then deploy the built output instead of building from scratch.
-    if !req.dry_run {
+    if !req.dry_run && !ctx.prebuilt {
         if provider.needs_prebuild(&frameworks) {
             ctx.prebuilt = crate::build_stage::run(&ctx)?;
         } else if !req.json {
@@ -1154,6 +1178,46 @@ mod tests {
             login: Consent::Never,
             link: Consent::Never,
         }
+    }
+
+    #[test]
+    fn github_pages_dry_run_uses_zolas_default_output() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("zola.toml"),
+            "base_url = 'https://example.org/site'",
+        )
+        .unwrap();
+        let output = dir.path().join("public");
+        std::fs::create_dir(&output).unwrap();
+        std::fs::write(output.join("index.html"), "<h1>Zola site</h1>").unwrap();
+        let mut request = req(&[], &[], None);
+        request.target = Some("github-pages".into());
+        request.prod = true;
+        request.dry_run = true;
+
+        let result = run(dir.path(), request).unwrap();
+        assert_eq!(result.provider, "github-pages");
+    }
+
+    #[test]
+    fn github_pages_dry_run_accepts_output_from_an_unknown_generator() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("appz.jsonc"),
+            r#"{"deploy":{"default":"github-pages","targets":{"github-pages":{"outputDir":"rendered site"}}}}"#,
+        )
+        .unwrap();
+        let output = dir.path().join("rendered site");
+        std::fs::create_dir(&output).unwrap();
+        std::fs::write(output.join("index.html"), "<h1>Static build</h1>").unwrap();
+        let mut request = req(&[], &[], None);
+        request.prod = true;
+        request.dry_run = true;
+
+        let result = run(dir.path(), request).unwrap();
+        assert_eq!(result.provider, "github-pages");
+        assert!(!result.is_preview);
     }
 
     #[test]

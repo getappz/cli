@@ -29,7 +29,7 @@ impl GithubPagesProvider {
             return Err(DeployError::DeployFailed {
                 provider: self.name(),
                 reason: format!(
-                    "build output '{}' is missing or empty: run appz build first",
+                    "build output '{}' is missing or empty: build the site before deploying",
                     ctx.output_dir
                 ),
             });

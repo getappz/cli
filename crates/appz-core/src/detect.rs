@@ -441,11 +441,14 @@ pub fn detect_toolchains(root: &Path) -> Result<Vec<DetectedToolchain>, String> 
     }
     detected.retain(|tc| !superseded.contains(&tc.slug));
 
-    // Third pass: if any strong match exists, drop weak-only matches
+    // A runtime or package manager alone does not rule out a weak framework.
     let has_strong = detected.iter().any(|tc| {
-        get_frameworks().iter().any(|f| {
-            f.slug == tc.slug && matches!(f.detection_confidence, DetectionConfidence::Strong)
-        })
+        !crate::toolchains::FRAMEWORKS
+            .iter()
+            .any(|core| core.slug == tc.slug)
+            && get_frameworks().iter().any(|f| {
+                f.slug == tc.slug && matches!(f.detection_confidence, DetectionConfidence::Strong)
+            })
     });
     if has_strong {
         detected.retain(|tc| {
@@ -539,6 +542,76 @@ mod tests {
         let probe = DetectorFilesystem::new(dir.clone());
         assert!(!check_criteria(&probe, &v0.detectors));
         assert!(check_criteria(&probe, &v1.detectors));
+    }
+
+    #[test]
+    fn detects_static_build_commands_and_outputs_from_the_shipped_catalog() {
+        for (name, marker, content, slug, command, output) in [
+            (
+                "zola",
+                "zola.toml",
+                "base_url = 'https://example.org'",
+                "zola",
+                "zola build",
+                "public",
+            ),
+            (
+                "zola-legacy",
+                "config.toml",
+                "base_url = 'https://example.org'",
+                "zola",
+                "zola build",
+                "public",
+            ),
+            (
+                "hugo",
+                "hugo.toml",
+                "baseURL = 'https://example.org'",
+                "hugo",
+                "hugo --gc",
+                "public",
+            ),
+            (
+                "eleventy",
+                "package.json",
+                r#"{"devDependencies":{"@11ty/eleventy":"^3"}}"#,
+                "eleventy",
+                "npx @11ty/eleventy",
+                "_site",
+            ),
+            (
+                "storybook",
+                "package.json",
+                r#"{"devDependencies":{"storybook":"^10"}}"#,
+                "storybook",
+                "storybook build",
+                "storybook-static",
+            ),
+            (
+                "sveltekit-static",
+                "package.json",
+                r#"{"devDependencies":{"@sveltejs/kit":"^2","svelte":"^5","vite":"^7","@sveltejs/adapter-static":"^3"}}"#,
+                "sveltekit-static",
+                "vite build",
+                "build",
+            ),
+        ] {
+            let dir = test_dir(name);
+            fs::write(dir.join(marker), content).unwrap();
+            let toolchains = detect_toolchains(&dir).unwrap();
+            let detected = toolchains.iter().find(|tc| tc.slug == slug).unwrap();
+            assert_eq!(detected.build_command.as_deref(), Some(command));
+            assert_eq!(crate::primary_output_directory(&toolchains), output);
+        }
+
+        let dir = test_dir("unrelated-config-toml");
+        fs::write(dir.join("config.toml"), "other_setting = true").unwrap();
+        assert!(
+            !detect_toolchains(&dir)
+                .unwrap()
+                .iter()
+                .any(|tc| tc.slug == "zola")
+        );
     }
 
     #[test]

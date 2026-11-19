@@ -11,7 +11,8 @@ use crate::toolchains::{
 const REGISTRY_URL: &str =
     "https://raw.githubusercontent.com/getappz/cli/main/registry/toolchains.toml";
 const CACHE_TTL_SECONDS: u64 = 24 * 3600;
-const CACHE_FILE: &str = "toolchains-registry.json";
+const CACHE_FILE: &str = "toolchains-registry-v2.json";
+const BUNDLED_REGISTRY: &str = include_str!("../../../registry/toolchains.toml");
 
 pub fn cache_path() -> PathBuf {
     crate::format_defaults::appz_home_dir().join(CACHE_FILE)
@@ -29,7 +30,7 @@ pub fn load_frameworks_registry(offline: bool) -> Vec<Framework> {
         .unwrap_or_default()
         .as_secs();
 
-    let registry: Vec<Framework> = match load_cached::<Vec<RegistryFrameworkSpec>>(
+    let cached = match load_cached::<Vec<RegistryFrameworkSpec>>(
         &cache_path(),
         CACHE_TTL_SECONDS,
         offline,
@@ -37,13 +38,20 @@ pub fn load_frameworks_registry(offline: bool) -> Vec<Framework> {
         fetch_registry,
         parse_registry_toml,
     ) {
-        Ok(specs) => specs.into_iter().map(convert_to_framework).collect(),
+        Ok(specs) => specs,
         Err(e) => {
-            eprintln!("warning: toolchains registry unavailable — using built-in core only: {e}");
+            if !offline || cache_path().exists() {
+                eprintln!(
+                    "warning: toolchains registry unavailable — using the bundled catalog: {e}"
+                );
+            }
             vec![]
         }
     };
 
+    let bundled =
+        parse_registry_toml(BUNDLED_REGISTRY).expect("bundled toolchain registry must parse");
+    let registry = bundled.into_iter().chain(cached).map(convert_to_framework);
     merge_frameworks(embedded_frameworks(), registry)
 }
 
@@ -80,7 +88,10 @@ pub fn refresh_registry_cache() -> Result<usize, String> {
     Ok(count)
 }
 
-fn merge_frameworks(mut embedded: Vec<Framework>, registry: Vec<Framework>) -> Vec<Framework> {
+fn merge_frameworks(
+    mut embedded: Vec<Framework>,
+    registry: impl IntoIterator<Item = Framework>,
+) -> Vec<Framework> {
     for rfw in registry {
         let slug_matches: Vec<usize> = embedded
             .iter()
@@ -112,24 +123,7 @@ fn merge_frameworks(mut embedded: Vec<Framework>, registry: Vec<Framework>) -> V
 }
 
 fn embedded_frameworks() -> Vec<Framework> {
-    use crate::toolchains::{
-        BUN_PM, BUN_RUNTIME, GO_RUNTIME, JAVA_RUNTIME, NODE_RUNTIME, NPM_PM, PHP_RUNTIME, PNPM_PM,
-        PYTHON, RUBY_RUNTIME, RUST_RUNTIME, YARN_PM,
-    };
-    vec![
-        PYTHON,
-        RUBY_RUNTIME,
-        RUST_RUNTIME,
-        BUN_RUNTIME,
-        NODE_RUNTIME,
-        GO_RUNTIME,
-        JAVA_RUNTIME,
-        PHP_RUNTIME,
-        NPM_PM,
-        PNPM_PM,
-        BUN_PM,
-        YARN_PM,
-    ]
+    crate::toolchains::FRAMEWORKS.to_vec()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

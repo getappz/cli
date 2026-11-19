@@ -199,6 +199,12 @@ without publishing.
   from `gh-pages` in the repository's Pages settings. URLs respect the build
   output's `CNAME`, user/org sites, and project sites. The push does not confirm
   completion of GitHub's asynchronous Pages build.
+  The bundled framework presets supply the build command and output directory.
+  For example, appz runs `zola build` and publishes `public/` for a Zola site.
+  To publish an existing build from any static site generator, set
+  `deploy.targets.github-pages.outputDir` in `appz.jsonc` to the directory
+  containing only the files you want to publish. Relative paths resolve from
+  the project root. Run your usual build first, then run the deploy command.
 - `appz deploy --target aws-s3 --prod` uses AWS CLI credentials (including
   profiles/roles), honors the configured region, and syncs the build output
   with `--delete`, skipping symlinks. It refuses output with no readable files,
@@ -216,6 +222,7 @@ Example `appz.jsonc` configuration:
 {
   "deploy": {
     "targets": {
+      "github-pages": { "outputDir": "public" },
       "aws-s3": { "bucket": "my-site", "region": "eu-west-1", "prefix": "site" },
       "render": { "service": "srv-your-service-id" }
     }

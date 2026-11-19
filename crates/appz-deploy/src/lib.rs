@@ -2,13 +2,17 @@ mod context;
 mod error;
 mod exec;
 mod fingerprint;
+pub mod markdown;
 mod output;
 mod provider;
 mod providers;
 pub mod static_cas;
 pub mod tunnel;
 
-pub use context::{DeployConfig, DeployContext, DeployHooks, parse_kv, read_deploy_config};
+pub use context::{
+    DeployConfig, DeployContext, DeployHooks, MarkdownConfig, parse_kv, read_deploy_config,
+    read_markdown_config,
+};
 pub use error::{DeployError, DeployResult};
 pub use exec::{ExecOutput, exec_captured, exec_captured_scrubbed};
 pub use output::{

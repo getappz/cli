@@ -26,7 +26,7 @@ pub(crate) fn prepare_upload(root: &Path) -> Result<(ScannedTree, TempDir), Stri
     for file in &tree.files {
         if eligible(file)
             && !file.r#type.starts_with("text/css")
-            && !imports_siblings(file, &tree.blobs_by_hash)
+            && !may_import_modules(file, &tree.blobs_by_hash)?
         {
             add_alias(file, &mut occupied, &mut aliases, &mut additions);
         }
@@ -85,13 +85,18 @@ fn eligible(file: &ScannedFileEntry) -> bool {
             .any(|p| mime.starts_with(p)))
 }
 
-// A cached-forever alias must not import siblings by their unhashed paths: after a
-// redeploy it would load newer chunks against old code, so such scripts keep one URL.
-fn imports_siblings(file: &ScannedFileEntry, blobs: &HashMap<String, LocalBlob>) -> bool {
-    static IMPORT: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r#"\b(?:from|import)\s*\(?\s*["'][./]"#).unwrap());
-    file.r#type.starts_with("application/javascript")
-        && std::fs::read_to_string(&blobs[&file.hash].path).is_ok_and(|js| IMPORT.is_match(&js))
+// Import targets can be expressions or resolved by an import map. A false
+// positive only costs an alias; guessing the target can break module identity.
+fn may_import_modules(
+    file: &ScannedFileEntry,
+    blobs: &HashMap<String, LocalBlob>,
+) -> Result<bool, String> {
+    static IMPORT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b(?:import|from)\b").unwrap());
+    if !file.r#type.starts_with("application/javascript") {
+        return Ok(false);
+    }
+    let bytes = read_blob(file, blobs)?;
+    Ok(std::str::from_utf8(&bytes).map_or(true, |js| IMPORT.is_match(js)))
 }
 
 fn add_alias(
@@ -115,12 +120,10 @@ fn add_alias(
     }
 }
 
-fn rewrite_blob(
-    file: &mut ScannedFileEntry,
-    blobs: &mut HashMap<String, LocalBlob>,
-    stage: &TempDir,
-    rewrite: impl FnOnce(&str) -> Result<String, String>,
-) -> Result<(), String> {
+fn read_blob(
+    file: &ScannedFileEntry,
+    blobs: &HashMap<String, LocalBlob>,
+) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::with_capacity(file.size);
     std::fs::File::open(&blobs[&file.hash].path)
         .and_then(|f| f.take((MAX_FILE_SIZE + 1) as u64).read_to_end(&mut bytes))
@@ -131,6 +134,16 @@ fn rewrite_blob(
             file.path
         ));
     }
+    Ok(bytes)
+}
+
+fn rewrite_blob(
+    file: &mut ScannedFileEntry,
+    blobs: &mut HashMap<String, LocalBlob>,
+    stage: &TempDir,
+    rewrite: impl FnOnce(&str) -> Result<String, String>,
+) -> Result<(), String> {
+    let bytes = read_blob(file, blobs)?;
     let Ok(source) = std::str::from_utf8(&bytes) else {
         eprintln!(
             "warning: {} is not UTF-8; its asset references are not fingerprinted",
@@ -277,27 +290,39 @@ fn rewrite_html(source: &str, mut base: Url, aliases: &Aliases) -> Result<String
             base = url;
         }
     }
-    // A URL pinned by integrity anywhere on the page keeps one name everywhere,
-    // so preloads of it hit the cache entry the pinned element uses.
+    // ES modules are keyed by URL, including when imported by other scripts.
+    // Keep their entry points, preloads and integrity-pinned resources in sync.
     let mut pinned = HashSet::new();
     rewrite_str(
         source,
         RewriteStrSettings {
-            element_content_handlers: vec![element!("[integrity]", |el| {
-                for attr in ["src", "href", "poster"] {
-                    if let Some(key) = el.get_attribute(attr).and_then(|r| site_path(&r, &base)) {
-                        pinned.insert(key);
+            element_content_handlers: vec![element!(
+                r#"[integrity], script[type="module" i][src], link[rel~="modulepreload" i][href]"#,
+                |el| {
+                    for attr in ["src", "href", "poster"] {
+                        if let Some(key) = el.get_attribute(attr).and_then(|r| site_path(&r, &base))
+                        {
+                            pinned.insert(key);
+                        }
                     }
+                    Ok(())
                 }
-                Ok(())
-            })],
+            )],
             ..Default::default()
         },
     )
     .map_err(|e| e.to_string())?;
-    let mut aliases = aliases.clone();
-    aliases.retain(|path, _| !pinned.contains(path));
-    let aliases = &aliases;
+    let filtered;
+    let aliases = if pinned.is_empty() {
+        aliases
+    } else {
+        filtered = aliases
+            .iter()
+            .filter(|(path, _)| !pinned.contains(*path))
+            .map(|(path, suffix)| (path.clone(), suffix.clone()))
+            .collect();
+        &filtered
+    };
     rewrite_str(source, RewriteStrSettings {
         element_content_handlers: vec![element!(
             "script[src], link[href], link[imagesrcset], img[src], img[srcset], source[src], source[srcset], video[src], video[poster], audio[src], iframe[src], a[href]",
@@ -403,6 +428,42 @@ mod tests {
         let paths: Vec<_> = tree.files.iter().map(|f| f.path.as_str()).collect();
         assert!(!paths.iter().any(|p| p.starts_with("/main-")));
         assert!(paths.iter().any(|p| p.starts_with("/chunk-")));
+    }
+
+    #[test]
+    fn dynamic_imports_and_scoped_modules_keep_their_urls() {
+        let site = tempfile::tempdir().unwrap();
+        for (name, js) in [
+            ("template.js", "import(`./chunk.js`)"),
+            ("comment.js", "import(/* chunk */ './chunk.js')"),
+            ("variable.js", "import(path)"),
+            ("scoped.js", "import 'dep'"),
+            (
+                "reexport.js",
+                "export { value } from /* sibling */ './chunk.js'",
+            ),
+            ("leaf.js", "export const value = 1"),
+        ] {
+            fs::write(site.path().join(name), js).unwrap();
+        }
+        let html = r#"<script type="importmap">{"scopes":{"/scoped.js":{"dep":"/leaf.js"}}}</script><link rel="modulepreload" href="/leaf.js"><script type="module" src="/scoped.js"></script><script type="module" src="/leaf.js"></script>"#;
+        fs::write(site.path().join("index.html"), html).unwrap();
+        let (tree, _stage) = prepare_upload(site.path()).unwrap();
+        assert_eq!(
+            tree.files
+                .iter()
+                .find(|f| f.path == "/index.html")
+                .unwrap()
+                .hash,
+            blob_id(html.as_bytes())
+        );
+        let aliases: Vec<_> = tree
+            .files
+            .iter()
+            .filter(|f| f.immutable == Some(true))
+            .collect();
+        assert_eq!(aliases.len(), 1);
+        assert!(aliases[0].path.starts_with("/leaf-"));
     }
 
     #[test]

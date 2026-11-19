@@ -183,8 +183,9 @@ slsa-verifier verify-artifact \
 `appz deploy --target appzdev` automatically fingerprints static assets for
 preview and production. For example, `css/site.css` gets an immutable URL
 such as `css/site-a3b128db29.css`. The CLI rewrites local asset references
-in uploaded HTML and stylesheets. Original URLs remain available for runtime
-imports, integrity-checked resources, and existing links. The filename uses
+in uploaded HTML and stylesheets. Module entry points, module preloads, and
+integrity-checked resources keep their original URLs. Original asset paths
+also remain available for runtime imports and existing links. The filename uses
 the first 10 hex characters of the BLAKE3 digest of the uploaded bytes.
 Deploy manifests use the full digest prefixed with `b3:`.
 

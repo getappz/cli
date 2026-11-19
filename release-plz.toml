@@ -1,6 +1,9 @@
 [workspace]
 git_release_enable = false
 release_always = false
+# Crates are publish = false, so the registry has no baseline version. Use git
+# tags (vX.Y.Z) as the source of truth for the last release instead.
+git_only = true
 
 # All 4 workspace crates set `publish = false` (they're internal/binary
 # crates, not published to crates.io) — release-plz skips publish=false

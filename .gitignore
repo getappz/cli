@@ -15,5 +15,6 @@
 /.fastembed_cache/
 /.kilocode/
 /.windsurf/
-/skills/
+/skills/*
+!/skills/appz/
 

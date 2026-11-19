@@ -51,6 +51,8 @@ pub fn load_frameworks_registry(offline: bool) -> Vec<Framework> {
 
     let bundled =
         parse_registry_toml(BUNDLED_REGISTRY).expect("bundled toolchain registry must parse");
+    // Later entries win in `merge_frameworks`: the remote registry overrides
+    // the bundled catalog, which is only the offline/first-run fallback.
     let registry = bundled.into_iter().chain(cached).map(convert_to_framework);
     merge_frameworks(embedded_frameworks(), registry)
 }

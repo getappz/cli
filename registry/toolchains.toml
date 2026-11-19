@@ -938,7 +938,7 @@ match_content = '(?m)^\s*base_url\s*='
 
 [frameworks.commands]
 build = "zola build"
-dev = "zola serve"
+dev = "zola serve --port $PORT"
 
 [[frameworks]]
 name = "Hydrogen (v1)"
@@ -2040,7 +2040,7 @@ path = "sentinel.conf"
 [[frameworks]]
 name = "Mastra"
 slug = "mastra"
-output_directory = ".mastra"
+output_directory = ".mastra/output"
 mise_plugin = "node"
 version_files = []
 default_version = "lts"

@@ -1,7 +1,7 @@
 # Releasing appz
 
 Every push to the `release` branch runs `.github/workflows/release.yml`. It builds the binaries,
-writes `SHA256SUMS.txt`, signs the archives with cosign (keyless) and creates or updates a **draft**
+writes `SHA256SUMS` (also published as `SHA256SUMS.txt`), signs the archives with cosign (keyless) and creates or updates a **draft**
 GitHub Release `v<version>` targeting the pushed commit, with generated notes. Nobody sees a draft
 until a maintainer publishes it.
 

@@ -1,0 +1,2 @@
+[build.env]
+passthrough = ["APPZ_BUILD_SHA"]

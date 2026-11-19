@@ -2,6 +2,10 @@
 members = ["crates/appz", "crates/appz-vault", "crates/appz-core", "crates/appz-deploy", "crates/appz-serve", "crates/command"]
 resolver = "2"
 
+[workspace.package]
+# Single version source. Bump with `mise run version-set <x.y.z[-rc.N]>`.
+version = "0.3.0"
+
 [profile.release]
 opt-level = 3
 lto = "thin"

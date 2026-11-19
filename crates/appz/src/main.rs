@@ -24,7 +24,7 @@ mod update;
 // ── CLI ─────────────────────────────────────────────────────────
 
 #[derive(Parser)]
-#[command(name = "appz", version)]
+#[command(name = "appz", version, long_version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("APPZ_BUILD_SHA"), ")"))]
 struct AppzCli {
     /// JSON output mode (for agent/CI use)
     #[arg(long, global = true)]

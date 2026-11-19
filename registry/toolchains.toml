@@ -247,7 +247,8 @@ dev = "docusaurus start --port $PORT"
 [[frameworks]]
 name = "Docusaurus (v1)"
 slug = "docusaurus"
-output_directory = "build"
+# v1 writes build/<projectName> (siteConfig.js), which the registry cannot
+# resolve: no default, so deploy asks for an explicit outputDir.
 mise_plugin = "node"
 version_files = []
 default_version = "lts"
@@ -534,7 +535,7 @@ mise_plugin = "node"
 version_files = []
 default_version = "lts"
 # A pre-1.0 kit also satisfies the SvelteKit 1+ entry; its commands differ.
-supersedes = ["vite", "sveltekit-1"]
+supersedes = ["vite", "sveltekit-1", "sveltekit-static"]
 detection_confidence = "strong"
 output_directory = "public"
 env_prefix = "VITE_"
@@ -577,7 +578,7 @@ name = "SvelteKit (static adapter)"
 slug = "sveltekit-static"
 mise_plugin = "node"
 default_version = "lts"
-supersedes = ["sveltekit", "sveltekit-1", "svelte", "vite"]
+supersedes = ["sveltekit-1", "svelte", "vite"]
 detection_confidence = "strong"
 output_directory = "build"
 env_prefix = "PUBLIC_"

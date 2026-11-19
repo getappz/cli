@@ -346,7 +346,13 @@ pub fn detect_toolchains(root: &Path) -> Result<Vec<DetectedToolchain>, String> 
     for tc in get_frameworks() {
         if check_criteria(&fs, &tc.detectors) {
             let version = detect_version(&fs, tc.version_files)
-                .or_else(|| detect_package_version(&fs, tc))
+                // A framework package's semver is never its runtime's version, so only
+                // the runtime's own entry may take it (remix must not make `node = "^2"`).
+                .or_else(|| {
+                    (tc.slug == tc.mise_plugin)
+                        .then(|| detect_package_version(&fs, tc))
+                        .flatten()
+                })
                 .unwrap_or_else(|| tc.default_version.to_string());
             let frameworks = scan_frameworks(&fs, tc.slug);
 
@@ -611,6 +617,39 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|tc| tc.slug == "zola")
+        );
+    }
+
+    #[test]
+    fn legacy_sveltekit_with_adapter_static_keeps_the_legacy_entry() {
+        let dir = test_dir("sveltekit-next-static");
+        fs::write(
+            dir.join("package.json"),
+            r#"{"devDependencies":{"@sveltejs/kit":"1.0.0-next.589","@sveltejs/adapter-static":"^1.0.0"}}"#,
+        )
+        .unwrap();
+        let slugs: Vec<_> = detect_toolchains(&dir)
+            .unwrap()
+            .into_iter()
+            .map(|t| t.slug)
+            .collect();
+        assert!(slugs.contains(&"sveltekit"), "{slugs:?}");
+        assert!(!slugs.contains(&"sveltekit-static"), "{slugs:?}");
+    }
+
+    #[test]
+    fn framework_package_version_is_not_a_runtime_version() {
+        let dir = test_dir("remix-runtime-version");
+        fs::write(
+            dir.join("package.json"),
+            r#"{"dependencies":{"@remix-run/dev":"^2.17.0"}}"#,
+        )
+        .unwrap();
+        let toolchains = detect_toolchains(&dir).unwrap();
+        assert!(toolchains.iter().any(|t| t.slug == "remix"));
+        assert!(
+            toolchains.iter().all(|t| !t.version.starts_with('^')),
+            "{toolchains:?}"
         );
     }
 

@@ -178,6 +178,16 @@ slsa-verifier verify-artifact \
   "$FILE"
 ```
 
+## Deploying to appz.dev
+
+`appz deploy --target appzdev` automatically fingerprints static assets for
+preview and production. For example, `css/site.css` gets an immutable URL
+such as `css/site-a3b128db29.css`. The CLI rewrites local asset references
+in uploaded HTML and stylesheets. Original URLs remain available for runtime
+imports, integrity-checked resources, and existing links. The filename uses
+the first 10 hex characters of the BLAKE3 digest of the uploaded bytes.
+The upload protocol continues to use SHA-256 for verification and deduplication.
+
 ## Deploying to GitHub Pages, S3, and Render
 
 These targets publish to production; use `--prod`. A preview request fails

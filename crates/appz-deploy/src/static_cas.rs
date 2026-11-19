@@ -230,7 +230,7 @@ pub fn is_immutable_asset(path: &str) -> bool {
 /// A name like `index-B1x2c3D4.js` or `main.073c9b0a.chunk.css`: some segment
 /// after the first is a hash (8+ characters: mixed-case or hex with digits,
 /// so ordinary words or version labels like `version2024` don't count).
-fn has_content_hash(path: &str) -> bool {
+pub(crate) fn has_content_hash(path: &str) -> bool {
     let name = path.rsplit('/').next().unwrap_or(path);
     let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
     stem.split(['.', '-']).skip(1).any(|seg| {
@@ -275,10 +275,16 @@ fn is_ignored(rel: &str, rules: &IgnoreRules) -> bool {
     })
 }
 
-/// SHA-256 of a file, streamed with a 64KB buffer to minimize syscall overhead.
-fn sha256_file(path: &Path) -> std::io::Result<String> {
+/// Read once for the upload's SHA-256 and, when eligible, the public filename's BLAKE3.
+fn file_hashes(
+    candidate: &Candidate,
+    fingerprint: bool,
+) -> std::io::Result<(String, Option<blake3::Hash>)> {
+    let mut asset = (fingerprint
+        && crate::fingerprint::eligible(&candidate.norm_path, candidate.mime, candidate.immutable))
+    .then(blake3::Hasher::new);
     let mut hasher = Sha256::new();
-    let mut file = std::fs::File::open(path)?;
+    let mut file = std::fs::File::open(&candidate.abs_path)?;
     let mut buf = [0u8; 64 * 1024];
     loop {
         let n = file.read(&mut buf)?;
@@ -286,8 +292,14 @@ fn sha256_file(path: &Path) -> std::io::Result<String> {
             break;
         }
         hasher.update(&buf[..n]);
+        if let Some(asset) = &mut asset {
+            asset.update(&buf[..n]);
+        }
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok((
+        format!("{:x}", hasher.finalize()),
+        asset.map(|a| a.finalize()),
+    ))
 }
 
 fn normalize_rel_path(rel: &Path) -> String {
@@ -336,6 +348,14 @@ fn oversized_file_error(path: &str, size: usize, ignore_file: Option<&str>) -> S
 }
 
 pub fn scan_output_dir(output_dir: &Path) -> Result<ScannedTree, String> {
+    scan_with_fingerprints(output_dir, None)
+}
+
+pub(crate) fn scan_with_fingerprints(
+    output_dir: &Path,
+    mut fingerprints: Option<&mut HashMap<String, blake3::Hash>>,
+) -> Result<ScannedTree, String> {
+    let fingerprint = fingerprints.is_some();
     if !output_dir.is_dir() {
         return Err(format!(
             "Output directory not found: {}",
@@ -403,8 +423,11 @@ pub fn scan_output_dir(output_dir: &Path) -> Result<ScannedTree, String> {
 
     if count == 1 {
         let c = &candidates[0];
-        let hash = sha256_file(&c.abs_path)
+        let (hash, asset) = file_hashes(c, fingerprint)
             .map_err(|e| format!("Failed to read {}: {e}", c.abs_path.display()))?;
+        if let (Some(map), Some(asset)) = (fingerprints.as_deref_mut(), asset) {
+            map.insert(c.norm_path.clone(), asset);
+        }
         total_bytes += c.size;
         files.push(ScannedFileEntry {
             path: c.norm_path.clone(),
@@ -436,7 +459,7 @@ pub fn scan_output_dir(output_dir: &Path) -> Result<ScannedTree, String> {
 
     let next_idx = AtomicUsize::new(0);
     let error_slot = Mutex::new(None::<String>);
-    let hashes: Vec<Mutex<Option<String>>> = (0..count).map(|_| Mutex::new(None)).collect();
+    let hashes: Vec<_> = (0..count).map(|_| Mutex::new(None)).collect();
 
     std::thread::scope(|s| {
         for _ in 0..num_threads {
@@ -451,7 +474,7 @@ pub fn scan_output_dir(output_dir: &Path) -> Result<ScannedTree, String> {
                     }
 
                     let c = &candidates[idx];
-                    match sha256_file(&c.abs_path) {
+                    match file_hashes(c, fingerprint) {
                         Ok(hash) => {
                             *hashes[idx].lock().unwrap() = Some(hash);
                         }
@@ -474,10 +497,13 @@ pub fn scan_output_dir(output_dir: &Path) -> Result<ScannedTree, String> {
     }
 
     for (c, hash_mutex) in candidates.into_iter().zip(hashes) {
-        let hash = hash_mutex
+        let (hash, asset) = hash_mutex
             .into_inner()
             .unwrap()
             .ok_or_else(|| "Missing computed hash".to_string())?;
+        if let (Some(map), Some(asset)) = (fingerprints.as_deref_mut(), asset) {
+            map.insert(c.norm_path.clone(), asset);
+        }
         total_bytes += c.size;
 
         files.push(ScannedFileEntry {

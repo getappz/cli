@@ -15,18 +15,26 @@ release_always = false
 name = "appz"
 release = true
 version_group = "appz"
+# Tags are plain `vX.Y.Z` (what release.yml triggers on), not release-plz's
+# default `<package>-vX.Y.Z` for workspaces. With the default, release-plz finds
+# no baseline tag, concludes nothing was ever released, and never opens a PR.
+# Only `appz` owns the tag; the other crates ride along via version_group.
+git_tag_name = "v{{ version }}"
 
 [[package]]
 name = "appz-core"
 release = true
 version_group = "appz"
+git_tag_enable = false
 
 [[package]]
 name = "appz-deploy"
 release = true
 version_group = "appz"
+git_tag_enable = false
 
 [[package]]
 name = "command"
 release = true
 version_group = "appz"
+git_tag_enable = false

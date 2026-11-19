@@ -1,6 +1,9 @@
 [workspace]
 git_release_enable = false
 release_always = false
+# Crates are publish = false, so the registry has no baseline version. Use git
+# tags (vX.Y.Z) as the source of truth for the last release instead.
+git_only = true
 
 # All 4 workspace crates set `publish = false` (they're internal/binary
 # crates, not published to crates.io) — release-plz skips publish=false
@@ -15,18 +18,26 @@ release_always = false
 name = "appz"
 release = true
 version_group = "appz"
+# Tags are plain `vX.Y.Z` (what release.yml triggers on), not release-plz's
+# default `<package>-vX.Y.Z` for workspaces. With the default, release-plz finds
+# no baseline tag, concludes nothing was ever released, and never opens a PR.
+# Only `appz` owns the tag; the other crates ride along via version_group.
+git_tag_name = "v{{ version }}"
 
 [[package]]
 name = "appz-core"
 release = true
 version_group = "appz"
+git_tag_enable = false
 
 [[package]]
 name = "appz-deploy"
 release = true
 version_group = "appz"
+git_tag_enable = false
 
 [[package]]
 name = "command"
 release = true
 version_group = "appz"
+git_tag_enable = false

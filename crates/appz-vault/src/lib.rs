@@ -21,7 +21,7 @@ pub const PASSPHRASE_ENV: &str = "APPZ_VAULT_PASSPHRASE";
 pub use error::{VaultError, VaultResult};
 pub use vault::manager::{
     create_vault, get_secret_value, list_secret_names, open_vault, open_vault_with_dek,
-    read_vault_body, remove_secret_value, set_secret_value, update_vault_body, write_vault_body,
-    VaultPaths,
+    read_vault_body, remove_secret_value, secret_expiries, set_secret_expiry, set_secret_value,
+    update_vault_body, write_vault_body, VaultPaths,
 };
-pub use vault::model::{SecretEntry, VaultBody, VaultFile};
+pub use vault::model::{ExpiryStatus, SecretEntry, SecretExpiry, VaultBody, VaultFile};

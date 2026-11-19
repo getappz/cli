@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 /// Newest vault file format this build reads and writes. A newer file is
 /// refused instead of being rewritten through a struct that would drop its
 /// newer fields.
-pub const FORMAT_VERSION: u32 = 2;
+pub const FORMAT_VERSION: u32 = 3;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct VaultFile {
@@ -41,6 +41,42 @@ pub struct SecretEntry {
     /// binding existed: those decrypt with empty AAD until rewritten.
     #[serde(default)]
     pub aad: bool,
+    /// When the credential stops working at its issuer, as recorded by the
+    /// user (v3). The vault cannot learn this itself; it only reminds. Kept
+    /// outside the encrypted value so `ls` and `check` need no unlock.
+    #[serde(default)]
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+/// How close a secret is to its recorded expiry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExpiryStatus {
+    /// No expiry recorded.
+    Untracked,
+    Ok,
+    /// Expires within the requested window.
+    Expiring,
+    Expired,
+}
+
+/// One secret's name and recorded expiry, as listed by `ls` and `check`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SecretExpiry {
+    pub name: String,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub status: ExpiryStatus,
+}
+
+impl SecretEntry {
+    pub fn expiry_status(&self, now: DateTime<Utc>, within: chrono::Duration) -> ExpiryStatus {
+        match self.expires_at {
+            None => ExpiryStatus::Untracked,
+            Some(at) if at <= now => ExpiryStatus::Expired,
+            Some(at) if at - now <= within => ExpiryStatus::Expiring,
+            Some(_) => ExpiryStatus::Ok,
+        }
+    }
 }
 
 impl Drop for SecretEntry {

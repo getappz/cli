@@ -186,9 +186,36 @@ enum VaultCmd {
         /// Use the user-wide vault (~/.appz) instead of this project's
         #[arg(long)]
         global: bool,
+        /// Day the credential stops working at its issuer (YYYY-MM-DD, UTC)
+        #[arg(long, conflicts_with = "ttl")]
+        expires: Option<String>,
+        /// Time until it stops working, e.g. 90d, 2w, 12h
+        #[arg(long)]
+        ttl: Option<String>,
     },
-    /// List stored names (never values)
+    /// List stored names with their recorded expiry (never values)
     Ls {
+        #[arg(long)]
+        global: bool,
+    },
+    /// Record or change the expiry of a stored secret without touching its value
+    Expire {
+        name: String,
+        /// Day the credential stops working at its issuer (YYYY-MM-DD, UTC)
+        #[arg(long, conflicts_with = "ttl")]
+        expires: Option<String>,
+        /// Time until it stops working, e.g. 90d, 2w, 12h
+        #[arg(long)]
+        ttl: Option<String>,
+        /// Use the user-wide vault (~/.appz) instead of this project's
+        #[arg(long)]
+        global: bool,
+    },
+    /// Exit non-zero when a stored secret is expired or about to expire
+    Check {
+        /// Warn this long before expiry, e.g. 14d, 2w
+        #[arg(long, default_value = "14d")]
+        within: String,
         #[arg(long)]
         global: bool,
     },
@@ -1710,22 +1737,102 @@ fn vault_path_for(global: bool) -> PathBuf {
     secrets::vault_path(Path::new("."), global).unwrap_or_else(|e| error(&e))
 }
 
+/// One `ls`/`check` line: the name, plus its recorded expiry when there is one.
+fn vault_row(row: &appz_vault::SecretExpiry) -> String {
+    use appz_vault::ExpiryStatus::*;
+    let (name, at, status) = (&row.name, &row.expires_at, row.status);
+    let Some(at) = at else {
+        return name.clone();
+    };
+    let days = (*at - chrono::Utc::now()).num_days();
+    let note = match status {
+        Expired => format!("EXPIRED {}", at.format("%Y-%m-%d")),
+        Expiring => format!("expires in {days}d ({})", at.format("%Y-%m-%d")),
+        _ => format!("expires {} (in {days}d)", at.format("%Y-%m-%d")),
+    };
+    format!("{name}  {note}")
+}
+
 fn run_vault_cmd(cmd: VaultCmd, json: bool) {
     match cmd {
         VaultCmd::Set {
             name,
             value,
             global,
-        } => match secrets::set(&vault_path_for(global), &name, value) {
-            Ok(()) => success(&format!("stored {name}")),
-            Err(e) => error(&e),
-        },
-        VaultCmd::Ls { global } => match secrets::names(&vault_path_for(global)) {
-            Ok(names) if json => println!("{}", serde_json::to_string(&names).unwrap()),
-            Ok(names) if names.is_empty() => info("no secrets stored"),
-            Ok(names) => info(&names.join("\n")),
-            Err(e) => error(&e),
-        },
+            expires,
+            ttl,
+        } => {
+            let expires_at =
+                secrets::parse_expiry(expires.as_deref(), ttl.as_deref(), chrono::Utc::now())
+                    .unwrap_or_else(|e| error(&e));
+            match secrets::set(&vault_path_for(global), &name, value, expires_at) {
+                Ok(()) => success(&format!("stored {name}")),
+                Err(e) => error(&e),
+            }
+        }
+        VaultCmd::Ls { global } => {
+            match secrets::expiries(&vault_path_for(global), chrono::Duration::days(14)) {
+                Ok(rows) if json => {
+                    let names: Vec<_> = rows.into_iter().map(|r| r.name).collect();
+                    println!("{}", serde_json::to_string(&names).unwrap());
+                }
+                Ok(rows) if rows.is_empty() => info("no secrets stored"),
+                Ok(rows) => info(&rows.iter().map(vault_row).collect::<Vec<_>>().join(
+                    "
+",
+                )),
+                Err(e) => error(&e),
+            }
+        }
+        VaultCmd::Expire {
+            name,
+            expires,
+            ttl,
+            global,
+        } => {
+            let expires_at =
+                secrets::parse_expiry(expires.as_deref(), ttl.as_deref(), chrono::Utc::now())
+                    .unwrap_or_else(|e| error(&e));
+            if expires_at.is_none() {
+                error("give --expires YYYY-MM-DD or --ttl 90d");
+            }
+            match secrets::set_expiry(&vault_path_for(global), &name, expires_at) {
+                Ok(()) => success(&format!("recorded expiry for {name}")),
+                Err(e) => error(&e),
+            }
+        }
+        VaultCmd::Check { within, global } => {
+            use appz_vault::ExpiryStatus::{Expired, Expiring};
+            let within = secrets::parse_duration(&within).unwrap_or_else(|e| error(&e));
+            let rows =
+                secrets::expiries(&vault_path_for(global), within).unwrap_or_else(|e| error(&e));
+            let due: Vec<_> = rows
+                .iter()
+                .filter(|r| matches!(r.status, Expired | Expiring))
+                .collect();
+            if json {
+                let out: Vec<_> = rows
+                    .iter()
+                    .map(|r| serde_json::to_value(r).unwrap())
+                    .collect();
+                println!("{}", serde_json::to_string(&out).unwrap());
+                if !due.is_empty() {
+                    std::process::exit(1);
+                }
+            } else if due.is_empty() {
+                success("no secrets expired or expiring soon");
+            } else {
+                let lines: Vec<_> = due.into_iter().map(vault_row).collect();
+                error(&format!(
+                    "rotate these:
+{}",
+                    lines.join(
+                        "
+"
+                    )
+                ));
+            }
+        }
         VaultCmd::Rm { name, global } => match secrets::remove(&vault_path_for(global), &name) {
             Ok(true) => success(&format!("removed {name}")),
             Ok(false) => error(&format!("{name} is not stored")),

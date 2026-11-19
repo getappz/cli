@@ -3,8 +3,8 @@ use crate::crypto::kdf::{derive_kek, KdfParams};
 use crate::error::{VaultError, VaultResult};
 use crate::session;
 use crate::vault::file::{create_vault_file, read_vault_file, vault_file_exists, write_vault_file};
-use crate::vault::model::{SecretEntry, VaultBody, VaultFile, FORMAT_VERSION};
-use chrono::Utc;
+use crate::vault::model::{SecretEntry, SecretExpiry, VaultBody, VaultFile, FORMAT_VERSION};
+use chrono::{DateTime, Utc};
 use rand::Rng;
 use std::path::{Path, PathBuf};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
@@ -268,9 +268,44 @@ pub fn set_secret_value(
             added_at: Utc::now(),
             rotated_at: None,
             aad: true,
+            expires_at: None,
         },
     );
     Ok(())
+}
+
+/// Record (or clear, with `None`) when `name` expires at its issuer.
+pub fn set_secret_expiry(
+    body: &mut VaultBody,
+    name: &str,
+    expires_at: Option<DateTime<Utc>>,
+) -> VaultResult<()> {
+    match body.get_mut(name) {
+        Some(entry) => {
+            entry.expires_at = expires_at;
+            Ok(())
+        }
+        None => Err(VaultError::SecretNotFound(name.to_string())),
+    }
+}
+
+/// Every secret's recorded expiry and status, soonest expiry first, then
+/// untracked ones. Needs no decryption.
+pub fn secret_expiries(
+    body: &VaultBody,
+    now: DateTime<Utc>,
+    within: chrono::Duration,
+) -> Vec<SecretExpiry> {
+    let mut out: Vec<_> = body
+        .iter()
+        .map(|(name, e)| SecretExpiry {
+            name: name.clone(),
+            expires_at: e.expires_at,
+            status: e.expiry_status(now, within),
+        })
+        .collect();
+    out.sort_by_key(|r| (r.expires_at.is_none(), r.expires_at, r.name.clone()));
+    out
 }
 
 pub fn remove_secret_value(body: &mut VaultBody, name: &str) -> VaultResult<bool> {
@@ -284,6 +319,7 @@ pub fn list_secret_names(body: &VaultBody) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vault::model::ExpiryStatus;
     use tempfile::TempDir;
 
     use crate::paths::test_support::with_temp_home;
@@ -474,6 +510,7 @@ mod tests {
                 added_at: Utc::now(),
                 rotated_at: None,
                 aad: false,
+                expires_at: None,
             },
         );
         assert_eq!(
@@ -567,6 +604,7 @@ mod tests {
                     added_at: Utc::now(),
                     rotated_at: None,
                     aad: false,
+                    expires_at: None,
                 },
             );
             Ok(())
@@ -646,5 +684,42 @@ mod tests {
         write_vault_file(&path, serde_json::to_string(&vault).unwrap().as_bytes()).unwrap();
 
         assert!(open_vault(&path, "pw").is_ok());
+    }
+
+    #[test]
+    fn expiry_is_classified_and_sorted_soonest_first() {
+        use chrono::Duration;
+        let dek = [7u8; 32];
+        let mut body = VaultBody::default();
+        for name in ["NONE", "LATER", "SOON", "GONE"] {
+            set_secret_value(&mut body, &dek, name, "v").unwrap();
+        }
+        let now = Utc::now();
+        set_secret_expiry(&mut body, "LATER", Some(now + Duration::days(90))).unwrap();
+        set_secret_expiry(&mut body, "SOON", Some(now + Duration::days(3))).unwrap();
+        set_secret_expiry(&mut body, "GONE", Some(now - Duration::days(1))).unwrap();
+
+        let rows = secret_expiries(&body, now, Duration::days(14));
+        let order: Vec<_> = rows.iter().map(|r| (r.name.as_str(), r.status)).collect();
+        assert_eq!(
+            order,
+            vec![
+                ("GONE", ExpiryStatus::Expired),
+                ("SOON", ExpiryStatus::Expiring),
+                ("LATER", ExpiryStatus::Ok),
+                ("NONE", ExpiryStatus::Untracked),
+            ]
+        );
+        set_secret_expiry(&mut body, "SOON", None).unwrap();
+        assert_eq!(body["SOON"].expires_at, None);
+        assert!(set_secret_expiry(&mut body, "MISSING", None).is_err());
+    }
+
+    #[test]
+    fn entries_without_an_expiry_field_still_load() {
+        let entry: SecretEntry =
+            serde_json::from_str(r#"{"value":"00","added_at":"2026-01-01T00:00:00Z","aad":true}"#)
+                .unwrap();
+        assert_eq!(entry.expires_at, None);
     }
 }

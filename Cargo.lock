@@ -131,7 +131,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "appz"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "appz-core",
  "appz-deploy",
@@ -164,7 +164,7 @@ dependencies = [
 
 [[package]]
 name = "appz-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "command",
@@ -181,7 +181,7 @@ dependencies = [
 
 [[package]]
 name = "appz-deploy"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "appz-core",
  "blake3",
@@ -578,7 +578,7 @@ dependencies = [
 
 [[package]]
 name = "command"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ctrlc",
  "miette",

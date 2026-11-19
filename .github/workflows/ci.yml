@@ -87,7 +87,7 @@ jobs:
         with:
           fetch-depth: 0
       - if: needs.changes.result != 'success' || needs.changes.outputs.code == 'true'
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           components: clippy
       - if: needs.changes.result != 'success' || needs.changes.outputs.code == 'true'
@@ -113,7 +113,7 @@ jobs:
         with:
           fetch-depth: 0
       - if: needs.changes.result != 'success' || needs.changes.outputs.code == 'true'
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           components: rustfmt
       - if: needs.changes.result != 'success' || needs.changes.outputs.code == 'true'

@@ -204,7 +204,7 @@ dependencies = [
 
 [[package]]
 name = "appz-serve"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "futures-util",
  "http-body-util",
@@ -221,7 +221,7 @@ dependencies = [
 
 [[package]]
 name = "appz-vault"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "aes-gcm",
  "argon2",

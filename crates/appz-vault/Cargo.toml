@@ -1,6 +1,6 @@
 [package]
 name = "appz-vault"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 description = "Local secrets vault with envelope encryption (Argon2id KEK / AES-256-GCM DEK), OS-keyring session cache, and global/project scoping. Forked from flare-vault."
 license = "Apache-2.0"

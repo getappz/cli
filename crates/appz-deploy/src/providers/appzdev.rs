@@ -146,6 +146,18 @@ pub fn parse_api_error(
     match err {
         ureq::Error::Status(code, resp) => {
             if code == 401 {
+                // A session still waiting on its 2FA code is not a missing login.
+                if let Ok(json) = resp.into_json::<serde_json::Value>()
+                    && json.get("code").and_then(|c| c.as_str()) == Some("MFA_REQUIRED")
+                {
+                    let reason = json.get("error").and_then(|e| e.as_str()).unwrap_or(
+                        "two-factor verification required; finish verification in your browser",
+                    );
+                    return DeployError::DeployFailed {
+                        provider: provider_name,
+                        reason: reason.to_string(),
+                    };
+                }
                 return DeployError::AuthMissing {
                     provider: provider_name,
                     env_var: "APPZ_TOKEN",
@@ -2114,5 +2126,36 @@ SPACED=hello world
 
         shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
         let _ = handle.join();
+    }
+
+    fn status_error(code: u16, body: &str) -> ureq::Error {
+        ureq::Error::Status(code, ureq::Response::new(code, "status", body).unwrap())
+    }
+
+    #[test]
+    fn mfa_required_401_reports_the_server_message() {
+        let err = status_error(
+            401,
+            r#"{"error":"two-factor verification required","code":"MFA_REQUIRED"}"#,
+        );
+        match parse_api_error(err, "AppzDev", "List projects") {
+            DeployError::DeployFailed { reason, .. } => {
+                assert_eq!(reason, "two-factor verification required");
+            }
+            other => panic!("expected DeployFailed, got {other:?}"),
+        }
+        let err = status_error(401, r#"{"code":"MFA_REQUIRED"}"#);
+        match parse_api_error(err, "AppzDev", "List projects") {
+            DeployError::DeployFailed { reason, .. } => assert!(reason.contains("browser")),
+            other => panic!("expected DeployFailed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plain_401_still_asks_for_login() {
+        for body in [r#"{"error":"unauthorized"}"#, "not json"] {
+            let err = parse_api_error(status_error(401, body), "AppzDev", "List projects");
+            assert!(matches!(err, DeployError::AuthMissing { .. }), "{err:?}");
+        }
     }
 }

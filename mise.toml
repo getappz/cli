@@ -3,3 +3,13 @@
 
 [tools]
 rust = "latest"
+
+[tasks.version-set]
+description = "Set the workspace version (e.g. 0.3.1 or 0.3.1-rc.1) and refresh Cargo.lock"
+usage = 'arg "<version>"'
+run = '''
+v="${usage_version:?version required}"
+printf '%s' "$v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' || { echo "bad version: $v" >&2; exit 1; }
+sed -i -E "/^\[workspace\.package\]/,/^\[/ s/^version = \".*\"/version = \"$v\"/" Cargo.toml
+cargo update -w
+'''

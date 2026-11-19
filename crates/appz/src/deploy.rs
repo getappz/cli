@@ -198,7 +198,7 @@ fn autodetect_target(project_dir: &Path) -> Result<String, String> {
 }
 
 /// Everything besides the source files that changes what gets deployed: the
-/// target, the project name, and the `-e` / `-b` values. Only hashed into the
+/// target, the project name, the environment's configured vars, and the `-e` / `-b` values. Only hashed into the
 /// fingerprint, never stored.
 fn fingerprint_extra(slug: &str, req: &DeployRequest, config: &DeployConfig) -> String {
     // The command uses the last value for repeated keys.
@@ -216,6 +216,10 @@ fn fingerprint_extra(slug: &str, req: &DeployRequest, config: &DeployConfig) -> 
         },
         req.project,
         config.targets.get(slug),
+        config
+            .env_for(if req.prod { "production" } else { "preview" })
+            .into_iter()
+            .collect::<std::collections::BTreeMap<_, _>>(),
         effective_env(&req.env),
         effective_env(&req.build_env)
     ])

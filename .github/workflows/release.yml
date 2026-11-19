@@ -143,7 +143,9 @@ jobs:
         run: git archive --format=tar.gz --prefix="appz-${VERSION}/" "$GITHUB_SHA" -o "dist/appz-${VERSION}-source.tar.gz"
 
       - name: Generate checksums
-        run: cd dist && sha256sum * > SHA256SUMS.txt
+        # Published under both names: install.sh and `appz update` fetch
+        # SHA256SUMS; the package-manager jobs fetch SHA256SUMS.txt.
+        run: cd dist && sha256sum * > SHA256SUMS.txt && cp SHA256SUMS.txt SHA256SUMS
 
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2

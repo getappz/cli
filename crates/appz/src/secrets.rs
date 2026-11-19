@@ -1,13 +1,15 @@
 //! `appz env` storage and deploy-time lookup, on top of `appz-vault`.
 //! Global vault `~/.appz/vault.json`, project vault `<root>/.appz/vault.json`.
 
+use chrono::{DateTime, Duration, Utc};
 use std::collections::HashMap;
 use std::io::{IsTerminal, Read};
 use std::path::{Path, PathBuf};
 
 use appz_vault::{
-    VaultError, VaultPaths, create_vault, get_secret_value, list_secret_names, open_vault,
-    open_vault_with_dek, read_vault_body, remove_secret_value, set_secret_value, update_vault_body,
+    SecretExpiry, VaultError, VaultPaths, create_vault, get_secret_value, open_vault,
+    open_vault_with_dek, read_vault_body, remove_secret_value, secret_expiries, set_secret_expiry,
+    set_secret_value, update_vault_body,
 };
 
 const APP: &str = "appz";
@@ -110,7 +112,12 @@ pub fn valid_name(name: &str) -> bool {
 
 /// `value` of `None` is read from a hidden prompt, or stdin when piped, so it
 /// stays out of shell history.
-pub fn set(path: &Path, name: &str, value: Option<String>) -> Result<(), String> {
+pub fn set(
+    path: &Path,
+    name: &str,
+    value: Option<String>,
+    expires_at: Option<DateTime<Utc>>,
+) -> Result<(), String> {
     if !valid_name(name) {
         return Err(format!("'{name}' is not a valid variable name"));
     }
@@ -128,16 +135,51 @@ pub fn set(path: &Path, name: &str, value: Option<String>) -> Result<(), String>
         }
     };
     let dek = dek_for(path)?;
-    update_vault_body(path, |b| set_secret_value(b, &dek, name, &value)).map_err(|e| e.to_string())
+    update_vault_body(path, |b| {
+        set_secret_value(b, &dek, name, &value)?;
+        set_secret_expiry(b, name, expires_at)
+    })
+    .map_err(|e| e.to_string())
 }
 
-/// Names only; values are never printed. Needs no unlock.
-pub fn names(path: &Path) -> Result<Vec<String>, String> {
+/// Every secret's recorded expiry and status. Needs no unlock.
+pub fn expiries(path: &Path, within: Duration) -> Result<Vec<SecretExpiry>, String> {
     if !path.exists() {
         return Ok(vec![]);
     }
     let body = read_vault_body(path).map_err(|e| e.to_string())?;
-    Ok(list_secret_names(&body))
+    Ok(secret_expiries(&body, Utc::now(), within))
+}
+
+/// `--expires 2027-02-18` (that day, 00:00 UTC) or `--ttl 90d` from `now`.
+pub fn parse_expiry(
+    expires: Option<&str>,
+    ttl: Option<&str>,
+    now: DateTime<Utc>,
+) -> Result<Option<DateTime<Utc>>, String> {
+    match (expires, ttl) {
+        (Some(_), Some(_)) => Err("use either --expires or --ttl, not both".into()),
+        (Some(d), None) => {
+            let day = chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d")
+                .map_err(|_| format!("'{d}' is not a date; use YYYY-MM-DD"))?;
+            Ok(Some(day.and_hms_opt(0, 0, 0).unwrap().and_utc()))
+        }
+        (None, Some(t)) => Ok(Some(now + parse_duration(t)?)),
+        (None, None) => Ok(None),
+    }
+}
+
+/// `90d`, `2w` or `12h`.
+pub fn parse_duration(s: &str) -> Result<Duration, String> {
+    let bad = || format!("'{s}' is not a duration; use e.g. 90d, 2w or 12h");
+    let (num, unit) = s.split_at(s.len().saturating_sub(1));
+    let n: i64 = num.parse().map_err(|_| bad())?;
+    match unit {
+        "d" => Ok(Duration::days(n)),
+        "w" => Ok(Duration::weeks(n)),
+        "h" => Ok(Duration::hours(n)),
+        _ => Err(bad()),
+    }
 }
 
 pub fn remove(path: &Path, name: &str) -> Result<bool, String> {
@@ -223,6 +265,16 @@ mod tests {
         assert!(command::DENIED_CHILD_ENV.contains(&PASSPHRASE_VAR));
     }
 
+    fn listed(path: &Path) -> Vec<String> {
+        let mut v: Vec<_> = expiries(path, Duration::days(14))
+            .unwrap()
+            .into_iter()
+            .map(|r| r.name)
+            .collect();
+        v.sort();
+        v
+    }
+
     #[test]
     fn set_ls_rm_and_deploy_env_filter() {
         // Passphrase from env + keyring off: no prompts, no OS keyring.
@@ -233,20 +285,73 @@ mod tests {
         }
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(".appz").join("vault.json");
-        set(&path, "VERCEL_TOKEN", Some("tok".into())).unwrap();
-        set(&path, "OTHER", Some("x".into())).unwrap();
-        assert_eq!(names(&path).unwrap(), vec!["OTHER", "VERCEL_TOKEN"]);
+        set(&path, "VERCEL_TOKEN", Some("tok".into()), None).unwrap();
+        set(&path, "OTHER", Some("x".into()), None).unwrap();
+        assert_eq!(listed(&path), vec!["OTHER", "VERCEL_TOKEN"]);
         assert!(remove(&path, "OTHER").unwrap());
         assert!(!remove(&path, "OTHER").unwrap());
-        assert_eq!(names(&path).unwrap(), vec!["VERCEL_TOKEN"]);
+        assert_eq!(listed(&path), vec!["VERCEL_TOKEN"]);
 
         // Inside a git repo the vault dir gets ignored, once.
         std::fs::create_dir(dir.path().join(".git")).unwrap();
         std::fs::write(dir.path().join(".gitignore"), "target").unwrap();
         let path2 = dir.path().join(".appz").join("v2.json");
-        set(&path2, "A", Some("1".into())).unwrap();
+        set(&path2, "A", Some("1".into()), None).unwrap();
         gitignore_project_vault(&path2);
         let gi = std::fs::read_to_string(dir.path().join(".gitignore")).unwrap();
         assert_eq!(gi, "target\n# appz local state (not shared)\n.appz/\n");
+    }
+
+    use appz_vault::ExpiryStatus;
+
+    #[test]
+    fn expiry_flags_parse_and_conflict() {
+        let now = DateTime::parse_from_rfc3339("2026-11-19T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(parse_expiry(None, None, now).unwrap(), None);
+        assert_eq!(
+            parse_expiry(Some("2027-02-18"), None, now)
+                .unwrap()
+                .unwrap()
+                .to_rfc3339(),
+            "2027-02-18T00:00:00+00:00"
+        );
+        assert_eq!(
+            parse_expiry(None, Some("90d"), now).unwrap().unwrap(),
+            now + Duration::days(90)
+        );
+        assert_eq!(parse_duration("2w").unwrap(), Duration::weeks(2));
+        assert_eq!(parse_duration("12h").unwrap(), Duration::hours(12));
+        assert!(parse_expiry(Some("2027-02-18"), Some("90d"), now).is_err());
+        assert!(parse_expiry(Some("18/02/2027"), None, now).is_err());
+        assert!(parse_duration("90").is_err());
+        assert!(parse_duration("d").is_err());
+        assert!(parse_duration("").is_err());
+    }
+
+    #[test]
+    fn set_records_expiry_that_ls_reads_without_unlock() {
+        // SAFETY: only this test and the one above touch these vars, with the same values.
+        unsafe {
+            std::env::set_var(PASSPHRASE_VAR, "pw");
+            std::env::set_var("APPZ_VAULT_KEYRING", "off");
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".appz").join("vault.json");
+        let soon = Utc::now() + Duration::days(3);
+        set(&path, "NPM_TOKEN", Some("t".into()), Some(soon)).unwrap();
+        set(&path, "PLAIN", Some("p".into()), None).unwrap();
+        let rows = expiries(&path, Duration::days(14)).unwrap();
+        let find = |n: &str| rows.iter().find(|r| r.name == n).unwrap().status;
+        assert_eq!(find("NPM_TOKEN"), ExpiryStatus::Expiring);
+        assert_eq!(find("PLAIN"), ExpiryStatus::Untracked);
+        // Overwriting without a date clears the recorded expiry.
+        set(&path, "NPM_TOKEN", Some("t2".into()), None).unwrap();
+        let rows = expiries(&path, Duration::days(14)).unwrap();
+        assert_eq!(
+            rows.iter().find(|r| r.name == "NPM_TOKEN").unwrap().status,
+            ExpiryStatus::Untracked
+        );
     }
 }

@@ -11,7 +11,7 @@ fn dev_generates_the_project_install_command() {
         data: appz_core::parse_registry_toml(registry).unwrap(),
     };
     fs::write(
-        cache.join("toolchains-registry.json"),
+        cache.join(appz_core::cache_path().file_name().unwrap()),
         serde_json::to_vec(&payload).unwrap(),
     )
     .unwrap();

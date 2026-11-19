@@ -27,9 +27,15 @@ runs:
   steps:
     - name: Install appz
       shell: bash
-      run: npm install -g "@getappz/cli@${{ inputs.version }}"
+      env:
+        APPZ_VERSION: ${{ inputs.version }}
+      run: npm install -g "@getappz/cli@${APPZ_VERSION}"
 
     - name: Run appz ${{ inputs.command }}
       shell: bash
       working-directory: ${{ inputs.working-directory }}
-      run: appz ${{ inputs.command }} ${{ inputs.args }}
+      env:
+        APPZ_COMMAND: ${{ inputs.command }}
+        APPZ_ARGS: ${{ inputs.args }}
+      # APPZ_ARGS is deliberately unquoted so it splits into separate arguments.
+      run: appz "$APPZ_COMMAND" $APPZ_ARGS

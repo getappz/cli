@@ -285,7 +285,7 @@ pub fn set_secret_expiry(
             entry.expires_at = expires_at;
             Ok(())
         }
-        None => Err(VaultError::Crypto(format!("{name} is not stored"))),
+        None => Err(VaultError::SecretNotFound(name.to_string())),
     }
 }
 

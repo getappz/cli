@@ -142,6 +142,19 @@ pub fn set(
     .map_err(|e| e.to_string())
 }
 
+/// Change a stored secret's recorded expiry; its value is not touched, so no
+/// unlock is needed.
+pub fn set_expiry(
+    path: &Path,
+    name: &str,
+    expires_at: Option<DateTime<Utc>>,
+) -> Result<(), String> {
+    if !path.exists() {
+        return Err(format!("{name} is not stored"));
+    }
+    update_vault_body(path, |b| set_secret_expiry(b, name, expires_at)).map_err(|e| e.to_string())
+}
+
 /// Every secret's recorded expiry and status. Needs no unlock.
 pub fn expiries(path: &Path, within: Duration) -> Result<Vec<SecretExpiry>, String> {
     if !path.exists() {

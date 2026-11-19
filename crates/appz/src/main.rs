@@ -198,6 +198,19 @@ enum VaultCmd {
         #[arg(long)]
         global: bool,
     },
+    /// Record or change the expiry of a stored secret without touching its value
+    Expire {
+        name: String,
+        /// Day the credential stops working at its issuer (YYYY-MM-DD, UTC)
+        #[arg(long, conflicts_with = "ttl")]
+        expires: Option<String>,
+        /// Time until it stops working, e.g. 90d, 2w, 12h
+        #[arg(long)]
+        ttl: Option<String>,
+        /// Use the user-wide vault (~/.appz) instead of this project's
+        #[arg(long)]
+        global: bool,
+    },
     /// Exit non-zero when a stored secret is expired or about to expire
     Check {
         /// Warn this long before expiry, e.g. 14d, 2w
@@ -1768,6 +1781,23 @@ fn run_vault_cmd(cmd: VaultCmd, json: bool) {
                     "
 ",
                 )),
+                Err(e) => error(&e),
+            }
+        }
+        VaultCmd::Expire {
+            name,
+            expires,
+            ttl,
+            global,
+        } => {
+            let expires_at =
+                secrets::parse_expiry(expires.as_deref(), ttl.as_deref(), chrono::Utc::now())
+                    .unwrap_or_else(|e| error(&e));
+            if expires_at.is_none() {
+                error("give --expires YYYY-MM-DD or --ttl 90d");
+            }
+            match secrets::set_expiry(&vault_path_for(global), &name, expires_at) {
+                Ok(()) => success(&format!("recorded expiry for {name}")),
                 Err(e) => error(&e),
             }
         }

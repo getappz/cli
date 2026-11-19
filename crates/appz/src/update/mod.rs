@@ -109,7 +109,7 @@ fn resolve_target_version(
             Some(v)
         }
         None => {
-            let latest = match github::check_for_update() {
+            let latest = match github::check_for_update(false) {
                 Ok(Some(v)) => v,
                 Ok(None) => {
                     if !quiet {

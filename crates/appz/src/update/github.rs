@@ -147,9 +147,11 @@ pub(crate) fn latest_version() -> Result<String, String> {
         .ok_or_else(|| "no tag_name in release".to_string())
 }
 
-pub(crate) fn check_for_update() -> Result<Option<String>, String> {
-    // Check the 24h cache first.
-    if let Some(cached) = read_cache()? {
+/// `use_cache` lets a passive check reuse a result under 24h old. An explicit
+/// `appz update` passes `false`: a cached "up to date" from before a release
+/// would otherwise hide that release for a day.
+pub(crate) fn check_for_update(use_cache: bool) -> Result<Option<String>, String> {
+    if use_cache && let Some(cached) = read_cache()? {
         return Ok(cached);
     }
 

@@ -16,12 +16,12 @@ use std::time::{Duration, Instant};
 
 use crate::context::DeployContext;
 use crate::error::{DeployError, DeployResult};
+use crate::fingerprint::prepare_upload;
 use crate::output::{
     DeployOutput, DeployStatus, DeploymentInfo, DeploymentInspect, DetectedConfig,
     DomainVerifyResult, PrerequisiteStatus, ProjectDomain, ProjectInfo,
 };
 use crate::provider::DeployProvider;
-use crate::static_cas::scan_output_dir;
 
 pub struct AppzdevProvider;
 
@@ -774,10 +774,11 @@ impl AppzdevProvider {
         }
 
         let output_path = ctx.output_path();
-        let scanned = scan_output_dir(&output_path).map_err(|e| DeployError::DeployFailed {
-            provider: self.name(),
-            reason: e,
-        })?;
+        let (scanned, _staged_blobs) =
+            prepare_upload(&output_path).map_err(|e| DeployError::DeployFailed {
+                provider: self.name(),
+                reason: e,
+            })?;
 
         if scanned.files.is_empty() {
             return Err(DeployError::DeployFailed {
@@ -939,7 +940,7 @@ impl AppzdevProvider {
                                 break;
                             }
 
-                            let read_hash = crate::static_cas::sha256_hex(&data);
+                            let read_hash = crate::static_cas::blob_id(&data);
                             if read_hash != hash {
                                 let mut lock = upload_error.lock().unwrap();
                                 if lock.is_none() {
@@ -1687,13 +1688,41 @@ SPACED=hello world
                             let method = parts.first().copied().unwrap_or("");
                             let path = parts.get(1).copied().unwrap_or("");
 
+                            let handshake;
                             let (status, resp_body) = if method == "POST"
                                 && path == "/api/v0/deployments"
                             {
-                                (
-                                    "200 OK",
-                                    r#"{"deploymentId":"dpl_mock_1","id":"dpl_mock_1","url":"https://mock.appz.page","status":"ready","missing":[]}"#,
-                                )
+                                let manifest: serde_json::Value =
+                                    serde_json::from_slice(&body).unwrap();
+                                let files = manifest["files"].as_array().unwrap();
+                                let js = files.iter().find(|f| f["path"] == "/app.js").unwrap();
+                                let alias = format!(
+                                    "/app-{}.js",
+                                    &js["hash"].as_str().unwrap().strip_prefix("b3:").unwrap()
+                                        [..10]
+                                );
+                                assert!(
+                                    files
+                                        .iter()
+                                        .any(|f| f["path"] == alias && f["immutable"] == true)
+                                );
+                                let html = format!(r#"<script src="{alias}"></script>"#);
+                                let hash = crate::static_cas::blob_id(html.as_bytes());
+                                assert!(
+                                    files
+                                        .iter()
+                                        .any(|f| f["path"] == "/index.html" && f["hash"] == hash)
+                                );
+                                handshake = serde_json::json!({"deploymentId":"dpl_mock_1","missing":[hash]}).to_string();
+                                ("200 OK", handshake.as_str())
+                            } else if method == "PUT" && path.contains("/files/") {
+                                assert_eq!(
+                                    path.rsplit('/').next().unwrap(),
+                                    crate::static_cas::blob_id(&body)
+                                );
+                                ("200 OK", "{}")
+                            } else if method == "POST" && path.ends_with("/commit") {
+                                ("200 OK", r#"{"url":"https://mock.appz.page"}"#)
                             } else if method == "GET"
                                 && path.starts_with("/api/v0/deployments/dpl_mock_1")
                             {
@@ -1813,7 +1842,11 @@ SPACED=hello world
         // Scaffold a mock project with dist output
         let dist = dir.path().join("dist");
         std::fs::create_dir_all(&dist).unwrap();
-        std::fs::write(dist.join("index.html"), "<h1>Hello Appz</h1>").unwrap();
+        std::fs::write(
+            dist.join("index.html"),
+            r#"<script src="/app.js"></script>"#,
+        )
+        .unwrap();
         std::fs::write(dist.join("app.js"), "console.log('test');").unwrap();
 
         let mut ctx = DeployContext::new(dir.path().to_path_buf(), "dist".to_string());

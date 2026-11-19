@@ -4,6 +4,9 @@ on:
   push:
     tags:
       - "v*"
+  # Started by release-plz.yml after it tags (GITHUB_TOKEN tag pushes trigger nothing).
+  # Dispatch with --ref vX.Y.Z so GITHUB_REF_NAME is the tag, as for a tag push.
+  workflow_dispatch:
 
 # Least privilege: read-only token by default, elevated per job below.
 permissions:

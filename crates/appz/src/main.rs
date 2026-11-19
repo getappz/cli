@@ -296,7 +296,7 @@ struct DeployArgs {
     #[arg(long)]
     force: bool,
     /// Deploy to every target configured under deploy.targets instead of one
-    #[arg(long, conflicts_with = "target")]
+    #[arg(long, conflicts_with_all = ["target", "project"])]
     all: bool,
 }
 
@@ -2660,6 +2660,11 @@ fn run_login(args: LoginArgs, json: bool) {
                 let session_res = ureq::get(&session_url)
                     .set("Authorization", &format!("Bearer {token}"))
                     .call();
+                if matches!(session_res, Err(ureq::Error::Status(401, _))) {
+                    error(
+                        "login was not completed: the new session is not authorized (finish any two-factor verification in your browser, then run `appz login` again)",
+                    );
+                }
 
                 let mut user_id = None;
                 let mut email = None;

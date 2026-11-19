@@ -296,7 +296,7 @@ struct DeployArgs {
     #[arg(long)]
     force: bool,
     /// Deploy to every target configured under deploy.targets instead of one
-    #[arg(long, conflicts_with = "target")]
+    #[arg(long, conflicts_with_all = ["target", "project"])]
     all: bool,
 }
 

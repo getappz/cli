@@ -5,7 +5,7 @@
 //! Conversion problems only ever cost a page its sibling; they never fail a
 //! deploy.
 
-use crate::static_cas::{LocalBlob, ScannedFileEntry, ScannedTree, sha256_hex};
+use crate::static_cas::{LocalBlob, ScannedFileEntry, ScannedTree, blob_id};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -218,11 +218,9 @@ pub fn add_markdown_siblings(
     pages.sort();
 
     // Bounded concurrency; results keep page order so the output (and the
-    // deploy payload) is deterministic. Identical HTML is converted once: the
-    // first thread to see a content hash does the work, the rest wait for and
-    // reuse its result.
+    // deploy payload) is deterministic. Only identical converter inputs share work.
     let results: Vec<Mutex<Option<Outcome>>> = pages.iter().map(|_| Mutex::new(None)).collect();
-    let by_content: Mutex<HashMap<String, Arc<OnceLock<Outcome>>>> = Mutex::new(HashMap::new());
+    let by_content = Mutex::new(HashMap::<_, Arc<OnceLock<Outcome>>>::new());
     let next = AtomicUsize::new(0);
     std::thread::scope(|s| {
         for _ in 0..CONCURRENCY.min(pages.len()) {
@@ -241,13 +239,13 @@ pub fn add_markdown_siblings(
                                 format!("{html_path} is over the {MAX_HTML_BYTES} byte limit"),
                             )),
                             Ok(html) => {
+                                let url = origin.and_then(|o| page_url(o, html_path));
                                 let cell = by_content
                                     .lock()
                                     .unwrap()
-                                    .entry(sha256_hex(&html))
+                                    .entry((blob_id(&html), url.clone()))
                                     .or_default()
                                     .clone();
-                                let url = origin.and_then(|o| page_url(o, html_path));
                                 cell.get_or_init(|| converter.convert(&html, url.as_deref()))
                                     .clone()
                             }
@@ -258,41 +256,62 @@ pub fn add_markdown_siblings(
         }
     });
 
-    let mut generated = 0;
+    let converted = pages
+        .into_iter()
+        .zip(results)
+        .filter_map(|((_, path), result)| {
+            result.into_inner().unwrap().map(|outcome| (path, outcome))
+        });
+    stage_siblings(tree, dir, converted)
+}
+
+fn stage_siblings(
+    tree: &mut ScannedTree,
+    dir: TempDir,
+    converted: impl Iterator<Item = (String, Outcome)>,
+) -> Result<SiblingGuard, String> {
+    let mut staged = Vec::new();
     let mut skipped = 0;
     let mut first_error = None;
-    for ((_, md_path), result) in pages.into_iter().zip(results) {
-        let markdown = match result.into_inner().unwrap() {
-            Some(Ok(markdown)) => markdown,
-            Some(Err(e)) => {
+    for (md_path, result) in converted {
+        let markdown = match result {
+            Ok(markdown) => markdown,
+            Err(e) => {
                 skipped += 1;
                 first_error.get_or_insert(e.message);
                 continue;
             }
-            None => continue,
         };
         let bytes = markdown.into_bytes();
-        let hash = sha256_hex(&bytes);
-        let blob_path = dir.path().join(format!("{hash}.md"));
-        if !blob_path.exists() {
+        let hash = blob_id(&bytes);
+        let blob_path = dir.path().join(hash.trim_start_matches("b3:"));
+        if !blob_path.is_file() {
             std::fs::write(&blob_path, &bytes)
                 .map_err(|e| format!("cannot write {}: {e}", blob_path.display()))?;
         }
-        tree.total_bytes += bytes.len();
+        staged.push((
+            blob_path,
+            ScannedFileEntry {
+                path: md_path,
+                hash,
+                size: bytes.len(),
+                r#type: MARKDOWN_MIME.to_owned(),
+                immutable: None,
+            },
+        ));
+    }
+    // A failed write drops the scratch directory. Publish entries only once
+    // every blob is ready so callers can still deploy the original tree.
+    let generated = staged.len();
+    for (path, file) in staged {
+        tree.total_bytes += file.size;
         tree.blobs_by_hash
-            .entry(hash.clone())
-            .or_insert_with(|| LocalBlob {
+            .entry(file.hash.clone())
+            .or_insert_with_key(|hash| LocalBlob {
                 hash: hash.clone(),
-                path: blob_path,
+                path,
             });
-        tree.files.push(ScannedFileEntry {
-            path: md_path,
-            hash,
-            size: bytes.len(),
-            r#type: MARKDOWN_MIME.to_owned(),
-            immutable: None,
-        });
-        generated += 1;
+        tree.files.push(file);
     }
     Ok(SiblingGuard {
         _dir: dir,
@@ -300,4 +319,32 @@ pub fn add_markdown_siblings(
         skipped,
         first_error,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::static_cas::scan_output_dir;
+
+    #[test]
+    fn failed_scratch_write_preserves_the_upload_tree() {
+        let root = TempDir::new().unwrap();
+        std::fs::write(root.path().join("index.html"), "original").unwrap();
+        let mut tree = scan_output_dir(root.path()).unwrap();
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir(
+            dir.path()
+                .join(blob_id(b"second").trim_start_matches("b3:")),
+        )
+        .unwrap();
+        let converted = [
+            ("/a.md".into(), Ok("first".into())),
+            ("/b.md".into(), Ok("second".into())),
+        ];
+        assert!(stage_siblings(&mut tree, dir, converted.into_iter()).is_err());
+        assert_eq!(tree.files.len(), 1);
+        assert_eq!(tree.files[0].path, "/index.html");
+        assert_eq!(tree.blobs_by_hash.len(), 1);
+        assert_eq!(tree.total_bytes, "original".len());
+    }
 }

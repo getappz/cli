@@ -1,10 +1,7 @@
 //! Content-Addressable Storage (CAS) scanner & Merkle tree builder.
 //!
-//! Adapted from WSL earlier appz-client with SHA-256 (Cloudflare R2 alignment).
-
-use sha2::{Digest, Sha256};
+//! New manifests use tagged BLAKE3 blob IDs; legacy manifests have untagged SHA-256 IDs.
 use std::collections::HashMap;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -153,10 +150,8 @@ pub struct ScannedTree {
     pub total_bytes: usize,
 }
 
-pub fn sha256_hex(data: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(data);
-    format!("{:x}", hasher.finalize())
+pub(crate) fn blob_id(data: &[u8]) -> String {
+    format!("b3:{}", blake3::hash(data))
 }
 
 #[inline]
@@ -230,7 +225,7 @@ pub fn is_immutable_asset(path: &str) -> bool {
 /// A name like `index-B1x2c3D4.js` or `main.073c9b0a.chunk.css`: some segment
 /// after the first is a hash (8+ characters: mixed-case or hex with digits,
 /// so ordinary words or version labels like `version2024` don't count).
-fn has_content_hash(path: &str) -> bool {
+pub(crate) fn has_content_hash(path: &str) -> bool {
     let name = path.rsplit('/').next().unwrap_or(path);
     let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
     stem.split(['.', '-']).skip(1).any(|seg| {
@@ -275,19 +270,10 @@ fn is_ignored(rel: &str, rules: &IgnoreRules) -> bool {
     })
 }
 
-/// SHA-256 of a file, streamed with a 64KB buffer to minimize syscall overhead.
-fn sha256_file(path: &Path) -> std::io::Result<String> {
-    let mut hasher = Sha256::new();
-    let mut file = std::fs::File::open(path)?;
-    let mut buf = [0u8; 64 * 1024];
-    loop {
-        let n = file.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
-    Ok(format!("{:x}", hasher.finalize()))
+fn file_blob_id(path: &Path) -> std::io::Result<String> {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update_reader(std::fs::File::open(path)?)?;
+    Ok(format!("b3:{}", hasher.finalize()))
 }
 
 fn normalize_rel_path(rel: &Path) -> String {
@@ -403,7 +389,7 @@ pub fn scan_output_dir(output_dir: &Path) -> Result<ScannedTree, String> {
 
     if count == 1 {
         let c = &candidates[0];
-        let hash = sha256_file(&c.abs_path)
+        let hash = file_blob_id(&c.abs_path)
             .map_err(|e| format!("Failed to read {}: {e}", c.abs_path.display()))?;
         total_bytes += c.size;
         files.push(ScannedFileEntry {
@@ -451,7 +437,7 @@ pub fn scan_output_dir(output_dir: &Path) -> Result<ScannedTree, String> {
                     }
 
                     let c = &candidates[idx];
-                    match sha256_file(&c.abs_path) {
+                    match file_blob_id(&c.abs_path) {
                         Ok(hash) => {
                             *hashes[idx].lock().unwrap() = Some(hash);
                         }
@@ -509,6 +495,14 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
+    fn blob_id_matches_the_worker_wire_format() {
+        assert_eq!(
+            blob_id(b"abc"),
+            "b3:6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85"
+        );
+    }
+
+    #[test]
     fn test_scan_output_dir_basic() {
         let dir = tempdir().unwrap();
         std::fs::write(dir.path().join("index.html"), "<h1>Hello</h1>").unwrap();
@@ -536,7 +530,7 @@ mod tests {
         assert_eq!(css_entry.r#type, "text/css; charset=utf-8");
         // Not content-hashed: edited in place, so never cached forever.
         assert_eq!(css_entry.immutable, None);
-        assert_eq!(css_entry.hash, sha256_hex(b"body { color: red; }"));
+        assert_eq!(css_entry.hash, blob_id(b"body { color: red; }"));
         let blob = &scanned.blobs_by_hash[&css_entry.hash];
         assert_eq!(std::fs::read(&blob.path).unwrap(), b"body { color: red; }");
     }

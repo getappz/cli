@@ -209,7 +209,11 @@ fn fingerprint_extra(slug: &str, req: &DeployRequest, config: &DeployConfig) -> 
             .collect::<std::collections::BTreeMap<_, _>>()
     };
     serde_json::json!([
-        slug,
+        if slug == "appzdev" {
+            "appzdev:asset-fingerprints-b3-v1"
+        } else {
+            slug
+        },
         req.project,
         config.targets.get(slug),
         effective_env(&req.env),

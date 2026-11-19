@@ -1,6 +1,7 @@
 mod context;
 mod error;
 mod exec;
+mod fingerprint;
 pub mod markdown;
 mod output;
 mod provider;

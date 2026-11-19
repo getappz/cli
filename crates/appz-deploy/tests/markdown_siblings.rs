@@ -3,7 +3,7 @@ use appz_deploy::markdown::{
     markdown_sibling_path,
 };
 use appz_deploy::read_markdown_config;
-use appz_deploy::static_cas::{ScannedTree, scan_output_dir, sha256_hex};
+use appz_deploy::static_cas::{ScannedTree, scan_output_dir};
 use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -124,18 +124,18 @@ fn enabled_adds_md_for_each_html() {
     let entry = tree.files.iter().find(|f| f.path == "/index.md").unwrap();
     assert_eq!(entry.r#type, "text/markdown; charset=utf-8");
     let bytes = fs::read(&tree.blobs_by_hash[&entry.hash].path).unwrap();
-    assert_eq!(sha256_hex(&bytes), entry.hash);
+    assert_eq!(format!("b3:{}", blake3::hash(&bytes)), entry.hash);
     assert_eq!(bytes.len(), entry.size);
     assert!(String::from_utf8(bytes).unwrap().contains("# Hello"));
 }
 
 #[test]
 fn page_url_is_passed_to_the_converter_when_origin_is_known() {
-    let (a, b, c) = (page("a"), page("b"), page("c"));
+    let a = page("same");
     let dir = site(&[
         ("index.html", &a),
-        ("about/index.html", &b),
-        ("pricing.html", &c),
+        ("about/index.html", &a),
+        ("pricing.html", &a),
     ]);
     let mut with = scan_output_dir(dir.path()).unwrap();
     let _g1 =

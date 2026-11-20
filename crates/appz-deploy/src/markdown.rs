@@ -776,6 +776,7 @@ fn convert_batched_pages(
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)] // one internal call site; a context struct would only add indirection
 fn run_batch_wave(
     output_dir: &Path,
     batches: &[Vec<usize>],

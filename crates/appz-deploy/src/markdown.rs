@@ -8,21 +8,38 @@
 use crate::static_cas::{LocalBlob, ScannedFileEntry, ScannedTree, blob_id};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 const MARKDOWN_MIME: &str = "text/markdown; charset=utf-8";
 
-/// Path of the hosted conversion endpoint, relative to the API base.
+/// Path of the hosted single-page conversion endpoint, relative to the API base.
 pub const MARKDOWN_CONVERT_PATH: &str = "/api/v0/markdown/convert";
+/// Path of the hosted batch conversion endpoint, relative to the API base.
+pub const MARKDOWN_CONVERT_BATCH_PATH: &str = "/api/v0/markdown/convert-batch";
 /// Optional request header carrying the absolute URL the page is served at.
 pub const PAGE_ORIGIN_HEADER: &str = "X-Page-Origin";
 /// Pages larger than this are not sent for conversion.
 pub const MAX_HTML_BYTES: usize = 2 * 1024 * 1024;
-/// Parallel conversion requests (each one costs money, so keep it low).
+/// Maximum pages accepted per batch request.
+pub const BATCH_MAX_PAGES: usize = 25;
+/// Target serialized JSON body cap per batch (~3.5 MB, safely below the 4 MB server limit).
+pub const BATCH_TARGET_BYTES: usize = 3_500_000;
+/// Parallel conversion requests for single-page fallback / closures.
 const CONCURRENCY: usize = 4;
+/// Parallel batch requests in flight (server converts 5 pages concurrently per batch).
+const BATCH_CONCURRENCY: usize = 2;
+/// Longest single `Retry-After` we will sit out; longer asks stop the run.
+const MAX_RETRY_AFTER_SECS: u64 = 120;
+/// Total time one run may spend waiting out rate limits.
+const MAX_TOTAL_RATE_LIMIT_WAIT_SECS: u64 = 300;
+/// Serialized-entry headroom above [`BATCH_TARGET_BYTES`] before the server's
+/// 4 MB body limit; a lone page past this is skipped locally instead of sent.
+const BATCH_HARD_LIMIT_SLACK_BYTES: usize = 500_000;
+/// Serialized size of `{"pages":[]}`.
+const ENVELOPE_BYTES: usize = 12;
 
 /// Why a page got no Markdown sibling.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,10 +64,60 @@ impl std::fmt::Display for ConvertError {
     }
 }
 
+/// One page in a [`MarkdownConverter::convert_batch`] request.
+#[derive(Debug, Clone, Copy)]
+pub struct BatchPage<'a> {
+    pub id: &'a str,
+    pub html: &'a str,
+    pub origin: Option<&'a str>,
+}
+
+/// Batching limits advertised by a [`MarkdownConverter`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BatchLimits {
+    pub max_pages: usize,
+    pub max_body_bytes: usize,
+    pub max_in_flight: usize,
+}
+
+impl BatchLimits {
+    pub const fn single() -> Self {
+        Self {
+            max_pages: 1,
+            max_body_bytes: usize::MAX,
+            max_in_flight: CONCURRENCY,
+        }
+    }
+}
+
+type BatchResults = Vec<(String, Outcome)>;
+type BatchRetryErr = (ConvertError, Option<u64>);
+
 /// Turns one page into Markdown. `page_url` is where the page is served, when
 /// known.
 pub trait MarkdownConverter: Sync {
     fn convert(&self, html: &[u8], page_url: Option<&str>) -> Result<String, ConvertError>;
+
+    /// Convert a batch of UTF-8 HTML pages, returning `(id, outcome)` pairs.
+    fn convert_batch(&self, pages: &[BatchPage<'_>]) -> Result<BatchResults, ConvertError> {
+        Ok(pages
+            .iter()
+            .map(|p| (p.id.to_owned(), self.convert(p.html.as_bytes(), p.origin)))
+            .collect())
+    }
+
+    /// Limits used by [`add_markdown_siblings`] when packing and scheduling batches.
+    fn batch_limits(&self) -> BatchLimits {
+        BatchLimits::single()
+    }
+
+    #[doc(hidden)]
+    fn convert_batch_with_retry(
+        &self,
+        pages: &[BatchPage<'_>],
+    ) -> Result<BatchResults, BatchRetryErr> {
+        self.convert_batch(pages).map_err(|e| (e, None))
+    }
 }
 
 impl<F> MarkdownConverter for F
@@ -62,25 +129,62 @@ where
     }
 }
 
-/// Converter backed by `POST {api_base}/api/v0/markdown/convert`: raw HTML in
-/// the body, `{markdown, tokens, mode}` JSON back. Every non-200 is an error;
-/// 4xx is never retried, a 5xx is retried once.
+#[derive(serde::Serialize)]
+struct WireBatchRequest<'a> {
+    pages: &'a [WireBatchPage<'a>],
+}
+
+#[derive(serde::Serialize)]
+struct WireBatchPage<'a> {
+    id: &'a str,
+    html: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    origin: Option<&'a str>,
+}
+
+#[derive(serde::Deserialize)]
+struct WireBatchResponse {
+    results: Vec<WireBatchResult>,
+}
+
+#[derive(serde::Deserialize)]
+struct WireBatchResult {
+    id: String,
+    status: u16,
+    #[serde(default)]
+    markdown: Option<String>,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+struct BatchCallError {
+    err: ConvertError,
+    retry_after_secs: Option<u64>,
+}
+
+/// Converter backed by `POST {api_base}/api/v0/markdown/convert-batch` (with
+/// fallback to `/api/v0/markdown/convert` for older APIs).
 pub struct HttpMarkdownConverter {
     endpoint: String,
+    batch_endpoint: String,
     auth_header: Option<String>,
     agent: ureq::Agent,
+    batch_unsupported: AtomicBool,
 }
 
 impl HttpMarkdownConverter {
     pub fn new(api_base: &str, token: Option<&str>) -> Self {
+        let base = api_base.trim_end_matches('/');
         Self {
-            endpoint: format!("{}{MARKDOWN_CONVERT_PATH}", api_base.trim_end_matches('/')),
+            endpoint: format!("{base}{MARKDOWN_CONVERT_PATH}"),
+            batch_endpoint: format!("{base}{MARKDOWN_CONVERT_BATCH_PATH}"),
             auth_header: token.map(|t| format!("Bearer {t}")),
             agent: ureq::builder()
                 .timeout_read(Duration::from_secs(30))
                 .timeout_write(Duration::from_secs(30))
                 .max_idle_connections_per_host(CONCURRENCY)
                 .build(),
+            batch_unsupported: AtomicBool::new(false),
         }
     }
 
@@ -98,6 +202,152 @@ impl HttpMarkdownConverter {
         }
         req.send_bytes(html)
     }
+
+    #[allow(clippy::result_large_err)]
+    fn post_batch(&self, body: &[u8]) -> Result<ureq::Response, ureq::Error> {
+        let mut req = self
+            .agent
+            .post(&self.batch_endpoint)
+            .set("Content-Type", "application/json");
+        if let Some(auth) = &self.auth_header {
+            req = req.set("Authorization", auth);
+        }
+        req.send_bytes(body)
+    }
+
+    fn convert_single_fallback(
+        &self,
+        pages: &[BatchPage<'_>],
+    ) -> Result<Vec<(String, Outcome)>, BatchCallError> {
+        // Keep pages converted before a fatal status; the failing page and every
+        // remaining one carry that error (the caller then stops later batches).
+        let mut out = Vec::with_capacity(pages.len());
+        let mut fatal: Option<ConvertError> = None;
+        for page in pages {
+            let res = match &fatal {
+                Some(e) => Err(e.clone()),
+                None => self.convert(page.html.as_bytes(), page.origin),
+            };
+            if fatal.is_none()
+                && let Err(e) = &res
+                && is_fatal_status(e.status)
+            {
+                fatal = Some(e.clone());
+            }
+            out.push((page.id.to_owned(), res));
+        }
+        Ok(out)
+    }
+
+    fn send_batch(
+        &self,
+        pages: &[BatchPage<'_>],
+    ) -> Result<Vec<(String, Outcome)>, BatchCallError> {
+        if pages.is_empty() {
+            return Ok(Vec::new());
+        }
+        if self.batch_unsupported.load(Ordering::Relaxed) {
+            return self.convert_single_fallback(pages);
+        }
+        let wire_pages: Vec<WireBatchPage<'_>> = pages
+            .iter()
+            .map(|p| WireBatchPage {
+                id: p.id,
+                html: p.html,
+                origin: p.origin,
+            })
+            .collect();
+        let body = serde_json::to_vec(&WireBatchRequest { pages: &wire_pages }).map_err(|e| {
+            BatchCallError {
+                err: ConvertError::new(format!("cannot serialize markdown batch: {e}")),
+                retry_after_secs: None,
+            }
+        })?;
+
+        let mut result = self.post_batch(&body);
+        if matches!(result, Err(ureq::Error::Status(503, _))) {
+            result = self.post_batch(&body);
+        }
+        match result {
+            Ok(resp) if resp.status() == 200 => {
+                let parsed: WireBatchResponse = resp.into_json().map_err(|e| BatchCallError {
+                    err: ConvertError::new(format!("unreadable converter response: {e}")),
+                    retry_after_secs: None,
+                })?;
+                let mut by_id = HashMap::with_capacity(parsed.results.len());
+                for item in parsed.results {
+                    let outcome = match item.status {
+                        200 => match item.markdown {
+                            Some(md) if !md.trim().is_empty() => Ok(md),
+                            _ => Err(ConvertError::new("converter returned no content")),
+                        },
+                        code => Err(status_error(code, item.error.unwrap_or_default())),
+                    };
+                    by_id.insert(item.id, outcome);
+                }
+                Ok(pages
+                    .iter()
+                    .map(|p| {
+                        let outcome = by_id.remove(p.id).unwrap_or_else(|| {
+                            Err(ConvertError::new("converter omitted page result"))
+                        });
+                        (p.id.to_owned(), outcome)
+                    })
+                    .collect())
+            }
+            Ok(resp) if matches!(resp.status(), 404 | 405) => {
+                self.batch_unsupported.store(true, Ordering::Relaxed);
+                self.convert_single_fallback(pages)
+            }
+            Ok(resp) => {
+                let retry_after_secs = parse_retry_after(resp.header("retry-after"));
+                Err(BatchCallError {
+                    err: status_error(resp.status(), String::new()),
+                    retry_after_secs,
+                })
+            }
+            Err(ureq::Error::Status(404 | 405, _)) => {
+                self.batch_unsupported.store(true, Ordering::Relaxed);
+                self.convert_single_fallback(pages)
+            }
+            Err(ureq::Error::Status(code, resp)) => {
+                let retry_after_secs = if code == 429 {
+                    parse_retry_after(resp.header("retry-after"))
+                } else {
+                    None
+                };
+                let detail = resp
+                    .into_json::<serde_json::Value>()
+                    .ok()
+                    .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_owned))
+                    .unwrap_or_default();
+                Err(BatchCallError {
+                    err: status_error(code, detail),
+                    retry_after_secs,
+                })
+            }
+            Err(e) => Err(BatchCallError {
+                err: ConvertError::new(format!("converter unreachable: {e}")),
+                retry_after_secs: None,
+            }),
+        }
+    }
+}
+
+fn is_fatal_status(status: Option<u16>) -> bool {
+    matches!(status, Some(401 | 403 | 429))
+}
+
+/// `Retry-After` as seconds: delta-seconds, or an HTTP-date (RFC 9110) measured
+/// from now. Not clamped; the caller decides whether the wait is acceptable.
+fn parse_retry_after(raw: Option<&str>) -> Option<u64> {
+    let v = raw?.trim();
+    if let Ok(secs) = v.parse::<u64>() {
+        return Some(secs);
+    }
+    let when = chrono::DateTime::parse_from_rfc2822(v).ok()?;
+    let delta = when.signed_duration_since(chrono::Utc::now()).num_seconds();
+    Some(delta.max(0) as u64)
 }
 
 impl MarkdownConverter for HttpMarkdownConverter {
@@ -127,6 +377,26 @@ impl MarkdownConverter for HttpMarkdownConverter {
             }
             Err(e) => Err(ConvertError::new(format!("converter unreachable: {e}"))),
         }
+    }
+
+    fn convert_batch(&self, pages: &[BatchPage<'_>]) -> Result<BatchResults, ConvertError> {
+        self.send_batch(pages).map_err(|e| e.err)
+    }
+
+    fn batch_limits(&self) -> BatchLimits {
+        BatchLimits {
+            max_pages: BATCH_MAX_PAGES,
+            max_body_bytes: BATCH_TARGET_BYTES,
+            max_in_flight: BATCH_CONCURRENCY,
+        }
+    }
+
+    fn convert_batch_with_retry(
+        &self,
+        pages: &[BatchPage<'_>],
+    ) -> Result<BatchResults, BatchRetryErr> {
+        self.send_batch(pages)
+            .map_err(|e| (e.err, e.retry_after_secs))
     }
 }
 
@@ -217,13 +487,38 @@ pub fn add_markdown_siblings(
         .collect();
     pages.sort();
 
+    if pages.is_empty() {
+        return stage_siblings(tree, dir, std::iter::empty());
+    }
+
+    let limits = converter.batch_limits();
+    let results = if limits.max_pages <= 1 {
+        convert_single_pages(output_dir, &pages, origin, converter, limits.max_in_flight)
+    } else {
+        convert_batched_pages(output_dir, &pages, origin, converter, limits)
+    };
+
+    let converted = pages
+        .into_iter()
+        .zip(results)
+        .map(|((_, md_path), outcome)| (md_path, outcome));
+    stage_siblings(tree, dir, converted)
+}
+
+fn convert_single_pages(
+    output_dir: &Path,
+    pages: &[(String, String)],
+    origin: Option<&str>,
+    converter: &dyn MarkdownConverter,
+    concurrency: usize,
+) -> Vec<Outcome> {
     // Bounded concurrency; results keep page order so the output (and the
     // deploy payload) is deterministic. Only identical converter inputs share work.
     let results: Vec<Mutex<Option<Outcome>>> = pages.iter().map(|_| Mutex::new(None)).collect();
     let by_content = Mutex::new(HashMap::<_, Arc<OnceLock<Outcome>>>::new());
     let next = AtomicUsize::new(0);
     std::thread::scope(|s| {
-        for _ in 0..CONCURRENCY.min(pages.len()) {
+        for _ in 0..concurrency.max(1).min(pages.len()) {
             s.spawn(|| {
                 loop {
                     let i = next.fetch_add(1, Ordering::Relaxed);
@@ -255,14 +550,353 @@ pub fn add_markdown_siblings(
             });
         }
     });
-
-    let converted = pages
+    results
         .into_iter()
-        .zip(results)
-        .filter_map(|((_, path), result)| {
-            result.into_inner().unwrap().map(|outcome| (path, outcome))
-        });
-    stage_siblings(tree, dir, converted)
+        .map(|r| r.into_inner().unwrap().unwrap())
+        .collect()
+}
+
+/// Metadata only: the HTML is re-read when its batch is built, so memory stays
+/// bounded by the in-flight batches rather than the whole site.
+struct UniqueBatchPage {
+    path: String,
+    origin: Option<String>,
+    entry_bytes: usize,
+}
+
+fn serialized_entry_bytes(html: &str, origin: Option<&str>) -> usize {
+    // Use the max 2-digit batch id ("p24") so packed size never underestimates.
+    serde_json::to_string(&WireBatchPage {
+        id: "p24",
+        html,
+        origin,
+    })
+    .map(|s| s.len())
+    .unwrap_or(usize::MAX)
+}
+
+fn pack_batches(
+    uids: &[usize],
+    unique: &[UniqueBatchPage],
+    limits: BatchLimits,
+) -> Vec<Vec<usize>> {
+    let mut batches = Vec::new();
+    let mut current = Vec::new();
+    let mut current_bytes = ENVELOPE_BYTES;
+    for &uid in uids {
+        let entry_bytes = unique[uid].entry_bytes;
+        let sep = usize::from(!current.is_empty());
+        if !current.is_empty()
+            && (current.len() >= limits.max_pages
+                || current_bytes
+                    .saturating_add(sep)
+                    .saturating_add(entry_bytes)
+                    > limits.max_body_bytes)
+        {
+            batches.push(std::mem::take(&mut current));
+            current_bytes = ENVELOPE_BYTES;
+        }
+        let sep = usize::from(!current.is_empty());
+        current.push(uid);
+        current_bytes = current_bytes
+            .saturating_add(sep)
+            .saturating_add(entry_bytes);
+    }
+    if !current.is_empty() {
+        batches.push(current);
+    }
+    batches
+}
+
+#[derive(Default)]
+struct BatchRunState {
+    fatal_error: Mutex<Option<ConvertError>>,
+    /// (total seconds spent waiting, end of the current rate-limit window)
+    cooldown: Mutex<(u64, Option<Instant>)>,
+}
+
+impl BatchRunState {
+    fn fatal(&self) -> Option<ConvertError> {
+        self.fatal_error.lock().unwrap().clone()
+    }
+
+    fn set_fatal(&self, err: ConvertError) {
+        let mut guard = self.fatal_error.lock().unwrap();
+        if guard.is_none() {
+            *guard = Some(err);
+        }
+    }
+
+    fn wait_cooldown_if_any(&self) {
+        let until = self.cooldown.lock().unwrap().1;
+        if let Some(target) = until {
+            let now = Instant::now();
+            if target > now {
+                std::thread::sleep(target - now);
+            }
+        }
+    }
+
+    fn schedule_rate_limit_wait(&self, secs: u64) -> bool {
+        let target = {
+            let mut guard = self.cooldown.lock().unwrap();
+            let now = Instant::now();
+            if let Some(existing) = guard.1
+                && existing > now
+            {
+                existing
+            } else if secs <= MAX_RETRY_AFTER_SECS
+                && guard.0.saturating_add(secs) <= MAX_TOTAL_RATE_LIMIT_WAIT_SECS
+            {
+                // A new window: allowed while the run's total wait budget lasts.
+                guard.0 += secs;
+                let next = now + Duration::from_secs(secs);
+                guard.1 = Some(next);
+                next
+            } else {
+                return false;
+            }
+        };
+        let now = Instant::now();
+        if target > now {
+            std::thread::sleep(target - now);
+        }
+        true
+    }
+}
+
+fn convert_batched_pages(
+    output_dir: &Path,
+    pages: &[(String, String)],
+    origin: Option<&str>,
+    converter: &dyn MarkdownConverter,
+    limits: BatchLimits,
+) -> Vec<Outcome> {
+    let mut local_outcomes: Vec<Option<Outcome>> = vec![None; pages.len()];
+    let mut page_to_uid: Vec<Option<usize>> = vec![None; pages.len()];
+    let mut unique: Vec<UniqueBatchPage> = Vec::new();
+    let mut dedupe: HashMap<(String, Option<String>), usize> = HashMap::new();
+    let max_single_request = limits
+        .max_body_bytes
+        .saturating_add(BATCH_HARD_LIMIT_SLACK_BYTES);
+
+    for (i, (html_path, _)) in pages.iter().enumerate() {
+        match std::fs::read(output_dir.join(html_path.trim_start_matches('/'))) {
+            Err(e) => {
+                local_outcomes[i] = Some(Err(ConvertError::new(format!(
+                    "cannot read {html_path}: {e}"
+                ))));
+            }
+            Ok(bytes) if bytes.len() > MAX_HTML_BYTES => {
+                local_outcomes[i] = Some(Err(ConvertError::new(format!(
+                    "{html_path} is over the {MAX_HTML_BYTES} byte limit"
+                ))));
+            }
+            Ok(bytes) => match String::from_utf8(bytes) {
+                Err(_) => {
+                    local_outcomes[i] = Some(Err(ConvertError::new(format!(
+                        "{html_path} is not valid UTF-8"
+                    ))));
+                }
+                Ok(html) => {
+                    let url = origin.and_then(|o| page_url(o, html_path));
+                    let key = (blob_id(html.as_bytes()), url.clone());
+                    if let Some(&uid) = dedupe.get(&key) {
+                        page_to_uid[i] = Some(uid);
+                        continue;
+                    }
+                    let entry_bytes = serialized_entry_bytes(&html, url.as_deref());
+                    if entry_bytes.saturating_add(ENVELOPE_BYTES) > max_single_request {
+                        local_outcomes[i] = Some(Err(ConvertError::new(format!(
+                            "{html_path} is too large to convert once JSON-encoded"
+                        ))));
+                        continue;
+                    }
+                    let uid = unique.len();
+                    unique.push(UniqueBatchPage {
+                        path: html_path.clone(),
+                        origin: url,
+                        entry_bytes,
+                    });
+                    dedupe.insert(key, uid);
+                    page_to_uid[i] = Some(uid);
+                }
+            },
+        }
+    }
+
+    let unique_outcomes: Vec<Mutex<Option<Outcome>>> =
+        (0..unique.len()).map(|_| Mutex::new(None)).collect();
+    let state = BatchRunState::default();
+    if !unique.is_empty() {
+        let all_uids: Vec<usize> = (0..unique.len()).collect();
+        let batches = pack_batches(&all_uids, &unique, limits);
+        let retry_503 = run_batch_wave(
+            output_dir,
+            &batches,
+            &unique,
+            converter,
+            limits.max_in_flight,
+            &state,
+            &unique_outcomes,
+            true,
+        );
+        if !retry_503.is_empty() && state.fatal().is_none() {
+            let retry_batches = pack_batches(&retry_503, &unique, limits);
+            let _ = run_batch_wave(
+                output_dir,
+                &retry_batches,
+                &unique,
+                converter,
+                limits.max_in_flight,
+                &state,
+                &unique_outcomes,
+                false,
+            );
+        }
+    }
+
+    let final_outcomes: Vec<Option<Outcome>> = unique_outcomes
+        .into_iter()
+        .map(|slot| slot.into_inner().unwrap())
+        .collect();
+    let fallback_err = state.fatal();
+    local_outcomes
+        .into_iter()
+        .zip(page_to_uid)
+        .map(|(local, uid)| {
+            local.unwrap_or_else(|| {
+                final_outcomes[uid.unwrap()].clone().unwrap_or_else(|| {
+                    Err(fallback_err
+                        .clone()
+                        .unwrap_or_else(|| ConvertError::new("converter returned no result")))
+                })
+            })
+        })
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)] // one internal call site; a context struct would only add indirection
+fn run_batch_wave(
+    output_dir: &Path,
+    batches: &[Vec<usize>],
+    unique: &[UniqueBatchPage],
+    converter: &dyn MarkdownConverter,
+    max_in_flight: usize,
+    state: &BatchRunState,
+    unique_outcomes: &[Mutex<Option<Outcome>>],
+    allow_503_retry: bool,
+) -> Vec<usize> {
+    let retry_503 = Mutex::new(Vec::new());
+    let next = AtomicUsize::new(0);
+    std::thread::scope(|s| {
+        for _ in 0..max_in_flight.max(1).min(batches.len()) {
+            s.spawn(|| {
+                loop {
+                    let bi = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(batch) = batches.get(bi) else {
+                        break;
+                    };
+                    if let Some(err) = state.fatal() {
+                        for &uid in batch {
+                            *unique_outcomes[uid].lock().unwrap() = Some(Err(err.clone()));
+                        }
+                        continue;
+                    }
+                    state.wait_cooldown_if_any();
+                    if let Some(err) = state.fatal() {
+                        for &uid in batch {
+                            *unique_outcomes[uid].lock().unwrap() = Some(Err(err.clone()));
+                        }
+                        continue;
+                    }
+
+                    let mut loaded: Vec<(usize, String)> = Vec::with_capacity(batch.len());
+                    for &uid in batch {
+                        let path = &unique[uid].path;
+                        match std::fs::read_to_string(output_dir.join(path.trim_start_matches('/')))
+                        {
+                            Ok(html) => loaded.push((uid, html)),
+                            Err(e) => {
+                                *unique_outcomes[uid].lock().unwrap() = Some(Err(
+                                    ConvertError::new(format!("cannot read {path}: {e}")),
+                                ));
+                            }
+                        }
+                    }
+                    if loaded.is_empty() {
+                        continue;
+                    }
+
+                    let ids: Vec<String> = (0..loaded.len()).map(|idx| format!("p{idx}")).collect();
+                    let wire: Vec<BatchPage<'_>> = loaded
+                        .iter()
+                        .zip(&ids)
+                        .map(|((uid, html), id)| BatchPage {
+                            id: id.as_str(),
+                            html: html.as_str(),
+                            origin: unique[*uid].origin.as_deref(),
+                        })
+                        .collect();
+
+                    let mut retried_429 = false;
+                    let response = loop {
+                        match converter.convert_batch_with_retry(&wire) {
+                            Ok(res) => break Ok(res),
+                            Err((err, Some(secs)))
+                                if err.status == Some(429)
+                                    && !retried_429
+                                    && state.schedule_rate_limit_wait(secs) =>
+                            {
+                                retried_429 = true;
+                                // Another batch may have gone fatal while we slept.
+                                if let Some(e) = state.fatal() {
+                                    break Err(e);
+                                }
+                            }
+                            Err((err, _)) => break Err(err),
+                        }
+                    };
+
+                    match response {
+                        Ok(items) => {
+                            let mut by_id: HashMap<String, Outcome> = items.into_iter().collect();
+                            for ((uid, _), id) in loaded.iter().zip(&ids) {
+                                let uid = *uid;
+                                let outcome = by_id.remove(id).unwrap_or_else(|| {
+                                    Err(ConvertError::new("converter omitted page result"))
+                                });
+                                // A per-item 429 only costs that page; 401/403 mean the
+                                // whole run is unauthorized.
+                                if let Err(e) = &outcome
+                                    && matches!(e.status, Some(401 | 403))
+                                {
+                                    state.set_fatal(e.clone());
+                                }
+                                if allow_503_retry
+                                    && matches!(&outcome, Err(e) if e.status == Some(503))
+                                {
+                                    retry_503.lock().unwrap().push(uid);
+                                } else {
+                                    *unique_outcomes[uid].lock().unwrap() = Some(outcome);
+                                }
+                            }
+                        }
+                        Err(err) => {
+                            if is_fatal_status(err.status) {
+                                state.set_fatal(err.clone());
+                            }
+                            for (uid, _) in &loaded {
+                                let uid = *uid;
+                                *unique_outcomes[uid].lock().unwrap() = Some(Err(err.clone()));
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    });
+    retry_503.into_inner().unwrap()
 }
 
 fn stage_siblings(

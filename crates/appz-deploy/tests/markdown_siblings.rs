@@ -526,3 +526,497 @@ fn http_null_or_empty_markdown_is_an_error() {
     let c = HttpMarkdownConverter::new(&base, None);
     assert!(c.convert(b"<h1>x</h1>", None).is_err());
 }
+
+// ---- batch converter over a local mock server ----
+
+type ReqLog = Arc<Mutex<Vec<(String, String)>>>;
+
+fn mock_batch_server(
+    respond: impl Fn(&str, &str, usize) -> (u16, Vec<(&'static str, &'static str)>, String)
+    + Send
+    + Sync
+    + 'static,
+) -> (String, ReqLog) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let log: ReqLog = Arc::default();
+    let seen = log.clone();
+    let respond = Arc::new(respond);
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut sock) = stream else { break };
+            let seen = seen.clone();
+            let respond = respond.clone();
+            std::thread::spawn(move || {
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 4096];
+                let (head_end, len) = loop {
+                    let n = sock.read(&mut chunk).unwrap_or(0);
+                    if n == 0 {
+                        break (buf.len(), 0);
+                    }
+                    buf.extend_from_slice(&chunk[..n]);
+                    if let Some(p) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let head = String::from_utf8_lossy(&buf[..p]).to_lowercase();
+                        let len = head
+                            .lines()
+                            .find_map(|l| l.strip_prefix("content-length: "))
+                            .and_then(|v| v.trim().parse::<usize>().ok())
+                            .unwrap_or(0);
+                        break (p + 4, len);
+                    }
+                };
+                while buf.len() < head_end + len {
+                    let n = sock.read(&mut chunk).unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    buf.extend_from_slice(&chunk[..n]);
+                }
+                let head = String::from_utf8_lossy(&buf[..head_end.min(buf.len())]).into_owned();
+                let body = String::from_utf8_lossy(
+                    &buf[head_end.min(buf.len())..(head_end + len).min(buf.len())],
+                )
+                .into_owned();
+                let index = {
+                    let mut l = seen.lock().unwrap();
+                    l.push((head.clone(), body.clone()));
+                    l.len() - 1
+                };
+                let (status, headers, resp_body) = respond(&head, &body, index);
+                let mut extra = String::new();
+                for (k, v) in headers {
+                    extra.push_str(&format!("{k}: {v}\r\n"));
+                }
+                let _ = write!(
+                    sock,
+                    "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{extra}Connection: close\r\n\r\n{resp_body}",
+                    resp_body.len()
+                );
+            });
+        }
+    });
+    (base, log)
+}
+
+#[test]
+fn batch_packs_by_count_maps_by_id_dedupes_hashes_and_caps_concurrency() {
+    // 27 unique pages + 3 duplicates of page 0 -> 27 unique pages sent across 2 batches (25 + 2).
+    let mut files = Vec::new();
+    let mut contents = Vec::new();
+    for i in 0..27 {
+        contents.push((format!("p{i:02}.html"), page(&i.to_string())));
+    }
+    let dup = page("0");
+    for d in 0..3 {
+        contents.push((format!("dup{d}.html"), dup.clone()));
+    }
+    for (p, b) in &contents {
+        files.push((p.as_str(), b.as_str()));
+    }
+    let dir = site(&files);
+
+    let active = Arc::new(AtomicUsize::new(0));
+    let peak = Arc::new(AtomicUsize::new(0));
+    let (active_c, peak_c) = (active.clone(), peak.clone());
+
+    let (base, log) = mock_batch_server(move |head, body, _| {
+        assert!(
+            head.to_lowercase()
+                .starts_with("post /api/v0/markdown/convert-batch ")
+        );
+        assert!(head.to_lowercase().contains("authorization: bearer tok"));
+        let cur = active_c.fetch_add(1, Ordering::SeqCst) + 1;
+        peak_c.fetch_max(cur, Ordering::SeqCst);
+        std::thread::sleep(std::time::Duration::from_millis(25));
+
+        let req: serde_json::Value = serde_json::from_str(body).unwrap();
+        let pages = req["pages"].as_array().unwrap();
+        // Return results in REVERSE order to verify ID-based (not positional) mapping.
+        let results: Vec<serde_json::Value> = pages
+            .iter()
+            .rev()
+            .map(|p| {
+                let id = p["id"].as_str().unwrap();
+                let html = p["html"].as_str().unwrap();
+                let origin = p.get("origin").and_then(|o| o.as_str()).unwrap_or("-");
+                serde_json::json!({
+                    "id": id,
+                    "status": 200,
+                    "markdown": format!("# Converted {html} @ {origin}\n"),
+                    "tokens": 5,
+                    "mode": "minimal",
+                })
+            })
+            .collect();
+        active_c.fetch_sub(1, Ordering::SeqCst);
+        let resp = serde_json::json!({ "results": results });
+        (200, vec![], resp.to_string())
+    });
+
+    let c = HttpMarkdownConverter::new(&base, Some("tok"));
+    let mut tree = scan_output_dir(dir.path()).unwrap();
+    let guard = add_markdown_siblings(dir.path(), &mut tree, None, &c).unwrap();
+    assert_eq!((guard.generated, guard.skipped), (30, 0));
+    assert!(guard.warning().is_none());
+    assert!(
+        peak.load(Ordering::SeqCst) <= 2,
+        "peak={}",
+        peak.load(Ordering::SeqCst)
+    );
+
+    let calls = log.lock().unwrap();
+    assert_eq!(calls.len(), 2);
+    let mut counts: Vec<usize> = calls
+        .iter()
+        .map(|(_, b)| {
+            serde_json::from_str::<serde_json::Value>(b).unwrap()["pages"]
+                .as_array()
+                .unwrap()
+                .len()
+        })
+        .collect();
+    counts.sort();
+    assert_eq!(counts, vec![2, 25]);
+    assert!(read_md(&tree, "/p07.md").contains("Page 7"));
+    assert!(read_md(&tree, "/dup2.md").contains("Page 0"));
+}
+
+#[test]
+fn batch_packs_by_serialized_size_and_isolates_oversized_escaped_page() {
+    // 2 pages of ~1.9 MB each -> ~3.8 MB combined > 3.5 MB target -> must split into 2 batches.
+    // Plus 1 page of ~1.9 MB full of `"` (escapes to ~3.8 MB > 3.5 MB target) -> isolated in its own batch.
+    let big_plain = format!("<h1>plain</h1>{}", "a".repeat(1_850_000));
+    let big_quotes = format!("<h1>q</h1>{}", "\"".repeat(1_850_000));
+    let dir = site(&[
+        ("a.html", &big_plain),
+        ("b.html", &format!("<h1>b</h1>{}", "b".repeat(1_850_000))),
+        ("q.html", &big_quotes),
+    ]);
+
+    let (base, log) = mock_batch_server(|_, body, _| {
+        let req: serde_json::Value = serde_json::from_str(body).unwrap();
+        let results: Vec<_> = req["pages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| {
+                serde_json::json!({
+                    "id": p["id"],
+                    "status": 200,
+                    "markdown": "# ok\n",
+                    "tokens": 2,
+                    "mode": "minimal",
+                })
+            })
+            .collect();
+        (
+            200,
+            vec![],
+            serde_json::json!({ "results": results }).to_string(),
+        )
+    });
+
+    let c = HttpMarkdownConverter::new(&base, None);
+    let mut tree = scan_output_dir(dir.path()).unwrap();
+    let guard = add_markdown_siblings(dir.path(), &mut tree, None, &c).unwrap();
+    assert_eq!((guard.generated, guard.skipped), (3, 0));
+    let calls = log.lock().unwrap();
+    assert_eq!(
+        calls.len(),
+        3,
+        "each ~1.9MB/escaped page isolated under 3.5MB"
+    );
+    for (_, b) in calls.iter() {
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(b).unwrap()["pages"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+}
+
+#[test]
+fn batch_handles_partial_failures_and_retries_503_once() {
+    let dir = site(&[
+        ("a_ok.html", &page("ok")),
+        ("b_422.html", &page("bad422")),
+        ("c_503_recover.html", &page("retry_ok")),
+        ("d_503_stay.html", &page("retry_fail")),
+    ]);
+
+    let (base, log) = mock_batch_server(|_, body, idx| {
+        let req: serde_json::Value = serde_json::from_str(body).unwrap();
+        let results: Vec<_> = req["pages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| {
+                let id = p["id"].as_str().unwrap();
+                let html = p["html"].as_str().unwrap();
+                if html.contains("bad422") {
+                    serde_json::json!({ "id": id, "status": 422, "error": "unconvertible" })
+                } else if html.contains("retry_ok") && idx == 0 {
+                    serde_json::json!({ "id": id, "status": 503, "error": "timeout" })
+                } else if html.contains("retry_fail") {
+                    serde_json::json!({ "id": id, "status": 503, "error": "still down" })
+                } else {
+                    serde_json::json!({ "id": id, "status": 200, "markdown": "# Recovered\n", "tokens": 2, "mode": "minimal" })
+                }
+            })
+            .collect();
+        (
+            200,
+            vec![],
+            serde_json::json!({ "results": results }).to_string(),
+        )
+    });
+
+    let c = HttpMarkdownConverter::new(&base, None);
+    let mut tree = scan_output_dir(dir.path()).unwrap();
+    let guard = add_markdown_siblings(dir.path(), &mut tree, None, &c).unwrap();
+    assert_eq!((guard.generated, guard.skipped), (2, 2));
+    assert_eq!(log.lock().unwrap().len(), 2, "wave 1 + one 503 retry wave");
+    let all = paths(&tree);
+    assert!(all.contains(&"/a_ok.md".to_string()));
+    assert!(all.contains(&"/c_503_recover.md".to_string()));
+    assert!(!all.contains(&"/b_422.md".to_string()));
+    assert!(!all.contains(&"/d_503_stay.md".to_string()));
+}
+
+#[test]
+fn batch_403_and_429_stop_remaining_batches_and_emit_one_warning() {
+    // 26 unique pages -> 2 batches; batch 0 returns 403 -> batch 1 must not be sent.
+    let contents: Vec<(String, String)> = (0..26)
+        .map(|i| (format!("p{i:02}.html"), page(&i.to_string())))
+        .collect();
+    let files: Vec<(&str, &str)> = contents
+        .iter()
+        .map(|(p, b)| (p.as_str(), b.as_str()))
+        .collect();
+    let dir = site(&files);
+
+    let (base_403, log_403) =
+        mock_batch_server(|_, _, _| (403, vec![], r#"{"error":"not entitled"}"#.into()));
+    let c = HttpMarkdownConverter::new(&base_403, Some("tok"));
+    let mut tree = scan_output_dir(dir.path()).unwrap();
+    let guard = add_markdown_siblings(dir.path(), &mut tree, None, &c).unwrap();
+    assert_eq!((guard.generated, guard.skipped), (0, 26));
+    assert!(log_403.lock().unwrap().len() <= 2);
+    let w = guard.warning().unwrap();
+    assert!(w.contains("26 pages") && w.contains("HTTP 403"), "{w}");
+
+    // 429 with Retry-After: 0 waits and retries once; if still 429, stops cleanly with one warning.
+    let (base_429, log_429) = mock_batch_server(|_, _, _| {
+        (
+            429,
+            vec![("Retry-After", "0")],
+            r#"{"error":"slow down"}"#.into(),
+        )
+    });
+    let c = HttpMarkdownConverter::new(&base_429, Some("tok"));
+    let mut tree = scan_output_dir(dir.path()).unwrap();
+    let guard = add_markdown_siblings(dir.path(), &mut tree, None, &c).unwrap();
+    assert_eq!((guard.generated, guard.skipped), (0, 26));
+    assert!(log_429.lock().unwrap().len() <= 4); // each in-flight batch may retry once
+    let w = guard.warning().unwrap();
+    assert!(w.contains("26 pages") && w.contains("HTTP 429"), "{w}");
+}
+
+#[test]
+fn batch_404_falls_back_to_single_page_endpoint() {
+    let (a, b) = (page("a"), page("b"));
+    let dir = site(&[("a.html", &a), ("b.html", &b)]);
+    let (base, log) = mock_batch_server(|head, _, _| {
+        if head
+            .to_lowercase()
+            .starts_with("post /api/v0/markdown/convert-batch ")
+        {
+            (404, vec![], r#"{"error":"not found"}"#.into())
+        } else {
+            (200, vec![], OK_BODY.into())
+        }
+    });
+    let c = HttpMarkdownConverter::new(&base, None);
+    let mut tree = scan_output_dir(dir.path()).unwrap();
+    let guard = add_markdown_siblings(dir.path(), &mut tree, None, &c).unwrap();
+    assert_eq!((guard.generated, guard.skipped), (2, 0));
+    let heads: Vec<String> = log
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(h, _)| h.lines().next().unwrap().to_lowercase())
+        .collect();
+    assert!(heads[0].starts_with("post /api/v0/markdown/convert-batch "));
+    assert_eq!(
+        heads
+            .iter()
+            .filter(|h| h.starts_with("post /api/v0/markdown/convert "))
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn batch_fallback_keeps_pages_converted_before_a_fatal_status() {
+    let dir = site(&[
+        ("a.html", &page("a")),
+        ("b.html", &page("b")),
+        ("c.html", &page("boom")),
+        ("d.html", &page("d")),
+    ]);
+    let (base, log) = mock_batch_server(|head, body, _| {
+        if head
+            .to_lowercase()
+            .starts_with("post /api/v0/markdown/convert-batch ")
+        {
+            (404, vec![], r#"{"error":"not found"}"#.into())
+        } else if body.contains("boom") {
+            (429, vec![], r#"{"error":"slow down"}"#.into())
+        } else {
+            (200, vec![], OK_BODY.into())
+        }
+    });
+    let c = HttpMarkdownConverter::new(&base, None);
+    let mut tree = scan_output_dir(dir.path()).unwrap();
+    let guard = add_markdown_siblings(dir.path(), &mut tree, None, &c).unwrap();
+    assert_eq!((guard.generated, guard.skipped), (2, 2));
+    let all = paths(&tree);
+    assert!(all.contains(&"/a.md".to_string()) && all.contains(&"/b.md".to_string()));
+    assert!(guard.warning().unwrap().contains("HTTP 429"));
+    // batch attempt + a + b + boom; `d` is never sent after the fatal 429.
+    assert_eq!(log.lock().unwrap().len(), 4);
+}
+
+#[test]
+fn batch_5xx_other_than_503_is_not_retried() {
+    let dir = site(&[("a.html", &page("a"))]);
+    let (base, log) = mock_batch_server(|_, _, _| (504, vec![], r#"{"error":"gateway"}"#.into()));
+    let c = HttpMarkdownConverter::new(&base, None);
+    let mut tree = scan_output_dir(dir.path()).unwrap();
+    let guard = add_markdown_siblings(dir.path(), &mut tree, None, &c).unwrap();
+    assert_eq!((guard.generated, guard.skipped), (0, 1));
+    assert_eq!(log.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn batch_whole_503_is_retried_once_in_call() {
+    let dir = site(&[("a.html", &page("a"))]);
+    let (base, log) = mock_batch_server(|_, body, idx| {
+        if idx == 0 {
+            return (503, vec![], r#"{"error":"busy"}"#.into());
+        }
+        let req: serde_json::Value = serde_json::from_str(body).unwrap();
+        let id = req["pages"][0]["id"].clone();
+        let r = serde_json::json!({"results":[{"id":id,"status":200,"markdown":"# ok\n"}]});
+        (200, vec![], r.to_string())
+    });
+    let c = HttpMarkdownConverter::new(&base, None);
+    let mut tree = scan_output_dir(dir.path()).unwrap();
+    let guard = add_markdown_siblings(dir.path(), &mut tree, None, &c).unwrap();
+    assert_eq!((guard.generated, guard.skipped), (1, 0));
+    assert_eq!(log.lock().unwrap().len(), 2);
+}
+
+/// 429 once per distinct first page (i.e. once per batch), then success.
+fn rate_limit_each_batch_once(retry_after: &'static str) -> (String, ReqLog) {
+    let seen = Mutex::new(std::collections::HashSet::<String>::new());
+    mock_batch_server(move |_, body, _| {
+        let req: serde_json::Value = serde_json::from_str(body).unwrap();
+        let first = req["pages"][0]["html"].as_str().unwrap().to_owned();
+        if seen.lock().unwrap().insert(first) {
+            return (
+                429,
+                vec![("Retry-After", retry_after)],
+                r#"{"error":"slow"}"#.into(),
+            );
+        }
+        let results: Vec<_> = req["pages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| serde_json::json!({"id": p["id"], "status": 200, "markdown": "# ok\n"}))
+            .collect();
+        (
+            200,
+            vec![],
+            serde_json::json!({ "results": results }).to_string(),
+        )
+    })
+}
+
+fn many_pages_site(n: usize) -> TempDir {
+    let contents: Vec<(String, String)> = (0..n)
+        .map(|i| (format!("p{i:03}.html"), page(&i.to_string())))
+        .collect();
+    let files: Vec<(&str, &str)> = contents
+        .iter()
+        .map(|(p, b)| (p.as_str(), b.as_str()))
+        .collect();
+    site(&files)
+}
+
+#[test]
+fn batch_honors_a_later_rate_limit_window() {
+    // 51 pages -> 3 batches; each gets one 429 (Retry-After: 0) then succeeds.
+    let dir = many_pages_site(51);
+    let (base, _log) = rate_limit_each_batch_once("0");
+    let c = HttpMarkdownConverter::new(&base, None);
+    let mut tree = scan_output_dir(dir.path()).unwrap();
+    let guard = add_markdown_siblings(dir.path(), &mut tree, None, &c).unwrap();
+    assert_eq!((guard.generated, guard.skipped), (51, 0));
+}
+
+#[test]
+fn batch_retry_after_http_date_is_honored() {
+    let dir = many_pages_site(3);
+    let (base, log) = rate_limit_each_batch_once("Wed, 21 Oct 2015 07:28:00 GMT");
+    let c = HttpMarkdownConverter::new(&base, None);
+    let mut tree = scan_output_dir(dir.path()).unwrap();
+    let guard = add_markdown_siblings(dir.path(), &mut tree, None, &c).unwrap();
+    assert_eq!((guard.generated, guard.skipped), (3, 0));
+    assert_eq!(log.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn batch_retry_after_beyond_the_cap_is_not_retried_early() {
+    let dir = many_pages_site(3);
+    let (base, log) = rate_limit_each_batch_once("300");
+    let c = HttpMarkdownConverter::new(&base, None);
+    let mut tree = scan_output_dir(dir.path()).unwrap();
+    let guard = add_markdown_siblings(dir.path(), &mut tree, None, &c).unwrap();
+    assert_eq!((guard.generated, guard.skipped), (0, 3));
+    assert_eq!(log.lock().unwrap().len(), 1);
+    assert!(guard.warning().unwrap().contains("HTTP 429"));
+}
+
+#[test]
+fn batch_page_too_large_once_encoded_is_skipped_locally() {
+    // 2.05 MB of quotes is under MAX_HTML_BYTES but JSON-escapes past ~4 MB.
+    let huge = format!("<h1>q</h1>{}", "\"".repeat(2_050_000));
+    assert!(huge.len() < MAX_HTML_BYTES);
+    let dir = site(&[("q.html", &huge), ("ok.html", &page("ok"))]);
+    let (base, log) = mock_batch_server(|_, body, _| {
+        let req: serde_json::Value = serde_json::from_str(body).unwrap();
+        let results: Vec<_> = req["pages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| serde_json::json!({"id": p["id"], "status": 200, "markdown": "# ok\n"}))
+            .collect();
+        (
+            200,
+            vec![],
+            serde_json::json!({ "results": results }).to_string(),
+        )
+    });
+    let c = HttpMarkdownConverter::new(&base, None);
+    let mut tree = scan_output_dir(dir.path()).unwrap();
+    let guard = add_markdown_siblings(dir.path(), &mut tree, None, &c).unwrap();
+    assert_eq!((guard.generated, guard.skipped), (1, 1));
+    assert!(!paths(&tree).contains(&"/q.md".to_string()));
+    assert_eq!(log.lock().unwrap().len(), 1, "only the small page is sent");
+}

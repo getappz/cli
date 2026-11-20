@@ -255,15 +255,15 @@ async fn try_html_fallback(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEST_SEQ: AtomicU64 = AtomicU64::new(0);
 
     fn make_temp_pair() -> (PathBuf, PathBuf) {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
+        let seq = TEST_SEQ.fetch_add(1, Ordering::Relaxed);
         let base =
-            std::env::temp_dir().join(format!("appz-serve-sec-{}-{nonce}", std::process::id()));
+            std::env::temp_dir().join(format!("appz-serve-sec-{}-{seq}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
         let root = base.join("site");
         let outside = base.join("outside");
         std::fs::create_dir_all(&root).unwrap();

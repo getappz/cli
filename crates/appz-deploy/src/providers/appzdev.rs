@@ -46,6 +46,7 @@ pub(crate) fn negotiate_payload(
     payload
 }
 
+const DEPLOY_USER_AGENT: &str = concat!("appz-cli/", env!("CARGO_PKG_VERSION"));
 const DEFAULT_API_URL: &str = "https://api.appz.dev";
 
 /// Normalizes a project id or name into a valid edge project slug:
@@ -861,7 +862,7 @@ impl AppzdevProvider {
 
         // Step 1: POST /api/v0/deployments - Handshake & missing blob diff
         let create_url = format!("{}/api/v0/deployments", api_base);
-        let mut req = ureq::post(&create_url);
+        let mut req = ureq::post(&create_url).set("User-Agent", DEPLOY_USER_AGENT);
         if let Some(token) = &token_opt {
             req = req.set("Authorization", &format!("Bearer {token}"));
         }
@@ -940,6 +941,7 @@ impl AppzdevProvider {
             let next_idx = AtomicUsize::new(0);
             let upload_error = Mutex::new(None::<String>);
             let agent = ureq::builder()
+                .user_agent(DEPLOY_USER_AGENT)
                 .timeout_read(Duration::from_secs(30))
                 .timeout_write(Duration::from_secs(30))
                 .max_idle_connections(32)
@@ -1074,7 +1076,7 @@ impl AppzdevProvider {
         // Step 3: Commit deployment if blobs were uploaded, or if inline publish failed on 500
         let final_url = if !missing.is_empty() || inline_publish_failed {
             let commit_url = format!("{}/api/v0/deployments/{}/commit", api_base, deployment_id);
-            let mut commit_req = ureq::post(&commit_url);
+            let mut commit_req = ureq::post(&commit_url).set("User-Agent", DEPLOY_USER_AGENT);
             if let Some(token) = &token_opt {
                 commit_req = commit_req.set("Authorization", &format!("Bearer {token}"));
             }
@@ -1726,12 +1728,16 @@ SPACED=hello world
                             }
 
                             let mut content_length = 0;
+                            let mut user_agent = String::new();
                             loop {
                                 let mut line = String::new();
                                 if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
                                     break;
                                 }
                                 let lower = line.to_lowercase();
+                                if lower.starts_with("user-agent:") {
+                                    user_agent = line["user-agent:".len()..].trim().to_owned();
+                                }
                                 if let Some(val) = lower.strip_prefix("content-length:") {
                                     content_length = val.trim().parse::<usize>().unwrap_or(0);
                                 }
@@ -1746,6 +1752,15 @@ SPACED=hello world
                             let method = parts.first().copied().unwrap_or("");
                             let path = parts.get(1).copied().unwrap_or("");
 
+                            if matches!((method, path), ("POST", "/api/v0/deployments"))
+                                || (method == "PUT" && path.contains("/files/"))
+                                || (method == "POST" && path.ends_with("/commit"))
+                            {
+                                assert_eq!(
+                                    user_agent,
+                                    format!("appz-cli/{}", env!("CARGO_PKG_VERSION"))
+                                );
+                            }
                             let handshake;
                             let (status, resp_body) = if method == "POST"
                                 && path == "/api/v0/deployments"

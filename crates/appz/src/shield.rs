@@ -1,7 +1,9 @@
+use rand::RngCore;
+use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -61,6 +63,8 @@ impl ShieldGateway {
         let stop_flag = Arc::new(AtomicBool::new(false));
         let stop_clone = Arc::clone(&stop_flag);
 
+        let pin_token = config.pin.as_deref().map(generate_pin_session_token);
+        let throttle = Arc::new(UnlockThrottle::default());
         let config = Arc::new(config);
         let handle = thread::spawn(move || {
             let created_at = Instant::now();
@@ -77,11 +81,19 @@ impl ShieldGateway {
                 let _ = client_stream.set_read_timeout(Some(Duration::from_secs(5)));
                 let _ = client_stream.set_write_timeout(Some(Duration::from_secs(5)));
                 let config = Arc::clone(&config);
+                let pin_token = pin_token.clone();
+                let throttle = Arc::clone(&throttle);
                 // fire-and-forget: one connection, ends when either side closes.
                 // A thread each so a slow or long-lived (websocket) connection
                 // does not stall the others.
                 thread::spawn(move || {
-                    handle_connection(&mut client_stream, &config, created_at);
+                    handle_connection(
+                        &mut client_stream,
+                        &config,
+                        created_at,
+                        pin_token.as_deref(),
+                        &throttle,
+                    );
                 });
             }
         });
@@ -115,14 +127,88 @@ pub fn is_expired(created_at: Instant, ttl: Duration) -> bool {
     created_at.elapsed() >= ttl
 }
 
-/// Check if the HTTP Cookie header contains a valid `appz_pin=<pin>` cookie
-pub fn check_pin_cookie(headers: &str, expected_pin: &str) -> bool {
-    for line in headers.lines() {
-        if let Some(cookie_val) = line.strip_prefix("Cookie:") {
+const MAX_PIN_ATTEMPTS: u32 = 5;
+const PIN_LOCKOUT_SECS: u64 = 30;
+const MAX_UNLOCK_BODY: usize = 4096;
+
+#[derive(Default)]
+struct UnlockThrottle {
+    state: Mutex<(u32, Option<Instant>)>,
+}
+
+impl UnlockThrottle {
+    fn remaining_lockout_secs(&self) -> Option<u64> {
+        let mut guard = self.state.lock().unwrap();
+        let until = guard.1?;
+        let now = Instant::now();
+        if until > now {
+            Some((until - now).as_secs().max(1))
+        } else {
+            guard.1 = None;
+            None
+        }
+    }
+
+    fn record_failure(&self) {
+        let mut guard = self.state.lock().unwrap();
+        guard.0 = guard.0.saturating_add(1);
+        if guard.0 >= MAX_PIN_ATTEMPTS {
+            guard.0 = 0;
+            guard.1 = Some(Instant::now() + Duration::from_secs(PIN_LOCKOUT_SECS));
+        }
+    }
+
+    fn reset(&self) {
+        let mut guard = self.state.lock().unwrap();
+        guard.0 = 0;
+        guard.1 = None;
+    }
+}
+
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (&x, &y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+fn generate_pin_session_token(pin: &str) -> String {
+    let mut secret = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut secret);
+    let mut hasher = Sha256::new();
+    hasher.update(secret);
+    hasher.update(b":");
+    hasher.update(pin.as_bytes());
+    let digest = hasher.finalize();
+    let mut out = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
+}
+
+fn header_lines(headers: &str) -> impl Iterator<Item = (&str, &str)> {
+    headers
+        .lines()
+        .skip(1)
+        .take_while(|line| !line.trim().is_empty())
+        .filter_map(|line| {
+            let (name, val) = line.split_once(':')?;
+            Some((name.trim(), val.trim()))
+        })
+}
+
+/// Check if the HTTP Cookie header contains a valid `appz_pin=<token>` cookie
+pub fn check_pin_cookie(headers: &str, expected_token: &str) -> bool {
+    for (name, cookie_val) in header_lines(headers) {
+        if name.eq_ignore_ascii_case("cookie") {
             for part in cookie_val.split(';') {
-                let trimmed = part.trim();
-                if let Some(val) = trimmed.strip_prefix("appz_pin=")
-                    && val.trim() == expected_pin
+                if let Some(val) = part.trim().strip_prefix("appz_pin=")
+                    && constant_time_eq(val.trim().as_bytes(), expected_token.as_bytes())
                 {
                     return true;
                 }
@@ -134,19 +220,16 @@ pub fn check_pin_cookie(headers: &str, expected_pin: &str) -> bool {
 
 /// Check if the HTTP Authorization header matches `Basic <base64(user:pass)>`
 pub fn check_basic_auth(headers: &str, expected_auth: &str) -> bool {
-    // Look for Authorization: Basic ...
-    for line in headers.lines() {
-        if let Some(auth_val) = line.strip_prefix("Authorization:") {
-            let trimmed = auth_val.trim();
-            if let Some(b64) = trimmed.strip_prefix("Basic ") {
-                // Decode base64
-                let raw_b64 = b64.trim();
-                // Simple standard base64 decode
-                if let Ok(decoded_bytes) = simple_base64_decode(raw_b64)
-                    && let Ok(decoded_str) = std::str::from_utf8(&decoded_bytes)
-                {
-                    return decoded_str == expected_auth;
-                }
+    for (name, auth_val) in header_lines(headers) {
+        if name.eq_ignore_ascii_case("authorization")
+            && auth_val.len() >= 6
+            && auth_val[..6].eq_ignore_ascii_case("basic ")
+        {
+            let raw_b64 = auth_val[6..].trim();
+            if let Ok(decoded_bytes) = simple_base64_decode(raw_b64)
+                && let Ok(decoded_str) = std::str::from_utf8(&decoded_bytes)
+            {
+                return constant_time_eq(decoded_str.as_bytes(), expected_auth.as_bytes());
             }
         }
     }
@@ -260,11 +343,103 @@ pub fn render_unlock_html(pin_failed: bool) -> String {
     )
 }
 
-fn handle_connection(stream: &mut TcpStream, config: &ShieldConfig, created_at: Instant) {
+fn parse_content_length(headers: &str) -> usize {
+    for (name, val) in header_lines(headers) {
+        if name.eq_ignore_ascii_case("content-length")
+            && let Ok(len) = val.parse::<usize>()
+        {
+            return len;
+        }
+    }
+    0
+}
+
+fn decode_form_component(raw: &str) -> Option<String> {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b'%' => {
+                let h1 = *bytes.get(i + 1)? as char;
+                let h2 = *bytes.get(i + 2)? as char;
+                let hi = h1.to_digit(16)? as u8;
+                let lo = h2.to_digit(16)? as u8;
+                out.push((hi << 4) | lo);
+                i += 3;
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+fn parse_form_pin(body: &str) -> Option<String> {
+    let mut found = None;
+    for pair in body.split('&') {
+        if pair.is_empty() {
+            continue;
+        }
+        let (k, v) = pair.split_once('=')?;
+        if decode_form_component(k)?.as_str() == "pin" {
+            if found.is_some() {
+                return None;
+            }
+            found = Some(decode_form_component(v)?);
+        }
+    }
+    found
+}
+
+fn read_unlock_body(stream: &mut TcpStream, initial: &[u8]) -> Option<String> {
+    let end = head_end(initial)?;
+    let headers = String::from_utf8_lossy(&initial[..end]);
+    let content_len = parse_content_length(&headers);
+    if content_len == 0 || content_len > MAX_UNLOCK_BODY {
+        return None;
+    }
+    let body_start = end + HEAD_END.len();
+    let mut body = initial[body_start..].to_vec();
+    while body.len() < content_len {
+        let mut buf = [0u8; 1024];
+        let want = (content_len - body.len()).min(buf.len());
+        match stream.read(&mut buf[..want]) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => body.extend_from_slice(&buf[..n]),
+        }
+    }
+    if body.len() < content_len {
+        return None;
+    }
+    body.truncate(content_len);
+    String::from_utf8(body).ok()
+}
+
+fn is_unlock_request(req_head: &str) -> bool {
+    let (method, path) = request_line(req_head);
+    let clean_path = path.split('?').next().unwrap_or(&path);
+    method == "POST" && clean_path == "/__appz_unlock"
+}
+
+fn handle_connection(
+    stream: &mut TcpStream,
+    config: &ShieldConfig,
+    created_at: Instant,
+    pin_token: Option<&str>,
+    throttle: &UnlockThrottle,
+) {
     let Some(request) = read_head(stream) else {
         return;
     };
-    let req_str = String::from_utf8_lossy(&request);
+    let head_bytes = head_end(&request).map_or(request.len(), |e| e + HEAD_END.len());
+    let req_head = String::from_utf8_lossy(&request[..head_bytes]);
 
     // 1. Check TTL Expiration
     if is_expired(created_at, config.ttl) {
@@ -275,7 +450,7 @@ fn handle_connection(stream: &mut TcpStream, config: &ShieldConfig, created_at: 
 
     // 2. Check Basic Auth
     if let Some(ref expected_auth) = config.basic_auth
-        && !check_basic_auth(&req_str, expected_auth)
+        && !check_basic_auth(&req_head, expected_auth)
     {
         let resp = "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"appz shield\"\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nAuthentication required\r\n";
         let _ = stream.write_all(resp.as_bytes());
@@ -284,32 +459,39 @@ fn handle_connection(stream: &mut TcpStream, config: &ShieldConfig, created_at: 
 
     // 3. Check PIN Gatekeeper
     if let Some(ref expected_pin) = config.pin {
-        // Check if request is unlock POST
-        if req_str.starts_with("POST /__appz_unlock") {
-            // Find body
-            let pin_param = format!("pin={expected_pin}");
-            if req_str.contains(&pin_param) {
-                // Success: set cookie and redirect to root
+        let expected_cookie = pin_token.unwrap_or(expected_pin.as_str());
+        if is_unlock_request(&req_head) {
+            if let Some(wait_secs) = throttle.remaining_lockout_secs() {
                 let resp = format!(
-                    "HTTP/1.1 302 Found\r\nSet-Cookie: appz_pin={expected_pin}; Path=/; HttpOnly\r\nLocation: /\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-                );
-                let _ = stream.write_all(resp.as_bytes());
-                return;
-            } else {
-                // Incorrect PIN: render page with error
-                let html = render_unlock_html(true);
-                let resp = format!(
-                    "HTTP/1.1 401 Unauthorized\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    html.len(),
-                    html
+                    "HTTP/1.1 429 Too Many Requests\r\nRetry-After: {wait_secs}\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nToo many incorrect PIN attempts. Try again in {wait_secs}s.\r\n"
                 );
                 let _ = stream.write_all(resp.as_bytes());
                 return;
             }
+            let submitted = read_unlock_body(stream, &request).and_then(|b| parse_form_pin(&b));
+            if let Some(pin) = submitted
+                && constant_time_eq(pin.as_bytes(), expected_pin.as_bytes())
+            {
+                throttle.reset();
+                let resp = format!(
+                    "HTTP/1.1 302 Found\r\nSet-Cookie: appz_pin={expected_cookie}; Path=/; HttpOnly; SameSite=Lax\r\nLocation: /\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+                let _ = stream.write_all(resp.as_bytes());
+                return;
+            }
+            throttle.record_failure();
+            let html = render_unlock_html(true);
+            let resp = format!(
+                "HTTP/1.1 401 Unauthorized\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                html.len(),
+                html
+            );
+            let _ = stream.write_all(resp.as_bytes());
+            return;
         }
 
         // Check for cookie
-        if !check_pin_cookie(&req_str, expected_pin) {
+        if !check_pin_cookie(&req_head, expected_cookie) {
             let html = render_unlock_html(false);
             let resp = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -325,7 +507,7 @@ fn handle_connection(stream: &mut TcpStream, config: &ShieldConfig, created_at: 
     let started = Instant::now();
     let status = forward(stream, config.target_port, &request);
     if let Some(tx) = &config.events {
-        let (method, path) = request_line(&req_str);
+        let (method, path) = request_line(&req_head);
         let _ = tx.send(RequestLog {
             method,
             path,
@@ -587,5 +769,91 @@ mod tests {
 
         let failed = render_unlock_html(true);
         assert!(failed.contains("Incorrect PIN"));
+    }
+
+    #[test]
+    fn header_checks_are_case_insensitive_and_ignore_body() {
+        let headers = "GET / HTTP/1.1\r\nhost: localhost\r\ncookie: appz_pin=tok123\r\nauthorization: basic YWRtaW46c2VjcmV0\r\n\r\n";
+        assert!(check_pin_cookie(headers, "tok123"));
+        assert!(check_basic_auth(headers, "admin:secret"));
+
+        let spoofed_in_body = "POST / HTTP/1.1\r\nHost: localhost\r\n\r\nCookie: appz_pin=tok123\r\nAuthorization: Basic YWRtaW46c2VjcmV0\r\n";
+        assert!(!check_pin_cookie(spoofed_in_body, "tok123"));
+        assert!(!check_basic_auth(spoofed_in_body, "admin:secret"));
+    }
+
+    #[test]
+    fn form_pin_parser_is_exact() {
+        assert_eq!(parse_form_pin("pin=1234"), Some("1234".to_string()));
+        assert_eq!(parse_form_pin("foo=1&pin=12%334"), Some("1234".to_string()));
+        assert_eq!(parse_form_pin("pin=12340"), Some("12340".to_string()));
+        assert_eq!(parse_form_pin("pin=1234&pin=9999"), None);
+        assert_eq!(parse_form_pin("other=1234"), None);
+    }
+
+    #[test]
+    fn pin_unlock_rejects_prefix_sets_opaque_cookie_and_throttles() {
+        let upstream = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = upstream.local_addr().unwrap().port();
+        thread::spawn(move || {
+            while let Ok((mut s, _)) = upstream.accept() {
+                let _ = read_head(&mut s);
+                let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
+            }
+        });
+
+        let mut config = ShieldConfig::new(port);
+        config.pin = Some("1234".to_string());
+        let gateway = ShieldGateway::start(config).unwrap();
+
+        let send = |raw: &[u8]| -> String {
+            let mut c = TcpStream::connect(("127.0.0.1", gateway.bound_port)).unwrap();
+            c.write_all(raw).unwrap();
+            let mut out = String::new();
+            c.read_to_string(&mut out).unwrap();
+            out
+        };
+
+        // Prefix match (`pin=12340`) must be rejected.
+        let bad =
+            send(b"POST /__appz_unlock HTTP/1.1\r\nHost: x\r\nContent-Length: 9\r\n\r\npin=12340");
+        assert!(bad.starts_with("HTTP/1.1 401"), "{bad}");
+
+        // Exact PIN succeeds, sets HttpOnly SameSite=Lax token cookie that does not leak `1234`.
+        let ok =
+            send(b"POST /__appz_unlock HTTP/1.1\r\nHost: x\r\nContent-Length: 8\r\n\r\npin=1234");
+        assert!(ok.starts_with("HTTP/1.1 302"), "{ok}");
+        let set_cookie = ok
+            .lines()
+            .find(|l| l.to_ascii_lowercase().starts_with("set-cookie:"))
+            .unwrap();
+        assert!(set_cookie.contains("HttpOnly"), "{set_cookie}");
+        assert!(set_cookie.contains("SameSite=Lax"), "{set_cookie}");
+        let cookie_kv = set_cookie
+            .split(':')
+            .nth(1)
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .trim();
+        assert_ne!(cookie_kv, "appz_pin=1234");
+
+        // Using the issued session cookie reaches upstream.
+        let authed =
+            send(format!("GET / HTTP/1.1\r\nHost: x\r\nCookie: {cookie_kv}\r\n\r\n").as_bytes());
+        assert!(authed.starts_with("HTTP/1.1 200 OK"), "{authed}");
+        assert!(authed.ends_with("ok"), "{authed}");
+
+        // 5 failed attempts trigger 429 lockout.
+        for _ in 0..5 {
+            let r = send(
+                b"POST /__appz_unlock HTTP/1.1\r\nHost: x\r\nContent-Length: 8\r\n\r\npin=0000",
+            );
+            assert!(r.starts_with("HTTP/1.1 401"), "{r}");
+        }
+        let locked =
+            send(b"POST /__appz_unlock HTTP/1.1\r\nHost: x\r\nContent-Length: 8\r\n\r\npin=1234");
+        assert!(locked.starts_with("HTTP/1.1 429"), "{locked}");
     }
 }

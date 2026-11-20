@@ -1886,7 +1886,15 @@ fn run_env(args: EnvArgs, json: bool) {
                     let kvs: Vec<(String, String)> =
                         vars.into_iter().map(|v| (v.key, v.value)).collect();
                     let formatted = appz_deploy::format_env_file(&kvs);
-                    let target_path = root.join(&file);
+                    let target_path = match secrets::resolve_project_file(&root, &file) {
+                        Ok(p) => p,
+                        Err(e) => error(&e),
+                    };
+                    if let Some(parent) = target_path.parent()
+                        && let Err(e) = std::fs::create_dir_all(parent)
+                    {
+                        error(&format!("failed to create parent dir: {e}"));
+                    }
                     if let Err(e) = std::fs::write(&target_path, formatted) {
                         error(&format!("failed to write {}: {e}", target_path.display()));
                     }

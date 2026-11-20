@@ -111,12 +111,41 @@ pub fn load_stored_auth() -> Option<StoredAuth> {
 }
 
 pub fn save_stored_auth(auth: &StoredAuth) -> Result<(), std::io::Error> {
+    use std::io::Write;
     let p = auth_file_path();
-    if let Some(parent) = p.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
+    let parent = p.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent)?;
     let data = serde_json::to_string_pretty(auth).map_err(std::io::Error::other)?;
-    std::fs::write(p, data)
+
+    let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
+    tmp.write_all(data.as_bytes())?;
+    tmp.as_file().sync_all()?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o600))?;
+    }
+
+    #[cfg(windows)]
+    restrict_auth_file_to_current_user(tmp.path());
+
+    tmp.persist(&p).map_err(|e| e.error)?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn restrict_auth_file_to_current_user(path: &Path) {
+    let Some(user) = std::env::var_os("USERNAME") else {
+        return;
+    };
+    let mut grant = user;
+    grant.push(":(F)");
+    let _ = std::process::Command::new("icacls")
+        .arg(path)
+        .args(["/inheritance:r", "/grant:r"])
+        .arg(grant)
+        .output();
 }
 
 pub fn clear_stored_auth() -> Result<(), std::io::Error> {
@@ -373,21 +402,31 @@ pub fn parse_env_file(content: &str) -> Vec<(String, String)> {
     out
 }
 
+fn is_valid_env_key(key: &str) -> bool {
+    !key.is_empty()
+        && !key
+            .chars()
+            .any(|c| c == '=' || c == '\r' || c == '\n' || c == '\0' || c.is_ascii_whitespace())
+}
+
 pub fn format_env_file(vars: &[(String, String)]) -> String {
     let cap = vars.iter().map(|(k, v)| k.len() + v.len() + 4).sum();
     let mut out = String::with_capacity(cap);
     for (k, v) in vars {
+        if !is_valid_env_key(k) {
+            continue;
+        }
         out.push_str(k);
         out.push('=');
-        if v.contains(' ') || v.contains('\n') || v.contains('"') || v.is_empty() {
+        if v.contains([' ', '\t', '\n', '\r', '"']) || v.is_empty() {
             out.push('"');
             for c in v.chars() {
-                if c == '\\' {
-                    out.push_str("\\\\");
-                } else if c == '"' {
-                    out.push_str("\\\"");
-                } else {
-                    out.push(c);
+                match c {
+                    '\\' => out.push_str("\\\\"),
+                    '"' => out.push_str("\\\""),
+                    '\n' => out.push_str("\\n"),
+                    '\r' => out.push_str("\\r"),
+                    _ => out.push(c),
                 }
             }
             out.push('"');
@@ -405,9 +444,12 @@ pub fn pull_cloud_env(
     token: Option<&str>,
     target: Option<&str>,
 ) -> DeployResult<Vec<CloudEnvVar>> {
-    let mut url = format!("{api_base}/api/v0/projects/{project_id}/env");
+    use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
+    let encoded_project = utf8_percent_encode(project_id, NON_ALPHANUMERIC);
+    let mut url = format!("{api_base}/api/v0/projects/{encoded_project}/env");
     if let Some(t) = target {
-        url.push_str(&format!("?target={t}"));
+        let encoded_target = utf8_percent_encode(t, NON_ALPHANUMERIC);
+        url.push_str(&format!("?target={encoded_target}"));
     }
     let mut req = ureq::get(&url);
     if let Some(tok) = token {
@@ -438,6 +480,15 @@ pub fn pull_cloud_env(
             provider: "AppzDev",
             reason: format!("Failed to parse cloud env vars: {e}"),
         })?;
+
+    for var in &vars {
+        if !is_valid_env_key(&var.key) {
+            return Err(DeployError::DeployFailed {
+                provider: "AppzDev",
+                reason: format!("Invalid environment variable key received: {:?}", var.key),
+            });
+        }
+    }
 
     Ok(vars)
 }
@@ -1690,6 +1741,15 @@ SPACED=hello world
         assert!(formatted.contains("DATABASE_URL=postgres://user:pass@localhost:5432/db"));
         assert!(formatted.contains("API_KEY=sk_test_12345"));
         assert!(formatted.contains("SPACED=\"hello world\""));
+
+        // Newline injection in values is escaped and invalid keys are dropped.
+        let injected = vec![
+            ("SAFE".to_string(), "val\nEVIL=1\r\n".to_string()),
+            ("BAD=KEY".to_string(), "x".to_string()),
+            ("BAD\nKEY".to_string(), "x".to_string()),
+        ];
+        let safe = format_env_file(&injected);
+        assert_eq!(safe, "SAFE=\"val\\nEVIL=1\\r\\n\"\n");
     }
 
     struct MockServer {

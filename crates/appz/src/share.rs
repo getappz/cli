@@ -187,17 +187,15 @@ pub fn resolve_backend(project_dir: &Path, install: Consent) -> Result<Backend, 
         })
 }
 
-/// The PIN to require: the given code, or a random 4-digit one for `auto`
+/// The PIN to require: the given code, or a CSPRNG 4-digit one for `auto`
 /// (a bare `--pin`).
 pub fn resolve_pin(raw: &str) -> String {
     if raw != "auto" {
         return raw.to_string();
     }
-    use std::hash::{BuildHasher, Hasher};
-    let n = std::collections::hash_map::RandomState::new()
-        .build_hasher()
-        .finish();
-    format!("{:04}", n % 10_000)
+    use rand::Rng;
+    let n = rand::rngs::OsRng.gen_range(0..10_000u32);
+    format!("{n:04}")
 }
 
 /// A public tunnel in front of the Shield gateway in front of a local port.

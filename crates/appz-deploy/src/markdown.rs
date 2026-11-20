@@ -848,6 +848,10 @@ fn run_batch_wave(
                                     && state.schedule_rate_limit_wait(secs) =>
                             {
                                 retried_429 = true;
+                                // Another batch may have gone fatal while we slept.
+                                if let Some(e) = state.fatal() {
+                                    break Err(e);
+                                }
                             }
                             Err((err, _)) => break Err(err),
                         }
@@ -861,8 +865,10 @@ fn run_batch_wave(
                                 let outcome = by_id.remove(id).unwrap_or_else(|| {
                                     Err(ConvertError::new("converter omitted page result"))
                                 });
+                                // A per-item 429 only costs that page; 401/403 mean the
+                                // whole run is unauthorized.
                                 if let Err(e) = &outcome
-                                    && is_fatal_status(e.status)
+                                    && matches!(e.status, Some(401 | 403))
                                 {
                                     state.set_fatal(e.clone());
                                 }

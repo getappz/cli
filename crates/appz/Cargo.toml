@@ -34,6 +34,7 @@ filetime = "0.2"
 flate2 = "1"
 semver = "1"
 sha2 = "0.10"
+rand = "0.8"
 tar = "0.4"
 ureq = { version = "2", features = ["json"] }
 zip = { version = "9", default-features = false, features = ["deflate"] }

@@ -264,6 +264,62 @@ fn expiry_notice(name: &str, entry: &SecretEntry, now: DateTime<Utc>) -> Option<
     }
 }
 
+/// Resolve `rel_file` strictly within `root`, rejecting absolute paths,
+/// parent traversal (`..`), NUL bytes, and symlinks pointing outside `root`.
+pub fn resolve_project_file(root: &Path, rel_file: impl AsRef<Path>) -> Result<PathBuf, String> {
+    let rel = rel_file.as_ref();
+    let rel_display = rel.display();
+    if rel.as_os_str().is_empty() || rel.to_string_lossy().contains('\0') {
+        return Err("target file path cannot be empty or contain NUL".into());
+    }
+    if rel.is_absolute() {
+        return Err(format!(
+            "refusing absolute path outside project: {rel_display}"
+        ));
+    }
+    let canonical_root = appz_core::canonicalize(root)
+        .map_err(|e| format!("cannot resolve project root {}: {e}", root.display()))?;
+    let mut clean = PathBuf::new();
+    for c in rel.components() {
+        match c {
+            std::path::Component::Normal(p) => clean.push(p),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir
+            | std::path::Component::RootDir
+            | std::path::Component::Prefix(_) => {
+                return Err(format!("refusing path outside project: {rel_display}"));
+            }
+        }
+    }
+    if clean.as_os_str().is_empty() {
+        return Err("target file path cannot be empty".into());
+    }
+    let target = canonical_root.join(&clean);
+    if let Some(parent) = target.parent()
+        && parent.exists()
+    {
+        let canonical_parent = appz_core::canonicalize(parent)
+            .map_err(|e| format!("cannot resolve parent dir: {e}"))?;
+        if !canonical_parent.starts_with(&canonical_root) {
+            return Err(format!(
+                "refusing path escaping project root: {rel_display}"
+            ));
+        }
+    }
+    if let Ok(meta) = std::fs::symlink_metadata(&target)
+        && meta.file_type().is_symlink()
+    {
+        let real = appz_core::canonicalize(&target)
+            .map_err(|e| format!("cannot resolve symlink {}: {e}", target.display()))?;
+        if !real.starts_with(&canonical_root) {
+            return Err(format!(
+                "refusing symlink target outside project root: {rel_display}"
+            ));
+        }
+    }
+    Ok(target)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -418,5 +474,18 @@ mod tests {
         assert!(soon.starts_with("T expires in 3d"), "{soon}");
         let gone = expiry_notice("T", &entry(Some(now - Duration::days(2))), now).unwrap();
         assert!(gone.starts_with("T expired on"), "{gone}");
+    }
+
+    #[test]
+    fn resolve_project_file_rejects_traversal_and_absolute_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let ok = resolve_project_file(dir.path(), ".env.local").unwrap();
+        assert!(ok.ends_with(".env.local"));
+        let nested = resolve_project_file(dir.path(), "sub/.env").unwrap();
+        assert!(nested.ends_with(".env"));
+
+        for bad in ["", "../secret", "a/../../secret", "/etc/passwd", "a\0b"] {
+            assert!(resolve_project_file(dir.path(), bad).is_err(), "{bad}");
+        }
     }
 }

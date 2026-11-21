@@ -43,6 +43,8 @@ pub struct DeployRequest {
     pub build_env: Vec<String>,
     pub dry_run: bool,
     pub json: bool,
+    /// Run a best-effort source backup after a successful non-dry-run deploy.
+    pub backup: bool,
     /// Installing a missing platform CLI (works without a terminal).
     pub install: Consent,
     /// Running the CLI's login. Only ever `Ask`/`Yes` with a real terminal:
@@ -263,8 +265,8 @@ struct PreparedTarget {
 
 pub fn run(project_dir: &Path, req: DeployRequest) -> Result<DeployOutput, String> {
     let target = prepare_target(project_dir, req)?;
-    let (output, fingerprint) = upload_target(&target)?;
-    match finish_target(&target, &output, fingerprint.as_deref()) {
+    let (mut output, fingerprint) = upload_target(&target)?;
+    match finish_target(&target, &mut output, fingerprint.as_deref()) {
         Some(error) => Err(format!(
             "deployed ({}) but {error}",
             output.url.as_deref().unwrap_or("url unknown")
@@ -491,8 +493,20 @@ fn upload_target(target: &PreparedTarget) -> Result<(DeployOutput, Option<String
 
 fn finish_target(
     target: &PreparedTarget,
-    output: &DeployOutput,
+    output: &mut DeployOutput,
     fingerprint: Option<&str>,
+) -> Option<String> {
+    finish_target_with(target, output, fingerprint, crate::backup::after_deploy)
+}
+
+fn finish_target_with(
+    target: &PreparedTarget,
+    output: &mut DeployOutput,
+    fingerprint: Option<&str>,
+    run_backup: impl FnOnce(
+        &Path,
+        &crate::backup::AfterDeploy<'_>,
+    ) -> Option<appz_deploy::BackupSummary>,
 ) -> Option<String> {
     let ctx = &target.ctx;
     if ctx.dry_run || target.cached.is_some() {
@@ -507,7 +521,41 @@ fn finish_target(
     if let (Some(fp), Some(url)) = (fingerprint, &output.url) {
         crate::deploy_state::record(&ctx.project_dir, slug, target.req.prod, fp, url);
     }
+    if target.req.backup {
+        let build_env_names = build_env_var_names(&target.req);
+        let interactive = if !target.req.json && crate::is_tty() {
+            crate::backup::Interactive::Yes
+        } else {
+            crate::backup::Interactive::No
+        };
+        output.backup = run_backup(
+            &ctx.project_dir,
+            &crate::backup::AfterDeploy {
+                // `after_deploy` derives its dedup identity from the backup selection itself.
+                fingerprint: "",
+                target: slug,
+                production: target.req.prod,
+                url: output.url.as_deref(),
+                build_env_names,
+                interactive,
+                json: target.req.json,
+            },
+        );
+    }
     None
+}
+
+fn build_env_var_names(req: &DeployRequest) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for entry in &req.build_env {
+        let key = entry.split_once('=').map_or(entry.as_str(), |(k, _)| k);
+        if !key.is_empty() {
+            names.push(key.to_string());
+        }
+    }
+    names.sort();
+    names.dedup();
+    names
 }
 
 /// One target's outcome from `deploy --all`. `output` is present whenever the
@@ -587,8 +635,8 @@ fn run_targets(
     uploads
         .into_iter()
         .map(|(target, result)| match result {
-            Ok((prepared, (output, fingerprint))) => TargetResult {
-                error: finish_target(&prepared, &output, fingerprint.as_deref()),
+            Ok((prepared, (mut output, fingerprint))) => TargetResult {
+                error: finish_target(&prepared, &mut output, fingerprint.as_deref()),
                 target,
                 output: Some(output),
             },
@@ -1072,6 +1120,7 @@ mod tests {
             cached: None,
         };
         target.req.force = true;
+        target.req.backup = false;
         let mut output = DeployOutput::dry_run("vercel", true);
         output.url = Some("https://example.com".into());
         let fp = crate::deploy_state::fingerprint(
@@ -1087,11 +1136,11 @@ mod tests {
             output.url.as_ref().unwrap(),
         );
         for _ in 0..2 {
-            assert!(finish_target(&target, &output, Some(&fp)).is_some());
+            assert!(finish_target(&target, &mut output, Some(&fp)).is_some());
             assert!(crate::deploy_state::unchanged(dir.path(), "vercel", false, &fp).is_none());
         }
         target.ctx.deploy_config.hooks.after_deploy.clear();
-        assert!(finish_target(&target, &output, Some(&fp)).is_none());
+        assert!(finish_target(&target, &mut output, Some(&fp)).is_none());
         assert!(crate::deploy_state::unchanged(dir.path(), "vercel", false, &fp).is_some());
     }
 
@@ -1178,6 +1227,7 @@ mod tests {
             build_env: build.iter().map(|s| s.to_string()).collect(),
             dry_run: false,
             json: false,
+            backup: true,
             install: Consent::Never,
             login: Consent::Never,
             link: Consent::Never,
@@ -1346,5 +1396,188 @@ mod tests {
         let v = serde_json::to_value(&failed).unwrap();
         assert!(v.get("output").is_none());
         assert_eq!(v["error"], "boom");
+    }
+
+    fn prepared_for_test(dir: &Path, mut request: DeployRequest) -> PreparedTarget {
+        request.target = Some("vercel".into());
+        let mut ctx = DeployContext::new(dir.to_path_buf(), "dist".into());
+        ctx.dry_run = request.dry_run;
+        ctx.json_output = request.json;
+        PreparedTarget {
+            ctx,
+            provider: get_provider("vercel").unwrap(),
+            req: request,
+            setup_names: Vec::new(),
+            cached: None,
+        }
+    }
+
+    #[test]
+    fn dry_run_never_backs_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut request = req(&[], &[], None);
+        request.dry_run = true;
+        let target = prepared_for_test(dir.path(), request);
+        let mut output = DeployOutput::dry_run("vercel", true);
+        output.url = Some("https://preview.example.com".into());
+
+        let mut called = false;
+        let err = finish_target_with(&target, &mut output, Some("fp-1"), |_, _| {
+            called = true;
+            None
+        });
+        assert!(err.is_none());
+        assert!(!called);
+        assert!(output.backup.is_none());
+    }
+
+    #[test]
+    fn no_backup_flag_skips() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut request = req(&[], &[], None);
+        request.backup = false;
+        let target = prepared_for_test(dir.path(), request);
+        let mut output = DeployOutput::dry_run("vercel", true);
+        output.status = appz_deploy::DeployStatus::Ready;
+        output.url = Some("https://preview.example.com".into());
+
+        let mut called = false;
+        let err = finish_target_with(&target, &mut output, Some("fp-1"), |_, _| {
+            called = true;
+            None
+        });
+        assert!(err.is_none());
+        assert!(!called);
+        assert!(output.backup.is_none());
+    }
+
+    #[test]
+    fn backup_failure_does_not_change_the_deploy_result() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("index.html"), "<h1>hi</h1>").unwrap();
+        let request = req(&[], &[], None);
+        let target = prepared_for_test(dir.path(), request);
+        let mut output = DeployOutput::dry_run("vercel", true);
+        output.status = appz_deploy::DeployStatus::Ready;
+        output.url = Some("https://preview.example.com".into());
+
+        let err = finish_target_with(&target, &mut output, Some("fp-1"), |root, ad| {
+            crate::backup::run_after_deploy_failed_fixture(root, ad)
+        });
+        assert!(err.is_none());
+        assert_eq!(output.status, appz_deploy::DeployStatus::Ready);
+        assert_eq!(output.url.as_deref(), Some("https://preview.example.com"));
+        let backup = output
+            .backup
+            .expect("skipped backup summary should be recorded");
+        assert_eq!(backup.snapshot, None);
+        assert!(
+            backup
+                .skipped
+                .as_deref()
+                .is_some_and(|s| s.contains("boom")),
+            "{:?}",
+            backup.skipped
+        );
+    }
+
+    #[test]
+    fn json_output_includes_backup_summary() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut request = req(&[], &[], None);
+        request.json = true;
+        let target = prepared_for_test(dir.path(), request);
+        let mut output = DeployOutput::dry_run("vercel", true);
+        output.status = appz_deploy::DeployStatus::Ready;
+        output.url = Some("https://preview.example.com".into());
+
+        let err = finish_target_with(&target, &mut output, Some("fp-1"), |_, ad| {
+            assert_eq!(ad.interactive, crate::backup::Interactive::No);
+            assert!(ad.json);
+            Some(appz_deploy::BackupSummary {
+                snapshot: Some("snap-42".into()),
+                added_bytes: 2048,
+                skipped: None,
+            })
+        });
+        assert!(err.is_none());
+
+        let json = serde_json::to_value(&output).unwrap();
+        assert_eq!(json["backup"]["snapshot"], "snap-42");
+        assert_eq!(json["backup"]["added_bytes"], 2048);
+        assert!(json["backup"].get("skipped").is_none());
+
+        // When backup is None, the field is omitted (`skip_serializing_if = "Option::is_none"`).
+        let bare = serde_json::to_value(DeployOutput::dry_run("vercel", true)).unwrap();
+        assert!(bare.get("backup").is_none());
+    }
+
+    #[test]
+    fn url_less_and_render_deploys_still_run_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("index.html"), "<h1>hi</h1>").unwrap();
+        let target = prepared_for_test(dir.path(), req(&[], &[], None));
+        let mut output = DeployOutput::dry_run("render", true);
+        output.status = appz_deploy::DeployStatus::Ready;
+        output.url = None;
+
+        let mut called = false;
+        let err = finish_target_with(&target, &mut output, None, |_, ad| {
+            called = true;
+            assert_eq!(ad.fingerprint, "");
+            assert_eq!(ad.url, None);
+            Some(appz_deploy::BackupSummary {
+                snapshot: Some("snap-url-less".into()),
+                added_bytes: 12,
+                skipped: None,
+            })
+        });
+        assert!(err.is_none());
+        assert!(called);
+        assert_eq!(
+            output.backup.as_ref().and_then(|b| b.snapshot.as_deref()),
+            Some("snap-url-less")
+        );
+        assert!(crate::deploy_state::unchanged(dir.path(), "vercel", false, "").is_none());
+    }
+
+    #[test]
+    fn backup_runs_after_after_deploy_hook_edits() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("index.html"), "<h1>before</h1>").unwrap();
+        let mut target = prepared_for_test(dir.path(), req(&[], &[], None));
+        #[cfg(windows)]
+        let hook = vec![
+            "cmd".into(),
+            "/C".into(),
+            "echo after > generated.txt".into(),
+        ];
+        #[cfg(not(windows))]
+        let hook = vec![
+            "sh".into(),
+            "-c".into(),
+            "echo after > generated.txt".into(),
+        ];
+        target.ctx.deploy_config.hooks.after_deploy = hook;
+        let pre_hook_fp = crate::deploy_state::fingerprint(
+            dir.path(),
+            &fingerprint_extra("vercel", &target.req, &target.ctx.deploy_config),
+        )
+        .unwrap();
+
+        let mut output = DeployOutput::dry_run("vercel", true);
+        output.status = appz_deploy::DeployStatus::Ready;
+        output.url = Some("https://preview.example.com".into());
+
+        let mut saw_hook_output = false;
+        let err = finish_target_with(&target, &mut output, Some(&pre_hook_fp), |root, _| {
+            saw_hook_output = root.join("generated.txt").exists();
+            None
+        });
+        assert!(err.is_none(), "{err:?}");
+        assert!(saw_hook_output);
+        assert!(
+            crate::deploy_state::unchanged(dir.path(), "vercel", false, &pre_hook_fp).is_some()
+        );
     }
 }

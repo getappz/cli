@@ -373,6 +373,7 @@ impl AppzServer {
             build_env: vec![],
             dry_run: arg.dry_run,
             json: true,
+            backup: true,
             // An agent installs software / creates platform projects only when
             // told to (`allow_setup`); otherwise it gets the step that is needed.
             // Login needs a browser, so an agent supplies a token instead
@@ -463,7 +464,15 @@ impl AppzServer {
                     vars.into_iter().map(|v| (v.key, v.value)).collect();
                 let formatted = appz_deploy::format_env_file(&kvs);
                 let rel_file = arg.file.unwrap_or_else(|| ".env.local".to_string());
-                let target_path = root.join(&rel_file);
+                let target_path = match crate::secrets::resolve_project_file(&root, &rel_file) {
+                    Ok(p) => p,
+                    Err(e) => return Ok(Self::err(e)),
+                };
+                if let Some(parent) = target_path.parent()
+                    && let Err(e) = std::fs::create_dir_all(parent)
+                {
+                    return Ok(Self::err(format!("failed to create parent dir: {e}")));
+                }
                 if let Err(e) = std::fs::write(&target_path, formatted) {
                     return Ok(Self::err(format!(
                         "failed to write {}: {e}",

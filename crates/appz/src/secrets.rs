@@ -195,11 +195,71 @@ pub fn parse_duration(s: &str) -> Result<Duration, String> {
     }
 }
 
+/// Every secret name stored in the global or project vault for `project_dir`.
+/// Reads only the unencrypted key index (never prompts or decrypts values).
+pub(crate) fn known_names(project_dir: &Path) -> std::collections::BTreeSet<String> {
+    let p = paths(project_dir);
+    let mut names = std::collections::BTreeSet::new();
+    for path in std::iter::once(p.global_vault_path())
+        .chain(p.project_vault_path())
+        .filter(|f| f.exists())
+    {
+        if let Ok(body) = read_vault_body(&path) {
+            names.extend(body.keys().cloned());
+        }
+    }
+    names
+}
+
 pub fn remove(path: &Path, name: &str) -> Result<bool, String> {
     if !path.exists() {
         return Ok(false);
     }
     update_vault_body(path, |b| remove_secret_value(b, name)).map_err(|e| e.to_string())
+}
+
+#[derive(Clone)]
+pub(crate) enum SecretStatus {
+    Missing,
+    Locked,
+    Found(String),
+}
+
+/// Read one secret from `path` using the active keyring session (never prompts),
+/// distinguishing missing secrets from a locked vault.
+pub(crate) fn get_status(path: &Path, name: &str) -> Result<SecretStatus, String> {
+    if !valid_name(name) {
+        return Err(format!("'{name}' is not a valid variable name"));
+    }
+    if !path.exists() {
+        return Ok(SecretStatus::Missing);
+    }
+    let dek = match open_vault_with_dek(path, APP) {
+        Ok(d) => d.dek,
+        Err(VaultError::Locked) => {
+            if let Some(pw) = std::env::var(PASSPHRASE_VAR).ok().filter(|p| !p.is_empty()) {
+                open_vault(path, &pw).map_err(|e| e.to_string())?.dek
+            } else {
+                return Ok(SecretStatus::Locked);
+            }
+        }
+        Err(e) => return Err(e.to_string()),
+    };
+    let body = read_vault_body(path).map_err(|e| e.to_string())?;
+    match get_secret_value(&body, &dek, name).map_err(|e| e.to_string())? {
+        Some(v) => Ok(SecretStatus::Found(v.to_string())),
+        None => Ok(SecretStatus::Missing),
+    }
+}
+
+/// Read one secret value from `path` using an already-unlocked vault session.
+#[allow(dead_code)]
+pub fn get(path: &Path, name: &str) -> Result<Option<String>, String> {
+    match get_status(path, name)? {
+        SecretStatus::Found(v) => Ok(Some(v)),
+        SecretStatus::Missing => Ok(None),
+        SecretStatus::Locked => Err(VaultError::Locked.to_string()),
+    }
 }
 
 pub struct VaultEnv {
@@ -264,6 +324,62 @@ fn expiry_notice(name: &str, entry: &SecretEntry, now: DateTime<Utc>) -> Option<
     }
 }
 
+/// Resolve `rel_file` strictly within `root`, rejecting absolute paths,
+/// parent traversal (`..`), NUL bytes, and symlinks pointing outside `root`.
+pub fn resolve_project_file(root: &Path, rel_file: impl AsRef<Path>) -> Result<PathBuf, String> {
+    let rel = rel_file.as_ref();
+    let rel_display = rel.display();
+    if rel.as_os_str().is_empty() || rel.to_string_lossy().contains('\0') {
+        return Err("target file path cannot be empty or contain NUL".into());
+    }
+    if rel.is_absolute() {
+        return Err(format!(
+            "refusing absolute path outside project: {rel_display}"
+        ));
+    }
+    let canonical_root = appz_core::canonicalize(root)
+        .map_err(|e| format!("cannot resolve project root {}: {e}", root.display()))?;
+    let mut clean = PathBuf::new();
+    for c in rel.components() {
+        match c {
+            std::path::Component::Normal(p) => clean.push(p),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir
+            | std::path::Component::RootDir
+            | std::path::Component::Prefix(_) => {
+                return Err(format!("refusing path outside project: {rel_display}"));
+            }
+        }
+    }
+    if clean.as_os_str().is_empty() {
+        return Err("target file path cannot be empty".into());
+    }
+    let target = canonical_root.join(&clean);
+    if let Some(parent) = target.parent()
+        && parent.exists()
+    {
+        let canonical_parent = appz_core::canonicalize(parent)
+            .map_err(|e| format!("cannot resolve parent dir: {e}"))?;
+        if !canonical_parent.starts_with(&canonical_root) {
+            return Err(format!(
+                "refusing path escaping project root: {rel_display}"
+            ));
+        }
+    }
+    if let Ok(meta) = std::fs::symlink_metadata(&target)
+        && meta.file_type().is_symlink()
+    {
+        let real = appz_core::canonicalize(&target)
+            .map_err(|e| format!("cannot resolve symlink {}: {e}", target.display()))?;
+        if !real.starts_with(&canonical_root) {
+            return Err(format!(
+                "refusing symlink target outside project root: {rel_display}"
+            ));
+        }
+    }
+    Ok(target)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -326,8 +442,11 @@ mod tests {
         }
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(".appz").join("vault.json");
+        assert_eq!(get(&path, "MISSING").unwrap(), None);
         set(&path, "VERCEL_TOKEN", Some("tok".into()), None).unwrap();
         set(&path, "OTHER", Some("x".into()), None).unwrap();
+        assert_eq!(get(&path, "VERCEL_TOKEN").unwrap().as_deref(), Some("tok"));
+        assert_eq!(get(&path, "NOT_SET").unwrap(), None);
         assert_eq!(listed(&path), vec!["OTHER", "VERCEL_TOKEN"]);
         assert!(remove(&path, "OTHER").unwrap());
         assert!(!remove(&path, "OTHER").unwrap());
@@ -418,5 +537,18 @@ mod tests {
         assert!(soon.starts_with("T expires in 3d"), "{soon}");
         let gone = expiry_notice("T", &entry(Some(now - Duration::days(2))), now).unwrap();
         assert!(gone.starts_with("T expired on"), "{gone}");
+    }
+
+    #[test]
+    fn resolve_project_file_rejects_traversal_and_absolute_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let ok = resolve_project_file(dir.path(), ".env.local").unwrap();
+        assert!(ok.ends_with(".env.local"));
+        let nested = resolve_project_file(dir.path(), "sub/.env").unwrap();
+        assert!(nested.ends_with(".env"));
+
+        for bad in ["", "../secret", "a/../../secret", "/etc/passwd", "a\0b"] {
+            assert!(resolve_project_file(dir.path(), bad).is_err(), "{bad}");
+        }
     }
 }

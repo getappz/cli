@@ -69,6 +69,8 @@ enum AppzCmd {
     Clean(CleanArgs),
     /// Snapshot local project source in a Rustic repository
     Backup(backup::BackupArgs),
+    /// Reconstruct a source snapshot in an empty directory
+    Restore(backup::restore::RestoreArgs),
     /// Diagnose project stack, config, and suggestions
     Doctor(DoctorArgs),
     /// Build the checkout and install it over the running `appz` binary
@@ -325,6 +327,9 @@ struct DeployArgs {
     /// Deploy to every target configured under deploy.targets instead of one
     #[arg(long, conflicts_with_all = ["target", "project"])]
     all: bool,
+    /// Skip the automatic source backup after a successful deploy
+    #[arg(long)]
+    no_backup: bool,
 }
 
 #[derive(Args)]
@@ -1556,6 +1561,11 @@ fn main() {
                 error(&e.to_string());
             }
         }
+        AppzCmd::Restore(a) => {
+            if let Err(e) = backup::restore::run(a, json) {
+                error(&e.to_string());
+            }
+        }
         AppzCmd::Doctor(a) => run_doctor_cmd(a, json),
         AppzCmd::DevInstall(a) => dev_install::run(!a.debug, a.dry_run),
         AppzCmd::Mcp => {
@@ -1886,7 +1896,15 @@ fn run_env(args: EnvArgs, json: bool) {
                     let kvs: Vec<(String, String)> =
                         vars.into_iter().map(|v| (v.key, v.value)).collect();
                     let formatted = appz_deploy::format_env_file(&kvs);
-                    let target_path = root.join(&file);
+                    let target_path = match secrets::resolve_project_file(&root, &file) {
+                        Ok(p) => p,
+                        Err(e) => error(&e),
+                    };
+                    if let Some(parent) = target_path.parent()
+                        && let Err(e) = std::fs::create_dir_all(parent)
+                    {
+                        error(&format!("failed to create parent dir: {e}"));
+                    }
                     if let Err(e) = std::fs::write(&target_path, formatted) {
                         error(&format!("failed to write {}: {e}", target_path.display()));
                     }
@@ -2061,6 +2079,7 @@ fn run_deploy(args: DeployArgs, json: bool) {
         build_env: args.build_env,
         dry_run: args.dry_run,
         json,
+        backup: !args.no_backup,
         install: if assume_yes() {
             deploy::Consent::Yes
         } else if !json && is_tty() {
@@ -2162,6 +2181,9 @@ fn run_deploy(args: DeployArgs, json: bool) {
                     warning(
                         "deploy succeeded but the live URL could not be confirmed from CLI output",
                     );
+                }
+                if let Some(id) = output.backup.as_ref().and_then(|b| b.snapshot.as_deref()) {
+                    info(&format!("source snapshot saved ({id})"));
                 }
                 outro("deploy complete");
             }
@@ -2983,6 +3005,29 @@ mod tests {
         assert!(AppzCli::try_parse_from(["appz", "rollback"]).is_err());
         assert!(AppzCli::try_parse_from(["appz", "alias", "app.example.com"]).is_ok());
         assert!(AppzCli::try_parse_from(["appz", "alias"]).is_err());
+
+        match AppzCli::try_parse_from(["appz", "deploy", "--no-backup"])
+            .unwrap()
+            .command
+        {
+            AppzCmd::Deploy(a) => assert!(a.no_backup),
+            _ => panic!("not deploy"),
+        }
+
+        for args in [
+            &["appz", "backup"][..],
+            &["appz", "backup", "create"],
+            &["appz", "backup", "ls"],
+            &["appz", "backup", "list"],
+        ] {
+            assert!(
+                matches!(
+                    AppzCli::try_parse_from(args).unwrap().command,
+                    AppzCmd::Backup(_)
+                ),
+                "{args:?}"
+            );
+        }
     }
 
     #[test]

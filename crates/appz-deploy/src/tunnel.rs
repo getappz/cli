@@ -211,7 +211,7 @@ impl TunnelProvider for SshTunnelProvider {
         let mut cmd = Command::new("ssh");
         cmd.arg("-T")
             .arg("-o")
-            .arg("StrictHostKeyChecking=no")
+            .arg("StrictHostKeyChecking=accept-new")
             .arg("-o")
             .arg("ServerAliveInterval=30")
             .arg("-R")

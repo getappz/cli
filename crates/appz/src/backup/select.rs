@@ -16,8 +16,13 @@
 //!   restore can rebuild the history without a reachable remote.
 
 use std::collections::BTreeSet;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
+use cap_std::fs::Dir;
+use sha2::{Digest, Sha256};
 
 use crate::deploy_state::{self, SKIP_DIRS};
 
@@ -28,6 +33,7 @@ pub struct Selection {
     pub files: Vec<PathBuf>,
     /// Changed stage-zero entries, including files normalized by Git clean filters.
     pub staged: Vec<StagedEntry>,
+    pub deleted: DeletedPaths,
     /// Variable names found in `.env*` files, sorted and deduped. Values are
     /// never read into this struct.
     pub env_names: Vec<String>,
@@ -39,14 +45,21 @@ pub struct Selection {
     pub bundle: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DeletedPaths {
+    pub index: BTreeSet<String>,
+    pub worktree: BTreeSet<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct StagedEntry {
     path: PathBuf,
     object_id: String,
     gitlink: bool,
+    pub(super) mode: String,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct GitInfo {
     /// `HEAD`, or empty in a repository with no commits yet.
     pub sha: String,
@@ -54,6 +67,8 @@ pub struct GitInfo {
     pub remote: Option<String>,
     /// Commits reachable from HEAD but from no remote ref.
     pub ahead: u32,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub prefix: String,
 }
 
 /// Select the source to snapshot. `output_dirs` are build outputs (from the
@@ -71,6 +86,7 @@ pub fn select(root: &Path, output_dirs: &[&str]) -> Result<Selection, String> {
         return Ok(Selection {
             files,
             staged: Vec::new(),
+            deleted: DeletedPaths::default(),
             env_names,
             git: None,
             bundle: None,
@@ -84,14 +100,42 @@ pub fn select(root: &Path, output_dirs: &[&str]) -> Result<Selection, String> {
     let mut changed: BTreeSet<PathBuf> = BTreeSet::new();
     // Tracked changes and untracked files. `-z` keeps paths verbatim, so
     // spaces and non-ASCII names survive unchanged.
+    let mut deleted = DeletedPaths::default();
     let mut staged_paths = BTreeSet::new();
-    for (rel, code) in git_status(root)? {
+    for (rel, code) in git_status(root, &state.prefix)? {
         if !filter.keeps(&rel, code == *b"??") {
             continue;
         }
         // AA and AU are unmerged index entries; neither has a stage-zero blob.
         if matches!(code[0], b'A' | b'C' | b'M' | b'R' | b'T') && !matches!(&code, b"AA" | b"AU") {
             staged_paths.insert(rel.clone());
+        }
+        if matches!(&code, b"D " | b" D" | b"MD" | b"AD" | b"TD") {
+            let name = rel
+                .to_str()
+                .ok_or("cannot record a non-UTF-8 deletion path")?;
+            // git_status returns Git's slash-separated path bytes on all platforms.
+            if code[0] == b'D' {
+                deleted.index.insert(name.to_owned());
+            }
+            match std::fs::symlink_metadata(root.join(&rel)) {
+                Ok(meta) if !meta.is_dir() => {
+                    changed.insert(rel);
+                }
+                Ok(_) => {
+                    deleted.worktree.insert(name.to_owned());
+                }
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                    ) =>
+                {
+                    deleted.worktree.insert(name.to_owned());
+                }
+                Err(e) => return Err(format!("cannot inspect deleted path {name}: {e}")),
+            }
+            continue;
         }
         if code[1] != b'D' && code[0] != b'D' {
             match std::fs::symlink_metadata(root.join(&rel)) {
@@ -120,10 +164,205 @@ pub fn select(root: &Path, output_dirs: &[&str]) -> Result<Selection, String> {
     Ok(Selection {
         files: changed.into_iter().collect(),
         staged,
+        deleted,
         env_names,
         git: Some(state),
         bundle,
     })
+}
+
+impl Selection {
+    pub fn staged_modes(&self) -> std::collections::BTreeMap<String, String> {
+        self.staged
+            .iter()
+            .map(|entry| {
+                (
+                    entry.path.to_string_lossy().replace('\\', "/"),
+                    entry.mode.clone(),
+                )
+            })
+            .collect()
+    }
+}
+
+/// Compute a content fingerprint matching everything [`super::snapshot`] stages
+/// for `selection` (selected working-tree files including tracked `.vscode`
+/// entries, staged git blobs, local-only commit ancestry, and env/build-env names).
+#[allow(dead_code)] // Restore verifies the content fingerprint independently of deduplication.
+pub(super) fn selection_fingerprint(
+    root: &Path,
+    selection: &Selection,
+    build_env_names: &[String],
+) -> Result<String, String> {
+    Ok(staged_fingerprints(root, root, selection, build_env_names)?.0)
+}
+
+/// Keep the content fingerprint readable by existing restore clients. A second
+/// digest records file modes for snapshot deduplication.
+pub(super) fn staged_fingerprints(
+    root: &Path,
+    files_root: &Path,
+    selection: &Selection,
+    build_env_names: &[String],
+) -> Result<(String, String), String> {
+    let mut permissions = Sha256::new();
+    let mut hash = Sha256::new();
+    let project = Dir::open_ambient_dir(files_root, cap_std::ambient_authority())
+        .map_err(|e| format!("cannot open backup root {}: {e}", root.display()))?;
+
+    hash.update(b"files\0");
+    for rel in &selection.files {
+        let normalized = rel.to_string_lossy().replace('\\', "/");
+        hash.update(normalized.as_bytes());
+        hash.update(b"\0");
+        hash_selected_entry(&project, rel, &mut hash, &mut permissions)?;
+    }
+
+    hash.update(b"staged\0");
+    for entry in &selection.staged {
+        let normalized = entry.path.to_string_lossy().replace('\\', "/");
+        hash.update(normalized.as_bytes());
+        hash.update(b"\0");
+        hash.update(entry.object_id.as_bytes());
+        hash.update(b"\0");
+        hash.update([u8::from(entry.gitlink)]);
+        if !entry.mode.is_empty() {
+            hash.update(entry.mode.as_bytes());
+            hash.update([0]);
+        }
+    }
+
+    for (kind, paths) in [
+        ("index-deletion", &selection.deleted.index),
+        ("worktree-deletion", &selection.deleted.worktree),
+    ] {
+        for path in paths {
+            hash.update(kind.as_bytes());
+            hash.update(b"\0");
+            hash.update(path.as_bytes());
+            hash.update(b"\0");
+        }
+    }
+
+    hash.update(b"git\0");
+    if let Some(git) = &selection.git {
+        hash.update([1u8]);
+        hash.update(git.sha.as_bytes());
+        hash.update(b"\0");
+        hash.update(git.branch.as_deref().unwrap_or("").as_bytes());
+        hash.update(b"\0");
+        hash.update(git.remote.as_deref().unwrap_or("").as_bytes());
+        hash.update(b"\0");
+        hash.update(git.ahead.to_le_bytes());
+        hash.update([u8::from(selection.bundle.is_some())]);
+        if selection.bundle.is_some() {
+            let revs = git_stdout(
+                root,
+                &["rev-list", "--topo-order", "HEAD", "--not", "--remotes"],
+            )?;
+            hash.update((revs.len() as u64).to_le_bytes());
+            hash.update(&revs);
+        }
+    } else {
+        hash.update([0u8]);
+    }
+
+    hash.update(b"env\0");
+    for name in &selection.env_names {
+        hash.update(name.as_bytes());
+        hash.update(b"\0");
+    }
+
+    let mut build_names = build_env_names.to_vec();
+    build_names.sort();
+    build_names.dedup();
+    hash.update(b"build_env\0");
+    for name in &build_names {
+        hash.update(name.as_bytes());
+        hash.update(b"\0");
+    }
+
+    let digest = hash.finalize();
+    let mut hex = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        use std::fmt::Write as _;
+        let _ = write!(&mut hex, "{byte:02x}");
+    }
+    Ok((hex, format!("mode:{:x}", permissions.finalize())))
+}
+
+fn hash_selected_entry(
+    project: &Dir,
+    rel: &Path,
+    hash: &mut Sha256,
+    permissions: &mut Sha256,
+) -> Result<(), String> {
+    let mut parent = project
+        .try_clone()
+        .map_err(|e| format!("cannot clone project dir handle: {e}"))?;
+    let mut components = rel.components().peekable();
+    let name = loop {
+        let Some(std::path::Component::Normal(name)) = components.next() else {
+            return Err(format!("invalid selected source: {}", rel.display()));
+        };
+        if components.peek().is_none() {
+            break name;
+        }
+        parent = parent
+            .open_dir_nofollow(name)
+            .map_err(|e| format!("cannot traverse {}: {e}", rel.display()))?;
+    };
+
+    let meta = parent
+        .symlink_metadata(name)
+        .map_err(|e| format!("cannot stat {}: {e}", rel.display()))?;
+    if meta.is_symlink() {
+        let target = parent
+            .read_link_contents(name)
+            .map_err(|e| format!("cannot read link {}: {e}", rel.display()))?;
+        hash.update(b"sym\0");
+        hash.update(target.as_os_str().as_encoded_bytes());
+        hash.update(b"\0");
+        return Ok(());
+    }
+    if !meta.is_file() {
+        return Err(format!("unsupported backup source: {}", rel.display()));
+    }
+
+    let mut options = cap_std::fs::OpenOptions::new();
+    options.read(true).follow(FollowSymlinks::No);
+    #[cfg(unix)]
+    {
+        use cap_std::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let mut file = parent
+        .open_with(name, &options)
+        .map_err(|e| format!("cannot open {}: {e}", rel.display()))?
+        .into_std();
+    let meta = file
+        .metadata()
+        .map_err(|e| format!("cannot stat {}: {e}", rel.display()))?;
+    if !meta.is_file() {
+        return Err(format!("expected a regular file: {}", rel.display()));
+    }
+    #[cfg(unix)]
+    permissions.update(std::os::unix::fs::PermissionsExt::mode(&meta.permissions()).to_le_bytes());
+    #[cfg(not(unix))]
+    permissions.update([u8::from(meta.permissions().readonly())]);
+    hash.update(b"reg\0");
+    hash.update(meta.len().to_le_bytes());
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = file
+            .read(&mut buf)
+            .map_err(|e| format!("cannot read {}: {e}", rel.display()))?;
+        if n == 0 {
+            break;
+        }
+        hash.update(&buf[..n]);
+    }
+    Ok(())
 }
 
 /// Decides which paths are source worth keeping. Built once per selection.
@@ -182,8 +421,34 @@ fn is_generated_file(name: &[u8]) -> bool {
         || name == b"Thumbs.db"
 }
 
+/// A backup or restore may run inside a Git hook with the caller's index exported.
+/// Clear Git's repository-local environment before selecting a checkout by cwd.
+pub(super) fn git_command() -> Command {
+    let mut git = Command::new("git");
+    for key in [
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_CONFIG",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_CONFIG_COUNT",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_IMPLICIT_WORK_TREE",
+        "GIT_GRAFT_FILE",
+        "GIT_INDEX_FILE",
+        "GIT_NO_REPLACE_OBJECTS",
+        "GIT_REPLACE_REF_BASE",
+        "GIT_PREFIX",
+        "GIT_SHALLOW_FILE",
+        "GIT_COMMON_DIR",
+    ] {
+        git.env_remove(key);
+    }
+    git
+}
+
 fn git(root: &Path, args: &[&str]) -> Result<std::process::Output, String> {
-    Command::new("git")
+    git_command()
         .args(args)
         .current_dir(root)
         // Stable English messages: we match "not a git repository" below.
@@ -210,7 +475,7 @@ fn git_stdout(root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
 /// failure is an error: silently treating a repository we cannot read as
 /// "not git" would skip the unpushed commits and report a complete backup.
 fn git_state(root: &Path) -> Result<Option<GitInfo>, String> {
-    let probe = match Command::new("git")
+    let probe = match git_command()
         .args(["rev-parse", "--is-inside-work-tree"])
         .current_dir(root)
         .env("LC_ALL", "C")
@@ -278,6 +543,10 @@ fn git_state(root: &Path) -> Result<Option<GitInfo>, String> {
         branch,
         remote,
         ahead,
+        prefix: String::from_utf8(git_stdout(root, &["rev-parse", "--show-prefix"])?)
+            .map_err(|_| "non-UTF-8 Git project prefix")?
+            .trim_end_matches(['\r', '\n'])
+            .to_owned(),
     }))
 }
 
@@ -288,12 +557,13 @@ fn has_git_dir(root: &Path) -> bool {
 
 /// Paths git reports as modified/staged/untracked, relative to `root`, with
 /// the two-column porcelain status.
-fn git_status(root: &Path) -> Result<Vec<(PathBuf, [u8; 2])>, String> {
+fn git_status(root: &Path, prefix: &str) -> Result<Vec<(PathBuf, [u8; 2])>, String> {
     let out = git_stdout(
         root,
         &[
             "status",
             "--porcelain=v1",
+            "--no-renames",
             "-z",
             "--untracked-files=all",
             "--",
@@ -301,22 +571,14 @@ fn git_status(root: &Path) -> Result<Vec<(PathBuf, [u8; 2])>, String> {
         ],
     )?;
     // Porcelain paths are repo-root relative; drop the prefix down to `root`.
-    let prefix = git_stdout(root, &["rev-parse", "--show-prefix"])?;
-    let prefix = prefix.strip_suffix(b"\n").unwrap_or(&prefix);
-
     let mut paths = Vec::new();
-    let mut entries = out.split(|b| *b == 0);
-    while let Some(entry) = entries.next() {
+    for entry in out.split(|b| *b == 0) {
         if entry.len() < 4 {
             continue;
         }
         let code = [entry[0], entry[1]];
         let path = &entry[3..];
-        // A rename/copy entry is followed by the old path; skip it.
-        if code.iter().any(|c| matches!(c, b'R' | b'C')) {
-            entries.next();
-        }
-        if let Some(rel) = path.strip_prefix(prefix) {
+        if let Some(rel) = path.strip_prefix(prefix.as_bytes()) {
             paths.push((git_path(rel)?.to_owned(), code));
         }
     }
@@ -380,6 +642,7 @@ fn staged_entries(root: &Path, mut paths: BTreeSet<PathBuf>) -> Result<Vec<Stage
                 path: path.to_owned(),
                 object_id: id.to_string(),
                 gitlink: mode == "160000",
+                mode: mode.to_owned(),
             });
         }
     }
@@ -406,7 +669,7 @@ pub fn save_staged(root: &Path, entry: &StagedEntry, stage: &Path) -> Result<(),
         std::fs::write(&target, format!("{id}\n")).map_err(|e| e.to_string())?;
     } else {
         let file = std::fs::File::create(&target).map_err(|e| e.to_string())?;
-        let out = Command::new("git")
+        let out = git_command()
             .args(["cat-file", "blob", id])
             .current_dir(root)
             .stdout(file)
@@ -665,6 +928,37 @@ mod tests {
             ["local.config.json", "src/a.rs", "src/b.rs",],
             "ignored build output stays out"
         );
+    }
+
+    #[test]
+    fn records_child_deletion_when_a_file_replaces_its_parent() {
+        let repo = git_repo(&[("pkg/old", "old")]);
+        let _remote = with_remote(&repo);
+        std::fs::remove_file(repo.path().join("pkg/old")).unwrap();
+        std::fs::remove_dir(repo.path().join("pkg")).unwrap();
+        repo.write("pkg", "replacement");
+        let selected = select(repo.path(), &[]).unwrap();
+        assert_eq!(rels(&selected.files), ["pkg"]);
+        assert!(selected.deleted.worktree.contains("pkg/old"));
+    }
+
+    #[test]
+    fn deletion_only_snapshots_distinguish_the_index_from_the_worktree() {
+        let repo = git_repo(&[("old.txt", "source")]);
+        let _remote = with_remote(&repo);
+        let fingerprint = || {
+            let selected = select(repo.path(), &[]).unwrap();
+            assert!(selected.files.is_empty());
+            selection_fingerprint(repo.path(), &selected, &[]).unwrap()
+        };
+        let clean = fingerprint();
+        std::fs::remove_file(repo.path().join("old.txt")).unwrap();
+        let unstaged = fingerprint();
+        repo.git(&["add", "-u"]);
+        let staged = fingerprint();
+        assert_ne!(clean, unstaged);
+        assert_ne!(unstaged, staged);
+        assert_ne!(clean, staged);
     }
 
     #[test]
@@ -957,5 +1251,55 @@ mod tests {
             select(repo.path(), &[]).unwrap().files,
             [PathBuf::from(OsStr::from_bytes(b"source\xff"))]
         );
+    }
+
+    #[test]
+    fn selection_fingerprint_tracks_tracked_vscode_staged_blobs_and_local_commits() {
+        let repo = git_repo(&[
+            ("src/a.rs", "fn main() {}"),
+            (".vscode/settings.json", "{}"),
+        ]);
+        let _bare = with_remote(&repo);
+
+        let sel0 = select(repo.path(), &[]).unwrap();
+        let fp0 = selection_fingerprint(repo.path(), &sel0, &["API_URL".into()]).unwrap();
+        let fp0_repeat = selection_fingerprint(repo.path(), &sel0, &["API_URL".into()]).unwrap();
+        assert_eq!(fp0, fp0_repeat);
+        assert_eq!(fp0.len(), 64);
+
+        // 1. Tracked file under `.vscode/` (skipped by deploy_state::SKIP_DIRS).
+        repo.write(".vscode/settings.json", "{\"editor.tabSize\":2}");
+        let sel1 = select(repo.path(), &[]).unwrap();
+        let fp1 = selection_fingerprint(repo.path(), &sel1, &["API_URL".into()]).unwrap();
+        assert_ne!(fp1, fp0);
+
+        // 2. Staged blob differs from working tree (working tree reverted to original bytes).
+        repo.write("src/a.rs", "fn main() { println!(\"staged\"); }");
+        assert!(
+            git(repo.path(), &["add", "src/a.rs"])
+                .unwrap()
+                .status
+                .success()
+        );
+        repo.write("src/a.rs", "fn main() {}");
+        let sel2 = select(repo.path(), &[]).unwrap();
+        let fp2 = selection_fingerprint(repo.path(), &sel2, &["API_URL".into()]).unwrap();
+        assert_ne!(fp2, fp1);
+
+        // 3. Local-only commit (`ahead > 0`).
+        assert!(
+            git(repo.path(), &["commit", "-m", "local commit"])
+                .unwrap()
+                .status
+                .success()
+        );
+        let sel3 = select(repo.path(), &[]).unwrap();
+        if let Some(bundle) = &sel3.bundle {
+            let fp3 = selection_fingerprint(repo.path(), &sel3, &["API_URL".into()]).unwrap();
+            assert_ne!(fp3, fp2);
+            remove_bundle(bundle);
+        } else {
+            panic!("expected local commit bundle");
+        }
     }
 }

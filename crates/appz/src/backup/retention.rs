@@ -224,7 +224,7 @@ fn forget_items(output: &str) -> Result<Vec<ForgetItem>, EngineError> {
     Ok(groups.into_iter().flat_map(|g| g.items).collect())
 }
 
-fn forget_ids(engine: &impl Rustic, ids: &[&str]) -> Result<usize, EngineError> {
+fn forget_ids<E: Rustic + ?Sized>(engine: &E, ids: &[&str]) -> Result<usize, EngineError> {
     let mut args = vec!["forget", "--json", "--"];
     args.extend_from_slice(ids);
     Ok(forget_items(&engine.run(&args)?.stdout)?
@@ -269,8 +269,8 @@ fn maintenance_lock(project: &Path, repository: &str) -> std::io::Result<Mainten
 /// Runs at most once a day unless the state records no run for today.
 /// If `max_size` is exceeded, progressively forgets the oldest snapshots
 /// until under capacity or reaching `min_keep`.
-pub fn apply(
-    engine: &impl Rustic,
+pub fn apply<E: Rustic + ?Sized>(
+    engine: &E,
     retention: &Retention,
     project: &Path,
     repository: &str,
@@ -358,7 +358,7 @@ pub fn apply(
     })
 }
 
-fn query_repo_size(engine: &impl Rustic) -> Result<u64, EngineError> {
+pub(super) fn query_repo_size<E: Rustic + ?Sized>(engine: &E) -> Result<u64, EngineError> {
     let out = engine.run(&["repoinfo", "--json"])?;
     #[derive(Deserialize)]
     #[serde(untagged)]

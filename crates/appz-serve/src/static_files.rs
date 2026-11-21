@@ -6,7 +6,7 @@ use hyper::header::{CACHE_CONTROL, CONTENT_TYPE, HeaderValue, LOCATION};
 use hyper::http::StatusCode;
 use hyper::{Method, Response};
 use mime_guess::from_path;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use tokio::fs;
 
 pub async fn handle_static_file(
@@ -15,20 +15,38 @@ pub async fn handle_static_file(
     method: &Method,
     spa_fallback: bool,
 ) -> Result<Response<Full<Bytes>>> {
+    let canonical_root = fs::canonicalize(root_dir).await.map_err(ServeError::Io)?;
+    let candidate = resolve_under_root(&canonical_root, request_path)?;
+
     if let Some(redirect_path) = check_redirect(request_path) {
         return Ok(create_redirect(&redirect_path));
     }
 
-    let path = normalize_path(root_dir, request_path)?;
+    let path = match verify_existing_under_root(&canonical_root, &candidate).await? {
+        Some(p) => p,
+        None => {
+            if let Some(fallback_path) =
+                try_html_fallback(&canonical_root, &candidate, request_path).await?
+            {
+                return respond_path(&fallback_path, method).await;
+            }
+            if spa_fallback && is_spa_navigation_path(request_path) {
+                return handle_spa_fallback(&canonical_root, method).await;
+            }
+            return Ok(not_found());
+        }
+    };
 
     let metadata = match fs::metadata(&path).await {
         Ok(m) => m,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            if let Some(fallback_path) = try_html_fallback(root_dir, request_path).await? {
+            if let Some(fallback_path) =
+                try_html_fallback(&canonical_root, &candidate, request_path).await?
+            {
                 return respond_path(&fallback_path, method).await;
             }
             if spa_fallback && is_spa_navigation_path(request_path) {
-                return handle_spa_fallback(root_dir, method).await;
+                return handle_spa_fallback(&canonical_root, method).await;
             }
             return Ok(not_found());
         }
@@ -41,17 +59,21 @@ pub async fn handle_static_file(
             return Ok(create_redirect(redirect_path));
         }
 
-        if let Some(fallback_path) = try_html_fallback(root_dir, request_path).await? {
+        if let Some(fallback_path) =
+            try_html_fallback(&canonical_root, &candidate, request_path).await?
+        {
             return respond_path(&fallback_path, method).await;
         }
 
-        let index_path = path.join("index.html");
-        if fs::metadata(&index_path).await.is_ok() {
+        let index_candidate = path.join("index.html");
+        if let Some(index_path) =
+            verify_existing_under_root(&canonical_root, &index_candidate).await?
+        {
             return respond_path(&index_path, method).await;
         }
 
         if spa_fallback && is_spa_navigation_path(request_path) {
-            return handle_spa_fallback(root_dir, method).await;
+            return handle_spa_fallback(&canonical_root, method).await;
         }
         return Ok(not_found());
     }
@@ -95,22 +117,59 @@ async fn head_file(path: &Path) -> Result<Response<Full<Bytes>>> {
         .body(Full::new(Bytes::new()))?)
 }
 
-async fn handle_spa_fallback(root_dir: &Path, method: &Method) -> Result<Response<Full<Bytes>>> {
-    let index_path = root_dir.join("index.html");
+async fn handle_spa_fallback(
+    canonical_root: &Path,
+    method: &Method,
+) -> Result<Response<Full<Bytes>>> {
+    let candidate = canonical_root.join("index.html");
+    let Some(index_path) = verify_existing_under_root(canonical_root, &candidate).await? else {
+        return Ok(not_found());
+    };
     respond_path(&index_path, method).await.or(Ok(not_found()))
 }
 
-fn normalize_path(root_dir: &Path, request_path: &str) -> Result<PathBuf> {
+fn resolve_under_root(canonical_root: &Path, request_path: &str) -> Result<PathBuf> {
     let path = request_path.trim_start_matches('/');
     let decoded = urlencoding::decode(path)
         .map_err(|e| ServeError::Config(format!("Invalid URL encoding: {e}")))?;
-    let full_path = root_dir.join(decoded.as_ref());
-    if !full_path.starts_with(root_dir) {
+    if decoded.contains('\0') || decoded.contains('\\') {
         return Err(ServeError::InvalidPath(format!(
-            "Path outside root directory: {request_path}"
+            "Invalid path characters: {request_path}"
         )));
     }
-    Ok(full_path)
+    let mut resolved = canonical_root.to_path_buf();
+    for component in Path::new(decoded.as_ref()).components() {
+        match component {
+            Component::Normal(part) => resolved.push(part),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err(ServeError::InvalidPath(format!(
+                    "Path outside root directory: {request_path}"
+                )));
+            }
+        }
+    }
+    Ok(resolved)
+}
+
+async fn verify_existing_under_root(
+    canonical_root: &Path,
+    candidate: &Path,
+) -> Result<Option<PathBuf>> {
+    match fs::canonicalize(candidate).await {
+        Ok(real) => {
+            if real.starts_with(canonical_root) {
+                Ok(Some(real))
+            } else {
+                Err(ServeError::InvalidPath(format!(
+                    "Path outside root directory: {}",
+                    candidate.display()
+                )))
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(ServeError::Io(e)),
+    }
 }
 
 pub(crate) fn not_found() -> Response<Full<Bytes>> {
@@ -130,24 +189,38 @@ pub(crate) fn internal_error() -> Response<Full<Bytes>> {
 }
 
 fn check_redirect(request_path: &str) -> Option<String> {
+    let safe_location = |loc: &str| {
+        let collapsed = loc.trim_start_matches('/');
+        if collapsed.is_empty() {
+            "/".to_string()
+        } else {
+            format!("/{collapsed}")
+        }
+    };
     if request_path == "/index.html" {
         return Some("/".to_string());
     }
-    if request_path.ends_with(".html") && request_path != "/index.html" {
-        return Some(request_path.trim_end_matches(".html").to_string());
-    }
     if request_path.ends_with("/index.html") {
-        return Some(request_path.trim_end_matches("/index.html").to_string());
+        return Some(safe_location(request_path.trim_end_matches("/index.html")));
+    }
+    if request_path.ends_with(".html") {
+        return Some(safe_location(request_path.trim_end_matches(".html")));
     }
     None
 }
 
 fn create_redirect(location: &str) -> Response<Full<Bytes>> {
+    let collapsed = location.trim_start_matches('/');
+    let normalized = if collapsed.is_empty() {
+        "/".to_string()
+    } else {
+        format!("/{collapsed}")
+    };
     Response::builder()
         .status(StatusCode::MOVED_PERMANENTLY)
         .header(
             LOCATION,
-            HeaderValue::from_str(location).unwrap_or_else(|_| HeaderValue::from_static("/")),
+            HeaderValue::from_str(&normalized).unwrap_or_else(|_| HeaderValue::from_static("/")),
         )
         .body(Full::new(Bytes::new()))
         .expect("redirect response")
@@ -158,21 +231,113 @@ fn is_spa_navigation_path(path: &str) -> bool {
     !path.is_empty() && !path.contains('.')
 }
 
-async fn try_html_fallback(root_dir: &Path, request_path: &str) -> Result<Option<PathBuf>> {
+async fn try_html_fallback(
+    canonical_root: &Path,
+    candidate: &Path,
+    request_path: &str,
+) -> Result<Option<PathBuf>> {
     let path = request_path.trim_start_matches('/');
     if path.is_empty() || path.contains('.') {
         return Ok(None);
     }
 
-    let html_path = root_dir.join(format!("{path}.html"));
-    if fs::metadata(&html_path).await.is_ok() {
-        return Ok(Some(html_path));
+    if let Some(name) = candidate.file_name().and_then(|n| n.to_str()) {
+        let html_candidate = candidate.with_file_name(format!("{name}.html"));
+        if let Some(real) = verify_existing_under_root(canonical_root, &html_candidate).await? {
+            return Ok(Some(real));
+        }
     }
 
-    let index_path = root_dir.join(path).join("index.html");
-    if fs::metadata(&index_path).await.is_ok() {
-        return Ok(Some(index_path));
+    let index_candidate = candidate.join("index.html");
+    verify_existing_under_root(canonical_root, &index_candidate).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEST_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    fn make_temp_pair() -> (PathBuf, PathBuf) {
+        let seq = TEST_SEQ.fetch_add(1, Ordering::Relaxed);
+        let base =
+            std::env::temp_dir().join(format!("appz-serve-sec-{}-{seq}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("site");
+        let outside = base.join("outside");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(root.join("index.html"), "<h1>home</h1>").unwrap();
+        std::fs::write(root.join("about.html"), "<h1>about</h1>").unwrap();
+        std::fs::write(outside.join("secret.txt"), "top-secret").unwrap();
+        (base, root)
     }
 
-    Ok(None)
+    #[tokio::test]
+    async fn blocks_lexical_and_encoded_path_traversal() {
+        let (base, root) = make_temp_pair();
+        for bad in [
+            "/../outside/secret.txt",
+            "/%2e%2e/outside/secret.txt",
+            "/%2e%2e%2foutside%2fsecret.txt",
+            "/..%5coutside%5csecret.txt",
+            "/sub/../../outside/secret.txt",
+        ] {
+            let res = handle_static_file(&root, bad, &Method::GET, false).await;
+            assert!(
+                matches!(res, Err(ServeError::InvalidPath(_))),
+                "expected InvalidPath for {bad}, got {res:?}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn blocks_symlink_escaping_root() {
+        let (base, root) = make_temp_pair();
+        let outside_secret = base.join("outside").join("secret.txt");
+        let link = root.join("leak.txt");
+        #[cfg(unix)]
+        let linked = std::os::unix::fs::symlink(&outside_secret, &link).is_ok();
+        #[cfg(windows)]
+        let linked = std::os::windows::fs::symlink_file(&outside_secret, &link).is_ok();
+
+        if linked {
+            let res = handle_static_file(&root, "/leak.txt", &Method::GET, false).await;
+            assert!(
+                matches!(res, Err(ServeError::InvalidPath(_))),
+                "symlink outside root must be rejected, got {res:?}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn redirect_collapses_protocol_relative_paths() {
+        let (base, root) = make_temp_pair();
+        let resp = handle_static_file(&root, "//evil.com/index.html", &Method::GET, false)
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::MOVED_PERMANENTLY);
+        let loc = resp.headers().get(LOCATION).unwrap().to_str().unwrap();
+        assert!(!loc.starts_with("//"), "open redirect location: {loc}");
+        assert_eq!(loc, "/evil.com");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn serves_valid_files_and_clean_html_fallback() {
+        let (base, root) = make_temp_pair();
+        let ok_index = handle_static_file(&root, "/", &Method::GET, false)
+            .await
+            .unwrap();
+        assert_eq!(ok_index.status(), StatusCode::OK);
+
+        let ok_about = handle_static_file(&root, "/about", &Method::GET, false)
+            .await
+            .unwrap();
+        assert_eq!(ok_about.status(), StatusCode::OK);
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }

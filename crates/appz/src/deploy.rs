@@ -521,7 +521,7 @@ fn finish_target_with(
     if let (Some(fp), Some(url)) = (fingerprint, &output.url) {
         crate::deploy_state::record(&ctx.project_dir, slug, target.req.prod, fp, url);
         if target.req.backup {
-            let build_env_names = build_env_var_names(&target.req, &ctx.deploy_config);
+            let build_env_names = build_env_var_names(&target.req);
             let interactive = if !target.req.json && crate::is_tty() {
                 crate::backup::Interactive::Yes
             } else {
@@ -544,8 +544,8 @@ fn finish_target_with(
     None
 }
 
-fn build_env_var_names(req: &DeployRequest, config: &DeployConfig) -> Vec<String> {
-    let mut names: Vec<String> = config.build_env.keys().cloned().collect();
+fn build_env_var_names(req: &DeployRequest) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
     for entry in &req.build_env {
         let key = entry.split_once('=').map_or(entry.as_str(), |(k, _)| k);
         if !key.is_empty() {
@@ -1134,11 +1134,11 @@ mod tests {
             output.url.as_ref().unwrap(),
         );
         for _ in 0..2 {
-            assert!(finish_target(&target, &output, Some(&fp)).is_some());
+            assert!(finish_target(&target, &mut output, Some(&fp)).is_some());
             assert!(crate::deploy_state::unchanged(dir.path(), "vercel", false, &fp).is_none());
         }
         target.ctx.deploy_config.hooks.after_deploy.clear();
-        assert!(finish_target(&target, &output, Some(&fp)).is_none());
+        assert!(finish_target(&target, &mut output, Some(&fp)).is_none());
         assert!(crate::deploy_state::unchanged(dir.path(), "vercel", false, &fp).is_some());
     }
 

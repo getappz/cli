@@ -31,20 +31,31 @@ pub struct AfterDeploy<'a> {
 ///
 /// Never returns an error so a backup failure never fails or alters the deploy
 /// result; emits one-line notes to stderr unless `req.json` is true.
+enum RepoOpen<E> {
+    Opened(E),
+    Skipped(String),
+}
+
 pub fn after_deploy(root: &Path, req: &AfterDeploy<'_>) -> Option<BackupSummary> {
-    let mut skip_note = None;
     after_deploy_with(
         root,
         req,
         |cfg| {
-            repo::open_repo_noting(root, cfg, req.interactive, |msg| {
+            let mut skip_note = None;
+            let res = repo::open_repo_noting(root, cfg, req.interactive, |msg| {
                 skip_note = Some(msg.to_string());
                 if !req.json {
                     eprintln!("{msg}");
                 }
-            })
+            });
+            match res {
+                Ok(Some(cli)) => Ok(RepoOpen::Opened(cli)),
+                Ok(None) => Ok(RepoOpen::Skipped(
+                    skip_note.unwrap_or_else(|| "backup skipped".to_string()),
+                )),
+                Err(e) => Err(e),
+            }
         },
-        || skip_note.take(),
         |msg| {
             if !req.json {
                 eprintln!("{msg}");
@@ -56,8 +67,7 @@ pub fn after_deploy(root: &Path, req: &AfterDeploy<'_>) -> Option<BackupSummary>
 fn after_deploy_with<E: Rustic>(
     root: &Path,
     req: &AfterDeploy<'_>,
-    open: impl FnOnce(&config::BackupConfig) -> std::result::Result<Option<E>, String>,
-    mut take_skip_note: impl FnMut() -> Option<String>,
+    open: impl FnOnce(&config::BackupConfig) -> std::result::Result<RepoOpen<E>, String>,
     mut note: impl FnMut(&str),
 ) -> Option<BackupSummary> {
     let cfg = match config::read_config(root) {
@@ -76,12 +86,12 @@ fn after_deploy_with<E: Rustic>(
     }
 
     let engine = match open(&cfg) {
-        Ok(Some(engine)) => engine,
-        Ok(None) => {
+        Ok(RepoOpen::Opened(engine)) => engine,
+        Ok(RepoOpen::Skipped(reason)) => {
             return Some(BackupSummary {
                 snapshot: None,
                 added_bytes: 0,
-                skipped: Some(take_skip_note().unwrap_or_else(|| "backup skipped".to_string())),
+                skipped: Some(reason),
             });
         }
         Err(err) => {
@@ -143,8 +153,7 @@ pub(crate) fn run_after_deploy_failed_fixture(
     after_deploy_with(
         root,
         req,
-        |_| Ok(Some(FailingEngine)),
-        || None,
+        |_| Ok(RepoOpen::Opened(FailingEngine)),
         |m| notes.push(m.to_string()),
     )
 }

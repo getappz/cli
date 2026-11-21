@@ -218,7 +218,7 @@ fn is_uninitialized_repo_error(msg: &str) -> bool {
         || lower.contains("no such file")
 }
 
-fn generate_recovery_password() -> String {
+pub(super) fn generate_recovery_password() -> String {
     let mut bytes = [0u8; 32];
     rand::rngs::OsRng.fill_bytes(&mut bytes);
     encode_base64(&bytes)

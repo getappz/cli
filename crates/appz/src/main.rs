@@ -69,6 +69,8 @@ enum AppzCmd {
     Clean(CleanArgs),
     /// Snapshot local project source in a Rustic repository
     Backup(backup::BackupArgs),
+    /// Reconstruct a source snapshot in an empty directory
+    Restore(backup::restore::RestoreArgs),
     /// Diagnose project stack, config, and suggestions
     Doctor(DoctorArgs),
     /// Build the checkout and install it over the running `appz` binary
@@ -1556,6 +1558,11 @@ fn main() {
         AppzCmd::Clean(a) => run_clean(a, json),
         AppzCmd::Backup(a) => {
             if let Err(e) = backup::run(a, json) {
+                error(&e.to_string());
+            }
+        }
+        AppzCmd::Restore(a) => {
+            if let Err(e) = backup::restore::run(a, json) {
                 error(&e.to_string());
             }
         }

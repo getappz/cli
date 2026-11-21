@@ -33,6 +33,7 @@ pub struct Selection {
     pub files: Vec<PathBuf>,
     /// Changed stage-zero entries, including files normalized by Git clean filters.
     pub staged: Vec<StagedEntry>,
+    pub deleted: DeletedPaths,
     /// Variable names found in `.env*` files, sorted and deduped. Values are
     /// never read into this struct.
     pub env_names: Vec<String>,
@@ -42,6 +43,12 @@ pub struct Selection {
     /// directory. Present only when there is something to carry; the caller
     /// removes it with [`remove_bundle`].
     pub bundle: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DeletedPaths {
+    pub index: BTreeSet<String>,
+    pub worktree: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +66,8 @@ pub struct GitInfo {
     pub remote: Option<String>,
     /// Commits reachable from HEAD but from no remote ref.
     pub ahead: u32,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub prefix: String,
 }
 
 /// Select the source to snapshot. `output_dirs` are build outputs (from the
@@ -76,6 +85,7 @@ pub fn select(root: &Path, output_dirs: &[&str]) -> Result<Selection, String> {
         return Ok(Selection {
             files,
             staged: Vec::new(),
+            deleted: DeletedPaths::default(),
             env_names,
             git: None,
             bundle: None,
@@ -89,14 +99,37 @@ pub fn select(root: &Path, output_dirs: &[&str]) -> Result<Selection, String> {
     let mut changed: BTreeSet<PathBuf> = BTreeSet::new();
     // Tracked changes and untracked files. `-z` keeps paths verbatim, so
     // spaces and non-ASCII names survive unchanged.
+    let mut deleted = DeletedPaths::default();
     let mut staged_paths = BTreeSet::new();
-    for (rel, code) in git_status(root)? {
+    for (rel, code) in git_status(root, &state.prefix)? {
         if !filter.keeps(&rel, code == *b"??") {
             continue;
         }
         // AA and AU are unmerged index entries; neither has a stage-zero blob.
         if matches!(code[0], b'A' | b'C' | b'M' | b'R' | b'T') && !matches!(&code, b"AA" | b"AU") {
             staged_paths.insert(rel.clone());
+        }
+        if matches!(&code, b"D " | b" D" | b"MD" | b"AD" | b"TD") {
+            let name = rel
+                .to_str()
+                .ok_or("cannot record a non-UTF-8 deletion path")?;
+            // git_status returns Git's slash-separated path bytes on all platforms.
+            if code[0] == b'D' {
+                deleted.index.insert(name.to_owned());
+            }
+            match std::fs::symlink_metadata(root.join(&rel)) {
+                Ok(meta) if !meta.is_dir() => {
+                    changed.insert(rel);
+                }
+                Ok(_) => {
+                    deleted.worktree.insert(name.to_owned());
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    deleted.worktree.insert(name.to_owned());
+                }
+                Err(e) => return Err(format!("cannot inspect deleted path {name}: {e}")),
+            }
+            continue;
         }
         if code[1] != b'D' && code[0] != b'D' {
             match std::fs::symlink_metadata(root.join(&rel)) {
@@ -125,6 +158,7 @@ pub fn select(root: &Path, output_dirs: &[&str]) -> Result<Selection, String> {
     Ok(Selection {
         files: changed.into_iter().collect(),
         staged,
+        deleted,
         env_names,
         git: Some(state),
         bundle,
@@ -159,6 +193,18 @@ pub(super) fn selection_fingerprint(
         hash.update(entry.object_id.as_bytes());
         hash.update(b"\0");
         hash.update([u8::from(entry.gitlink)]);
+    }
+
+    for (kind, paths) in [
+        ("index-deletion", &selection.deleted.index),
+        ("worktree-deletion", &selection.deleted.worktree),
+    ] {
+        for path in paths {
+            hash.update(kind.as_bytes());
+            hash.update(b"\0");
+            hash.update(path.as_bytes());
+            hash.update(b"\0");
+        }
     }
 
     hash.update(b"git\0");
@@ -329,8 +375,34 @@ fn is_generated_file(name: &[u8]) -> bool {
         || name == b"Thumbs.db"
 }
 
+/// A backup or restore may run inside a Git hook with the caller's index exported.
+/// Clear Git's repository-local environment before selecting a checkout by cwd.
+pub(super) fn git_command() -> Command {
+    let mut git = Command::new("git");
+    for key in [
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_CONFIG",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_CONFIG_COUNT",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_IMPLICIT_WORK_TREE",
+        "GIT_GRAFT_FILE",
+        "GIT_INDEX_FILE",
+        "GIT_NO_REPLACE_OBJECTS",
+        "GIT_REPLACE_REF_BASE",
+        "GIT_PREFIX",
+        "GIT_SHALLOW_FILE",
+        "GIT_COMMON_DIR",
+    ] {
+        git.env_remove(key);
+    }
+    git
+}
+
 fn git(root: &Path, args: &[&str]) -> Result<std::process::Output, String> {
-    Command::new("git")
+    git_command()
         .args(args)
         .current_dir(root)
         // Stable English messages: we match "not a git repository" below.
@@ -357,7 +429,7 @@ fn git_stdout(root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
 /// failure is an error: silently treating a repository we cannot read as
 /// "not git" would skip the unpushed commits and report a complete backup.
 fn git_state(root: &Path) -> Result<Option<GitInfo>, String> {
-    let probe = match Command::new("git")
+    let probe = match git_command()
         .args(["rev-parse", "--is-inside-work-tree"])
         .current_dir(root)
         .env("LC_ALL", "C")
@@ -425,6 +497,10 @@ fn git_state(root: &Path) -> Result<Option<GitInfo>, String> {
         branch,
         remote,
         ahead,
+        prefix: String::from_utf8(git_stdout(root, &["rev-parse", "--show-prefix"])?)
+            .map_err(|_| "non-UTF-8 Git project prefix")?
+            .trim_end_matches(['\r', '\n'])
+            .to_owned(),
     }))
 }
 
@@ -435,12 +511,13 @@ fn has_git_dir(root: &Path) -> bool {
 
 /// Paths git reports as modified/staged/untracked, relative to `root`, with
 /// the two-column porcelain status.
-fn git_status(root: &Path) -> Result<Vec<(PathBuf, [u8; 2])>, String> {
+fn git_status(root: &Path, prefix: &str) -> Result<Vec<(PathBuf, [u8; 2])>, String> {
     let out = git_stdout(
         root,
         &[
             "status",
             "--porcelain=v1",
+            "--no-renames",
             "-z",
             "--untracked-files=all",
             "--",
@@ -448,22 +525,14 @@ fn git_status(root: &Path) -> Result<Vec<(PathBuf, [u8; 2])>, String> {
         ],
     )?;
     // Porcelain paths are repo-root relative; drop the prefix down to `root`.
-    let prefix = git_stdout(root, &["rev-parse", "--show-prefix"])?;
-    let prefix = prefix.strip_suffix(b"\n").unwrap_or(&prefix);
-
     let mut paths = Vec::new();
-    let mut entries = out.split(|b| *b == 0);
-    while let Some(entry) = entries.next() {
+    for entry in out.split(|b| *b == 0) {
         if entry.len() < 4 {
             continue;
         }
         let code = [entry[0], entry[1]];
         let path = &entry[3..];
-        // A rename/copy entry is followed by the old path; skip it.
-        if code.iter().any(|c| matches!(c, b'R' | b'C')) {
-            entries.next();
-        }
-        if let Some(rel) = path.strip_prefix(prefix) {
+        if let Some(rel) = path.strip_prefix(prefix.as_bytes()) {
             paths.push((git_path(rel)?.to_owned(), code));
         }
     }
@@ -553,7 +622,7 @@ pub fn save_staged(root: &Path, entry: &StagedEntry, stage: &Path) -> Result<(),
         std::fs::write(&target, format!("{id}\n")).map_err(|e| e.to_string())?;
     } else {
         let file = std::fs::File::create(&target).map_err(|e| e.to_string())?;
-        let out = Command::new("git")
+        let out = git_command()
             .args(["cat-file", "blob", id])
             .current_dir(root)
             .stdout(file)
@@ -812,6 +881,25 @@ mod tests {
             ["local.config.json", "src/a.rs", "src/b.rs",],
             "ignored build output stays out"
         );
+    }
+
+    #[test]
+    fn deletion_only_snapshots_distinguish_the_index_from_the_worktree() {
+        let repo = git_repo(&[("old.txt", "source")]);
+        let _remote = with_remote(&repo);
+        let fingerprint = || {
+            let selected = select(repo.path(), &[]).unwrap();
+            assert!(selected.files.is_empty());
+            selection_fingerprint(repo.path(), &selected, &[]).unwrap()
+        };
+        let clean = fingerprint();
+        std::fs::remove_file(repo.path().join("old.txt")).unwrap();
+        let unstaged = fingerprint();
+        repo.git(&["add", "-u"]);
+        let staged = fingerprint();
+        assert_ne!(clean, unstaged);
+        assert_ne!(unstaged, staged);
+        assert_ne!(clean, staged);
     }
 
     #[test]

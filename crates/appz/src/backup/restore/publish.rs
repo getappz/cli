@@ -175,9 +175,10 @@ pub(super) fn apply(root: &Path, prepared: &Path, m: &Manifest, before: &Head) -
     )?;
     fs::write(
         recovery.path().join("RECOVERY.txt"),
-        "The files directory holds original files moved from the project, including edits made during publication. affected.json lists the paths involved. Keep any subsequent edits before recovering. Restore the original branch or detached commit from original-head.json, restore original-index to the Git index if present, then copy the saved files back at their relative paths. Paths newly created by restore can be removed after inspection. An interrupted restore may have moved only some originals. Do not delete unrelated files.\n",
+        include_str!("recovery.txt"),
     )?;
     let path = recovery.keep();
+    eprintln!("In-place restore recovery directory: {}", path.display());
     let publish = || -> Result<()> {
         for rel in &moved {
             ensure_parents(&saved, rel)?;

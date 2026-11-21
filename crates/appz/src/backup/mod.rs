@@ -16,6 +16,148 @@ pub use repo::{Interactive, PASSWORD_ENV, open_repo, vault_key};
 #[allow(unused_imports)]
 pub use snapshot::{BackupSummary, CreateInput, create as create_snapshot};
 
+/// Parameters for best-effort post-deploy source backup.
+pub struct AfterDeploy<'a> {
+    pub fingerprint: &'a str,
+    pub target: &'a str,
+    pub production: bool,
+    pub url: Option<&'a str>,
+    pub build_env_names: Vec<String>,
+    pub interactive: Interactive,
+    pub json: bool,
+}
+
+/// Best-effort source backup + retention after a successful deploy.
+///
+/// Never returns an error so a backup failure never fails or alters the deploy
+/// result; emits one-line notes to stderr unless `req.json` is true.
+enum RepoOpen<E> {
+    Opened(E),
+    Skipped(String),
+}
+
+pub fn after_deploy(root: &Path, req: &AfterDeploy<'_>) -> Option<BackupSummary> {
+    after_deploy_with(
+        root,
+        req,
+        |cfg| {
+            let mut skip_note = None;
+            let res = repo::open_repo_noting(root, cfg, req.interactive, |msg| {
+                skip_note = Some(msg.to_string());
+                if !req.json {
+                    eprintln!("{msg}");
+                }
+            });
+            match res {
+                Ok(Some(cli)) => Ok(RepoOpen::Opened(cli)),
+                Ok(None) => Ok(RepoOpen::Skipped(
+                    skip_note.unwrap_or_else(|| "backup skipped".to_string()),
+                )),
+                Err(e) => Err(e),
+            }
+        },
+        |msg| {
+            if !req.json {
+                eprintln!("{msg}");
+            }
+        },
+    )
+}
+
+fn after_deploy_with<E: Rustic>(
+    root: &Path,
+    req: &AfterDeploy<'_>,
+    open: impl FnOnce(&config::BackupConfig) -> std::result::Result<RepoOpen<E>, String>,
+    mut note: impl FnMut(&str),
+) -> Option<BackupSummary> {
+    let cfg = match config::read_config(root) {
+        Ok(cfg) => cfg,
+        Err(err) => {
+            note(&format!("backup skipped: {err}"));
+            return Some(BackupSummary {
+                snapshot: None,
+                added_bytes: 0,
+                skipped: Some(err),
+            });
+        }
+    };
+    if !cfg.is_enabled() {
+        return None;
+    }
+
+    let engine = match open(&cfg) {
+        Ok(RepoOpen::Opened(engine)) => engine,
+        Ok(RepoOpen::Skipped(reason)) => {
+            return Some(BackupSummary {
+                snapshot: None,
+                added_bytes: 0,
+                skipped: Some(reason),
+            });
+        }
+        Err(err) => {
+            note(&format!("backup skipped: {err}"));
+            return Some(BackupSummary {
+                snapshot: None,
+                added_bytes: 0,
+                skipped: Some(err),
+            });
+        }
+    };
+
+    let summary = match snapshot::create_quiet_deduped(
+        &engine,
+        CreateInput {
+            root,
+            fingerprint: req.fingerprint,
+            target: Some(req.target),
+            production: Some(req.production),
+            url: req.url,
+            build_env_names: req.build_env_names.clone(),
+        },
+        req.json,
+    ) {
+        Ok(summary) => summary,
+        Err(err) => {
+            let msg = err.to_string();
+            note(&format!("backup skipped: {msg}"));
+            return Some(BackupSummary {
+                snapshot: None,
+                added_bytes: 0,
+                skipped: Some(msg),
+            });
+        }
+    };
+
+    if summary.snapshot.is_some() {
+        let repo = config::repo_location(&cfg, root);
+        if let Err(err) = retention::apply(&engine, &cfg.retention, root, &repo) {
+            note(&format!("backup retention skipped: {err}"));
+        }
+    }
+
+    Some(summary)
+}
+
+#[cfg(test)]
+pub(crate) fn run_after_deploy_failed_fixture(
+    root: &Path,
+    req: &AfterDeploy<'_>,
+) -> Option<BackupSummary> {
+    struct FailingEngine;
+    impl Rustic for FailingEngine {
+        fn run(&self, _: &[&str]) -> std::result::Result<engine::RunOut, engine::EngineError> {
+            Err(engine::EngineError::Failed("boom".to_string()))
+        }
+    }
+    let mut notes = Vec::new();
+    after_deploy_with(
+        root,
+        req,
+        |_| Ok(RepoOpen::Opened(FailingEngine)),
+        |m| notes.push(m.to_string()),
+    )
+}
+
 use std::path::{Path, PathBuf};
 
 use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
@@ -492,6 +634,36 @@ mod tests {
         assert_eq!(
             repository_location(&root, "rclone:remote:bucket").unwrap(),
             "rclone:remote:bucket"
+        );
+    }
+
+    #[test]
+    fn after_deploy_respects_disabled_config_and_swallows_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("appz.jsonc"),
+            r#"{ "backup": { "enabled": false } }"#,
+        )
+        .unwrap();
+        let req = AfterDeploy {
+            fingerprint: "fp-1",
+            target: "vercel",
+            production: false,
+            url: Some("https://example.com"),
+            build_env_names: vec![],
+            interactive: Interactive::No,
+            json: true,
+        };
+        assert_eq!(run_after_deploy_failed_fixture(dir.path(), &req), None);
+
+        std::fs::remove_file(dir.path().join("appz.jsonc")).unwrap();
+        let summary = run_after_deploy_failed_fixture(dir.path(), &req).unwrap();
+        assert_eq!(summary.snapshot, None);
+        assert!(
+            summary
+                .skipped
+                .as_deref()
+                .is_some_and(|s| s.contains("boom"))
         );
     }
     #[test]

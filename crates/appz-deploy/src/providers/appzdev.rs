@@ -1163,6 +1163,7 @@ impl AppzdevProvider {
             // A new deployment was created and published even when every
             // blob was already stored, so this is never "nothing redeployed".
             unchanged: false,
+            backup: None,
         })
     }
 }
@@ -1340,6 +1341,7 @@ impl DeployProvider for AppzdevProvider {
             cli_missing: false,
             link_needed: false,
             unchanged: false,
+            backup: None,
         })
     }
 

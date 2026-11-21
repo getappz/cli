@@ -21,6 +21,15 @@ pub enum AuthState {
     Unknown,
 }
 
+/// Outcome summary of a best-effort source backup run after deploy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackupSummary {
+    pub snapshot: Option<String>,
+    pub added_bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skipped: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeployOutput {
     pub provider: String,
@@ -51,6 +60,9 @@ pub struct DeployOutput {
     /// (or, on `--dry-run`, would be) deployed; `url` is the previous one.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unchanged: bool,
+    /// Best-effort source backup summary produced after a successful deploy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backup: Option<BackupSummary>,
 }
 
 impl DeployOutput {
@@ -67,6 +79,7 @@ impl DeployOutput {
             cli_missing: false,
             link_needed: false,
             unchanged: false,
+            backup: None,
         }
     }
 }

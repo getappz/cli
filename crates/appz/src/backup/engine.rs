@@ -239,7 +239,11 @@ impl RusticCli {
             &self.cwd,
             &borrowed,
             SCRUB_PREFIX,
-            self.timeout,
+            if matches!(args.first(), Some(&"snapshots") | Some(&"repoinfo")) {
+                self.timeout.min(QUERY_TIMEOUT)
+            } else {
+                self.timeout
+            },
         )
         .map_err(|e| {
             if looks_like_missing_binary(&e) {

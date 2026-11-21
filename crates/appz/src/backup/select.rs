@@ -134,13 +134,26 @@ pub fn select(root: &Path, output_dirs: &[&str]) -> Result<Selection, String> {
 /// Compute a content fingerprint matching everything [`super::snapshot`] stages
 /// for `selection` (selected working-tree files including tracked `.vscode`
 /// entries, staged git blobs, local-only commit ancestry, and env/build-env names).
+#[allow(dead_code)] // Restore verifies the content fingerprint independently of deduplication.
 pub(super) fn selection_fingerprint(
     root: &Path,
     selection: &Selection,
     build_env_names: &[String],
 ) -> Result<String, String> {
+    Ok(staged_fingerprints(root, root, selection, build_env_names)?.0)
+}
+
+/// Keep the content fingerprint readable by existing restore clients. A second
+/// digest records file modes for snapshot deduplication.
+pub(super) fn staged_fingerprints(
+    root: &Path,
+    files_root: &Path,
+    selection: &Selection,
+    build_env_names: &[String],
+) -> Result<(String, String), String> {
+    let mut permissions = Sha256::new();
     let mut hash = Sha256::new();
-    let project = Dir::open_ambient_dir(root, cap_std::ambient_authority())
+    let project = Dir::open_ambient_dir(files_root, cap_std::ambient_authority())
         .map_err(|e| format!("cannot open backup root {}: {e}", root.display()))?;
 
     hash.update(b"files\0");
@@ -148,7 +161,7 @@ pub(super) fn selection_fingerprint(
         let normalized = rel.to_string_lossy().replace('\\', "/");
         hash.update(normalized.as_bytes());
         hash.update(b"\0");
-        hash_selected_entry(&project, rel, &mut hash)?;
+        hash_selected_entry(&project, rel, &mut hash, &mut permissions)?;
     }
 
     hash.update(b"staged\0");
@@ -205,10 +218,15 @@ pub(super) fn selection_fingerprint(
         use std::fmt::Write as _;
         let _ = write!(&mut hex, "{byte:02x}");
     }
-    Ok(hex)
+    Ok((hex, format!("mode:{:x}", permissions.finalize())))
 }
 
-fn hash_selected_entry(project: &Dir, rel: &Path, hash: &mut Sha256) -> Result<(), String> {
+fn hash_selected_entry(
+    project: &Dir,
+    rel: &Path,
+    hash: &mut Sha256,
+    permissions: &mut Sha256,
+) -> Result<(), String> {
     let mut parent = project
         .try_clone()
         .map_err(|e| format!("cannot clone project dir handle: {e}"))?;
@@ -258,6 +276,10 @@ fn hash_selected_entry(project: &Dir, rel: &Path, hash: &mut Sha256) -> Result<(
     if !meta.is_file() {
         return Err(format!("expected a regular file: {}", rel.display()));
     }
+    #[cfg(unix)]
+    permissions.update(std::os::unix::fs::PermissionsExt::mode(&meta.permissions()).to_le_bytes());
+    #[cfg(not(unix))]
+    permissions.update([u8::from(meta.permissions().readonly())]);
     hash.update(b"reg\0");
     hash.update(meta.len().to_le_bytes());
     let mut buf = [0u8; 8192];

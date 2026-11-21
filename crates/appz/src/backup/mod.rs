@@ -364,9 +364,11 @@ pub fn run(args: BackupArgs, json_output: bool) -> Result<()> {
         return Err(format!("not a directory: {}", root.display()).into());
     }
     let mut cfg = config::read_config(&root)?;
-    if let Some(env_repo) = engine::env_repository() {
-        cfg.repository = Some(repository_location(&root, path_arg(&env_repo)?)?);
-    }
+    let repository = match engine::env_repository() {
+        Some(path) => path_arg(&path)?.to_owned(),
+        None => config::repo_location(&cfg, &root),
+    };
+    cfg.repository = Some(repository_location(&root, &repository)?);
     let interactive = if !json_output && crate::is_tty() {
         Interactive::Yes
     } else {
@@ -1153,7 +1155,7 @@ mod tests {
 
         struct StatefulEngine {
             host: String,
-            fp: std::cell::RefCell<Option<String>>,
+            tags: std::cell::RefCell<Vec<String>>,
             calls: std::cell::RefCell<Vec<Vec<String>>>,
         }
 
@@ -1164,12 +1166,13 @@ mod tests {
                     .push(args.iter().map(|s| (*s).to_string()).collect());
                 match args {
                     ["snapshots", "--json"] => {
-                        let stdout = match self.fp.borrow().as_deref() {
-                            Some(fp) => format!(
-                                r#"[{{"group_key":{{"hostname":"{}"}},"snapshots":[{{"id":"snap-1","time":"2026-11-20T00:00:00Z","tags":["appz","fp:{fp}"]}}]}}]"#,
-                                self.host
+                        let stdout = match self.tags.borrow().as_slice() {
+                            [.., _] => format!(
+                                r#"[{{"group_key":{{"hostname":"{}"}},"snapshots":[{{"id":"snap-1","time":"2026-11-20T00:00:00Z","tags":{},"summary":{{"total_files_processed":2}}}}]}}]"#,
+                                self.host,
+                                serde_json::to_string(&*self.tags.borrow()).unwrap()
                             ),
-                            None => "[]".to_string(),
+                            [] => "[]".to_string(),
                         };
                         Ok(RunOut {
                             stdout,
@@ -1189,22 +1192,13 @@ mod tests {
                         stderr: String::new(),
                     }),
                     _ if args.first() == Some(&"backup") => {
-                        let fp = args
+                        *self.tags.borrow_mut() = args
                             .windows(2)
-                            .find_map(|w| (w[0] == "--tag").then_some(w[1]))
-                            .into_iter()
-                            .chain(args.iter().copied())
-                            .find_map(|s| s.strip_prefix("fp:"));
-                        // Extract fp: tag specifically from `--tag` pairs.
-                        let fp_tag = args
-                            .windows(2)
-                            .filter(|w| w[0] == "--tag")
-                            .find_map(|w| w[1].strip_prefix("fp:"))
-                            .map(str::to_string)
-                            .or_else(|| fp.map(str::to_string));
-                        *self.fp.borrow_mut() = fp_tag;
+                            .filter(|pair| pair[0] == "--tag")
+                            .map(|pair| pair[1].to_owned())
+                            .collect();
                         Ok(RunOut {
-                            stdout: r#"{"id":"snap-1","summary":{"data_added":256}}"#.into(),
+                            stdout: r#"{"id":"snap-1","summary":{"data_added":256,"total_files_processed":2}}"#.into(),
                             stderr: String::new(),
                         })
                     }
@@ -1215,7 +1209,7 @@ mod tests {
 
         let engine = StatefulEngine {
             host,
-            fp: std::cell::RefCell::new(None),
+            tags: Default::default(),
             calls: std::cell::RefCell::new(Vec::new()),
         };
 

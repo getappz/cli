@@ -252,13 +252,25 @@ fn locked_summary() -> BackupSummary {
 }
 
 #[derive(Deserialize)]
-struct SnapshotMeta {
+pub(super) struct SnapshotJsonSummary {
     #[serde(default)]
-    hostname: Option<String>,
+    pub(super) data_added: Option<u64>,
     #[serde(default)]
-    time: Option<chrono::DateTime<chrono::FixedOffset>>,
+    pub(super) data_added_packed: Option<u64>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct SnapshotMeta {
     #[serde(default)]
-    tags: Vec<String>,
+    pub(super) id: String,
+    #[serde(default)]
+    pub(super) hostname: Option<String>,
+    #[serde(default)]
+    pub(super) time: Option<String>,
+    #[serde(default)]
+    pub(super) tags: Vec<String>,
+    #[serde(default)]
+    pub(super) summary: Option<SnapshotJsonSummary>,
 }
 
 #[derive(Deserialize)]
@@ -267,17 +279,23 @@ struct GroupKey {
     hostname: Option<String>,
 }
 
-fn latest_snapshot_tags(
+pub(super) fn parse_snapshot_time(
+    raw: Option<&str>,
+) -> Option<chrono::DateTime<chrono::FixedOffset>> {
+    raw.and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+}
+
+pub(super) fn list_host_snapshots(
     engine: &dyn Rustic,
     host: &str,
-) -> Result<Option<Vec<String>>, EngineError> {
+) -> Result<Vec<SnapshotMeta>, EngineError> {
     let out = match engine.run(&["snapshots", "--json"]) {
         Ok(out) => out,
         Err(EngineError::Failed(msg))
             if msg.contains("No repository config file found")
                 || msg.contains("No snapshots found") =>
         {
-            return Ok(None);
+            return Ok(Vec::new());
         }
         Err(err) => return Err(err),
     };
@@ -319,14 +337,24 @@ fn latest_snapshot_tags(
         }
     }
 
+    if all
+        .iter()
+        .all(|s| parse_snapshot_time(s.time.as_deref()).is_some())
+    {
+        all.sort_by_key(|s| parse_snapshot_time(s.time.as_deref()));
+    }
+
+    Ok(all)
+}
+
+fn latest_snapshot_tags(
+    engine: &dyn Rustic,
+    host: &str,
+) -> Result<Option<Vec<String>>, EngineError> {
+    let mut all = list_host_snapshots(engine, host)?;
     if all.is_empty() {
         return Ok(None);
     }
-
-    if all.iter().all(|s| s.time.is_some()) {
-        all.sort_by_key(|s| s.time);
-    }
-
     Ok(all.pop().map(|s| s.tags))
 }
 

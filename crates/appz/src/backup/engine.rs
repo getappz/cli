@@ -28,6 +28,8 @@
 //!   incorrect. No suitable key found for the given password."
 //!   (rustic error C002, error class `credentials handling`)
 
+#![allow(dead_code)]
+
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 

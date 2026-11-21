@@ -165,6 +165,7 @@ fn create_from_selection(
         env_names: selection.env_names.clone(),
         build_env_names,
         files,
+        deleted: selection.deleted.clone(),
         has_bundle: selection.bundle.is_some(),
     };
 

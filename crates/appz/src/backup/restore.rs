@@ -1,6 +1,5 @@
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
 
 use clap::Args;
 use serde::{Deserialize, Serialize};
@@ -59,7 +58,7 @@ pub fn run(args: RestoreArgs, json: bool) -> Result<()> {
 }
 
 fn git(dir: &Path, args: &[&str]) -> Result<String> {
-    let out = Command::new("git")
+    let out = select::git_command()
         .current_dir(dir)
         .args(["-c", "core.hooksPath=/dev/null"])
         .args(args)
@@ -226,7 +225,48 @@ fn install_index(base: &Path, node: &Path, dir: &Path, link: bool) -> Result<()>
     Ok(())
 }
 
+/// Remove only the leaf, without following a restored link in a parent directory.
+fn remove_archived_file(dir: &Path, rel: &Path) -> Result<()> {
+    use cap_fs_ext::DirExt;
+    relative(rel)?;
+    let mut parent = cap_std::fs::Dir::open_ambient_dir(dir, cap_std::ambient_authority())?;
+    for component in rel.parent().unwrap().components() {
+        match parent.open_dir_nofollow(component.as_os_str()) {
+            Ok(next) => parent = next,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e.into()),
+        }
+    }
+    match parent.remove_file(rel.file_name().unwrap()) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
+    }
+}
+
+fn project_dir(checkout: &Path, m: &Manifest) -> Result<PathBuf> {
+    let prefix = m.git.as_ref().map_or("", |git| git.prefix.as_str());
+    if prefix.is_empty() {
+        return Ok(checkout.to_owned());
+    }
+    let prefix = Path::new(prefix);
+    relative(prefix)?;
+    // Check every ancestor including the final project directory.
+    ensure_parents(checkout, &prefix.join(MANIFEST_NAME))?;
+    Ok(checkout.join(prefix))
+}
+
 fn overlay(archive: &Path, dir: &Path, m: &Manifest) -> Result<()> {
+    if m.git.is_none() && (!m.deleted.index.is_empty() || !m.deleted.worktree.is_empty()) {
+        return Err("unexpected Git deletions in a non-Git snapshot".into());
+    }
+    for name in &m.deleted.index {
+        relative(Path::new(name))?;
+        git(dir, &["update-index", "--force-remove", "--", name])?;
+    }
+    for name in &m.deleted.worktree {
+        remove_archived_file(dir, Path::new(name))?;
+    }
     if m.git.is_some() && archive.join("git").try_exists()? {
         if !fs::symlink_metadata(archive.join("git"))?.is_dir() {
             return Err("invalid git archive".into());
@@ -347,7 +387,10 @@ pub fn restore(
         {
             return Err("in-place restore requires a clean Git project root".into());
         }
-        for name in &m.files {
+        if m.git.as_ref().is_some_and(|git| !git.prefix.is_empty()) {
+            return Err("restore a nested Git project using --to".into());
+        }
+        for name in m.files.iter().chain(&m.deleted.worktree) {
             relative(Path::new(name))?;
             if fs::symlink_metadata(root.join(name)).is_ok()
                 && git(root, &["--literal-pathspecs", "ls-files", "--", name])?.is_empty()
@@ -377,8 +420,9 @@ pub fn restore(
         fs::create_dir_all(parent)?;
         let stage = tempfile::tempdir_in(parent)?;
         checkout(archive.path(), root, stage.path(), &m, false)?;
-        overlay(archive.path(), stage.path(), &m)?;
-        let verified = fingerprint(stage.path(), &m, true)? == expected;
+        let project = project_dir(stage.path(), &m)?;
+        overlay(archive.path(), &project, &m)?;
+        let verified = fingerprint(&project, &m, true)? == expected;
         empty(&dir)?;
         if dir.try_exists()? {
             fs::remove_dir(&dir)?;
@@ -386,6 +430,7 @@ pub fn restore(
         fs::rename(stage.path(), &dir)?;
         verified
     };
+    let dir = project_dir(&dir, &m)?;
     let known = crate::secrets::known_names(&dir);
     let mut missing_env: Vec<_> = m
         .env_names
@@ -447,6 +492,7 @@ mod tests {
                 build_env_names: vec![],
                 files: vec!["hello".into()],
                 has_bundle: false,
+                deleted: Default::default(),
             },
         }
     }
@@ -514,7 +560,10 @@ mod tests {
         )
         .unwrap();
         fs::write(root.join("hello"), "committed").unwrap();
-        git(root, &["add", "hello"]).unwrap();
+        for name in ["staged-delete", "unstaged-delete", "cached-delete"] {
+            fs::write(root.join(name), name).unwrap();
+        }
+        git(root, &["add", "."]).unwrap();
         git(
             root,
             &[
@@ -530,13 +579,16 @@ mod tests {
             ],
         )
         .unwrap();
+        git(root, &["rm", "--", "staged-delete"]).unwrap();
+        fs::remove_file(root.join("unstaged-delete")).unwrap();
+        git(root, &["rm", "--cached", "--", "cached-delete"]).unwrap();
         fs::write(root.join("hello"), "staged").unwrap();
         git(root, &["add", "hello"]).unwrap();
         fs::write(root.join("hello"), "working").unwrap();
         let cli = RusticCli::new(
             super::super::engine::find_rustic(root).unwrap(),
             repo.path(),
-            "fixture",
+            super::super::repo::generate_recovery_password(),
             root,
         );
         cli.run(&["init"]).unwrap();
@@ -562,12 +614,19 @@ mod tests {
             RestoreDest::NewDir(dest.path().join("project")),
         )
         .unwrap();
+        assert_eq!(
+            git(&report.dir, &["status", "--porcelain"]).unwrap(),
+            git(root, &["status", "--porcelain"]).unwrap()
+        );
+        assert!(!report.dir.join("staged-delete").exists());
+        assert!(!report.dir.join("unstaged-delete").exists());
+        assert!(report.dir.join("cached-delete").is_file());
         assert_eq!(fs::read(report.dir.join("hello")).unwrap(), b"working");
         assert_eq!(git(&report.dir, &["show", ":hello"]).unwrap(), "staged");
         assert!(report.fingerprint_ok);
         assert!(restore(&cli, root, &snapshot, RestoreDest::InPlace).is_err());
         assert_eq!(fs::read(root.join("hello")).unwrap(), b"working");
-        git(root, &["restore", "--staged", "--worktree", "--", "hello"]).unwrap();
+        git(root, &["restore", "--staged", "--worktree", "--", "."]).unwrap();
         let report = restore(&cli, root, &snapshot, RestoreDest::InPlace).unwrap();
         assert!(report.fingerprint_ok);
         assert_eq!(git(root, &["show", ":hello"]).unwrap(), "staged");

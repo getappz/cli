@@ -71,7 +71,7 @@ fn after_deploy_with<E: Rustic>(
     open: impl FnOnce(&config::BackupConfig) -> std::result::Result<RepoOpen<E>, String>,
     mut note: impl FnMut(&str),
 ) -> Option<BackupSummary> {
-    let cfg = match config::read_config(root) {
+    let mut cfg = match config::read_config(root) {
         Ok(cfg) => cfg,
         Err(err) => {
             note(&format!("backup skipped: {err}"));
@@ -86,7 +86,10 @@ fn after_deploy_with<E: Rustic>(
         return None;
     }
 
-    let engine = match open(&cfg) {
+    let engine = match resolve_repository(root, &mut cfg)
+        .map_err(|e| e.to_string())
+        .and_then(|()| open(&cfg))
+    {
         Ok(RepoOpen::Opened(engine)) => engine,
         Ok(RepoOpen::Skipped(reason)) => {
             return Some(BackupSummary {
@@ -365,11 +368,7 @@ pub fn run(args: BackupArgs, json_output: bool) -> Result<()> {
         return Err(format!("not a directory: {}", root.display()).into());
     }
     let mut cfg = config::read_config(&root)?;
-    let repository = match engine::env_repository() {
-        Some(path) => path_arg(&path)?.to_owned(),
-        None => config::repo_location(&cfg, &root),
-    };
-    cfg.repository = Some(repository_location(&root, &repository)?);
+    resolve_repository(&root, &mut cfg)?;
     let interactive = if !json_output && crate::is_tty() {
         Interactive::Yes
     } else {
@@ -546,6 +545,18 @@ fn report(json_output: bool, message: &str, data: serde_json::Value) {
 pub(super) fn path_arg(path: &Path) -> Result<&str> {
     path.to_str()
         .ok_or_else(|| format!("Rustic requires a UTF-8 path: {}", path.display()).into())
+}
+
+fn resolve_repository(root: &Path, cfg: &mut config::BackupConfig) -> Result<()> {
+    let repository = match engine::env_repository() {
+        Some(path) => path_arg(&path)?.to_owned(),
+        None => config::repo_location(cfg, root),
+    };
+    cfg.repository = Some(repository_location(
+        &appz_core::canonicalize(root)?,
+        &repository,
+    )?);
+    Ok(())
 }
 
 // Local repositories must be disjoint from the source, including through symlinks.

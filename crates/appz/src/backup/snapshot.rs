@@ -189,14 +189,8 @@ fn create_from_selection(
             .map_err(|e| EngineError::Failed(e.to_string()))?;
     }
 
-    let worktree = stage.path().join("worktree");
-    std::fs::create_dir_all(&worktree).map_err(|e| EngineError::Failed(e.to_string()))?;
-    manifest.source_fingerprint = Some(
-        source_fingerprint(&worktree, selection, &manifest.build_env_names)
-            .map_err(EngineError::Failed)?,
-    );
     let manifest_bytes =
-        serde_json::to_vec_pretty(&manifest).map_err(|e| EngineError::Failed(e.to_string()))?;
+        encode_manifest(stage.path(), &mut manifest, selection).map_err(EngineError::Failed)?;
     std::fs::write(stage.path().join(MANIFEST_NAME), manifest_bytes)
         .map_err(|e| EngineError::Failed(e.to_string()))?;
 
@@ -250,6 +244,21 @@ fn create_from_selection(
         added_bytes,
         skipped: None,
     })
+}
+
+fn encode_manifest(
+    stage: &Path,
+    manifest: &mut Manifest,
+    selection: &select::Selection,
+) -> Result<Vec<u8>, String> {
+    let worktree = stage.join("worktree");
+    std::fs::create_dir_all(&worktree).map_err(|e| e.to_string())?;
+    manifest.source_fingerprint = Some(source_fingerprint(
+        &worktree,
+        selection,
+        &manifest.build_env_names,
+    )?);
+    serde_json::to_vec_pretty(manifest).map_err(|e| e.to_string())
 }
 
 /// Verify reconstructed source independently of branch names and remote reachability.

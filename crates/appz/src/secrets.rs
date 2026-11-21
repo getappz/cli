@@ -202,6 +202,50 @@ pub fn remove(path: &Path, name: &str) -> Result<bool, String> {
     update_vault_body(path, |b| remove_secret_value(b, name)).map_err(|e| e.to_string())
 }
 
+#[derive(Clone)]
+pub(crate) enum SecretStatus {
+    Missing,
+    Locked,
+    Found(String),
+}
+
+/// Read one secret from `path` using the active keyring session (never prompts),
+/// distinguishing missing secrets from a locked vault.
+pub(crate) fn get_status(path: &Path, name: &str) -> Result<SecretStatus, String> {
+    if !valid_name(name) {
+        return Err(format!("'{name}' is not a valid variable name"));
+    }
+    if !path.exists() {
+        return Ok(SecretStatus::Missing);
+    }
+    let dek = match open_vault_with_dek(path, APP) {
+        Ok(d) => d.dek,
+        Err(VaultError::Locked) => {
+            if let Some(pw) = std::env::var(PASSPHRASE_VAR).ok().filter(|p| !p.is_empty()) {
+                open_vault(path, &pw).map_err(|e| e.to_string())?.dek
+            } else {
+                return Ok(SecretStatus::Locked);
+            }
+        }
+        Err(e) => return Err(e.to_string()),
+    };
+    let body = read_vault_body(path).map_err(|e| e.to_string())?;
+    match get_secret_value(&body, &dek, name).map_err(|e| e.to_string())? {
+        Some(v) => Ok(SecretStatus::Found(v.to_string())),
+        None => Ok(SecretStatus::Missing),
+    }
+}
+
+/// Read one secret value from `path` using an already-unlocked vault session.
+#[allow(dead_code)]
+pub fn get(path: &Path, name: &str) -> Result<Option<String>, String> {
+    match get_status(path, name)? {
+        SecretStatus::Found(v) => Ok(Some(v)),
+        SecretStatus::Missing => Ok(None),
+        SecretStatus::Locked => Err(VaultError::Locked.to_string()),
+    }
+}
+
 pub struct VaultEnv {
     pub vars: HashMap<String, String>,
     /// A vault exists but is not unlocked in this session.
@@ -382,8 +426,11 @@ mod tests {
         }
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(".appz").join("vault.json");
+        assert_eq!(get(&path, "MISSING").unwrap(), None);
         set(&path, "VERCEL_TOKEN", Some("tok".into()), None).unwrap();
         set(&path, "OTHER", Some("x".into()), None).unwrap();
+        assert_eq!(get(&path, "VERCEL_TOKEN").unwrap().as_deref(), Some("tok"));
+        assert_eq!(get(&path, "NOT_SET").unwrap(), None);
         assert_eq!(listed(&path), vec!["OTHER", "VERCEL_TOKEN"]);
         assert!(remove(&path, "OTHER").unwrap());
         assert!(!remove(&path, "OTHER").unwrap());

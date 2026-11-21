@@ -6,8 +6,12 @@
 pub mod config;
 pub mod engine;
 pub mod manifest;
+pub mod repo;
 pub mod retention;
 pub mod select;
+
+#[allow(unused_imports)]
+pub use repo::{Interactive, PASSWORD_ENV, open_repo, vault_key};
 
 use std::path::{Path, PathBuf};
 

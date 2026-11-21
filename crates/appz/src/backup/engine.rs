@@ -28,6 +28,8 @@
 //!   incorrect. No suitable key found for the given password."
 //!   (rustic error C002, error class `credentials handling`)
 
+#![allow(dead_code)]
+
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -237,7 +239,11 @@ impl RusticCli {
             &self.cwd,
             &borrowed,
             SCRUB_PREFIX,
-            self.timeout,
+            if matches!(args.first(), Some(&"snapshots") | Some(&"repoinfo")) {
+                self.timeout.min(QUERY_TIMEOUT)
+            } else {
+                self.timeout
+            },
         )
         .map_err(|e| {
             if looks_like_missing_binary(&e) {

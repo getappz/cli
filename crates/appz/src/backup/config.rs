@@ -55,10 +55,15 @@ pub fn read_config(root: &Path) -> Result<BackupConfig, String> {
     Ok(cfg)
 }
 
-/// Stable 16-hex-character identifier derived from the canonical `/`-normalized project root.
+/// Stable 16-hex-character identifier derived from the canonical project root.
 pub fn project_id(root: &Path) -> String {
     let canonical = appz_core::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
-    let normalized = canonical.to_string_lossy().replace('\\', "/");
+    let raw = canonical.to_string_lossy();
+    let normalized = if cfg!(windows) {
+        std::borrow::Cow::Owned(raw.replace('\\', "/"))
+    } else {
+        raw
+    };
     let digest = Sha256::digest(normalized.as_bytes());
     format!("{digest:x}")[..16].to_string()
 }
@@ -151,6 +156,17 @@ mod tests {
 
         let other = tempfile::tempdir().unwrap();
         assert_ne!(id1, project_id(other.path()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn project_id_preserves_backslashes_on_unix() {
+        let dir = tempfile::tempdir().unwrap();
+        let slash_dir = dir.path().join("a").join("b");
+        let backslash_dir = dir.path().join(r"a\b");
+        std::fs::create_dir_all(&slash_dir).unwrap();
+        std::fs::create_dir_all(&backslash_dir).unwrap();
+        assert_ne!(project_id(&slash_dir), project_id(&backslash_dir));
     }
 
     #[test]

@@ -163,13 +163,14 @@ use std::path::{Path, PathBuf};
 use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
 use cap_std::fs::Dir;
 use clap::{Args, Subcommand};
-use engine::{ENV_PASSWORD, ENV_REPOSITORY, Rustic, RusticCli};
+use engine::{Rustic, RusticCli};
 use serde_json::json;
+#[cfg(test)]
 use sha2::{Digest, Sha256};
 
 #[derive(Args)]
 #[command(
-    after_help = "Set APPZ_BACKUP_REPOSITORY to a dedicated Rustic repository outside the project. Set APPZ_BACKUP_PASSWORD or store it with `appz vault set APPZ_BACKUP_PASSWORD` and run `appz vault unlock` before backup."
+    after_help = "Uses ~/.appz/backups/<project-id>/ by default (or appz.jsonc backup.repository / APPZ_BACKUP_REPOSITORY). Set APPZ_BACKUP_PASSWORD or let interactive `appz backup` store a generated password in the global vault."
 )]
 pub struct BackupArgs {
     /// Project directory (relative repository and restore paths resolve here)
@@ -199,53 +200,255 @@ enum BackupCmd {
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
+/// Structured output for `appz backup ls` / `backup::list`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ListOutput {
+    pub repository: String,
+    pub off_machine: bool,
+    pub size: u64,
+    pub max_size: u64,
+    pub snapshots: Vec<SnapshotRow>,
+}
+
+/// One snapshot row in [`ListOutput`], derived from snapshot tags and summary.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct SnapshotRow {
+    pub id: String,
+    pub time: String,
+    pub target: Option<String>,
+    pub environment: Option<String>,
+    pub commit: Option<String>,
+    pub url: Option<String>,
+    pub added_bytes: u64,
+}
+
+fn is_off_machine(repository: &str) -> bool {
+    let trimmed = repository.trim();
+    if trimmed.is_empty() || trimmed == "local" || trimmed.starts_with("local:") {
+        return false;
+    }
+    if Path::new(trimmed).is_absolute() {
+        return false;
+    }
+    if trimmed
+        .as_bytes()
+        .first()
+        .is_some_and(u8::is_ascii_alphabetic)
+        && trimmed.as_bytes().get(1) == Some(&b':')
+    {
+        return false;
+    }
+    trimmed
+        .split_once(':')
+        .is_some_and(|(backend, _)| !backend.is_empty() && !backend.contains(['/', '\\']))
+}
+
+fn tag_value(tags: &[String], prefix: &str) -> Option<String> {
+    tags.iter()
+        .find_map(|tag| tag.strip_prefix(prefix))
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+/// List snapshots and repository usage for `root`.
+pub fn list(
+    engine: &dyn Rustic,
+    cfg: &config::BackupConfig,
+    root: &Path,
+) -> std::result::Result<ListOutput, engine::EngineError> {
+    let repository = config::repo_location(cfg, root);
+    let off_machine = is_off_machine(&repository);
+    let max_size = cfg
+        .retention
+        .max_size
+        .as_deref()
+        .map(config::parse_size)
+        .transpose()
+        .map_err(engine::EngineError::Failed)?
+        .unwrap_or(0);
+    let size = retention::query_repo_size(engine)?;
+    let host = format!("appz-{}", config::project_id(root));
+    let mut snapshots = snapshot::list_host_snapshots(engine, &host)?;
+    snapshots.reverse();
+    let rows = snapshots
+        .into_iter()
+        .map(|meta| {
+            let added_bytes = meta
+                .summary
+                .as_ref()
+                .and_then(|s| s.data_added.or(s.data_added_packed))
+                .unwrap_or(0);
+            SnapshotRow {
+                id: meta.id,
+                time: meta.time.unwrap_or_default(),
+                target: tag_value(&meta.tags, "target:"),
+                environment: tag_value(&meta.tags, "env:"),
+                commit: tag_value(&meta.tags, "commit:"),
+                url: tag_value(&meta.tags, "url:"),
+                added_bytes,
+            }
+        })
+        .collect();
+
+    Ok(ListOutput {
+        repository,
+        off_machine,
+        size,
+        max_size,
+        snapshots: rows,
+    })
+}
+
+/// Create a manual source backup snapshot (with selection-based dedup) and apply retention when added.
+pub fn manual_create(
+    engine: &dyn Rustic,
+    cfg: &config::BackupConfig,
+    root: &Path,
+    quiet: bool,
+) -> std::result::Result<(BackupSummary, Option<retention::RetentionReport>), engine::EngineError> {
+    let summary = snapshot::create_quiet_deduped(
+        engine,
+        CreateInput {
+            root,
+            fingerprint: "",
+            target: None,
+            production: None,
+            url: None,
+            build_env_names: vec![],
+        },
+        quiet,
+    )?;
+
+    let retention_report = if summary.snapshot.is_some() {
+        let repository = config::repo_location(cfg, root);
+        match retention::apply(engine, &cfg.retention, root, &repository) {
+            Ok(report) => Some(report),
+            Err(err) => {
+                if !quiet {
+                    eprintln!("backup retention skipped: {err}");
+                }
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    Ok((summary, retention_report))
+}
+
+fn open_cli(
+    root: &Path,
+    cfg: &config::BackupConfig,
+    interactive: Interactive,
+    allow_disabled: bool,
+) -> std::result::Result<std::result::Result<RusticCli, String>, String> {
+    let mut effective = cfg.clone();
+    if allow_disabled {
+        effective.enabled = None;
+    }
+    let mut skip_note = None;
+    match repo::open_repo_noting(root, &effective, interactive, |msg| {
+        skip_note = Some(msg.to_string());
+    })? {
+        Some(cli) => Ok(Ok(cli)),
+        None => Ok(Err(skip_note.unwrap_or_else(|| {
+            "backup skipped: disabled in configuration".to_string()
+        }))),
+    }
+}
+
 pub fn run(args: BackupArgs, json_output: bool) -> Result<()> {
     let root = appz_core::canonicalize(&args.dir)?;
     if !root.is_dir() {
         return Err(format!("not a directory: {}", root.display()).into());
     }
-    let repo = engine::env_repository()
-        .ok_or_else(|| format!("set {ENV_REPOSITORY} to the backup repository"))?;
-    let repo = repository_location(&root, path_arg(&repo)?)?;
-    let password = match engine::env_password()? {
-        Some(value) => value,
-        None => crate::secrets::deploy_env(&root, &[ENV_PASSWORD.to_string()])?
-            .vars
-            .remove(ENV_PASSWORD)
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| format!("set {ENV_PASSWORD} or unlock a vault containing it"))?,
+    let mut cfg = config::read_config(&root)?;
+    let repository = match engine::env_repository() {
+        Some(path) => path_arg(&path)?.to_owned(),
+        None => config::repo_location(&cfg, &root),
     };
-    let consent = if crate::assume_yes() {
-        crate::deploy::Consent::Yes
-    } else if !json_output && crate::is_tty() {
-        crate::deploy::Consent::Ask
+    cfg.repository = Some(repository_location(&root, &repository)?);
+    let interactive = if !json_output && crate::is_tty() {
+        Interactive::Yes
     } else {
-        crate::deploy::Consent::Never
+        Interactive::No
     };
-    let bin = engine::ensure_installed(&root, consent)?;
-    let cli = RusticCli::new(bin, &repo, password, &root);
+
     match args.command.unwrap_or(BackupCmd::Create) {
-        BackupCmd::Create => create(&cli, &root, json_output)?,
+        BackupCmd::Create => {
+            if !cfg.is_enabled() {
+                let summary = BackupSummary {
+                    snapshot: None,
+                    added_bytes: 0,
+                    skipped: Some("backup is disabled in appz.jsonc".to_string()),
+                };
+                if json_output {
+                    println!("{}", serde_json::to_string(&summary)?);
+                } else {
+                    crate::info("Backup skipped (disabled in appz.jsonc)");
+                }
+                return Ok(());
+            }
+            let cli = match open_cli(&root, &cfg, interactive, false)? {
+                Ok(cli) => cli,
+                Err(reason) => {
+                    let summary = BackupSummary {
+                        snapshot: None,
+                        added_bytes: 0,
+                        skipped: Some(reason.clone()),
+                    };
+                    if json_output {
+                        println!("{}", serde_json::to_string(&summary)?);
+                    } else {
+                        crate::warning(&reason);
+                    }
+                    return Ok(());
+                }
+            };
+            let (summary, retention_report) = manual_create(&cli, &cfg, &root, json_output)?;
+            if json_output {
+                println!("{}", serde_json::to_string(&summary)?);
+            } else if let Some(id) = &summary.snapshot {
+                crate::success(&format!(
+                    "Snapshot {id} created ({} added)",
+                    format_bytes(summary.added_bytes)
+                ));
+                if retention_report.is_some_and(|r| r.over_cap) {
+                    crate::warning("Repository still exceeds the configured size limit");
+                }
+            } else if summary.skipped.as_deref() == Some("no changes") {
+                crate::info("Nothing new to back up (no changes)");
+            } else if let Some(reason) = &summary.skipped {
+                crate::warning(&format!("Backup skipped: {reason}"));
+            }
+        }
         BackupCmd::Init => {
-            cli.run(&["init"])?;
+            let _cli = open_cli(&root, &cfg, Interactive::Yes, false)?
+                .map_err(|reason| -> Box<dyn std::error::Error> { reason.into() })?;
             report(
                 json_output,
                 "Repository initialized",
-                json!({"status":"initialized"}),
+                json!({"status":"initialized","repository":config::repo_location(&cfg, &root)}),
             );
         }
         BackupCmd::List => {
-            let args: &[&str] = if json_output {
-                &["snapshots", "--json"]
+            let cli = open_cli(&root, &cfg, Interactive::No, true)?
+                .map_err(|reason| -> Box<dyn std::error::Error> { reason.into() })?
+                .with_query_timeout();
+            let out = list(&cli, &cfg, &root)?;
+            if json_output {
+                println!("{}", serde_json::to_string(&out)?);
             } else {
-                &["snapshots"]
-            };
-            print!("{}", cli.with_query_timeout().run(args)?.stdout);
+                print_list_human(&out);
+            }
         }
         BackupCmd::Restore {
             snapshot,
             destination,
         } => {
+            let cli = open_cli(&root, &cfg, Interactive::No, true)?
+                .map_err(|reason| -> Box<dyn std::error::Error> { reason.into() })?;
             cli.run(&["restore", "--", &snapshot, path_arg(&destination)?])?;
             report(
                 json_output,
@@ -254,8 +457,10 @@ pub fn run(args: BackupArgs, json_output: bool) -> Result<()> {
             );
         }
         BackupCmd::Prune => {
-            let policy = retention_policy(&root)?;
-            let result = retention::apply(&cli, &policy, &root, &repo)?;
+            let cli = open_cli(&root, &cfg, Interactive::No, true)?
+                .map_err(|reason| -> Box<dyn std::error::Error> { reason.into() })?;
+            let repo = config::repo_location(&cfg, &root);
+            let result = retention::apply(&cli, &cfg.retention, &root, &repo)?;
             let message = if result.ran {
                 "Retention applied"
             } else {
@@ -268,6 +473,65 @@ pub fn run(args: BackupArgs, json_output: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const KIB: u64 = 1024;
+    const MIB: u64 = 1024 * KIB;
+    const GIB: u64 = 1024 * MIB;
+    if bytes >= GIB {
+        format!("{:.2} GiB", bytes as f64 / GIB as f64)
+    } else if bytes >= MIB {
+        format!("{:.2} MiB", bytes as f64 / MIB as f64)
+    } else if bytes >= KIB {
+        format!("{:.1} KiB", bytes as f64 / KIB as f64)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+fn print_list_human(out: &ListOutput) {
+    let location_kind = if out.off_machine {
+        "off-machine"
+    } else {
+        "local"
+    };
+    println!("Repository: {} ({location_kind})", out.repository);
+    if !out.off_machine {
+        println!(
+            "Note: local repository protects against git clean, bad edits, and deleted folders, not against losing the machine."
+        );
+    }
+    if out.max_size > 0 {
+        println!(
+            "Size: {} / {}",
+            format_bytes(out.size),
+            format_bytes(out.max_size)
+        );
+    } else {
+        println!("Size: {}", format_bytes(out.size));
+    }
+    if out.snapshots.is_empty() {
+        println!("No snapshots.");
+        return;
+    }
+    println!();
+    for row in &out.snapshots {
+        let target = row.target.as_deref().unwrap_or("-");
+        let env = row.environment.as_deref().unwrap_or("-");
+        let commit = row
+            .commit
+            .as_deref()
+            .map(|s| &s[..s.len().min(7)])
+            .unwrap_or("-");
+        let url = row.url.as_deref().unwrap_or("-");
+        println!(
+            "{}  {}  {target}  {env}  {commit}  {url}  +{}",
+            row.id,
+            row.time,
+            format_bytes(row.added_bytes)
+        );
+    }
 }
 
 fn report(json_output: bool, message: &str, data: serde_json::Value) {
@@ -333,6 +597,7 @@ fn repository_location(root: &Path, repo: &str) -> Result<String> {
     Ok(path.to_owned())
 }
 
+#[cfg(test)]
 fn create(cli: &impl Rustic, root: &Path, json_output: bool) -> Result<()> {
     let project = Dir::open_ambient_dir(root, cap_std::ambient_authority())?;
     let outputs: Vec<_> = appz_core::detect_toolchains(root)?
@@ -371,6 +636,7 @@ pub(super) fn private_tempdir() -> std::io::Result<tempfile::TempDir> {
     builder.tempdir()
 }
 
+#[cfg(test)]
 fn write_snapshot(
     cli: &impl Rustic,
     root: &Path,
@@ -517,6 +783,7 @@ pub(super) fn stage_file(project: &Dir, rel: &Path, dest: &Path) -> Result<()> {
 }
 
 /// Fingerprint only restored metadata and bytes, independent of temporary names and inodes.
+#[cfg(test)]
 fn fingerprint_tree(root: &Path, dir: &Path, hash: &mut Sha256) -> Result<u64> {
     let mut entries = std::fs::read_dir(dir)?.collect::<std::io::Result<Vec<_>>>()?;
     entries.sort_by_key(|entry| entry.file_name());
@@ -556,10 +823,6 @@ fn fingerprint_tree(root: &Path, dir: &Path, hash: &mut Sha256) -> Result<u64> {
     }
     filetime::set_file_mtime(dir, std::time::UNIX_EPOCH.into())?;
     Ok(count)
-}
-
-fn retention_policy(root: &Path) -> Result<retention::Retention> {
-    Ok(config::read_config(root)?.retention)
 }
 
 #[cfg(test)]
@@ -741,5 +1004,224 @@ mod tests {
             );
         }
         assert!(repository_location(&root, "local:./backup:archive").is_err());
+    }
+
+    #[test]
+    fn ls_marks_local_repo_as_not_off_machine() {
+        let dir = tempfile::tempdir().unwrap();
+        struct EmptyRepoEngine;
+        impl Rustic for EmptyRepoEngine {
+            fn run(&self, args: &[&str]) -> std::result::Result<RunOut, EngineError> {
+                match args {
+                    ["repoinfo", "--json"] => Ok(RunOut {
+                        stdout: r#"{"files":{"repo":[{"size":1024}]}}"#.into(),
+                        stderr: String::new(),
+                    }),
+                    ["snapshots", "--json"] => Ok(RunOut {
+                        stdout: "[]".into(),
+                        stderr: String::new(),
+                    }),
+                    other => panic!("unexpected rustic call: {other:?}"),
+                }
+            }
+        }
+
+        let local_default = list(
+            &EmptyRepoEngine,
+            &config::BackupConfig::default(),
+            dir.path(),
+        )
+        .unwrap();
+        assert!(!local_default.off_machine);
+        assert!(
+            local_default
+                .repository
+                .contains(&config::project_id(dir.path()))
+        );
+        assert_eq!(local_default.size, 1024);
+        assert_eq!(local_default.max_size, 2 * 1024 * 1024 * 1024);
+
+        let local_explicit = list(
+            &EmptyRepoEngine,
+            &config::BackupConfig {
+                repository: Some("local:/tmp/backups".into()),
+                ..Default::default()
+            },
+            dir.path(),
+        )
+        .unwrap();
+        assert!(!local_explicit.off_machine);
+
+        let remote = list(
+            &EmptyRepoEngine,
+            &config::BackupConfig {
+                repository: Some("rclone:remote:appz-backups".into()),
+                ..Default::default()
+            },
+            dir.path(),
+        )
+        .unwrap();
+        assert!(remote.off_machine);
+    }
+
+    #[test]
+    fn ls_rows_come_from_tags() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = format!("appz-{}", config::project_id(dir.path()));
+        let snapshots_json = format!(
+            r#"[{{
+                "group_key":{{"hostname":"{host}"}},
+                "snapshots":[
+                    {{
+                        "id":"snap-old",
+                        "time":"2026-11-19T10:00:00Z",
+                        "tags":["appz","target:vercel","env:preview","commit:abc1234","fp:1"],
+                        "summary":{{"data_added":512}}
+                    }},
+                    {{
+                        "id":"snap-new",
+                        "time":"2026-11-20T12:00:00Z",
+                        "tags":["appz","target:netlify","env:production","commit:def5678","url:https://prod.example.com","fp:2"],
+                        "summary":{{"data_added":2048}}
+                    }}
+                ]
+            }},{{
+                "group_key":{{"hostname":"appz-otherproject00"}},
+                "snapshots":[{{"id":"other-host","time":"2026-11-21T00:00:00Z","tags":["appz"]}}]
+            }}]"#
+        );
+
+        struct TaggedEngine(String);
+        impl Rustic for TaggedEngine {
+            fn run(&self, args: &[&str]) -> std::result::Result<RunOut, EngineError> {
+                match args {
+                    ["repoinfo", "--json"] => Ok(RunOut {
+                        stdout: r#"{"files":{"repo":[{"size":4096}]}}"#.into(),
+                        stderr: String::new(),
+                    }),
+                    ["snapshots", "--json"] => Ok(RunOut {
+                        stdout: self.0.clone(),
+                        stderr: String::new(),
+                    }),
+                    other => panic!("unexpected rustic call: {other:?}"),
+                }
+            }
+        }
+
+        let out = list(
+            &TaggedEngine(snapshots_json),
+            &config::BackupConfig::default(),
+            dir.path(),
+        )
+        .unwrap();
+        assert_eq!(out.size, 4096);
+        assert_eq!(out.snapshots.len(), 2);
+        assert_eq!(
+            out.snapshots[0],
+            SnapshotRow {
+                id: "snap-new".into(),
+                time: "2026-11-20T12:00:00Z".into(),
+                target: Some("netlify".into()),
+                environment: Some("production".into()),
+                commit: Some("def5678".into()),
+                url: Some("https://prod.example.com".into()),
+                added_bytes: 2048,
+            }
+        );
+        assert_eq!(
+            out.snapshots[1],
+            SnapshotRow {
+                id: "snap-old".into(),
+                time: "2026-11-19T10:00:00Z".into(),
+                target: Some("vercel".into()),
+                environment: Some("preview".into()),
+                commit: Some("abc1234".into()),
+                url: None,
+                added_bytes: 512,
+            }
+        );
+    }
+
+    #[test]
+    fn manual_backup_reports_no_changes_when_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("index.html"), "<h1>hello</h1>").unwrap();
+        let repo_dir = tempfile::tempdir().unwrap();
+        let cfg = config::BackupConfig {
+            repository: Some(repo_dir.path().to_string_lossy().into_owned()),
+            ..Default::default()
+        };
+        let host = format!("appz-{}", config::project_id(dir.path()));
+
+        struct StatefulEngine {
+            host: String,
+            tags: std::cell::RefCell<Vec<String>>,
+            calls: std::cell::RefCell<Vec<Vec<String>>>,
+        }
+
+        impl Rustic for StatefulEngine {
+            fn run(&self, args: &[&str]) -> std::result::Result<RunOut, EngineError> {
+                self.calls
+                    .borrow_mut()
+                    .push(args.iter().map(|s| (*s).to_string()).collect());
+                match args {
+                    ["snapshots", "--json"] => {
+                        let stdout = match self.tags.borrow().as_slice() {
+                            [.., _] => format!(
+                                r#"[{{"group_key":{{"hostname":"{}"}},"snapshots":[{{"id":"snap-1","time":"2026-11-20T00:00:00Z","tags":{},"summary":{{"total_files_processed":2}}}}]}}]"#,
+                                self.host,
+                                serde_json::to_string(&*self.tags.borrow()).unwrap()
+                            ),
+                            [] => "[]".to_string(),
+                        };
+                        Ok(RunOut {
+                            stdout,
+                            stderr: String::new(),
+                        })
+                    }
+                    ["forget", ..] => Ok(RunOut {
+                        stdout: r#"[{"items":[]}]"#.into(),
+                        stderr: String::new(),
+                    }),
+                    ["prune"] => Ok(RunOut {
+                        stdout: String::new(),
+                        stderr: String::new(),
+                    }),
+                    ["repoinfo", "--json"] => Ok(RunOut {
+                        stdout: r#"{"files":{"repo":[{"size":128}]}}"#.into(),
+                        stderr: String::new(),
+                    }),
+                    _ if args.first() == Some(&"backup") => {
+                        *self.tags.borrow_mut() = args
+                            .windows(2)
+                            .filter(|pair| pair[0] == "--tag")
+                            .map(|pair| pair[1].to_owned())
+                            .collect();
+                        Ok(RunOut {
+                            stdout: r#"{"id":"snap-1","summary":{"data_added":256,"total_files_processed":2}}"#.into(),
+                            stderr: String::new(),
+                        })
+                    }
+                    other => panic!("unexpected rustic call: {other:?}"),
+                }
+            }
+        }
+
+        let engine = StatefulEngine {
+            host,
+            tags: Default::default(),
+            calls: std::cell::RefCell::new(Vec::new()),
+        };
+
+        let (first, retention_first) = manual_create(&engine, &cfg, dir.path(), true).unwrap();
+        assert_eq!(first.snapshot.as_deref(), Some("snap-1"));
+        assert!(retention_first.is_some_and(|r| r.ran));
+
+        let calls_after_first = engine.calls.borrow().len();
+        let (second, retention_second) = manual_create(&engine, &cfg, dir.path(), true).unwrap();
+        assert_eq!(second.snapshot, None);
+        assert_eq!(second.skipped.as_deref(), Some("no changes"));
+        assert!(retention_second.is_none());
+        assert_eq!(engine.calls.borrow().len(), calls_after_first + 1);
     }
 }

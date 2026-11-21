@@ -48,6 +48,10 @@ appz mcp       # stdio MCP server exposing detect/doctor/run to AI agents
 appz skills add  # install the appz agent skill into detected AI agents (--global for user-wide)
 ```
 
+To recover a hosted Appz project, run `appz projects --target appzdev restore <slug-or-id>`
+within 30 days of removal. Restore before deploying again to the deleted slug,
+because a new deploy can replace the deleted project.
+
 Set `APPZ_BACKUP_REPOSITORY` to a dedicated repository outside the project.
 Store its password with `appz vault set APPZ_BACKUP_PASSWORD` and run
 `appz vault unlock` before backing up, or set `APPZ_BACKUP_PASSWORD` for

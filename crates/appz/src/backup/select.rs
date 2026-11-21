@@ -46,7 +46,7 @@ pub struct StagedEntry {
     gitlink: bool,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct GitInfo {
     /// `HEAD`, or empty in a repository with no commits yet.
     pub sha: String,

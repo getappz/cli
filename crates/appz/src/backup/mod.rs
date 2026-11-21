@@ -9,9 +9,12 @@ pub mod manifest;
 pub mod repo;
 pub mod retention;
 pub mod select;
+pub mod snapshot;
 
 #[allow(unused_imports)]
 pub use repo::{Interactive, PASSWORD_ENV, open_repo, vault_key};
+#[allow(unused_imports)]
+pub use snapshot::{BackupSummary, CreateInput, create as create_snapshot};
 
 use std::path::{Path, PathBuf};
 
@@ -133,7 +136,7 @@ fn report(json_output: bool, message: &str, data: serde_json::Value) {
     }
 }
 
-fn path_arg(path: &Path) -> Result<&str> {
+pub(super) fn path_arg(path: &Path) -> Result<&str> {
     path.to_str()
         .ok_or_else(|| format!("Rustic requires a UTF-8 path: {}", path.display()).into())
 }
@@ -215,7 +218,7 @@ fn create(cli: &impl Rustic, root: &Path, json_output: bool) -> Result<()> {
     Ok(())
 }
 
-fn private_tempdir() -> std::io::Result<tempfile::TempDir> {
+pub(super) fn private_tempdir() -> std::io::Result<tempfile::TempDir> {
     let mut builder = tempfile::Builder::new();
     builder.prefix("appz-backup-");
     #[cfg(unix)]
@@ -317,7 +320,7 @@ fn write_snapshot(
     Ok(Some(snapshot))
 }
 
-fn stage_file(project: &Dir, rel: &Path, dest: &Path) -> Result<()> {
+pub(super) fn stage_file(project: &Dir, rel: &Path, dest: &Path) -> Result<()> {
     let mut parent = project.try_clone()?;
     let mut components = rel.components().peekable();
     let name = loop {

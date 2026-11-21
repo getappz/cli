@@ -195,6 +195,22 @@ pub fn parse_duration(s: &str) -> Result<Duration, String> {
     }
 }
 
+/// Every secret name stored in the global or project vault for `project_dir`.
+/// Reads only the unencrypted key index (never prompts or decrypts values).
+pub(crate) fn known_names(project_dir: &Path) -> std::collections::BTreeSet<String> {
+    let p = paths(project_dir);
+    let mut names = std::collections::BTreeSet::new();
+    for path in std::iter::once(p.global_vault_path())
+        .chain(p.project_vault_path())
+        .filter(|f| f.exists())
+    {
+        if let Ok(body) = read_vault_body(&path) {
+            names.extend(body.keys().cloned());
+        }
+    }
+    names
+}
+
 pub fn remove(path: &Path, name: &str) -> Result<bool, String> {
     if !path.exists() {
         return Ok(false);

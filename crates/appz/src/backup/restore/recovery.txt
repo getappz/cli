@@ -1,0 +1,18 @@
+Run these steps from the original project. Keep this directory until verification
+is complete. Save any changes made since the interruption before overwriting files.
+
+1. Stop the restore and confirm no Git process is using the checkout. Find its
+   index with "git rev-parse --path-format=absolute --git-path index". A killed
+   restore can leave index.lock beside it. Move that stale lock aside only
+   after confirming that no writer is active.
+2. Read original-head.json. If branch is present, verify the branch still
+   points to the recorded commit (or is still unborn), then run
+   "git symbolic-ref HEAD <branch>". For a detached HEAD, run
+   "git update-ref --no-deref HEAD <commit>". Stop if the branch has moved.
+3. Copy original-index over the index. If original-index is absent, the
+   checkout originally had no index. Move any newly installed index aside.
+4. Inspect affected.json. Move newly installed files aside before copying
+   originals from files/ to the same relative paths in the project. Keep
+   symlinks and permissions intact. A hard interruption can leave some
+   originals in the project and others in files/. Preserve unrelated files.
+5. Check the branch, HEAD, and "git status --short --untracked-files=all".

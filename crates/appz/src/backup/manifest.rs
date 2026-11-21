@@ -29,6 +29,12 @@ pub struct Manifest {
     pub env_names: Vec<String>,
     pub build_env_names: Vec<String>,
     pub files: Vec<String>,
+    #[serde(default)]
+    pub deleted: super::select::DeletedPaths,
+    #[serde(default)]
+    pub staged_modes: BTreeMap<String, String>,
+    #[serde(default)]
+    pub source_fingerprint: Option<String>,
     pub has_bundle: bool,
 }
 
@@ -69,11 +75,15 @@ mod tests {
                 branch: Some("main".to_string()),
                 remote: Some("origin".to_string()),
                 ahead: 0,
+                prefix: String::new(),
             }),
             tools: BTreeMap::from([("node".to_string(), "22.0.0".to_string())]),
             env_names: vec!["API_KEY".to_string(), "DATABASE_URL".to_string()],
             build_env_names: vec!["PUBLIC_URL".to_string()],
             files: vec!["src/main.rs".to_string()],
+            deleted: Default::default(),
+            staged_modes: Default::default(),
+            source_fingerprint: None,
             has_bundle: false,
         }
     }
@@ -100,6 +110,14 @@ mod tests {
             ..m
         };
         assert_eq!(tags(&minimal), vec!["appz"]);
+    }
+
+    #[test]
+    fn reads_manifests_written_before_deletions_were_recorded() {
+        let original = sample_manifest();
+        let mut json = serde_json::to_value(&original).unwrap();
+        json.as_object_mut().unwrap().remove("deleted");
+        assert_eq!(serde_json::from_value::<Manifest>(json).unwrap(), original);
     }
 
     #[test]

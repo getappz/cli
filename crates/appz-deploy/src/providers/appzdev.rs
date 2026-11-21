@@ -27,6 +27,9 @@ use crate::static_cas::ScannedFileEntry;
 
 pub struct AppzdevProvider;
 
+mod interrupt;
+pub use interrupt::enable_cli_deploy_interrupts;
+
 /// Body of `POST /api/v0/deployments`. `flags` is sent only when a feature is
 /// on, so deploys without opt-ins keep the exact pre-existing payload.
 pub(crate) fn negotiate_payload(
@@ -918,6 +921,13 @@ impl AppzdevProvider {
             req = req.set("Authorization", &format!("Bearer {token}"));
         }
 
+        let negotiating = interrupt::negotiating().map_err(|e| DeployError::DeployFailed {
+            provider: self.name(),
+            reason: format!("could not install deploy interrupt handler: {e}"),
+        })?;
+        if negotiating.is_some() {
+            req = req.timeout(Duration::from_secs(60));
+        }
         let resp_result = req.send_json(payload);
         let (resp, deployment_id, missing, inline_publish_failed) = match resp_result {
             Ok(r) => {
@@ -970,6 +980,18 @@ impl AppzdevProvider {
             Err(e) => return Err(parse_api_error(e, self.name(), "Initiate deployment")),
         };
 
+        let _pending_upload = negotiating.and_then(|slot| {
+            (!missing.is_empty() || inline_publish_failed).then(|| {
+                interrupt::PendingUpload::track(
+                    slot,
+                    &api_base,
+                    &deployment_id,
+                    token_opt.as_deref(),
+                )
+            })
+        });
+        interrupt::check_interrupted();
+
         // Step 2: Upload missing blobs with bounded concurrency (pool of 8) and retry
         if !missing.is_empty() {
             // A hash we never sent can't be uploaded; committing without it
@@ -1011,6 +1033,7 @@ impl AppzdevProvider {
                             if upload_error.lock().unwrap().is_some() {
                                 break;
                             }
+                            interrupt::check_interrupted();
                             let (hash, path) = missing_blobs[idx];
                             // Read only now, so at most one file per worker is
                             // in memory instead of the whole output directory.
@@ -1073,6 +1096,7 @@ impl AppzdevProvider {
                                 if attempt > 0 {
                                     std::thread::sleep(Duration::from_millis(200 * (1 << attempt)));
                                 }
+                                interrupt::check_interrupted();
                                 let mut up_req = agent
                                     .put(&upload_url)
                                     .set("Content-Type", "application/octet-stream");
@@ -1126,6 +1150,7 @@ impl AppzdevProvider {
 
         // Step 3: Commit deployment if blobs were uploaded, or if inline publish failed on 500
         let final_url = if !missing.is_empty() || inline_publish_failed {
+            interrupt::check_interrupted();
             let commit_url = format!("{}/api/v0/deployments/{}/commit", api_base, deployment_id);
             let mut commit_req = ureq::post(&commit_url).set("User-Agent", DEPLOY_USER_AGENT);
             if let Some(token) = &token_opt {

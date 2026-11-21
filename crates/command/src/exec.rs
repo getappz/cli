@@ -8,11 +8,12 @@ use std::os::windows::process::CommandExt;
 use std::process::{Command as StdCommand, Output, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(windows)]
-use std::sync::{Mutex, Once};
+use std::sync::Mutex;
+use std::sync::OnceLock;
 
 use crate::shell::Shell;
 
-/// Set by the Windows Ctrl+C handler when it fires. Callers that cascade
+/// Set by the process Ctrl+C handler when it fires. Callers that cascade
 /// through multiple fallback commands on a non-success exit (e.g. mise's
 /// winget -> PowerShell installer) should check this so a cancelled step
 /// doesn't get silently retried via a different method.
@@ -22,37 +23,42 @@ pub fn interrupted() -> bool {
     INTERRUPTED.load(Ordering::SeqCst)
 }
 
-/// Ensures the process-wide Ctrl+C handler is installed only once, even
-/// though `exec_interactive` may be called many times in a single run.
-///
-/// Windows-only: on Unix, the default "Ctrl+C terminates the process"
-/// disposition already works correctly (the child shares our process
-/// group and gets SIGINT directly). Installing a handler there — even one
-/// whose body does nothing — disables that default termination for the
-/// rest of the run, since the OS no longer kills a process that has a
-/// registered signal handler.
-#[cfg(windows)]
-static CTRLC_HANDLER_INIT: Once = Once::new();
+static INTERRUPT_ACTION: OnceLock<fn()> = OnceLock::new();
+
+/// Install a process-wide CLI interrupt action alongside Windows child cleanup.
+pub fn on_interrupt(action: fn()) -> Result<(), String> {
+    INTERRUPT_ACTION
+        .set(action)
+        .map_err(|_| "interrupt action already installed".to_string())?;
+    install_ctrlc_handler()
+}
 
 /// PID of the currently running interactive child, if any. Read by the
 /// Ctrl+C handler so it knows what to kill.
 #[cfg(windows)]
 static CURRENT_CHILD_PID: Mutex<Option<u32>> = Mutex::new(None);
 
-#[cfg(windows)]
-fn install_ctrlc_handler() {
-    CTRLC_HANDLER_INIT.call_once(|| {
-        let _ = ctrlc::set_handler(|| {
-            INTERRUPTED.store(true, Ordering::SeqCst);
-            if let Some(pid) = *CURRENT_CHILD_PID.lock().unwrap() {
-                let _ = StdCommand::new("taskkill")
-                    .args(["/F", "/T", "/PID", &pid.to_string()])
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status();
-            }
-        });
-    });
+fn install_ctrlc_handler() -> Result<(), String> {
+    static INSTALLED: OnceLock<Result<(), String>> = OnceLock::new();
+    INSTALLED
+        .get_or_init(|| {
+            ctrlc::set_handler(|| {
+                INTERRUPTED.store(true, Ordering::SeqCst);
+                #[cfg(windows)]
+                if let Some(pid) = *CURRENT_CHILD_PID.lock().unwrap() {
+                    let _ = StdCommand::new("taskkill")
+                        .args(["/F", "/T", "/PID", &pid.to_string()])
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .status();
+                }
+                if let Some(action) = INTERRUPT_ACTION.get() {
+                    action();
+                }
+            })
+            .map_err(|e| e.to_string())
+        })
+        .clone()
 }
 
 #[derive(Debug, Clone)]
@@ -470,7 +476,7 @@ impl Command {
         {
             const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
             cmd.creation_flags(CREATE_NEW_PROCESS_GROUP);
-            install_ctrlc_handler();
+            let _ = install_ctrlc_handler();
         }
 
         let mut child = cmd

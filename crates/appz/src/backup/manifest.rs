@@ -31,6 +31,10 @@ pub struct Manifest {
     pub files: Vec<String>,
     #[serde(default)]
     pub deleted: super::select::DeletedPaths,
+    #[serde(default)]
+    pub staged_modes: BTreeMap<String, String>,
+    #[serde(default)]
+    pub source_fingerprint: Option<String>,
     pub has_bundle: bool,
 }
 
@@ -78,6 +82,8 @@ mod tests {
             build_env_names: vec!["PUBLIC_URL".to_string()],
             files: vec!["src/main.rs".to_string()],
             deleted: Default::default(),
+            staged_modes: Default::default(),
+            source_fingerprint: None,
             has_bundle: false,
         }
     }

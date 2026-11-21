@@ -56,6 +56,7 @@ pub struct StagedEntry {
     path: PathBuf,
     object_id: String,
     gitlink: bool,
+    pub(super) mode: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -124,7 +125,12 @@ pub fn select(root: &Path, output_dirs: &[&str]) -> Result<Selection, String> {
                 Ok(_) => {
                     deleted.worktree.insert(name.to_owned());
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                    ) =>
+                {
                     deleted.worktree.insert(name.to_owned());
                 }
                 Err(e) => return Err(format!("cannot inspect deleted path {name}: {e}")),
@@ -165,6 +171,20 @@ pub fn select(root: &Path, output_dirs: &[&str]) -> Result<Selection, String> {
     })
 }
 
+impl Selection {
+    pub fn staged_modes(&self) -> std::collections::BTreeMap<String, String> {
+        self.staged
+            .iter()
+            .map(|entry| {
+                (
+                    entry.path.to_string_lossy().replace('\\', "/"),
+                    entry.mode.clone(),
+                )
+            })
+            .collect()
+    }
+}
+
 /// Compute a content fingerprint matching everything [`super::snapshot`] stages
 /// for `selection` (selected working-tree files including tracked `.vscode`
 /// entries, staged git blobs, local-only commit ancestry, and env/build-env names).
@@ -193,6 +213,10 @@ pub(super) fn selection_fingerprint(
         hash.update(entry.object_id.as_bytes());
         hash.update(b"\0");
         hash.update([u8::from(entry.gitlink)]);
+        if !entry.mode.is_empty() {
+            hash.update(entry.mode.as_bytes());
+            hash.update([0]);
+        }
     }
 
     for (kind, paths) in [
@@ -596,6 +620,7 @@ fn staged_entries(root: &Path, mut paths: BTreeSet<PathBuf>) -> Result<Vec<Stage
                 path: path.to_owned(),
                 object_id: id.to_string(),
                 gitlink: mode == "160000",
+                mode: mode.to_owned(),
             });
         }
     }
@@ -881,6 +906,18 @@ mod tests {
             ["local.config.json", "src/a.rs", "src/b.rs",],
             "ignored build output stays out"
         );
+    }
+
+    #[test]
+    fn records_child_deletion_when_a_file_replaces_its_parent() {
+        let repo = git_repo(&[("pkg/old", "old")]);
+        let _remote = with_remote(&repo);
+        std::fs::remove_file(repo.path().join("pkg/old")).unwrap();
+        std::fs::remove_dir(repo.path().join("pkg")).unwrap();
+        repo.write("pkg", "replacement");
+        let selected = select(repo.path(), &[]).unwrap();
+        assert_eq!(rels(&selected.files), ["pkg"]);
+        assert!(selected.deleted.worktree.contains("pkg/old"));
     }
 
     #[test]

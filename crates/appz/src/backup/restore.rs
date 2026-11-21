@@ -1,3 +1,4 @@
+mod publish;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
@@ -10,7 +11,7 @@ use super::{Interactive, Result, config, path_arg, select};
 
 #[derive(Args)]
 pub struct RestoreArgs {
-    /// Snapshot ID, prefix, or latest
+    /// Snapshot ID or prefix. "latest" selects the newest snapshot, which must have an appz manifest.
     id: String,
     /// Empty directory to restore into
     #[arg(long, required_unless_present = "force", conflicts_with = "force")]
@@ -28,6 +29,8 @@ pub enum RestoreDest {
 #[derive(Debug, Serialize)]
 pub struct RestoreReport {
     dir: PathBuf,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recovery_dir: Option<PathBuf>,
     fingerprint_ok: bool,
     missing_env: Vec<String>,
 }
@@ -47,6 +50,9 @@ pub fn run(args: RestoreArgs, json: bool) -> Result<()> {
         println!("{}", serde_json::to_string(&report)?);
     } else {
         println!("Restored to {}", report.dir.display());
+        if let Some(path) = &report.recovery_dir {
+            println!("Pre-restore files and index saved in {}", path.display());
+        }
         if !report.fingerprint_ok {
             crate::warning("Restored source fingerprint differs from the snapshot");
         }
@@ -110,31 +116,29 @@ fn ensure_parents(root: &Path, rel: &Path) -> Result<()> {
     Ok(())
 }
 
-fn checkout(archive: &Path, root: &Path, dir: &Path, m: &Manifest, in_place: bool) -> Result<()> {
+fn checkout(archive: &Path, root: &Path, dir: &Path, m: &Manifest) -> Result<()> {
     let Some(info) = &m.git else { return Ok(()) };
     if !info.sha.is_empty() && !object_id(&info.sha) {
         return Err("invalid commit in manifest".into());
     }
-    if !in_place {
-        if let Some(remote) = &info.remote {
-            let url = git(root, &["remote", "get-url", "--", remote])?;
-            git(
-                root,
-                &[
-                    "clone",
-                    "--no-local",
-                    "--no-checkout",
-                    "--origin",
-                    remote,
-                    "--",
-                    &url,
-                    path_arg(dir)?,
-                ],
-            )?;
-        } else {
-            git(dir, &["init"])?;
+    git(dir, &["init"])?;
+    if let Some(remote) = &info.remote {
+        match git(root, &["remote", "get-url", "--", remote]) {
+            Ok(url) => {
+                git(dir, &["remote", "add", "--", remote, &url])?;
+            }
+            Err(_) if m.has_bundle => {} // A self-contained bundle needs no remote.
+            Err(e) => return Err(e),
         }
     }
+    let fetch_remote = || -> Result<()> {
+        let remote = info
+            .remote
+            .as_deref()
+            .ok_or("snapshot requires a Git remote")?;
+        git(dir, &["fetch", "--no-tags", "--", remote])?;
+        Ok(())
+    };
     if m.has_bundle {
         let bundle = archive.join("git/local-commits.bundle");
         if !fs::symlink_metadata(bundle.parent().unwrap())?.is_dir()
@@ -142,20 +146,22 @@ fn checkout(archive: &Path, root: &Path, dir: &Path, m: &Manifest, in_place: boo
         {
             return Err("invalid Git bundle in snapshot".into());
         }
+        if git(dir, &["bundle", "verify", path_arg(&bundle)?]).is_err() {
+            fetch_remote()?;
+        }
         git(
             dir,
             &["fetch", "--no-tags", "--", path_arg(&bundle)?, "HEAD"],
         )?;
+    } else if !info.sha.is_empty() && git(dir, &["cat-file", "-e", &info.sha]).is_err() {
+        fetch_remote()?;
     }
-    if !info.sha.is_empty()
-        && !(in_place
-            && git(dir, &["rev-parse", "--verify", "HEAD"]).ok().as_ref() == Some(&info.sha))
-    {
+    if !info.sha.is_empty() {
         git(
             dir,
             &["checkout", "--no-overwrite-ignore", "--detach", &info.sha],
         )?;
-        if !in_place && let Some(branch) = &info.branch {
+        if let Some(branch) = &info.branch {
             git(dir, &["check-ref-format", "--branch", branch])?;
             git(dir, &["switch", "-C", branch, &info.sha])?;
         }
@@ -163,13 +169,19 @@ fn checkout(archive: &Path, root: &Path, dir: &Path, m: &Manifest, in_place: boo
     Ok(())
 }
 
-fn install_index(base: &Path, node: &Path, dir: &Path, link: bool) -> Result<()> {
+fn install_index(
+    base: &Path,
+    node: &Path,
+    dir: &Path,
+    link: bool,
+    manifest: &Manifest,
+) -> Result<()> {
     for entry in fs::read_dir(node)? {
         let e = entry?;
         let path = e.path();
         let kind = e.file_type()?;
         if kind.is_dir() {
-            install_index(base, &path, dir, link)?;
+            install_index(base, &path, dir, link, manifest)?;
             continue;
         }
         if !kind.is_file() {
@@ -194,21 +206,29 @@ fn install_index(base: &Path, node: &Path, dir: &Path, link: bool) -> Result<()>
             {
                 return Err("staged object does not match its archived ID".into());
             }
-            let tracked = git(
-                dir,
-                &[
-                    "--literal-pathspecs",
-                    "ls-files",
-                    "--stage",
-                    "--",
-                    path_arg(rel)?,
-                ],
-            )?;
-            tracked
-                .split_whitespace()
-                .next()
-                .unwrap_or("100644")
-                .to_owned()
+            let key = path_arg(rel)?.replace('\\', "/");
+            if let Some(mode) = manifest.staged_modes.get(&key) {
+                if !matches!(mode.as_str(), "100644" | "100755" | "120000") {
+                    return Err("invalid archived index mode".into());
+                }
+                mode.clone()
+            } else {
+                let tracked = git(
+                    dir,
+                    &[
+                        "--literal-pathspecs",
+                        "ls-files",
+                        "--stage",
+                        "--",
+                        path_arg(rel)?,
+                    ],
+                )?;
+                tracked
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("100644")
+                    .to_owned()
+            }
         };
         git(
             dir,
@@ -237,7 +257,13 @@ fn remove_archived_file(dir: &Path, rel: &Path) -> Result<()> {
             Err(e) => return Err(e.into()),
         }
     }
-    match parent.remove_file(rel.file_name().unwrap()) {
+    let leaf = rel.file_name().unwrap();
+    let removed = match parent.symlink_metadata(leaf) {
+        Ok(meta) if meta.is_dir() => parent.remove_dir(leaf),
+        Ok(_) => parent.remove_file(leaf),
+        Err(e) => Err(e),
+    };
+    match removed {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e.into()),
@@ -277,7 +303,7 @@ fn overlay(archive: &Path, dir: &Path, m: &Manifest) -> Result<()> {
                 if !fs::symlink_metadata(&base)?.is_dir() {
                     return Err("invalid index directory".into());
                 }
-                install_index(&base, &base, dir, link)?;
+                install_index(&base, &base, dir, link, m)?;
             }
         }
     }
@@ -296,6 +322,9 @@ fn overlay(archive: &Path, dir: &Path, m: &Manifest) -> Result<()> {
         let temp = tempfile::tempdir_in(target.parent().unwrap())?;
         let replacement = temp.path().join("file");
         super::stage_file(&source, rel, &replacement)?;
+        if fs::symlink_metadata(&target).is_ok_and(|m| m.is_dir()) {
+            fs::remove_dir(&target)?;
+        }
         fs::rename(replacement, target)?;
     }
     Ok(())
@@ -311,7 +340,15 @@ fn fingerprint(dir: &Path, m: &Manifest, restored: bool) -> Result<String> {
         // Secret values are deliberately absent from a restored worktree.
         selection.env_names.clone_from(&m.env_names);
     }
-    let result = select::selection_fingerprint(dir, &selection, &m.build_env_names);
+    let result = if m.source_fingerprint.is_some() {
+        super::snapshot::source_fingerprint(dir, &selection, &m.build_env_names)
+    } else {
+        // Legacy tags predate index mode recording.
+        for entry in &mut selection.staged {
+            entry.mode.clear();
+        }
+        select::selection_fingerprint(dir, &selection, &m.build_env_names)
+    };
     if let Some(bundle) = selection.bundle {
         select::remove_bundle(&bundle);
     }
@@ -381,6 +418,7 @@ pub fn restore(
         return Err("snapshot tag and manifest fingerprints differ".into());
     }
 
+    let expected = m.source_fingerprint.as_deref().unwrap_or(expected);
     if in_place && m.git.is_some() {
         if !root.join(".git").try_exists()?
             || !git(root, &["status", "--porcelain", "--untracked-files=all"])?.is_empty()
@@ -403,31 +441,45 @@ pub fn restore(
     } else if in_place && fingerprint(root, &m, false)? != expected {
         return Err("in-place restore requires an unchanged project fingerprint".into());
     }
+    let mut recovery_dir = None;
     let fingerprint_ok = if in_place && m.git.is_none() {
         true // The current tree already matches the requested snapshot.
     } else if in_place {
         // Exercise the checkout and validate every archived object before touching the live index.
+        let initial = publish::head(root)?;
         let rehearsal = super::private_tempdir()?;
-        checkout(archive.path(), root, rehearsal.path(), &m, false)?;
+        checkout(archive.path(), root, rehearsal.path(), &m)?;
         overlay(archive.path(), rehearsal.path(), &m)?;
-        checkout(archive.path(), root, &dir, &m, true)?;
-        overlay(archive.path(), &dir, &m)?;
-        fingerprint(&dir, &m, true)? == expected
+        if fingerprint(rehearsal.path(), &m, true)? != expected {
+            return Err("snapshot verification failed before in-place restore".into());
+        }
+        let recovery = publish::apply(root, rehearsal.path(), &m, &initial)?;
+        let verified = fingerprint(&dir, &m, true)
+            .map_err(|e| format!("{e}; recovery files: {}", recovery.display()))?
+            == expected;
+        recovery_dir = Some(recovery);
+        verified
     } else {
         let parent = dir
             .parent()
             .ok_or("destination requires a parent directory")?;
         fs::create_dir_all(parent)?;
-        let stage = tempfile::tempdir_in(parent)?;
-        checkout(archive.path(), root, stage.path(), &m, false)?;
+        let stage = super::private_tempdir_in(parent)?;
+        checkout(archive.path(), root, stage.path(), &m)?;
         let project = project_dir(stage.path(), &m)?;
         overlay(archive.path(), &project, &m)?;
         let verified = fingerprint(&project, &m, true)? == expected;
         empty(&dir)?;
+        #[cfg(unix)]
+        let destination_access = fs::metadata(&dir).ok().map(|meta| meta.permissions());
         if dir.try_exists()? {
             fs::remove_dir(&dir)?;
         }
         fs::rename(stage.path(), &dir)?;
+        #[cfg(unix)]
+        if let Some(perms) = destination_access {
+            fs::set_permissions(&dir, perms)?;
+        }
         verified
     };
     let dir = project_dir(&dir, &m)?;
@@ -442,6 +494,7 @@ pub fn restore(
     missing_env.dedup();
     Ok(RestoreReport {
         dir,
+        recovery_dir,
         fingerprint_ok,
         missing_env,
     })
@@ -493,6 +546,8 @@ mod tests {
                 files: vec!["hello".into()],
                 has_bundle: false,
                 deleted: Default::default(),
+                staged_modes: Default::default(),
+                source_fingerprint: None,
             },
         }
     }
@@ -545,12 +600,141 @@ mod tests {
     }
 
     #[test]
+    fn removes_only_empty_gitlink_directories() {
+        let root = tempfile::tempdir().unwrap();
+        let link = root.path().join("submodule");
+        fs::create_dir(&link).unwrap();
+        fs::write(link.join("local"), "keep").unwrap();
+        assert!(remove_archived_file(root.path(), Path::new("submodule")).is_err());
+        fs::remove_file(link.join("local")).unwrap();
+        remove_archived_file(root.path(), Path::new("submodule")).unwrap();
+        assert!(!link.exists());
+    }
+
+    #[test]
+    fn publish_rechecks_edits_and_keeps_originals_on_failure() {
+        let sandbox = tempfile::tempdir().unwrap();
+        let live = sandbox.path().join("live");
+        let prepared = sandbox.path().join("prepared");
+        fs::create_dir(&live).unwrap();
+        git(&live, &["init"]).unwrap();
+        fs::write(live.join("tracked"), "original").unwrap();
+        fs::write(live.join(".gitignore"), "local/\n").unwrap();
+        git(&live, &["add", "."]).unwrap();
+        git(
+            &live,
+            &[
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=test@example.invalid",
+                "-c",
+                "commit.gpgSign=false",
+                "commit",
+                "-m",
+                "base",
+            ],
+        )
+        .unwrap();
+        git(
+            &live,
+            &[
+                "clone",
+                "--",
+                path_arg(&live).unwrap(),
+                path_arg(&prepared).unwrap(),
+            ],
+        )
+        .unwrap();
+        let before = publish::head(&live).unwrap();
+        let mut manifest = fixture().manifest;
+        manifest.git = select::select(&prepared, &[]).unwrap().git;
+        manifest.files = vec!["tracked".into()];
+        fs::write(live.join("tracked"), "editor save").unwrap();
+        assert!(
+            publish::apply(&live, &prepared, &manifest, &before)
+                .unwrap_err()
+                .to_string()
+                .contains("changed while preparing")
+        );
+        assert_eq!(fs::read(live.join("tracked")).unwrap(), b"editor save");
+
+        fs::write(live.join("tracked"), "original").unwrap();
+        fs::create_dir(live.join("local")).unwrap();
+        fs::write(live.join("local/user-file"), "ignored").unwrap();
+        manifest.deleted.worktree.insert("local".into());
+        let error = publish::apply(&live, &prepared, &manifest, &before)
+            .unwrap_err()
+            .to_string();
+        let (_, path) = error
+            .split_once("recovery files: ")
+            .unwrap_or_else(|| panic!("{error}"));
+        assert_eq!(
+            fs::read(Path::new(path).join("files/tracked")).unwrap(),
+            b"original"
+        );
+        assert!(Path::new(path).join("original-index").is_file());
+        assert_eq!(fs::read(live.join("local/user-file")).unwrap(), b"ignored");
+        assert_eq!(git(&live, &["show", ":tracked"]).unwrap(), "original");
+        assert!(!live.join(".git/index.lock").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_can_be_replaced_by_a_symlink_after_its_tracked_file_is_deleted() {
+        let root = tempfile::tempdir().unwrap();
+        let archive = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("pkg")).unwrap();
+        fs::write(root.path().join("pkg/old"), "old").unwrap();
+        fs::create_dir(archive.path().join("worktree")).unwrap();
+        std::os::unix::fs::symlink("target", archive.path().join("worktree/pkg")).unwrap();
+        let mut m = fixture().manifest;
+        git(root.path(), &["init"]).unwrap();
+        m.git = select::select(root.path(), &[]).unwrap().git;
+        m.files = vec!["pkg".into()];
+        m.deleted.worktree.insert("pkg/old".into());
+        overlay(archive.path(), root.path(), &m).unwrap();
+        assert_eq!(
+            fs::read_link(root.path().join("pkg")).unwrap(),
+            Path::new("target")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn destination_access_survives_publication() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let dst = root.path().join("dst");
+        fs::create_dir(&dst).unwrap();
+        fs::set_permissions(&dst, fs::Permissions::from_mode(0o710)).unwrap();
+        let stage = super::super::private_tempdir_in(root.path()).unwrap();
+        assert_eq!(
+            fs::metadata(stage.path()).unwrap().permissions().mode() & 0o077,
+            0
+        );
+        restore(
+            &fixture(),
+            root.path(),
+            "abc",
+            RestoreDest::NewDir(dst.clone()),
+        )
+        .unwrap();
+        assert_eq!(
+            fs::metadata(dst).unwrap().permissions().mode() & 0o777,
+            0o710
+        );
+    }
+
+    #[test]
     #[ignore = "requires rustic and Git"]
     fn round_trip_restores_same_fingerprint() {
         let root = tempfile::tempdir().unwrap();
         let repo = tempfile::tempdir().unwrap();
         let dest = tempfile::tempdir().unwrap();
-        let root = root.path();
+        let project = root.path().join("project");
+        fs::create_dir(&project).unwrap();
+        let root = project.as_path();
         git(root, &["init"]).unwrap();
         let remote = tempfile::tempdir().unwrap();
         git(remote.path(), &["init", "--bare"]).unwrap();
@@ -584,6 +768,7 @@ mod tests {
         git(root, &["rm", "--cached", "--", "cached-delete"]).unwrap();
         fs::write(root.join("hello"), "staged").unwrap();
         git(root, &["add", "hello"]).unwrap();
+        git(root, &["update-index", "--chmod=+x", "--", "hello"]).unwrap();
         fs::write(root.join("hello"), "working").unwrap();
         let cli = RusticCli::new(
             super::super::engine::find_rustic(root).unwrap(),
@@ -607,6 +792,18 @@ mod tests {
         .unwrap()
         .snapshot
         .unwrap();
+        // The archived history was local at backup time; remote reachability can change later.
+        git(root, &["push", "origin", "HEAD"]).unwrap();
+        git(
+            root,
+            &[
+                "remote",
+                "set-url",
+                "origin",
+                path_arg(&dest.path().join("offline")).unwrap(),
+            ],
+        )
+        .unwrap();
         let report = restore(
             &cli,
             root,
@@ -623,12 +820,44 @@ mod tests {
         assert!(report.dir.join("cached-delete").is_file());
         assert_eq!(fs::read(report.dir.join("hello")).unwrap(), b"working");
         assert_eq!(git(&report.dir, &["show", ":hello"]).unwrap(), "staged");
+        assert!(
+            git(&report.dir, &["ls-files", "--stage", "--", "hello"])
+                .unwrap()
+                .starts_with("100755 ")
+        );
         assert!(report.fingerprint_ok);
         assert!(restore(&cli, root, &snapshot, RestoreDest::InPlace).is_err());
         assert_eq!(fs::read(root.join("hello")).unwrap(), b"working");
         git(root, &["restore", "--staged", "--worktree", "--", "."]).unwrap();
+        fs::write(root.join("later.txt"), "later commit").unwrap();
+        git(root, &["add", "later.txt"]).unwrap();
+        git(
+            root,
+            &[
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=test@example.invalid",
+                "-c",
+                "commit.gpgSign=false",
+                "commit",
+                "-m",
+                "later",
+            ],
+        )
+        .unwrap();
+        let later = git(root, &["rev-parse", "HEAD"]).unwrap();
+        let branch = git(root, &["symbolic-ref", "HEAD"]).unwrap();
         let report = restore(&cli, root, &snapshot, RestoreDest::InPlace).unwrap();
+        assert_eq!(git(root, &["rev-parse", &branch]).unwrap(), later);
+        assert!(!root.join("later.txt").exists());
         assert!(report.fingerprint_ok);
+        let recovery = report.recovery_dir.unwrap();
+        assert_eq!(
+            fs::read(recovery.join("files/hello")).unwrap(),
+            b"committed"
+        );
+        assert!(recovery.join("original-index").is_file());
         assert_eq!(git(root, &["show", ":hello"]).unwrap(), "staged");
         assert_eq!(fs::read(root.join("hello")).unwrap(), b"working");
     }

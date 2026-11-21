@@ -362,6 +362,10 @@ fn create(cli: &impl Rustic, root: &Path, json_output: bool) -> Result<()> {
 }
 
 pub(super) fn private_tempdir() -> std::io::Result<tempfile::TempDir> {
+    private_tempdir_in(&std::env::temp_dir())
+}
+
+pub(super) fn private_tempdir_in(parent: &Path) -> std::io::Result<tempfile::TempDir> {
     let mut builder = tempfile::Builder::new();
     builder.prefix("appz-backup-");
     #[cfg(unix)]
@@ -369,7 +373,7 @@ pub(super) fn private_tempdir() -> std::io::Result<tempfile::TempDir> {
         use std::os::unix::fs::PermissionsExt;
         builder.permissions(std::fs::Permissions::from_mode(0o700));
     }
-    builder.tempdir()
+    builder.tempdir_in(parent)
 }
 
 fn write_snapshot(

@@ -151,7 +151,7 @@ fn create_from_selection(
         .map(|p| p.to_string_lossy().replace('\\', "/"))
         .collect();
 
-    let manifest = Manifest {
+    let mut manifest = Manifest {
         appz_version: env!("CARGO_PKG_VERSION").to_string(),
         created_at: chrono::Utc::now().to_rfc3339(),
         target: input.target.map(str::to_string),
@@ -166,6 +166,8 @@ fn create_from_selection(
         build_env_names,
         files,
         deleted: selection.deleted.clone(),
+        staged_modes: selection.staged_modes(),
+        source_fingerprint: None,
         has_bundle: selection.bundle.is_some(),
     };
 
@@ -187,6 +189,12 @@ fn create_from_selection(
             .map_err(|e| EngineError::Failed(e.to_string()))?;
     }
 
+    let worktree = stage.path().join("worktree");
+    std::fs::create_dir_all(&worktree).map_err(|e| EngineError::Failed(e.to_string()))?;
+    manifest.source_fingerprint = Some(
+        source_fingerprint(&worktree, selection, &manifest.build_env_names)
+            .map_err(EngineError::Failed)?,
+    );
     let manifest_bytes =
         serde_json::to_vec_pretty(&manifest).map_err(|e| EngineError::Failed(e.to_string()))?;
     std::fs::write(stage.path().join(MANIFEST_NAME), manifest_bytes)
@@ -242,6 +250,22 @@ fn create_from_selection(
         added_bytes,
         skipped: None,
     })
+}
+
+/// Verify reconstructed source independently of branch names and remote reachability.
+pub(super) fn source_fingerprint(
+    root: &Path,
+    selected: &select::Selection,
+    env: &[String],
+) -> Result<String, String> {
+    let mut source = selected.clone();
+    source.bundle = None;
+    if let Some(info) = &mut source.git {
+        info.branch = None;
+        info.remote = None;
+        info.ahead = 0;
+    }
+    select::selection_fingerprint(root, &source, env)
 }
 
 fn locked_summary() -> BackupSummary {

@@ -8,6 +8,7 @@
 // Consumed by upcoming backup tasks (create, after_deploy, list, restore).
 #![allow(dead_code)]
 
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use rand::RngCore;
@@ -80,6 +81,14 @@ pub fn open_repo(
         |dir| engine::ensure_installed(dir, consent),
         |bin, repo, password, cwd| RusticCli::new(bin, repo, password, cwd),
         |msg| eprintln!("{msg}"),
+        |recovery| {
+            if std::io::stderr().is_terminal() {
+                let _ = cliclack::note(
+                    "Backup recovery key (save this somewhere off this machine)",
+                    recovery,
+                );
+            }
+        },
     )
 }
 
@@ -93,6 +102,7 @@ fn open_repo_with<E: Rustic>(
     ensure_bin: impl FnOnce(&Path) -> Result<PathBuf, String>,
     make_client: impl FnOnce(PathBuf, &str, &str, &Path) -> E,
     mut note: impl FnMut(&str),
+    show_recovery: impl FnOnce(&str),
 ) -> Result<Option<E>, String> {
     if !cfg.is_enabled() {
         return Ok(None);
@@ -174,9 +184,7 @@ fn open_repo_with<E: Rustic>(
                 vault.set(&key, &password)?;
                 let client = make_client(bin, &repo, &password, root);
                 client.run(&["init"]).map_err(|e| e.to_string())?;
-                note(&format!(
-                    "Backup recovery key (save this somewhere off this machine): {password}"
-                ));
+                show_recovery(&password);
                 Ok(Some(client))
             }
         },
@@ -363,6 +371,7 @@ mod tests {
                 events: events.clone(),
             },
             |msg| notes.push(msg.to_string()),
+            |_| {},
         )
         .unwrap();
 
@@ -386,6 +395,7 @@ mod tests {
                 events: events.clone(),
             },
             |msg| notes2.push(msg.to_string()),
+            |_| {},
         )
         .unwrap();
 
@@ -413,6 +423,7 @@ mod tests {
                 repo_initialized: RefCell::new(true),
                 events: events.clone(),
             },
+            |_| {},
             |_| {},
         )
         .unwrap()
@@ -442,6 +453,7 @@ mod tests {
                 events: events.clone(),
             },
             |msg| notes.push(msg.to_string()),
+            |_| {},
         )
         .unwrap();
 
@@ -457,7 +469,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let events = Rc::new(RefCell::new(Vec::new()));
         let vault = FakeVault::missing(events.clone());
-        let mut notes = Vec::new();
+        let mut shown_recovery = None;
         let expected_key = vault_key(&config::project_id(dir.path()));
 
         let client = open_repo_with(
@@ -472,7 +484,8 @@ mod tests {
                 repo_initialized: RefCell::new(false),
                 events: events.clone(),
             },
-            |msg| notes.push(msg.to_string()),
+            |_| {},
+            |key| shown_recovery = Some(key.to_string()),
         )
         .unwrap()
         .expect("interactive init should return client");
@@ -489,8 +502,6 @@ mod tests {
         assert_eq!(stored[0].0, expected_key);
         assert_eq!(stored[0].1.len(), 44);
         assert_eq!(client.password, stored[0].1);
-        assert_eq!(notes.len(), 1);
-        assert!(notes[0].contains("save this somewhere off this machine"));
-        assert!(notes[0].contains(&stored[0].1));
+        assert_eq!(shown_recovery.as_deref(), Some(stored[0].1.as_str()));
     }
 }

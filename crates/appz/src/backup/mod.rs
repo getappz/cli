@@ -3,7 +3,9 @@
 //! Only the source that cannot be rebuilt is snapshotted (see [`select`]);
 //! working-tree environment files are excluded. Git bundles preserve committed history.
 
+pub mod config;
 pub mod engine;
+pub mod manifest;
 pub mod retention;
 pub mod select;
 
@@ -408,20 +410,7 @@ fn fingerprint_tree(root: &Path, dir: &Path, hash: &mut Sha256) -> Result<u64> {
 }
 
 fn retention_policy(root: &Path) -> Result<retention::Retention> {
-    let source = match std::fs::read_to_string(root.join("appz.jsonc")) {
-        Ok(source) => source,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Default::default()),
-        Err(e) => return Err(e.into()),
-    };
-    let config: serde_json::Value = serde_json::from_str(&appz_core::strip_jsonc(&source))?;
-    let policy: retention::Retention = match config.pointer("/backup/retention") {
-        Some(policy) => serde_json::from_value(policy.clone())?,
-        None => Default::default(),
-    };
-    if let Some(size) = &policy.max_size {
-        retention::parse_size(size)?;
-    }
-    Ok(policy)
+    Ok(config::read_config(root)?.retention)
 }
 
 #[cfg(test)]

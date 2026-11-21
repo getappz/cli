@@ -101,6 +101,7 @@ impl AwsS3Provider {
             cli_missing: false,
             link_needed: false,
             unchanged: false,
+            backup: None,
         })
     }
 }

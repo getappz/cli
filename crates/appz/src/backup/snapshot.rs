@@ -12,7 +12,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use cap_std::fs::Dir;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+
+pub use appz_deploy::BackupSummary;
 
 use super::config;
 use super::engine::{EngineError, Rustic};
@@ -29,18 +31,22 @@ pub struct CreateInput<'a> {
     pub build_env_names: Vec<String>,
 }
 
-/// Outcome of a `backup::create` call.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BackupSummary {
-    pub snapshot: Option<String>,
-    pub added_bytes: u64,
-    pub skipped: Option<String>,
-}
-
 /// Create an incremental backup snapshot for `input.root` using `engine`.
 pub fn create(engine: &dyn Rustic, input: CreateInput<'_>) -> Result<BackupSummary, EngineError> {
     create_with(engine, input, crate::secrets::known_names, |msg| {
-        crate::warning(msg)
+        crate::warning(msg);
+    })
+}
+
+pub(super) fn create_quiet(
+    engine: &dyn Rustic,
+    input: CreateInput<'_>,
+    quiet: bool,
+) -> Result<BackupSummary, EngineError> {
+    create_with(engine, input, crate::secrets::known_names, |msg| {
+        if !quiet {
+            crate::warning(msg);
+        }
     })
 }
 

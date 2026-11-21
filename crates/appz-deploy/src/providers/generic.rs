@@ -286,6 +286,7 @@ impl GenericProvider {
             cli_missing: false,
             link_needed: false,
             unchanged: false,
+            backup: None,
         })
     }
 }

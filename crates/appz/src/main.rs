@@ -325,6 +325,9 @@ struct DeployArgs {
     /// Deploy to every target configured under deploy.targets instead of one
     #[arg(long, conflicts_with_all = ["target", "project"])]
     all: bool,
+    /// Skip the automatic source backup after a successful deploy
+    #[arg(long)]
+    no_backup: bool,
 }
 
 #[derive(Args)]
@@ -2069,6 +2072,7 @@ fn run_deploy(args: DeployArgs, json: bool) {
         build_env: args.build_env,
         dry_run: args.dry_run,
         json,
+        backup: !args.no_backup,
         install: if assume_yes() {
             deploy::Consent::Yes
         } else if !json && is_tty() {
@@ -2170,6 +2174,9 @@ fn run_deploy(args: DeployArgs, json: bool) {
                     warning(
                         "deploy succeeded but the live URL could not be confirmed from CLI output",
                     );
+                }
+                if let Some(id) = output.backup.as_ref().and_then(|b| b.snapshot.as_deref()) {
+                    info(&format!("source snapshot saved ({id})"));
                 }
                 outro("deploy complete");
             }
@@ -2991,6 +2998,14 @@ mod tests {
         assert!(AppzCli::try_parse_from(["appz", "rollback"]).is_err());
         assert!(AppzCli::try_parse_from(["appz", "alias", "app.example.com"]).is_ok());
         assert!(AppzCli::try_parse_from(["appz", "alias"]).is_err());
+
+        match AppzCli::try_parse_from(["appz", "deploy", "--no-backup"])
+            .unwrap()
+            .command
+        {
+            AppzCmd::Deploy(a) => assert!(a.no_backup),
+            _ => panic!("not deploy"),
+        }
     }
 
     #[test]

@@ -64,6 +64,15 @@ pub fn open_repo(
     cfg: &BackupConfig,
     mode: Interactive,
 ) -> Result<Option<RusticCli>, String> {
+    open_repo_noting(root, cfg, mode, |msg| eprintln!("{msg}"))
+}
+
+pub(super) fn open_repo_noting(
+    root: &Path,
+    cfg: &BackupConfig,
+    mode: Interactive,
+    note: impl FnMut(&str),
+) -> Result<Option<RusticCli>, String> {
     let vault_path = secrets::vault_path(root, true)?;
     let vault = GlobalVault { path: vault_path };
     let consent = match mode {
@@ -80,7 +89,7 @@ pub fn open_repo(
         &vault,
         |dir| engine::ensure_installed(dir, consent),
         |bin, repo, password, cwd| RusticCli::new(bin, repo, password, cwd),
-        |msg| eprintln!("{msg}"),
+        note,
         |recovery| {
             if std::io::stderr().is_terminal() {
                 let _ = cliclack::note(

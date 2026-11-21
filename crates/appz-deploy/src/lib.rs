@@ -16,7 +16,7 @@ pub use context::{
 pub use error::{DeployError, DeployResult};
 pub use exec::{ExecOutput, exec_captured, exec_captured_scrubbed};
 pub use output::{
-    ApexRecord, AuthState, CnameRecord, DeployOutput, DeployStatus, DeploymentInfo,
+    ApexRecord, AuthState, BackupSummary, CnameRecord, DeployOutput, DeployStatus, DeploymentInfo,
     DeploymentInspect, DetectedConfig, DnsRecordChallenge, DomainVerificationRecord,
     DomainVerifyResult, InspectFileEntry, PrerequisiteStatus, ProjectDomain, ProjectInfo,
 };

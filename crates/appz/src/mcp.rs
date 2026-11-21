@@ -373,6 +373,7 @@ impl AppzServer {
             build_env: vec![],
             dry_run: arg.dry_run,
             json: true,
+            backup: true,
             // An agent installs software / creates platform projects only when
             // told to (`allow_setup`); otherwise it gets the step that is needed.
             // Login needs a browser, so an agent supplies a token instead

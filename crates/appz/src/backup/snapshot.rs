@@ -38,23 +38,39 @@ pub fn create(engine: &dyn Rustic, input: CreateInput<'_>) -> Result<BackupSumma
     })
 }
 
-pub(super) fn create_quiet(
+pub(super) fn create_quiet_deduped(
     engine: &dyn Rustic,
     input: CreateInput<'_>,
     quiet: bool,
 ) -> Result<BackupSummary, EngineError> {
-    create_with(engine, input, crate::secrets::known_names, |msg| {
-        if !quiet {
-            crate::warning(msg);
-        }
-    })
+    create_with_dedup(
+        engine,
+        input,
+        crate::secrets::known_names,
+        |msg| {
+            if !quiet {
+                crate::warning(msg);
+            }
+        },
+        true,
+    )
 }
 
 fn create_with(
     engine: &dyn Rustic,
     input: CreateInput<'_>,
     vault_names: impl FnOnce(&Path) -> BTreeSet<String>,
+    warn: impl FnMut(&str),
+) -> Result<BackupSummary, EngineError> {
+    create_with_dedup(engine, input, vault_names, warn, false)
+}
+
+fn create_with_dedup(
+    engine: &dyn Rustic,
+    input: CreateInput<'_>,
+    vault_names: impl FnOnce(&Path) -> BTreeSet<String>,
     mut warn: impl FnMut(&str),
+    derive_fp_when_empty: bool,
 ) -> Result<BackupSummary, EngineError> {
     let outputs: Vec<_> = appz_core::detect_toolchains(input.root)
         .map_err(EngineError::Failed)?
@@ -63,7 +79,14 @@ fn create_with(
         .collect();
     let selection = select::select(input.root, &outputs).map_err(EngineError::Failed)?;
 
-    let res = create_from_selection(engine, &input, &selection, vault_names, &mut warn);
+    let res = create_from_selection(
+        engine,
+        &input,
+        &selection,
+        vault_names,
+        &mut warn,
+        derive_fp_when_empty,
+    );
     if let Some(bundle) = &selection.bundle {
         select::remove_bundle(bundle);
     }
@@ -76,6 +99,7 @@ fn create_from_selection(
     selection: &select::Selection,
     vault_names: impl FnOnce(&Path) -> BTreeSet<String>,
     warn: &mut impl FnMut(&str),
+    derive_fp_when_empty: bool,
 ) -> Result<BackupSummary, EngineError> {
     if !selection.env_names.is_empty() {
         let known = vault_names(input.root);
@@ -88,16 +112,27 @@ fn create_from_selection(
         }
     }
 
+    let mut build_env_names = input.build_env_names.clone();
+    build_env_names.sort();
+    build_env_names.dedup();
+
+    let derived_fp;
+    let effective_fp = if !input.fingerprint.is_empty() {
+        input.fingerprint
+    } else if derive_fp_when_empty {
+        derived_fp = select::selection_fingerprint(input.root, selection, &build_env_names)
+            .map_err(EngineError::Failed)?;
+        derived_fp.as_str()
+    } else {
+        ""
+    };
+
     let project_id = config::project_id(input.root);
     let host = format!("appz-{project_id}");
 
-    if !input.fingerprint.is_empty() {
+    if !effective_fp.is_empty() {
         match latest_snapshot_tags(engine, &host) {
-            Ok(Some(last_tags))
-                if last_tags
-                    .iter()
-                    .any(|t| t == &format!("fp:{}", input.fingerprint)) =>
-            {
+            Ok(Some(last_tags)) if last_tags.iter().any(|t| t == &format!("fp:{effective_fp}")) => {
                 return Ok(BackupSummary {
                     snapshot: None,
                     added_bytes: 0,
@@ -109,10 +144,6 @@ fn create_from_selection(
             Err(err) => return Err(err),
         }
     }
-
-    let mut build_env_names = input.build_env_names.clone();
-    build_env_names.sort();
-    build_env_names.dedup();
 
     let files: Vec<String> = selection
         .files
@@ -128,7 +159,7 @@ fn create_from_selection(
             .production
             .map(|p| if p { "production" } else { "preview" }.to_string()),
         url: input.url.map(str::to_string),
-        fingerprint: input.fingerprint.to_string(),
+        fingerprint: effective_fp.to_string(),
         git: selection.git.clone(),
         tools: BTreeMap::new(),
         env_names: selection.env_names.clone(),
@@ -646,5 +677,61 @@ mod tests {
         .unwrap();
         assert!(second.snapshot.is_some());
         assert!(second.added_bytes < 64 * 1024);
+    }
+
+    #[test]
+    fn create_quiet_deduped_derives_selection_fingerprint_and_skips_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("index.html"), "<h1>hello</h1>").unwrap();
+
+        let first_engine =
+            RecordingEngine::ok("[]", r#"{"id":"snap-1","summary":{"data_added":64}}"#);
+        let first = create_quiet_deduped(
+            &first_engine,
+            CreateInput {
+                root: dir.path(),
+                fingerprint: "",
+                target: Some("vercel"),
+                production: Some(false),
+                url: None,
+                build_env_names: vec!["PUBLIC_URL".into()],
+            },
+            true,
+        )
+        .unwrap();
+        assert_eq!(first.snapshot.as_deref(), Some("snap-1"));
+        let fp = first_engine
+            .manifest_seen
+            .borrow()
+            .as_ref()
+            .expect("manifest staged")
+            .fingerprint
+            .clone();
+        assert_eq!(fp.len(), 64);
+
+        let host = format!("appz-{}", config::project_id(dir.path()));
+        let second_snapshots = format!(
+            r#"[{{"group_key":{{"hostname":"{host}"}},"snapshots":[{{"id":"snap-1","time":"2026-11-20T00:00:00Z","tags":["appz","fp:{fp}"]}}]}}]"#
+        );
+        let second_engine = RecordingEngine::ok(
+            &second_snapshots,
+            r#"{"id":"snap-2","summary":{"data_added":64}}"#,
+        );
+        let second = create_quiet_deduped(
+            &second_engine,
+            CreateInput {
+                root: dir.path(),
+                fingerprint: "",
+                target: Some("vercel"),
+                production: Some(false),
+                url: None,
+                build_env_names: vec!["PUBLIC_URL".into()],
+            },
+            true,
+        )
+        .unwrap();
+        assert_eq!(second.snapshot, None);
+        assert_eq!(second.skipped.as_deref(), Some("no changes"));
+        assert_eq!(second_engine.calls.borrow().len(), 1);
     }
 }

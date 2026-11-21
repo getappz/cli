@@ -16,8 +16,13 @@
 //!   restore can rebuild the history without a reachable remote.
 
 use std::collections::BTreeSet;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
+use cap_std::fs::Dir;
+use sha2::{Digest, Sha256};
 
 use crate::deploy_state::{self, SKIP_DIRS};
 
@@ -124,6 +129,148 @@ pub fn select(root: &Path, output_dirs: &[&str]) -> Result<Selection, String> {
         git: Some(state),
         bundle,
     })
+}
+
+/// Compute a content fingerprint matching everything [`super::snapshot`] stages
+/// for `selection` (selected working-tree files including tracked `.vscode`
+/// entries, staged git blobs, local-only commit ancestry, and env/build-env names).
+pub(super) fn selection_fingerprint(
+    root: &Path,
+    selection: &Selection,
+    build_env_names: &[String],
+) -> Result<String, String> {
+    let mut hash = Sha256::new();
+    let project = Dir::open_ambient_dir(root, cap_std::ambient_authority())
+        .map_err(|e| format!("cannot open backup root {}: {e}", root.display()))?;
+
+    hash.update(b"files\0");
+    for rel in &selection.files {
+        let normalized = rel.to_string_lossy().replace('\\', "/");
+        hash.update(normalized.as_bytes());
+        hash.update(b"\0");
+        hash_selected_entry(&project, rel, &mut hash)?;
+    }
+
+    hash.update(b"staged\0");
+    for entry in &selection.staged {
+        let normalized = entry.path.to_string_lossy().replace('\\', "/");
+        hash.update(normalized.as_bytes());
+        hash.update(b"\0");
+        hash.update(entry.object_id.as_bytes());
+        hash.update(b"\0");
+        hash.update([u8::from(entry.gitlink)]);
+    }
+
+    hash.update(b"git\0");
+    if let Some(git) = &selection.git {
+        hash.update([1u8]);
+        hash.update(git.sha.as_bytes());
+        hash.update(b"\0");
+        hash.update(git.branch.as_deref().unwrap_or("").as_bytes());
+        hash.update(b"\0");
+        hash.update(git.remote.as_deref().unwrap_or("").as_bytes());
+        hash.update(b"\0");
+        hash.update(git.ahead.to_le_bytes());
+        hash.update([u8::from(selection.bundle.is_some())]);
+        if selection.bundle.is_some() {
+            let revs = git_stdout(
+                root,
+                &["rev-list", "--topo-order", "HEAD", "--not", "--remotes"],
+            )?;
+            hash.update((revs.len() as u64).to_le_bytes());
+            hash.update(&revs);
+        }
+    } else {
+        hash.update([0u8]);
+    }
+
+    hash.update(b"env\0");
+    for name in &selection.env_names {
+        hash.update(name.as_bytes());
+        hash.update(b"\0");
+    }
+
+    let mut build_names = build_env_names.to_vec();
+    build_names.sort();
+    build_names.dedup();
+    hash.update(b"build_env\0");
+    for name in &build_names {
+        hash.update(name.as_bytes());
+        hash.update(b"\0");
+    }
+
+    let digest = hash.finalize();
+    let mut hex = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        use std::fmt::Write as _;
+        let _ = write!(&mut hex, "{byte:02x}");
+    }
+    Ok(hex)
+}
+
+fn hash_selected_entry(project: &Dir, rel: &Path, hash: &mut Sha256) -> Result<(), String> {
+    let mut parent = project
+        .try_clone()
+        .map_err(|e| format!("cannot clone project dir handle: {e}"))?;
+    let mut components = rel.components().peekable();
+    let name = loop {
+        let Some(std::path::Component::Normal(name)) = components.next() else {
+            return Err(format!("invalid selected source: {}", rel.display()));
+        };
+        if components.peek().is_none() {
+            break name;
+        }
+        parent = parent
+            .open_dir_nofollow(name)
+            .map_err(|e| format!("cannot traverse {}: {e}", rel.display()))?;
+    };
+
+    let meta = parent
+        .symlink_metadata(name)
+        .map_err(|e| format!("cannot stat {}: {e}", rel.display()))?;
+    if meta.is_symlink() {
+        let target = parent
+            .read_link_contents(name)
+            .map_err(|e| format!("cannot read link {}: {e}", rel.display()))?;
+        hash.update(b"sym\0");
+        hash.update(target.as_os_str().as_encoded_bytes());
+        hash.update(b"\0");
+        return Ok(());
+    }
+    if !meta.is_file() {
+        return Err(format!("unsupported backup source: {}", rel.display()));
+    }
+
+    let mut options = cap_std::fs::OpenOptions::new();
+    options.read(true).follow(FollowSymlinks::No);
+    #[cfg(unix)]
+    {
+        use cap_std::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let mut file = parent
+        .open_with(name, &options)
+        .map_err(|e| format!("cannot open {}: {e}", rel.display()))?
+        .into_std();
+    let meta = file
+        .metadata()
+        .map_err(|e| format!("cannot stat {}: {e}", rel.display()))?;
+    if !meta.is_file() {
+        return Err(format!("expected a regular file: {}", rel.display()));
+    }
+    hash.update(b"reg\0");
+    hash.update(meta.len().to_le_bytes());
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = file
+            .read(&mut buf)
+            .map_err(|e| format!("cannot read {}: {e}", rel.display()))?;
+        if n == 0 {
+            break;
+        }
+        hash.update(&buf[..n]);
+    }
+    Ok(())
 }
 
 /// Decides which paths are source worth keeping. Built once per selection.
@@ -957,5 +1104,55 @@ mod tests {
             select(repo.path(), &[]).unwrap().files,
             [PathBuf::from(OsStr::from_bytes(b"source\xff"))]
         );
+    }
+
+    #[test]
+    fn selection_fingerprint_tracks_tracked_vscode_staged_blobs_and_local_commits() {
+        let repo = git_repo(&[
+            ("src/a.rs", "fn main() {}"),
+            (".vscode/settings.json", "{}"),
+        ]);
+        let _bare = with_remote(&repo);
+
+        let sel0 = select(repo.path(), &[]).unwrap();
+        let fp0 = selection_fingerprint(repo.path(), &sel0, &["API_URL".into()]).unwrap();
+        let fp0_repeat = selection_fingerprint(repo.path(), &sel0, &["API_URL".into()]).unwrap();
+        assert_eq!(fp0, fp0_repeat);
+        assert_eq!(fp0.len(), 64);
+
+        // 1. Tracked file under `.vscode/` (skipped by deploy_state::SKIP_DIRS).
+        repo.write(".vscode/settings.json", "{\"editor.tabSize\":2}");
+        let sel1 = select(repo.path(), &[]).unwrap();
+        let fp1 = selection_fingerprint(repo.path(), &sel1, &["API_URL".into()]).unwrap();
+        assert_ne!(fp1, fp0);
+
+        // 2. Staged blob differs from working tree (working tree reverted to original bytes).
+        repo.write("src/a.rs", "fn main() { println!(\"staged\"); }");
+        assert!(
+            git(repo.path(), &["add", "src/a.rs"])
+                .unwrap()
+                .status
+                .success()
+        );
+        repo.write("src/a.rs", "fn main() {}");
+        let sel2 = select(repo.path(), &[]).unwrap();
+        let fp2 = selection_fingerprint(repo.path(), &sel2, &["API_URL".into()]).unwrap();
+        assert_ne!(fp2, fp1);
+
+        // 3. Local-only commit (`ahead > 0`).
+        assert!(
+            git(repo.path(), &["commit", "-m", "local commit"])
+                .unwrap()
+                .status
+                .success()
+        );
+        let sel3 = select(repo.path(), &[]).unwrap();
+        if let Some(bundle) = &sel3.bundle {
+            let fp3 = selection_fingerprint(repo.path(), &sel3, &["API_URL".into()]).unwrap();
+            assert_ne!(fp3, fp2);
+            remove_bundle(bundle);
+        } else {
+            panic!("expected local commit bundle");
+        }
     }
 }

@@ -104,7 +104,7 @@ fn after_deploy_with<E: Rustic>(
         }
     };
 
-    let summary = match snapshot::create_quiet(
+    let summary = match snapshot::create_quiet_deduped(
         &engine,
         CreateInput {
             root,

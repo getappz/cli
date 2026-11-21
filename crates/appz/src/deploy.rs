@@ -522,11 +522,6 @@ fn finish_target_with(
         crate::deploy_state::record(&ctx.project_dir, slug, target.req.prod, fp, url);
     }
     if target.req.backup {
-        let backup_fp = crate::deploy_state::fingerprint(
-            &ctx.project_dir,
-            &fingerprint_extra(slug, &target.req, &ctx.deploy_config),
-        )
-        .unwrap_or_default();
         let build_env_names = build_env_var_names(&target.req);
         let interactive = if !target.req.json && crate::is_tty() {
             crate::backup::Interactive::Yes
@@ -536,7 +531,8 @@ fn finish_target_with(
         output.backup = run_backup(
             &ctx.project_dir,
             &crate::backup::AfterDeploy {
-                fingerprint: &backup_fp,
+                // `after_deploy` derives its dedup identity from the backup selection itself.
+                fingerprint: "",
                 target: slug,
                 production: target.req.prod,
                 url: output.url.as_deref(),
@@ -1528,7 +1524,7 @@ mod tests {
         let mut called = false;
         let err = finish_target_with(&target, &mut output, None, |_, ad| {
             called = true;
-            assert!(!ad.fingerprint.is_empty());
+            assert_eq!(ad.fingerprint, "");
             assert_eq!(ad.url, None);
             Some(appz_deploy::BackupSummary {
                 snapshot: Some("snap-url-less".into()),
@@ -1546,7 +1542,7 @@ mod tests {
     }
 
     #[test]
-    fn backup_fingerprint_reflects_after_deploy_hook_edits() {
+    fn backup_runs_after_after_deploy_hook_edits() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("index.html"), "<h1>before</h1>").unwrap();
         let mut target = prepared_for_test(dir.path(), req(&[], &[], None));
@@ -1573,14 +1569,13 @@ mod tests {
         output.status = appz_deploy::DeployStatus::Ready;
         output.url = Some("https://preview.example.com".into());
 
-        let mut backup_fp = None;
-        let err = finish_target_with(&target, &mut output, Some(&pre_hook_fp), |_, ad| {
-            backup_fp = Some(ad.fingerprint.to_string());
+        let mut saw_hook_output = false;
+        let err = finish_target_with(&target, &mut output, Some(&pre_hook_fp), |root, _| {
+            saw_hook_output = root.join("generated.txt").exists();
             None
         });
         assert!(err.is_none(), "{err:?}");
-        let backup_fp = backup_fp.expect("backup hook should have run");
-        assert_ne!(backup_fp, pre_hook_fp);
+        assert!(saw_hook_output);
         assert!(
             crate::deploy_state::unchanged(dir.path(), "vercel", false, &pre_hook_fp).is_some()
         );

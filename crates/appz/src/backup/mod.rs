@@ -7,6 +7,7 @@ pub mod config;
 pub mod engine;
 pub mod manifest;
 pub mod repo;
+pub mod restore;
 pub mod retention;
 pub mod select;
 pub mod snapshot;

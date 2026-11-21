@@ -2070,6 +2070,7 @@ fn run_ci(args: CiArgs, json: bool) {
 }
 
 fn run_deploy(args: DeployArgs, json: bool) {
+    appz_deploy::enable_cli_deploy_interrupts();
     let canonical = resolve_root(&args.dir);
     let all = args.all;
     let req = deploy::DeployRequest {

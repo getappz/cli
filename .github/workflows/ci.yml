@@ -73,6 +73,8 @@ jobs:
         run: cargo build --workspace --verbose
       - if: needs.changes.result != 'success' || needs.changes.outputs.code == 'true'
         run: cargo test --workspace --verbose
+      - if: needs.changes.result != 'success' || needs.changes.outputs.code == 'true'
+        run: python crates/appz/tests/interrupted_deploy.py target/debug/appz${{ runner.os == 'Windows' && '.exe' || '' }}
 
   clippy:
     needs: changes

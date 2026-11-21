@@ -3013,6 +3013,21 @@ mod tests {
             AppzCmd::Deploy(a) => assert!(a.no_backup),
             _ => panic!("not deploy"),
         }
+
+        for args in [
+            &["appz", "backup"][..],
+            &["appz", "backup", "create"],
+            &["appz", "backup", "ls"],
+            &["appz", "backup", "list"],
+        ] {
+            assert!(
+                matches!(
+                    AppzCli::try_parse_from(args).unwrap().command,
+                    AppzCmd::Backup(_)
+                ),
+                "{args:?}"
+            );
+        }
     }
 
     #[test]

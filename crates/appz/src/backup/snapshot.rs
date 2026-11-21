@@ -116,12 +116,36 @@ fn create_from_selection(
     build_env_names.sort();
     build_env_names.dedup();
 
+    let stage = super::private_tempdir().map_err(|e| EngineError::Failed(e.to_string()))?;
+    let worktree = stage.path().join("worktree");
+    std::fs::create_dir(&worktree).map_err(|e| EngineError::Failed(e.to_string()))?;
+    let project = Dir::open_ambient_dir(input.root, cap_std::ambient_authority())
+        .map_err(|e| EngineError::Failed(e.to_string()))?;
+
+    for rel in &selection.files {
+        super::stage_file(&project, rel, &worktree.join(rel))
+            .map_err(|e| EngineError::Failed(e.to_string()))?;
+    }
+    for rel in &selection.staged {
+        select::save_staged(input.root, rel, stage.path()).map_err(EngineError::Failed)?;
+    }
+    if let Some(bundle) = &selection.bundle {
+        let dir = stage.path().join("git");
+        std::fs::create_dir_all(&dir).map_err(|e| EngineError::Failed(e.to_string()))?;
+        std::fs::copy(bundle, dir.join("local-commits.bundle"))
+            .map_err(|e| EngineError::Failed(e.to_string()))?;
+    }
+
+    let mut mode_tag = None;
     let derived_fp;
     let effective_fp = if !input.fingerprint.is_empty() {
         input.fingerprint
     } else if derive_fp_when_empty {
-        derived_fp = select::selection_fingerprint(input.root, selection, &build_env_names)
-            .map_err(EngineError::Failed)?;
+        let (fp, modes) =
+            select::staged_fingerprints(input.root, &worktree, selection, &build_env_names)
+                .map_err(EngineError::Failed)?;
+        mode_tag = Some(modes);
+        derived_fp = fp;
         derived_fp.as_str()
     } else {
         ""
@@ -130,9 +154,18 @@ fn create_from_selection(
     let project_id = config::project_id(input.root);
     let host = format!("appz-{project_id}");
 
+    let expected = (1
+        + selection.files.len()
+        + selection.staged.len()
+        + usize::from(selection.bundle.is_some())) as u64;
     if !effective_fp.is_empty() {
-        match latest_snapshot_tags(engine, &host) {
-            Ok(Some(last_tags)) if last_tags.iter().any(|t| t == &format!("fp:{effective_fp}")) => {
+        match latest_snapshot_tags(engine, &host, expected) {
+            Ok(Some(last_tags))
+                if last_tags.iter().any(|t| t == &format!("fp:{effective_fp}"))
+                    && mode_tag
+                        .as_ref()
+                        .is_none_or(|mode| last_tags.contains(mode)) =>
+            {
                 return Ok(BackupSummary {
                     snapshot: None,
                     added_bytes: 0,
@@ -171,30 +204,13 @@ fn create_from_selection(
         has_bundle: selection.bundle.is_some(),
     };
 
-    let stage = super::private_tempdir().map_err(|e| EngineError::Failed(e.to_string()))?;
-    let project = Dir::open_ambient_dir(input.root, cap_std::ambient_authority())
-        .map_err(|e| EngineError::Failed(e.to_string()))?;
-
-    for rel in &selection.files {
-        super::stage_file(&project, rel, &stage.path().join("worktree").join(rel))
-            .map_err(|e| EngineError::Failed(e.to_string()))?;
-    }
-    for rel in &selection.staged {
-        select::save_staged(input.root, rel, stage.path()).map_err(EngineError::Failed)?;
-    }
-    if let Some(bundle) = &selection.bundle {
-        let dir = stage.path().join("git");
-        std::fs::create_dir_all(&dir).map_err(|e| EngineError::Failed(e.to_string()))?;
-        std::fs::copy(bundle, dir.join("local-commits.bundle"))
-            .map_err(|e| EngineError::Failed(e.to_string()))?;
-    }
-
     let manifest_bytes =
         encode_manifest(stage.path(), &mut manifest, selection).map_err(EngineError::Failed)?;
     std::fs::write(stage.path().join(MANIFEST_NAME), manifest_bytes)
         .map_err(|e| EngineError::Failed(e.to_string()))?;
 
-    let snapshot_tags = tags(&manifest);
+    let mut snapshot_tags = tags(&manifest);
+    snapshot_tags.extend(mode_tag);
     let stage_arg =
         super::path_arg(stage.path()).map_err(|e| EngineError::Failed(e.to_string()))?;
 
@@ -228,6 +244,15 @@ fn create_from_selection(
         .filter(|s| !s.is_empty())
         .ok_or_else(|| EngineError::Failed("rustic returned no ID for the new snapshot".into()))?
         .to_string();
+
+    let processed = parsed
+        .pointer("/summary/total_files_processed")
+        .and_then(|v| v.as_u64());
+    if processed != Some(expected) {
+        return Err(EngineError::Failed(format!(
+            "incomplete snapshot {id}: expected {expected} files, Rustic reported {processed:?}"
+        )));
+    }
 
     let added_bytes = parsed
         .pointer("/summary/data_added")
@@ -286,13 +311,27 @@ fn locked_summary() -> BackupSummary {
 }
 
 #[derive(Deserialize)]
-struct SnapshotMeta {
+pub(super) struct SnapshotJsonSummary {
     #[serde(default)]
-    hostname: Option<String>,
+    total_files_processed: Option<u64>,
     #[serde(default)]
-    time: Option<chrono::DateTime<chrono::FixedOffset>>,
+    pub(super) data_added: Option<u64>,
     #[serde(default)]
-    tags: Vec<String>,
+    pub(super) data_added_packed: Option<u64>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct SnapshotMeta {
+    #[serde(default)]
+    pub(super) id: String,
+    #[serde(default)]
+    pub(super) hostname: Option<String>,
+    #[serde(default)]
+    pub(super) time: Option<String>,
+    #[serde(default)]
+    pub(super) tags: Vec<String>,
+    #[serde(default)]
+    pub(super) summary: Option<SnapshotJsonSummary>,
 }
 
 #[derive(Deserialize)]
@@ -301,17 +340,23 @@ struct GroupKey {
     hostname: Option<String>,
 }
 
-fn latest_snapshot_tags(
+pub(super) fn parse_snapshot_time(
+    raw: Option<&str>,
+) -> Option<chrono::DateTime<chrono::FixedOffset>> {
+    raw.and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+}
+
+pub(super) fn list_host_snapshots(
     engine: &dyn Rustic,
     host: &str,
-) -> Result<Option<Vec<String>>, EngineError> {
+) -> Result<Vec<SnapshotMeta>, EngineError> {
     let out = match engine.run(&["snapshots", "--json"]) {
         Ok(out) => out,
         Err(EngineError::Failed(msg))
             if msg.contains("No repository config file found")
                 || msg.contains("No snapshots found") =>
         {
-            return Ok(None);
+            return Ok(Vec::new());
         }
         Err(err) => return Err(err),
     };
@@ -353,15 +398,29 @@ fn latest_snapshot_tags(
         }
     }
 
+    if all
+        .iter()
+        .all(|s| parse_snapshot_time(s.time.as_deref()).is_some())
+    {
+        all.sort_by_key(|s| parse_snapshot_time(s.time.as_deref()));
+    }
+
+    Ok(all)
+}
+
+fn latest_snapshot_tags(
+    engine: &dyn Rustic,
+    host: &str,
+    expected: u64,
+) -> Result<Option<Vec<String>>, EngineError> {
+    let mut all = list_host_snapshots(engine, host)?;
     if all.is_empty() {
         return Ok(None);
     }
-
-    if all.iter().all(|s| s.time.is_some()) {
-        all.sort_by_key(|s| s.time);
-    }
-
-    Ok(all.pop().map(|s| s.tags))
+    Ok(all
+        .pop()
+        .filter(|s| s.summary.as_ref().and_then(|v| v.total_files_processed) == Some(expected))
+        .map(|s| s.tags))
 }
 
 #[cfg(test)]
@@ -473,12 +532,12 @@ mod tests {
         std::fs::write(dir.path().join("index.html"), "<h1>hi</h1>").unwrap();
         let host = format!("appz-{}", config::project_id(dir.path()));
         let snapshots_json = format!(
-            r#"[{{"group_key":{{"hostname":"{host}"}},"snapshots":[{{"id":"prev","time":"2026-11-20T00:00:00Z","tags":["appz","fp:fp123"]}}]}}]"#
+            r#"[{{"group_key":{{"hostname":"{host}"}},"snapshots":[{{"id":"prev","time":"2026-11-20T00:00:00Z","summary":{{"total_files_processed":2}},"tags":["appz","fp:fp123"]}}]}}]"#
         );
 
         let engine = RecordingEngine::ok(
             &snapshots_json,
-            r#"{"id":"new","summary":{"data_added":10}}"#,
+            r#"{"id":"new","summary":{"data_added":10,"total_files_processed":2}}"#,
         );
 
         let summary =
@@ -503,7 +562,7 @@ mod tests {
 
         let engine = RecordingEngine::ok(
             r#"[{"group_key":{"hostname":"appz-otherproject00"},"snapshots":[{"id":"other","time":"2026-11-20T00:00:00Z","tags":["appz","fp:fp123"]}]}]"#,
-            r#"{"id":"mine","summary":{"data_added":42}}"#,
+            r#"{"id":"mine","summary":{"data_added":42,"total_files_processed":2}}"#,
         );
 
         let summary =
@@ -521,7 +580,10 @@ mod tests {
         std::fs::write(dir.path().join("src/main.rs"), "fn main() {}").unwrap();
         std::fs::write(dir.path().join(".env"), "API_KEY=secret").unwrap();
 
-        let engine = RecordingEngine::ok("[]", r#"{"id":"snap1","summary":{"data_added":512}}"#);
+        let engine = RecordingEngine::ok(
+            "[]",
+            r#"{"id":"snap1","summary":{"data_added":512,"total_files_processed":2}}"#,
+        );
         let expected_host = format!("appz-{}", config::project_id(dir.path()));
 
         let summary = create_with(
@@ -558,6 +620,29 @@ mod tests {
         assert_eq!(manifest.files, vec!["src/main.rs"]);
         assert_eq!(manifest.env_names, vec!["API_KEY"]);
         assert_eq!(manifest.build_env_names, vec!["PUBLIC_URL"]);
+    }
+
+    #[test]
+    fn rejects_an_incomplete_snapshot_even_on_retry() {
+        let project = tempfile::tempdir().unwrap();
+        std::fs::write(project.path().join("app.js"), "source").unwrap();
+        let host = format!("appz-{}", config::project_id(project.path()));
+        let previous = serde_json::json!([{
+            "hostname": host, "tags": ["fp:fp123"], "summary": { "total_files_processed": 1 }
+        }]);
+        let engine = RecordingEngine::ok(
+            &previous.to_string(),
+            r#"{"id":"partial","summary":{"total_files_processed":1}}"#,
+        );
+        let err = create_with(
+            &engine,
+            input_for(project.path()),
+            |_| BTreeSet::new(),
+            |_| {},
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("incomplete snapshot partial"));
+        assert_eq!(engine.calls.borrow().len(), 2);
     }
 
     #[test]
@@ -618,7 +703,10 @@ mod tests {
         std::fs::create_dir_all(root.join("dir with spaces")).unwrap();
         std::fs::write(root.join("dir with spaces/my file.txt"), "hello").unwrap();
 
-        let engine = RecordingEngine::ok("[]", r#"{"id":"s1","summary":{"data_added":128}}"#);
+        let engine = RecordingEngine::ok(
+            "[]",
+            r#"{"id":"s1","summary":{"data_added":128,"total_files_processed":2}}"#,
+        );
 
         let summary = create_with(&engine, input_for(&root), |_| BTreeSet::new(), |_| {}).unwrap();
         assert_eq!(summary.snapshot.as_deref(), Some("s1"));
@@ -648,7 +736,10 @@ mod tests {
         .unwrap();
         std::fs::write(dir.path().join("index.html"), "ok").unwrap();
 
-        let engine = RecordingEngine::ok("[]", r#"{"id":"s2","summary":{"data_added":64}}"#);
+        let engine = RecordingEngine::ok(
+            "[]",
+            r#"{"id":"s2","summary":{"data_added":64,"total_files_processed":2}}"#,
+        );
         let mut warnings = Vec::new();
 
         create_with(
@@ -718,8 +809,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("index.html"), "<h1>hello</h1>").unwrap();
 
-        let first_engine =
-            RecordingEngine::ok("[]", r#"{"id":"snap-1","summary":{"data_added":64}}"#);
+        let first_engine = RecordingEngine::ok(
+            "[]",
+            r#"{"id":"snap-1","summary":{"data_added":64,"total_files_processed":2}}"#,
+        );
         let first = create_quiet_deduped(
             &first_engine,
             CreateInput {
@@ -744,12 +837,20 @@ mod tests {
         assert_eq!(fp.len(), 64);
 
         let host = format!("appz-{}", config::project_id(dir.path()));
+        let mode = first_engine
+            .calls
+            .borrow()
+            .iter()
+            .flatten()
+            .find(|arg| arg.starts_with("mode:"))
+            .unwrap()
+            .clone();
         let second_snapshots = format!(
-            r#"[{{"group_key":{{"hostname":"{host}"}},"snapshots":[{{"id":"snap-1","time":"2026-11-20T00:00:00Z","tags":["appz","fp:{fp}"]}}]}}]"#
+            r#"[{{"group_key":{{"hostname":"{host}"}},"snapshots":[{{"id":"snap-1","time":"2026-11-20T00:00:00Z","summary":{{"total_files_processed":2}},"tags":["appz","fp:{fp}","{mode}"]}}]}}]"#
         );
         let second_engine = RecordingEngine::ok(
             &second_snapshots,
-            r#"{"id":"snap-2","summary":{"data_added":64}}"#,
+            r#"{"id":"snap-2","summary":{"data_added":64,"total_files_processed":2}}"#,
         );
         let second = create_quiet_deduped(
             &second_engine,

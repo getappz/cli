@@ -931,6 +931,17 @@ pub fn rename_project(
         .map_err(|e| e.to_string())
 }
 
+pub fn restore_project(
+    project_dir: &Path,
+    target: Option<String>,
+    id_or_slug: &str,
+) -> Result<appz_deploy::ProjectInfo, String> {
+    let (provider, ctx) = domain_ctx(project_dir, target)?;
+    provider
+        .restore_project(&ctx, id_or_slug)
+        .map_err(|e| e.to_string())
+}
+
 pub fn remove_project(
     project_dir: &Path,
     target: Option<String>,

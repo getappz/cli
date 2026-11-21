@@ -268,6 +268,17 @@ pub trait DeployProvider: Send + Sync {
         })
     }
 
+    fn restore_project(
+        &self,
+        _ctx: &DeployContext,
+        _id_or_slug: &str,
+    ) -> DeployResult<ProjectInfo> {
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "projects restore",
+        })
+    }
+
     fn remove_project(&self, ctx: &DeployContext, id_or_slug: &str) -> DeployResult<bool> {
         let _ = (ctx, id_or_slug);
         Err(DeployError::Unsupported {

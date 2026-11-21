@@ -520,26 +520,31 @@ fn finish_target_with(
     }
     if let (Some(fp), Some(url)) = (fingerprint, &output.url) {
         crate::deploy_state::record(&ctx.project_dir, slug, target.req.prod, fp, url);
-        if target.req.backup {
-            let build_env_names = build_env_var_names(&target.req);
-            let interactive = if !target.req.json && crate::is_tty() {
-                crate::backup::Interactive::Yes
-            } else {
-                crate::backup::Interactive::No
-            };
-            output.backup = run_backup(
-                &ctx.project_dir,
-                &crate::backup::AfterDeploy {
-                    fingerprint: fp,
-                    target: slug,
-                    production: target.req.prod,
-                    url: Some(url.as_str()),
-                    build_env_names,
-                    interactive,
-                    json: target.req.json,
-                },
-            );
-        }
+    }
+    if target.req.backup {
+        let backup_fp = crate::deploy_state::fingerprint(
+            &ctx.project_dir,
+            &fingerprint_extra(slug, &target.req, &ctx.deploy_config),
+        )
+        .unwrap_or_default();
+        let build_env_names = build_env_var_names(&target.req);
+        let interactive = if !target.req.json && crate::is_tty() {
+            crate::backup::Interactive::Yes
+        } else {
+            crate::backup::Interactive::No
+        };
+        output.backup = run_backup(
+            &ctx.project_dir,
+            &crate::backup::AfterDeploy {
+                fingerprint: &backup_fp,
+                target: slug,
+                production: target.req.prod,
+                url: output.url.as_deref(),
+                build_env_names,
+                interactive,
+                json: target.req.json,
+            },
+        );
     }
     None
 }
@@ -1119,6 +1124,7 @@ mod tests {
             cached: None,
         };
         target.req.force = true;
+        target.req.backup = false;
         let mut output = DeployOutput::dry_run("vercel", true);
         output.url = Some("https://example.com".into());
         let fp = crate::deploy_state::fingerprint(
@@ -1508,5 +1514,75 @@ mod tests {
         // When backup is None, the field is omitted (`skip_serializing_if = "Option::is_none"`).
         let bare = serde_json::to_value(DeployOutput::dry_run("vercel", true)).unwrap();
         assert!(bare.get("backup").is_none());
+    }
+
+    #[test]
+    fn url_less_and_render_deploys_still_run_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("index.html"), "<h1>hi</h1>").unwrap();
+        let target = prepared_for_test(dir.path(), req(&[], &[], None));
+        let mut output = DeployOutput::dry_run("render", true);
+        output.status = appz_deploy::DeployStatus::Ready;
+        output.url = None;
+
+        let mut called = false;
+        let err = finish_target_with(&target, &mut output, None, |_, ad| {
+            called = true;
+            assert!(!ad.fingerprint.is_empty());
+            assert_eq!(ad.url, None);
+            Some(appz_deploy::BackupSummary {
+                snapshot: Some("snap-url-less".into()),
+                added_bytes: 12,
+                skipped: None,
+            })
+        });
+        assert!(err.is_none());
+        assert!(called);
+        assert_eq!(
+            output.backup.as_ref().and_then(|b| b.snapshot.as_deref()),
+            Some("snap-url-less")
+        );
+        assert!(crate::deploy_state::unchanged(dir.path(), "vercel", false, "").is_none());
+    }
+
+    #[test]
+    fn backup_fingerprint_reflects_after_deploy_hook_edits() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("index.html"), "<h1>before</h1>").unwrap();
+        let mut target = prepared_for_test(dir.path(), req(&[], &[], None));
+        #[cfg(windows)]
+        let hook = vec![
+            "cmd".into(),
+            "/C".into(),
+            "echo after > generated.txt".into(),
+        ];
+        #[cfg(not(windows))]
+        let hook = vec![
+            "sh".into(),
+            "-c".into(),
+            "echo after > generated.txt".into(),
+        ];
+        target.ctx.deploy_config.hooks.after_deploy = hook;
+        let pre_hook_fp = crate::deploy_state::fingerprint(
+            dir.path(),
+            &fingerprint_extra("vercel", &target.req, &target.ctx.deploy_config),
+        )
+        .unwrap();
+
+        let mut output = DeployOutput::dry_run("vercel", true);
+        output.status = appz_deploy::DeployStatus::Ready;
+        output.url = Some("https://preview.example.com".into());
+
+        let mut backup_fp = None;
+        let err = finish_target_with(&target, &mut output, Some(&pre_hook_fp), |_, ad| {
+            backup_fp = Some(ad.fingerprint.to_string());
+            None
+        });
+        assert!(err.is_none(), "{err:?}");
+        let backup_fp = backup_fp.expect("backup hook should have run");
+        assert_ne!(backup_fp, pre_hook_fp);
+        assert!(
+            crate::deploy_state::unchanged(dir.path(), "vercel", false, &pre_hook_fp).is_some()
+        );
     }
 }

@@ -466,6 +466,8 @@ enum ProjectsCmd {
         /// Name or ID of the project to remove
         name: String,
     },
+    /// Restore a hosted project by slug or ID within 30 days of deletion
+    Restore { name: String },
 }
 
 #[derive(Args)]
@@ -2693,17 +2695,36 @@ fn run_projects(args: ProjectsArgs, json: bool) {
                 Err(e) => error(&e),
             }
         }
+        ProjectsCmd::Restore { name } => {
+            match deploy::restore_project(&canonical, args.target, &name) {
+                Ok(project) if json => {
+                    println!("{}", serde_json::to_string_pretty(&project).unwrap())
+                }
+                Ok(project) => success(&format!(
+                    "restored project {} ({})",
+                    project.slug, project.id
+                )),
+                Err(e) => error(&e),
+            }
+        }
         ProjectsCmd::Remove { name } => {
+            let deadline = chrono::Utc::now() + chrono::Duration::days(30);
             match deploy::remove_project(&canonical, args.target, &name) {
                 Ok(_) => {
+                    let command = format!("appz projects --target appzdev restore {name}");
+                    let deadline = deadline.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
                     if json {
                         println!(
                             "{}",
-                            serde_json::json!({ "status": "removed", "project": name })
+                            serde_json::json!({ "status": "removed", "project": name,
+                                "estimated_restore_deadline": deadline, "restore_command": command })
                         );
                     } else {
                         intro("appz projects remove");
                         success(&format!("removed project {name}"));
+                        info(&format!(
+                            "Recover within 30 days (approximately {deadline}). Restore before deploying to the same slug again.\nRun: {command}"
+                        ));
                         outro("done");
                     }
                 }

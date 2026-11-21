@@ -749,7 +749,22 @@ pub fn add_project(api_base: &str, token: Option<&str>, name: &str) -> DeployRes
     })
 }
 
+fn validate_project_ref(id_or_slug: &str) -> DeployResult<()> {
+    if id_or_slug.starts_with(|c: char| c.is_ascii_alphanumeric())
+        && id_or_slug
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+    {
+        return Ok(());
+    }
+    Err(DeployError::DeployFailed {
+        provider: "AppzDev",
+        reason: "Expected a project slug or ID".into(),
+    })
+}
+
 pub fn remove_project(api_base: &str, token: Option<&str>, id_or_slug: &str) -> DeployResult<bool> {
+    validate_project_ref(id_or_slug)?;
     let url = format!("{api_base}/api/v0/projects/{id_or_slug}");
     let mut req = ureq::delete(&url);
     if let Some(tok) = token {
@@ -1541,6 +1556,22 @@ impl DeployProvider for AppzdevProvider {
         rename_project(&api_base, token.as_deref(), id_or_slug, new_name)
     }
 
+    fn restore_project(&self, ctx: &DeployContext, id_or_slug: &str) -> DeployResult<ProjectInfo> {
+        let base = self.api_base(ctx);
+        validate_project_ref(id_or_slug)?;
+        let mut req = ureq::post(&format!("{base}/api/v0/projects/{id_or_slug}/restore"));
+        if let Some(token) = resolve_auth_token(Some(ctx)) {
+            req = req.set("Authorization", &format!("Bearer {token}"));
+        }
+        req.call()
+            .map_err(|e| parse_api_error(e, self.name(), "Restore project"))?
+            .into_json()
+            .map_err(|e| DeployError::DeployFailed {
+                provider: self.name(),
+                reason: format!("Invalid project in restore response: {e}"),
+            })
+    }
+
     fn remove_project(&self, ctx: &DeployContext, id_or_slug: &str) -> DeployResult<bool> {
         let api_base = self.api_base(ctx);
         let token = resolve_auth_token(Some(ctx));
@@ -1918,6 +1949,19 @@ SPACED=hello world
                                     "200 OK",
                                     r#"{"id":"prj_mock","name":"mock-app","slug":"mock-app","organizationId":"org_mock","createdAt":1762732800}"#,
                                 )
+                            } else if method == "POST"
+                                && path == "/api/v0/projects/mock-app/restore"
+                            {
+                                (
+                                    "200 OK",
+                                    r#"{"id":"prj_mock","name":"renamed-app","slug":"mock-app","createdAt":1762732800000,"pausedAt":null,"expiresAt":null}"#,
+                                )
+                            } else if method == "POST" && path == "/api/v0/projects/missing/restore"
+                            {
+                                (
+                                    "404 Not Found",
+                                    r#"{"error":"no restorable project with that name"}"#,
+                                )
                             } else if method == "PATCH" && path.starts_with("/api/v0/projects/") {
                                 (
                                     "200 OK",
@@ -2120,6 +2164,11 @@ SPACED=hello world
             .remove_project(&ctx, "mock-app")
             .expect("remove project must succeed");
         assert!(removed_proj);
+        let restored = provider.restore_project(&ctx, "mock-app").unwrap();
+        assert_eq!(restored.id, got_proj.id);
+        assert_eq!(restored.slug, got_proj.slug);
+        let err = provider.restore_project(&ctx, "missing").unwrap_err();
+        assert!(err.to_string().contains("no restorable project"));
     }
 
     #[test]

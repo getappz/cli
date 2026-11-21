@@ -2614,6 +2614,25 @@ fn run_domains(args: DomainsArgs, json: bool) {
     }
 }
 
+fn project_restore_command(dir: &Path, name: &str) -> String {
+    let dir = dir.to_string_lossy();
+    #[cfg(windows)]
+    let quoted = {
+        // PowerShell also treats typographic single quotes as string delimiters.
+        let mut escaped = String::new();
+        for c in dir.chars() {
+            if matches!(c, '\'' | '\u{2018}' | '\u{2019}' | '\u{201a}' | '\u{201b}') {
+                escaped.push('\'');
+            }
+            escaped.push(c);
+        }
+        escaped
+    };
+    #[cfg(not(windows))]
+    let quoted = dir.replace('\'', "'\\''");
+    format!("appz projects '{quoted}' --target appzdev restore {name}")
+}
+
 fn run_projects(args: ProjectsArgs, json: bool) {
     let canonical = resolve_root(&args.dir);
     match args.command {
@@ -2711,7 +2730,7 @@ fn run_projects(args: ProjectsArgs, json: bool) {
             let deadline = chrono::Utc::now() + chrono::Duration::days(30);
             match deploy::remove_project(&canonical, args.target, &name) {
                 Ok(_) => {
-                    let command = format!("appz projects --target appzdev restore {name}");
+                    let command = project_restore_command(&canonical, &name);
                     let deadline = deadline.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
                     if json {
                         println!(
@@ -2968,6 +2987,42 @@ fn run_logout(json: bool) {
 mod tests {
     use super::*;
     use clap::CommandFactory;
+
+    #[test]
+    fn restore_hint_preserves_the_project_directory() {
+        let dir = Path::new("team's project $archive");
+        let hint = project_restore_command(dir, "demo");
+        #[cfg(windows)]
+        let output = std::process::Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-Command",
+                &format!("function appz {{ $args }}; {hint}"),
+            ])
+            .output()
+            .unwrap();
+        #[cfg(not(windows))]
+        let output = std::process::Command::new("sh")
+            .args([
+                "-c",
+                &format!("appz() {{ printf '%s\\n' \"$@\"; }}; {hint}"),
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let cli = AppzCli::try_parse_from(std::iter::once("appz").chain(stdout.lines())).unwrap();
+        let AppzCmd::Projects(args) = cli.command else {
+            panic!("expected projects")
+        };
+        assert_eq!(args.dir, dir);
+        assert_eq!(args.target.as_deref(), Some("appzdev"));
+        assert!(matches!(args.command, ProjectsCmd::Restore { name } if name == "demo"));
+    }
 
     #[test]
     fn framework_install_recovers_missing_dependencies() {

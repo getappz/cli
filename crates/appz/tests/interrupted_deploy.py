@@ -69,11 +69,15 @@ def check(binary, phase, reject=False):
             flags = dict(creationflags=subprocess.CREATE_NEW_CONSOLE, startupinfo=startup)
         env = dict(os.environ, APPZ_API_URL=f"http://127.0.0.1:{api.server_port}",
                    APPZ_TOKEN="fixture", APPZ_PROJECT_ID="fixture", APPZ_VAULT_HOME_OVERRIDE=root)
+        env["PATH"] = os.pathsep.join((str(Path(binary).parent), env["PATH"]))
         with subprocess.Popen([binary, "--json", "deploy", "--target", "appzdev", "--no-backup"],
                               cwd=root, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                               **flags) as child:
             try:
                 if not reached.wait(15):
+                    if child.poll() is not None:
+                        _, stderr = child.communicate()
+                        raise AssertionError(f"CLI exited before {phase}: {stderr.decode(errors='replace')}")
                     raise AssertionError(f"{phase} never reached (exit {child.poll()})")
                 interrupt(child.pid)
                 if phase == "handshake":

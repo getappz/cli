@@ -82,8 +82,11 @@ fn create_from_selection(
         }
     }
 
+    let project_id = config::project_id(input.root);
+    let host = format!("appz-{project_id}");
+
     if !input.fingerprint.is_empty() {
-        match latest_snapshot_tags(engine) {
+        match latest_snapshot_tags(engine, &host) {
             Ok(Some(last_tags))
                 if last_tags
                     .iter()
@@ -100,9 +103,6 @@ fn create_from_selection(
             Err(err) => return Err(err),
         }
     }
-
-    let project_id = config::project_id(input.root);
-    let host = format!("appz-{project_id}");
 
     let mut build_env_names = input.build_env_names.clone();
     build_env_names.sort();
@@ -217,12 +217,23 @@ fn locked_summary() -> BackupSummary {
 #[derive(Deserialize)]
 struct SnapshotMeta {
     #[serde(default)]
+    hostname: Option<String>,
+    #[serde(default)]
     time: Option<chrono::DateTime<chrono::FixedOffset>>,
     #[serde(default)]
     tags: Vec<String>,
 }
 
-fn latest_snapshot_tags(engine: &dyn Rustic) -> Result<Option<Vec<String>>, EngineError> {
+#[derive(Deserialize)]
+struct GroupKey {
+    #[serde(default)]
+    hostname: Option<String>,
+}
+
+fn latest_snapshot_tags(
+    engine: &dyn Rustic,
+    host: &str,
+) -> Result<Option<Vec<String>>, EngineError> {
     let out = match engine.run(&["snapshots", "--json"]) {
         Ok(out) => out,
         Err(EngineError::Failed(msg))
@@ -237,7 +248,11 @@ fn latest_snapshot_tags(engine: &dyn Rustic) -> Result<Option<Vec<String>>, Engi
     #[derive(Deserialize)]
     #[serde(untagged)]
     enum Entry {
-        Group { snapshots: Vec<SnapshotMeta> },
+        Group {
+            #[serde(default)]
+            group_key: Option<GroupKey>,
+            snapshots: Vec<SnapshotMeta>,
+        },
         Single(SnapshotMeta),
     }
 
@@ -247,8 +262,23 @@ fn latest_snapshot_tags(engine: &dyn Rustic) -> Result<Option<Vec<String>>, Engi
     let mut all = Vec::new();
     for entry in entries {
         match entry {
-            Entry::Group { snapshots } => all.extend(snapshots),
-            Entry::Single(snapshot) => all.push(snapshot),
+            Entry::Group {
+                group_key,
+                snapshots,
+            } => {
+                let group_host = group_key.and_then(|g| g.hostname);
+                for s in snapshots {
+                    let effective_host = s.hostname.as_deref().or(group_host.as_deref());
+                    if effective_host == Some(host) {
+                        all.push(s);
+                    }
+                }
+            }
+            Entry::Single(s) => {
+                if s.hostname.as_deref() == Some(host) {
+                    all.push(s);
+                }
+            }
         }
     }
 
@@ -370,9 +400,13 @@ mod tests {
     fn skips_when_fingerprint_matches_last_snapshot() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("index.html"), "<h1>hi</h1>").unwrap();
+        let host = format!("appz-{}", config::project_id(dir.path()));
+        let snapshots_json = format!(
+            r#"[{{"group_key":{{"hostname":"{host}"}},"snapshots":[{{"id":"prev","time":"2026-11-20T00:00:00Z","tags":["appz","fp:fp123"]}}]}}]"#
+        );
 
         let engine = RecordingEngine::ok(
-            r#"[{"snapshots":[{"id":"prev","time":"2026-11-20T00:00:00Z","tags":["appz","fp:fp123"]}]}]"#,
+            &snapshots_json,
             r#"{"id":"new","summary":{"data_added":10}}"#,
         );
 
@@ -389,6 +423,24 @@ mod tests {
         );
         assert_eq!(engine.calls.borrow().len(), 1);
         assert_eq!(engine.calls.borrow()[0], vec!["snapshots", "--json"]);
+    }
+
+    #[test]
+    fn does_not_skip_when_fingerprint_matches_another_host() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("index.html"), "<h1>hi</h1>").unwrap();
+
+        let engine = RecordingEngine::ok(
+            r#"[{"group_key":{"hostname":"appz-otherproject00"},"snapshots":[{"id":"other","time":"2026-11-20T00:00:00Z","tags":["appz","fp:fp123"]}]}]"#,
+            r#"{"id":"mine","summary":{"data_added":42}}"#,
+        );
+
+        let summary =
+            create_with(&engine, input_for(dir.path()), |_| BTreeSet::new(), |_| {}).unwrap();
+
+        assert_eq!(summary.snapshot.as_deref(), Some("mine"));
+        assert_eq!(summary.added_bytes, 42);
+        assert_eq!(engine.calls.borrow().len(), 2);
     }
 
     #[test]
@@ -552,7 +604,11 @@ mod tests {
 
         let bin = super::super::engine::find_rustic(project.path())
             .expect("rustic binary required for ignored integration test");
-        let cli = super::super::engine::RusticCli::new(bin, repo.path(), "test-pw", project.path());
+        let mut raw = [0u8; 16];
+        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut raw);
+        let runtime_secret: String = raw.iter().map(|b| format!("{b:02x}")).collect();
+        let cli =
+            super::super::engine::RusticCli::new(bin, repo.path(), runtime_secret, project.path());
         cli.run(&["init"]).unwrap();
 
         let first = create(

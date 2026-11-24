@@ -25,10 +25,12 @@ use crate::output::{
 };
 use crate::provider::DeployProvider;
 use crate::static_cas::ScannedFileEntry;
+use projects::{ProjectState, Transfer};
 
 pub struct AppzdevProvider;
 
 mod interrupt;
+pub mod projects;
 pub use interrupt::enable_cli_deploy_interrupts;
 
 /// Body of `POST /v0/deployments`. `flags` is sent only when a feature is
@@ -1702,6 +1704,107 @@ impl DeployProvider for AppzdevProvider {
                 provider: self.name(),
                 reason: format!("Invalid project in restore response: {e}"),
             })
+    }
+
+    fn project_state(&self, ctx: &DeployContext, id: &str) -> DeployResult<ProjectState> {
+        projects::get_project_state(
+            &self.api_base(ctx),
+            resolve_auth_token(Some(ctx)).as_deref(),
+            id,
+        )
+    }
+
+    fn pause_project(&self, ctx: &DeployContext, id: &str) -> DeployResult<ProjectState> {
+        projects::project_action(
+            &self.api_base(ctx),
+            resolve_auth_token(Some(ctx)).as_deref(),
+            id,
+            "pause",
+        )
+    }
+
+    fn resume_project(&self, ctx: &DeployContext, id: &str) -> DeployResult<ProjectState> {
+        projects::project_action(
+            &self.api_base(ctx),
+            resolve_auth_token(Some(ctx)).as_deref(),
+            id,
+            "resume",
+        )
+    }
+
+    fn keep_project(&self, ctx: &DeployContext, id: &str) -> DeployResult<ProjectState> {
+        projects::project_action(
+            &self.api_base(ctx),
+            resolve_auth_token(Some(ctx)).as_deref(),
+            id,
+            "keep",
+        )
+    }
+
+    fn update_project(
+        &self,
+        ctx: &DeployContext,
+        id: &str,
+        update: &projects::ProjectSettingsUpdate,
+    ) -> DeployResult<ProjectState> {
+        projects::update_project(
+            &self.api_base(ctx),
+            resolve_auth_token(Some(ctx)).as_deref(),
+            id,
+            update,
+        )
+    }
+
+    fn request_transfer(
+        &self,
+        ctx: &DeployContext,
+        id: &str,
+        to_org: &str,
+    ) -> DeployResult<Transfer> {
+        projects::request_transfer(
+            &self.api_base(ctx),
+            resolve_auth_token(Some(ctx)).as_deref(),
+            id,
+            to_org,
+        )
+    }
+
+    fn list_transfers(&self, ctx: &DeployContext) -> DeployResult<Vec<Transfer>> {
+        projects::list_transfers(
+            &self.api_base(ctx),
+            resolve_auth_token(Some(ctx)).as_deref(),
+        )
+    }
+
+    fn get_transfer(&self, ctx: &DeployContext, id: &str) -> DeployResult<Transfer> {
+        projects::get_transfer(
+            &self.api_base(ctx),
+            resolve_auth_token(Some(ctx)).as_deref(),
+            id,
+        )
+    }
+
+    fn accept_transfer(
+        &self,
+        ctx: &DeployContext,
+        id: &str,
+        timeout: Duration,
+    ) -> DeployResult<Transfer> {
+        projects::accept_transfer(
+            &self.api_base(ctx),
+            resolve_auth_token(Some(ctx)).as_deref(),
+            id,
+            timeout,
+            Duration::from_secs(2),
+        )
+    }
+
+    fn cancel_transfer(&self, ctx: &DeployContext, id: &str) -> DeployResult<Transfer> {
+        projects::cancel_transfer(
+            &self.api_base(ctx),
+            resolve_auth_token(Some(ctx)).as_deref(),
+            id,
+        )
     }
 
     fn remove_project(&self, ctx: &DeployContext, id_or_slug: &str) -> DeployResult<bool> {

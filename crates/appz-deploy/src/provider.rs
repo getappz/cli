@@ -8,6 +8,7 @@ use crate::output::{
     DomainQuery, DomainVerifyResult, Page, PrerequisiteStatus, ProjectDomain, ProjectInfo,
     TeamDeployment, TeamDomain,
 };
+use crate::providers::appzdev::projects::{ProjectSettingsUpdate, ProjectState, Transfer};
 
 /// Timeout for the actual deploy invocation (platform CLIs can legitimately
 /// take minutes to build+upload).
@@ -301,6 +302,92 @@ pub trait DeployProvider: Send + Sync {
         Err(DeployError::Unsupported {
             provider: self.name(),
             operation: "projects restore",
+        })
+    }
+
+    fn project_state(&self, _ctx: &DeployContext, _id: &str) -> DeployResult<ProjectState> {
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "projects get",
+        })
+    }
+
+    fn pause_project(&self, _ctx: &DeployContext, _id: &str) -> DeployResult<ProjectState> {
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "projects pause",
+        })
+    }
+
+    fn resume_project(&self, _ctx: &DeployContext, _id: &str) -> DeployResult<ProjectState> {
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "projects resume",
+        })
+    }
+
+    fn keep_project(&self, _ctx: &DeployContext, _id: &str) -> DeployResult<ProjectState> {
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "projects keep",
+        })
+    }
+
+    fn update_project(
+        &self,
+        _ctx: &DeployContext,
+        _id: &str,
+        _update: &ProjectSettingsUpdate,
+    ) -> DeployResult<ProjectState> {
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "projects update",
+        })
+    }
+
+    fn request_transfer(
+        &self,
+        _ctx: &DeployContext,
+        _id: &str,
+        _to_org: &str,
+    ) -> DeployResult<Transfer> {
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "projects transfer",
+        })
+    }
+
+    fn list_transfers(&self, _ctx: &DeployContext) -> DeployResult<Vec<Transfer>> {
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "transfers list",
+        })
+    }
+
+    fn get_transfer(&self, _ctx: &DeployContext, _id: &str) -> DeployResult<Transfer> {
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "transfers inspect",
+        })
+    }
+
+    /// Accept a transfer, polling while the server reports it is reconciling.
+    fn accept_transfer(
+        &self,
+        _ctx: &DeployContext,
+        _id: &str,
+        _timeout: Duration,
+    ) -> DeployResult<Transfer> {
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "transfers accept",
+        })
+    }
+
+    fn cancel_transfer(&self, _ctx: &DeployContext, _id: &str) -> DeployResult<Transfer> {
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "transfers cancel",
         })
     }
 

@@ -81,6 +81,8 @@ enum AppzCmd {
     Deploy(DeployArgs),
     /// Roll back a deployment on edge hosting to a previous version
     Rollback(RollbackArgs),
+    /// Promote a ready deployment to production
+    Promote(PromoteArgs),
     /// Link this directory to a project on the platform
     Link(LinkArgs),
     /// Point a custom domain or alias to the deployment
@@ -395,6 +397,18 @@ struct ListArgs {
     /// Cursor from a previous page
     #[arg(long)]
     next: Option<String>,
+    /// Provider slug (default: detects from project or config)
+    #[arg(long)]
+    target: Option<String>,
+}
+
+#[derive(Args)]
+struct PromoteArgs {
+    /// Deployment ID or live URL to promote
+    id_or_url: String,
+    /// Project directory (defaults to current directory)
+    #[arg(default_value = ".")]
+    dir: PathBuf,
     /// Provider slug (default: detects from project or config)
     #[arg(long)]
     target: Option<String>,
@@ -1609,6 +1623,7 @@ fn main() {
         }
         AppzCmd::Deploy(a) => run_deploy(a, json),
         AppzCmd::Rollback(a) => run_rollback(a, json),
+        AppzCmd::Promote(a) => run_promote(a, json),
         AppzCmd::Link(a) => run_link(a, json),
         AppzCmd::Alias(a) => run_alias(a, json),
         AppzCmd::List(a) => run_list(a, json),
@@ -2338,6 +2353,48 @@ fn run_rollback(args: RollbackArgs, json: bool) {
                 outro("rollback complete");
             }
         }
+        Err(e) => error(&e),
+    }
+}
+
+fn run_promote(args: PromoteArgs, json: bool) {
+    let canonical = resolve_root(&args.dir);
+    if !assume_yes() && (json || !is_tty()) {
+        error("confirmation required — pass --yes to promote without prompting");
+    }
+    if !json {
+        intro("appz promote");
+    }
+    let confirm = |d: &appz_deploy::DeploymentInspect| {
+        if assume_yes() {
+            return true;
+        }
+        let current = d
+            .production_url
+            .as_deref()
+            .map(|u| format!(" (production now: {u})"))
+            .unwrap_or_default();
+        cliclack::confirm(format!(
+            "Promote deployment {} (version {}) to production? It replaces the current production deployment{current}.",
+            d.id, d.version_id
+        ))
+        .initial_value(false)
+        .interact()
+        .unwrap_or(false)
+    };
+    match deploy::promote(&canonical, args.target, &args.id_or_url, &confirm) {
+        Ok(Some(r)) if json => println!(
+            "{}",
+            serde_json::json!({ "status": "promoted", "provider": r.provider, "project_id": r.project_id,
+                "deployment_id": r.deployment_id, "version_id": r.version_id, "url": r.url })
+        ),
+        Ok(Some(r)) => {
+            success(&format!("promoted {} to production", r.deployment_id));
+            info(&r.url);
+            outro("promote complete");
+        }
+        Ok(None) if json => println!("{}", serde_json::json!({ "status": "canceled" })),
+        Ok(None) => outro("canceled"),
         Err(e) => error(&e),
     }
 }
@@ -3287,6 +3344,24 @@ mod tests {
     #[test]
     fn cli_definition_is_valid() {
         AppzCli::command().debug_assert();
+    }
+
+    #[test]
+    fn promote_takes_deployment_then_optional_dir() {
+        assert!(AppzCli::try_parse_from(["appz", "promote", "dpl_abc123def456"]).is_ok());
+        let cli = AppzCli::try_parse_from([
+            "appz",
+            "promote",
+            "https://x.appz.to",
+            "site",
+            "--target",
+            "appzdev",
+            "-y",
+            "--json",
+        ])
+        .unwrap();
+        assert!(cli.yes && cli.json);
+        assert!(AppzCli::try_parse_from(["appz", "promote"]).is_err());
     }
 
     #[test]

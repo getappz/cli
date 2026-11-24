@@ -937,6 +937,19 @@ pub fn inspect(
         .map_err(|e| e.to_string())
 }
 
+/// Promote a ready deployment to production. `Ok(None)` means `confirm` declined.
+pub fn promote(
+    project_dir: &Path,
+    target: Option<String>,
+    id_or_url: &str,
+    confirm: &dyn Fn(&appz_deploy::DeploymentInspect) -> bool,
+) -> Result<Option<appz_deploy::PromoteResult>, String> {
+    let (provider, ctx) = domain_ctx(project_dir, target)?;
+    provider
+        .promote_deployment(&ctx, id_or_url, confirm)
+        .map_err(|e| e.to_string())
+}
+
 /// Resolve the provider and a vault-backed context for a domain operation.
 fn domain_ctx(
     project_dir: &Path,

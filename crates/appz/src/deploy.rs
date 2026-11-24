@@ -770,7 +770,7 @@ pub fn plan_rollback(project_dir: &Path, target: Option<String>) -> Result<Rollb
     let query = appz_deploy::DeploymentQuery {
         project: Some(appz_deploy::resolve_project_id_from_dir(project_dir)),
         production: true,
-        status: Some("ready".into()),
+        status: vec!["ready".into()],
         limit: Some(100),
         ..Default::default()
     };

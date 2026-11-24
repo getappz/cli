@@ -698,7 +698,7 @@ pub fn pick_rollback_target(
     mut items: Vec<appz_deploy::TeamDeployment>,
 ) -> Result<RollbackPlan, String> {
     items.retain(|d| d.version_id.is_some());
-    items.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    items.sort_by_key(|d| std::cmp::Reverse(d.created_at));
     let cur = items.iter().position(|d| d.is_current).unwrap_or(0);
     if items.is_empty() {
         return Err("no ready production deployments to roll back to".into());

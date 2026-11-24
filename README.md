@@ -45,6 +45,8 @@ appz deploy    # deploy via the target platform's own CLI
 appz ci        # write a GitHub Actions deploy workflow
 appz doctor    # diagnose project stack, config, and suggestions
 appz mcp       # stdio MCP server exposing detect/doctor/run to AI agents
+appz activity  # organization audit events (--limit, --next, --action; owner or activity:read key)
+appz usage     # resource usage vs. limits (80%+ flagged) and plan features
 appz skills add  # install the appz agent skill into detected AI agents (--global for user-wide)
 ```
 

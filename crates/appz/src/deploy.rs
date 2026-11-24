@@ -978,6 +978,26 @@ pub fn rename_project(
         .map_err(|e| e.to_string())
 }
 
+pub fn list_activity(
+    project_dir: &Path,
+    target: Option<String>,
+    limit: Option<u32>,
+    cursor: Option<&str>,
+) -> Result<appz_deploy::ActivityPage, String> {
+    let (provider, ctx) = domain_ctx(project_dir, target)?;
+    provider
+        .list_activity(&ctx, limit, cursor)
+        .map_err(|e| e.to_string())
+}
+
+pub fn usage_report(
+    project_dir: &Path,
+    target: Option<String>,
+) -> Result<appz_deploy::UsageReport, String> {
+    let (provider, ctx) = domain_ctx(project_dir, target)?;
+    provider.usage_report(&ctx).map_err(|e| e.to_string())
+}
+
 pub fn restore_project(
     project_dir: &Path,
     target: Option<String>,

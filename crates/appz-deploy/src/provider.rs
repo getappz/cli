@@ -4,9 +4,9 @@ use std::time::Duration;
 use crate::context::DeployContext;
 use crate::error::{DeployError, DeployResult};
 use crate::output::{
-    AuthState, DeployOutput, DeploymentInfo, DeploymentInspect, DeploymentQuery, DetectedConfig,
-    DomainQuery, DomainVerifyResult, Page, PrerequisiteStatus, ProjectDomain, ProjectInfo,
-    TeamDeployment, TeamDomain,
+    ActivityPage, AuthState, DeployOutput, DeploymentInfo, DeploymentInspect, DeploymentQuery,
+    DetectedConfig, DomainQuery, DomainVerifyResult, Page, PrerequisiteStatus, ProjectDomain,
+    ProjectInfo, TeamDeployment, TeamDomain, UsageReport,
 };
 
 /// Timeout for the actual deploy invocation (platform CLIs can legitimately
@@ -290,6 +290,27 @@ pub trait DeployProvider: Send + Sync {
         Err(DeployError::Unsupported {
             provider: self.name(),
             operation: "projects rename",
+        })
+    }
+
+    fn list_activity(
+        &self,
+        ctx: &DeployContext,
+        limit: Option<u32>,
+        cursor: Option<&str>,
+    ) -> DeployResult<ActivityPage> {
+        let _ = (ctx, limit, cursor);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "activity",
+        })
+    }
+
+    fn usage_report(&self, ctx: &DeployContext) -> DeployResult<UsageReport> {
+        let _ = ctx;
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "usage",
         })
     }
 

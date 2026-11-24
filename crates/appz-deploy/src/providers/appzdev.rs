@@ -19,9 +19,9 @@ use crate::error::{DeployError, DeployResult};
 use crate::fingerprint::prepare_upload;
 use crate::markdown::{HttpMarkdownConverter, add_markdown_siblings};
 use crate::output::{
-    DeployOutput, DeployStatus, DeploymentInfo, DeploymentInspect, DeploymentQuery, DetectedConfig,
-    DomainQuery, DomainVerifyResult, Page, PrerequisiteStatus, ProjectDomain, ProjectInfo,
-    TeamDeployment, TeamDomain,
+    ActivityPage, DeployOutput, DeployStatus, DeploymentInfo, DeploymentInspect, DeploymentQuery,
+    DetectedConfig, DomainQuery, DomainVerifyResult, Page, PrerequisiteStatus, ProjectDomain,
+    ProjectInfo, TeamDeployment, TeamDomain, UsageReport,
 };
 use crate::provider::DeployProvider;
 use crate::static_cas::ScannedFileEntry;
@@ -710,6 +710,70 @@ pub fn list_team_deployments(
         &params,
         "List deployments",
     )
+}
+
+/// GET `/v0/activity`. A 403 means the caller is neither an owner session nor
+/// an org key with `activity:read`, so say that instead of a bare status.
+pub fn list_activity(
+    api_base: &str,
+    token: Option<&str>,
+    limit: Option<u32>,
+    cursor: Option<&str>,
+) -> DeployResult<ActivityPage> {
+    let mut req = ureq::get(&format!("{api_base}/v0/activity"));
+    if let Some(l) = limit {
+        req = req.query("limit", &l.to_string());
+    }
+    if let Some(c) = cursor {
+        req = req.query("cursor", c);
+    }
+    if let Some(tok) = token {
+        req = req.set("Authorization", &format!("Bearer {tok}"));
+    }
+    req.call()
+        .map_err(|e| match e {
+            ureq::Error::Status(403, _) => DeployError::DeployFailed {
+                provider: "AppzDev",
+                reason: "Activity needs an organization owner session or an API key with the `activity:read` scope".into(),
+            },
+            e => parse_api_error(e, "AppzDev", "List activity"),
+        })?
+        .into_json()
+        .map_err(|e| DeployError::DeployFailed {
+            provider: "AppzDev",
+            reason: format!("Invalid response from List activity: {e}"),
+        })
+}
+
+/// GET `/v0/usage` and `/v0/entitlements`, combined.
+pub fn get_usage_report(api_base: &str, token: Option<&str>) -> DeployResult<UsageReport> {
+    fn get<T: serde::de::DeserializeOwned>(
+        api_base: &str,
+        path: &str,
+        token: Option<&str>,
+        operation: &str,
+    ) -> DeployResult<T> {
+        let mut req = ureq::get(&format!("{api_base}{path}"));
+        if let Some(tok) = token {
+            req = req.set("Authorization", &format!("Bearer {tok}"));
+        }
+        req.call()
+            .map_err(|e| parse_api_error(e, "AppzDev", operation))?
+            .into_json()
+            .map_err(|e| DeployError::DeployFailed {
+                provider: "AppzDev",
+                reason: format!("Invalid response from {operation}: {e}"),
+            })
+    }
+    #[derive(serde::Deserialize)]
+    struct Entitlements {
+        entitlements: Vec<String>,
+    }
+    Ok(UsageReport {
+        usage: get(api_base, "/v0/usage", token, "Get usage")?,
+        entitlements: get::<Entitlements>(api_base, "/v0/entitlements", token, "Get entitlements")?
+            .entitlements,
+    })
 }
 
 pub fn list_team_domains(
@@ -1688,6 +1752,21 @@ impl DeployProvider for AppzdevProvider {
         rename_project(&api_base, token.as_deref(), id_or_slug, new_name)
     }
 
+    fn list_activity(
+        &self,
+        ctx: &DeployContext,
+        limit: Option<u32>,
+        cursor: Option<&str>,
+    ) -> DeployResult<ActivityPage> {
+        let token = resolve_auth_token(Some(ctx));
+        list_activity(&self.api_base(ctx), token.as_deref(), limit, cursor)
+    }
+
+    fn usage_report(&self, ctx: &DeployContext) -> DeployResult<UsageReport> {
+        let token = resolve_auth_token(Some(ctx));
+        get_usage_report(&self.api_base(ctx), token.as_deref())
+    }
+
     fn restore_project(&self, ctx: &DeployContext, id_or_slug: &str) -> DeployResult<ProjectInfo> {
         let base = self.api_base(ctx);
         validate_project_ref(id_or_slug)?;
@@ -2100,6 +2179,18 @@ SPACED=hello world
                                     "200 OK",
                                     r#"{"id":"prj_mock","name":"mock-app","slug":"mock-app","organizationId":"org_mock","createdAt":1762732800}"#,
                                 )
+                            } else if method == "GET" && path.starts_with("/v0/activity") {
+                                (
+                                    "200 OK",
+                                    r#"{"items":[{"id":"evt_1","organizationId":"org_1","actorUserId":"usr_1","actorKeyId":null,"actorType":"user","action":"project.create","resourceType":"project","resourceId":"prj_mock","ip":null,"createdAt":1762732800000}],"nextCursor":"cur_9"}"#,
+                                )
+                            } else if method == "GET" && path == "/v0/usage" {
+                                (
+                                    "200 OK",
+                                    r#"[{"label":"Projects","used":9,"limit":10,"detail":"per org"}]"#,
+                                )
+                            } else if method == "GET" && path == "/v0/entitlements" {
+                                ("200 OK", r#"{"entitlements":["custom-domains"]}"#)
                             } else if method == "POST" && path == "/v0/projects/mock-app/restore" {
                                 (
                                     "200 OK",
@@ -2350,6 +2441,12 @@ SPACED=hello world
             .remove_project(&ctx, "mock-app")
             .expect("remove project must succeed");
         assert!(removed_proj);
+        let activity = provider.list_activity(&ctx, Some(5), None).unwrap();
+        assert_eq!(activity.items[0].action, "project.create");
+        assert_eq!(activity.next_cursor.as_deref(), Some("cur_9"));
+        let report = provider.usage_report(&ctx).unwrap();
+        assert_eq!(report.usage[0].used, 9.0);
+        assert_eq!(report.entitlements, ["custom-domains"]);
         let restored = provider.restore_project(&ctx, "mock-app").unwrap();
         assert_eq!(restored.id, got_proj.id);
         assert_eq!(restored.slug, got_proj.slug);

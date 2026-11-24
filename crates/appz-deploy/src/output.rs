@@ -111,6 +111,56 @@ pub struct DeploymentQuery {
     pub cursor: Option<String>,
 }
 
+/// One organization audit event from `GET /v0/activity`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivityEvent {
+    pub id: String,
+    #[serde(default)]
+    pub organization_id: Option<String>,
+    #[serde(default)]
+    pub actor_user_id: Option<String>,
+    #[serde(default)]
+    pub actor_key_id: Option<String>,
+    #[serde(default)]
+    pub actor_type: Option<String>,
+    pub action: String,
+    #[serde(default)]
+    pub resource_type: Option<String>,
+    #[serde(default)]
+    pub resource_id: Option<String>,
+    #[serde(default)]
+    pub ip: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<f64>,
+}
+
+/// One page of audit events (`{ items, nextCursor }`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivityPage {
+    pub items: Vec<ActivityEvent>,
+    #[serde(default)]
+    pub next_cursor: Option<String>,
+}
+
+/// One resource row from `GET /v0/usage`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsageEntry {
+    pub label: String,
+    pub used: f64,
+    pub limit: f64,
+    #[serde(default)]
+    pub detail: String,
+}
+
+/// Organization usage plus the paid features it is entitled to.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsageReport {
+    pub usage: Vec<UsageEntry>,
+    pub entitlements: Vec<String>,
+}
+
 /// One page of a cursor-paginated listing (`{ items, next }`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Page<T> {

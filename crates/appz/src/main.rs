@@ -102,6 +102,10 @@ enum AppzCmd {
     Logout,
     /// Print currently authenticated user and active organization
     Whoami,
+    /// List organization audit events (owner session or `activity:read` key)
+    Activity(ActivityArgs),
+    /// Show resource usage against plan limits, plus plan features
+    Usage(UsageArgs),
     /// Store credentials in an encrypted vault used by `appz deploy`
     Env(EnvArgs),
     /// Manage the encrypted credential vault used by `appz deploy`
@@ -361,6 +365,29 @@ struct AliasArgs {
     domain: String,
     #[arg(default_value = ".")]
     dir: PathBuf,
+    /// Provider slug (default: detects from project or config)
+    #[arg(long)]
+    target: Option<String>,
+}
+
+#[derive(Args)]
+struct ActivityArgs {
+    /// Maximum events per page (1-100)
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..=100))]
+    limit: Option<u32>,
+    /// Cursor from a previous page
+    #[arg(long)]
+    next: Option<String>,
+    /// Only show events with this exact action (filters the fetched page client-side)
+    #[arg(long)]
+    action: Option<String>,
+    /// Provider slug (default: detects from project or config)
+    #[arg(long)]
+    target: Option<String>,
+}
+
+#[derive(Args)]
+struct UsageArgs {
     /// Provider slug (default: detects from project or config)
     #[arg(long)]
     target: Option<String>,
@@ -1616,6 +1643,8 @@ fn main() {
         AppzCmd::Login(a) => run_login(a, json),
         AppzCmd::Logout => run_logout(json),
         AppzCmd::Whoami => run_whoami(json),
+        AppzCmd::Activity(a) => run_activity(a, json),
+        AppzCmd::Usage(a) => run_usage(a, json),
         AppzCmd::Env(a) => run_env(a, json),
         AppzCmd::Vault(a) => run_vault_cmd(a.command, json),
         AppzCmd::Ci(a) => run_ci(a, json),
@@ -2322,6 +2351,121 @@ fn run_alias(args: AliasArgs, json: bool) {
         }
         Err(e) => error(&e),
     }
+}
+
+fn fmt_event_time(t: Option<f64>) -> String {
+    // The API does not document the unit; treat small values as seconds.
+    t.map(|t| if t < 1e11 { t * 1000.0 } else { t } as i64)
+        .map_or_else(|| "-".to_string(), |ms| fmt_millis(Some(ms)))
+}
+
+fn run_activity(args: ActivityArgs, json: bool) {
+    let page = match deploy::list_activity(
+        Path::new("."),
+        args.target,
+        args.limit,
+        args.next.as_deref(),
+    ) {
+        Ok(p) => p,
+        Err(e) => error(&e),
+    };
+    let items: Vec<_> = page
+        .items
+        .iter()
+        .filter(|e| args.action.as_deref().is_none_or(|a| e.action == a))
+        .collect();
+    if json {
+        let out = serde_json::json!({ "items": items, "nextCursor": page.next_cursor });
+        println!("{}", serde_json::to_string_pretty(&out).unwrap());
+        return;
+    }
+    intro("appz activity");
+    if items.is_empty() {
+        info("no activity events found");
+    } else {
+        let lines: Vec<String> = items
+            .iter()
+            .map(|e| {
+                let actor = e
+                    .actor_user_id
+                    .as_deref()
+                    .or(e.actor_key_id.as_deref())
+                    .or(e.actor_type.as_deref())
+                    .unwrap_or("-");
+                let target = match (e.resource_type.as_deref(), e.resource_id.as_deref()) {
+                    (Some(t), Some(id)) => format!("{t}:{id}"),
+                    (Some(t), None) => t.to_string(),
+                    _ => "-".to_string(),
+                };
+                format!(
+                    "{:<20}  {:<14}  {:<26}  {:<32}  {}",
+                    fmt_event_time(e.created_at),
+                    actor,
+                    e.action,
+                    target,
+                    e.ip.as_deref().unwrap_or("-")
+                )
+            })
+            .collect();
+        info(&lines.join(
+            "
+",
+        ));
+    }
+    print_next_hint(&page.next_cursor, "appz activity");
+    outro("done");
+}
+
+fn usage_percent(used: f64, limit: f64) -> Option<f64> {
+    (limit > 0.0).then(|| used / limit * 100.0)
+}
+
+fn run_usage(args: UsageArgs, json: bool) {
+    let report = match deploy::usage_report(Path::new("."), args.target) {
+        Ok(r) => r,
+        Err(e) => error(&e),
+    };
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report).unwrap());
+        return;
+    }
+    intro("appz usage");
+    let mut lines: Vec<String> = report
+        .usage
+        .iter()
+        .map(|u| {
+            let (pct, flag) = match usage_percent(u.used, u.limit) {
+                Some(p) => (
+                    format!("{p:.0}%"),
+                    if p >= 80.0 { "  !! near limit" } else { "" },
+                ),
+                None => ("-".to_string(), ""),
+            };
+            let limit = if u.limit > 0.0 {
+                u.limit.to_string()
+            } else {
+                "unlimited".into()
+            };
+            format!(
+                "{:<24}  {} / {}  ({}){}  {}",
+                u.label, u.used, limit, pct, flag, u.detail
+            )
+        })
+        .collect();
+    if lines.is_empty() {
+        lines.push("no usage reported".into());
+    }
+    info(&lines.join(
+        "
+",
+    ));
+    let features = if report.entitlements.is_empty() {
+        "none".to_string()
+    } else {
+        report.entitlements.join(", ")
+    };
+    info(&format!("Plan features: {features}"));
+    outro("done");
 }
 
 fn print_next_hint(next: &Option<String>, cmd: &str) {
@@ -3229,6 +3373,17 @@ mod tests {
     #[test]
     fn cli_definition_is_valid() {
         AppzCli::command().debug_assert();
+    }
+
+    #[test]
+    fn activity_and_usage_parse() {
+        assert!(
+            AppzCli::try_parse_from(["appz", "activity", "--limit", "20", "--next", "c"]).is_ok()
+        );
+        assert!(AppzCli::try_parse_from(["appz", "activity", "--limit", "0"]).is_err());
+        assert!(AppzCli::try_parse_from(["appz", "--json", "usage"]).is_ok());
+        assert_eq!(usage_percent(8.0, 10.0), Some(80.0));
+        assert_eq!(usage_percent(8.0, 0.0), None);
     }
 
     #[test]

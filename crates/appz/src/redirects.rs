@@ -343,12 +343,13 @@ impl Ctx<'_> {
         success(what);
         match &state {
             Some(v) => print_state(v),
-            None => match list.version {
-                Some(n) => warning(&format!(
-                    "staged v{n} (not live yet), run `appz redirects promote {n}`"
-                )),
-                None => {}
-            },
+            None => {
+                if let Some(n) = list.version {
+                    warning(&format!(
+                        "staged v{n} (not live yet), run `appz redirects promote {n}`"
+                    ));
+                }
+            }
         }
         outro("done");
     }

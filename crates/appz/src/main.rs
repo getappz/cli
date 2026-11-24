@@ -13,6 +13,7 @@ mod deploy;
 mod deploy_state;
 mod dev_install;
 mod init_source;
+mod list_filters;
 mod mcp;
 mod secrets;
 mod share;
@@ -376,14 +377,20 @@ struct ListArgs {
     #[arg(long)]
     all: bool,
     /// Only production deployments
-    #[arg(long)]
+    #[arg(long, conflicts_with = "environment")]
     prod: bool,
-    /// Only deployments in this environment
+    /// Only deployments in this environment (production, preview or a custom slug)
     #[arg(long)]
     environment: Option<String>,
-    /// Comma-separated statuses: ready,building,error,canceled
+    /// Statuses to include: ready, building, error, canceled (comma-separated or repeated)
+    #[arg(long, value_delimiter = ',')]
+    status: Vec<String>,
+    /// Only deployments created since this time: 7d, 12h, YYYY-MM-DD, RFC 3339
     #[arg(long)]
-    status: Option<String>,
+    since: Option<String>,
+    /// Only deployments created before this time (same formats as --since)
+    #[arg(long)]
+    until: Option<String>,
     /// Filter by metadata, key=value (repeatable)
     #[arg(long = "meta", value_name = "KEY=VALUE")]
     meta: Vec<String>,
@@ -2373,8 +2380,71 @@ fn run_list_legacy(dir: &Path, target: Option<String>, json: bool) {
     }
 }
 
+/// Validate the `appz ls` filter flags and convert them to an API query.
+fn build_list_query(
+    args: &ListArgs,
+    project: Option<String>,
+) -> Result<appz_deploy::DeploymentQuery, String> {
+    use list_filters::*;
+    let now = chrono::Utc::now();
+    let since = args
+        .since
+        .as_deref()
+        .map(|v| parse_time(v, false, now))
+        .transpose()?;
+    let until = args
+        .until
+        .as_deref()
+        .map(|v| parse_time(v, true, now))
+        .transpose()?;
+    if let (Some(s), Some(u)) = (since, until)
+        && s > u
+    {
+        return Err("--since must not be later than --until".into());
+    }
+    Ok(appz_deploy::DeploymentQuery {
+        project,
+        production: args.prod,
+        environment: args
+            .environment
+            .as_deref()
+            .map(parse_environment)
+            .transpose()?,
+        status: parse_statuses(&args.status)?,
+        since,
+        until,
+        meta: args
+            .meta
+            .iter()
+            .map(|m| parse_meta(m))
+            .collect::<Result<_, _>>()?,
+        limit: args.limit,
+        cursor: args.next.clone(),
+    })
+}
+
+/// The filters actually sent to the API, for `--json` output.
+fn list_filters_json(q: &appz_deploy::DeploymentQuery) -> serde_json::Value {
+    let meta: serde_json::Map<String, serde_json::Value> = q
+        .meta
+        .iter()
+        .filter_map(|kv| kv.split_once('='))
+        .map(|(k, v)| (k.to_string(), v.into()))
+        .collect();
+    serde_json::json!({
+        "project": q.project,
+        "type": q.production.then_some("production"),
+        "environment": q.environment,
+        "status": q.status,
+        "since": q.since,
+        "until": q.until,
+        "meta": meta,
+        "limit": q.limit,
+    })
+}
+
 fn run_list(args: ListArgs, json: bool) {
-    let (dir, named) = match args.project {
+    let (dir, named) = match args.project.clone() {
         Some(p) if !Path::new(&p).is_dir() => (PathBuf::from("."), Some(p)),
         Some(p) => (PathBuf::from(p), None),
         None => (PathBuf::from("."), None),
@@ -2387,13 +2457,15 @@ fn run_list(args: ListArgs, json: bool) {
                 || args.all
                 || args.prod
                 || args.environment.is_some()
-                || args.status.is_some()
+                || !args.status.is_empty()
+                || args.since.is_some()
+                || args.until.is_some()
                 || !args.meta.is_empty()
                 || args.limit.is_some()
                 || args.next.is_some();
             if new_flags {
                 error(
-                    "project names, --all, --prod, --environment, --status, --meta, --limit and --next are only supported for appz.dev projects",
+                    "project names, --all, --prod, --environment, --status, --since, --until, --meta, --limit and --next are only supported for appz.dev projects",
                 );
             }
             return run_list_legacy(&canonical, args.target, json);
@@ -2408,19 +2480,16 @@ fn run_list(args: ListArgs, json: bool) {
         }
     });
     let team_wide = project.is_none();
-    let query = appz_deploy::DeploymentQuery {
-        project,
-        production: args.prod,
-        environment: args.environment,
-        status: args.status,
-        meta: args.meta,
-        limit: args.limit,
-        cursor: args.next,
+    let query = match build_list_query(&args, project) {
+        Ok(q) => q,
+        Err(e) => error(&e),
     };
     match deploy::list_page(&canonical, args.target, &query) {
         Ok(page) => {
             if json {
-                println!("{}", serde_json::to_string_pretty(&page).unwrap());
+                let mut out = serde_json::to_value(&page).unwrap();
+                out["filters"] = list_filters_json(&query);
+                println!("{}", serde_json::to_string_pretty(&out).unwrap());
             } else {
                 intro("appz list");
                 if page.items.is_empty() {
@@ -3238,6 +3307,33 @@ mod tests {
         assert!(AppzCli::try_parse_from(["appz", "rollback"]).is_err());
         assert!(AppzCli::try_parse_from(["appz", "alias", "app.example.com"]).is_ok());
         assert!(AppzCli::try_parse_from(["appz", "alias"]).is_err());
+        match AppzCli::try_parse_from([
+            "appz",
+            "ls",
+            "--status",
+            "ready,error",
+            "--status",
+            "building",
+            "--since",
+            "7d",
+            "--meta",
+            "a=b",
+            "--meta",
+            "c=d",
+        ])
+        .unwrap()
+        .command
+        {
+            AppzCmd::List(a) => {
+                assert_eq!(a.status, ["ready", "error", "building"]);
+                assert_eq!(a.meta.len(), 2);
+                let q = build_list_query(&a, None).unwrap();
+                assert!(q.since.is_some() && q.until.is_none());
+                assert_eq!(list_filters_json(&q)["meta"]["c"], "d");
+            }
+            _ => panic!("expected list"),
+        }
+        assert!(AppzCli::try_parse_from(["appz", "ls", "--prod", "--environment", "x"]).is_err());
 
         match AppzCli::try_parse_from(["appz", "deploy", "--no-backup"])
             .unwrap()

@@ -666,43 +666,55 @@ fn get_page<T: serde::de::DeserializeOwned>(
         })
 }
 
+/// Query-string pairs for `GET /v0/deployments`.
+fn deployment_params(query: &DeploymentQuery) -> DeployResult<Vec<(String, String)>> {
+    let mut params: Vec<(String, String)> = Vec::new();
+    if let Some(p) = &query.project {
+        params.push(("projectId".into(), p.clone()));
+    }
+    if query.production {
+        params.push(("type".into(), "production".into()));
+    }
+    if let Some(e) = &query.environment {
+        params.push(("environment".into(), e.clone()));
+    }
+    for s in &query.status {
+        params.push(("status".into(), s.clone()));
+    }
+    if let Some(t) = query.since {
+        params.push(("since".into(), t.to_string()));
+    }
+    if let Some(t) = query.until {
+        params.push(("until".into(), t.to_string()));
+    }
+    for kv in &query.meta {
+        let (k, v) = kv
+            .split_once('=')
+            .ok_or_else(|| DeployError::DeployFailed {
+                provider: "AppzDev",
+                reason: format!("invalid --meta '{kv}': expected key=value"),
+            })?;
+        params.push((format!("meta.{k}"), v.to_string()));
+    }
+    if let Some(l) = query.limit {
+        params.push(("limit".into(), l.to_string()));
+    }
+    if let Some(c) = &query.cursor {
+        params.push(("cursor".into(), c.clone()));
+    }
+    Ok(params)
+}
+
 pub fn list_team_deployments(
     api_base: &str,
     token: Option<&str>,
     query: &DeploymentQuery,
 ) -> DeployResult<Page<TeamDeployment>> {
-    let mut params: Vec<(&str, String)> = Vec::new();
-    if let Some(p) = &query.project {
-        params.push(("projectId", p.clone()));
-    }
-    if query.production {
-        params.push(("type", "production".into()));
-    }
-    if let Some(e) = &query.environment {
-        params.push(("environment", e.clone()));
-    }
-    if let Some(s) = &query.status {
-        params.push(("status", s.clone()));
-    }
-    let meta: Vec<(String, String)> = query
-        .meta
+    let params = deployment_params(query)?;
+    let params: Vec<(&str, String)> = params
         .iter()
-        .map(|kv| {
-            kv.split_once('=')
-                .map(|(k, v)| (format!("meta.{k}"), v.to_string()))
-                .ok_or_else(|| DeployError::DeployFailed {
-                    provider: "AppzDev",
-                    reason: format!("invalid --meta '{kv}': expected key=value"),
-                })
-        })
-        .collect::<DeployResult<_>>()?;
-    params.extend(meta.iter().map(|(k, v)| (k.as_str(), v.clone())));
-    if let Some(l) = query.limit {
-        params.push(("limit", l.to_string()));
-    }
-    if let Some(c) = &query.cursor {
-        params.push(("cursor", c.clone()));
-    }
+        .map(|(k, v)| (k.as_str(), v.clone()))
+        .collect();
     get_page(
         api_base,
         "/v0/deployments",
@@ -1520,10 +1532,14 @@ impl DeployProvider for AppzdevProvider {
                 reason: format!("Invalid JSON from list deployments: {e}"),
             })?;
 
-        let items = resp.as_array().ok_or_else(|| DeployError::DeployFailed {
-            provider: self.name(),
-            reason: "Expected JSON array of deployments".into(),
-        })?;
+        // The API returns `{items, next}`; older servers returned a bare array.
+        let items = resp
+            .as_array()
+            .or_else(|| resp.get("items").and_then(|v| v.as_array()))
+            .ok_or_else(|| DeployError::DeployFailed {
+                provider: self.name(),
+                reason: "Expected deployments as `{items}` or a JSON array".into(),
+            })?;
 
         let mut out = Vec::new();
         for item in items {
@@ -2159,6 +2175,40 @@ SPACED=hello world
                 let _ = h.join();
             }
         }
+    }
+
+    #[test]
+    fn deployment_params_encode_filters() {
+        let p = deployment_params(&DeploymentQuery {
+            production: true,
+            environment: Some("staging".into()),
+            status: vec!["ready".into(), "error".into()],
+            since: Some(10),
+            until: Some(20),
+            meta: vec!["a=b=c".into()],
+            ..Default::default()
+        })
+        .unwrap();
+        let pairs: Vec<(&str, &str)> = p.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        assert_eq!(
+            pairs,
+            [
+                ("type", "production"),
+                ("environment", "staging"),
+                ("status", "ready"),
+                ("status", "error"),
+                ("since", "10"),
+                ("until", "20"),
+                ("meta.a", "b=c"),
+            ]
+        );
+        assert!(
+            deployment_params(&DeploymentQuery {
+                meta: vec!["nokv".into()],
+                ..Default::default()
+            })
+            .is_err()
+        );
     }
 
     #[test]

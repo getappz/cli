@@ -273,14 +273,37 @@ mod tests {
         let base = format!("http://{}", listener.local_addr().unwrap());
         let h = std::thread::spawn(move || {
             let (mut s, _) = listener.accept().unwrap();
+            // Read until the headers and the full Content-Length body have
+            // arrived: a single read can return the headers before the body.
+            let mut req = Vec::new();
             let mut buf = [0u8; 8192];
-            let n = s.read(&mut buf).unwrap();
+            loop {
+                let n = s.read(&mut buf).unwrap();
+                req.extend_from_slice(&buf[..n]);
+                let text = String::from_utf8_lossy(&req);
+                if let Some(end) = text.find("\r\n\r\n") {
+                    let len = text[..end]
+                        .lines()
+                        .find_map(|l| {
+                            let (k, v) = l.split_once(':')?;
+                            k.eq_ignore_ascii_case("content-length")
+                                .then(|| v.trim().parse::<usize>().ok())?
+                        })
+                        .unwrap_or(0);
+                    if req.len() >= end + 4 + len {
+                        break;
+                    }
+                }
+                if n == 0 {
+                    break;
+                }
+            }
             let resp = format!(
                 "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
             );
             s.write_all(resp.as_bytes()).unwrap();
-            String::from_utf8_lossy(&buf[..n]).into_owned()
+            String::from_utf8_lossy(&req).into_owned()
         });
         (base, h)
     }

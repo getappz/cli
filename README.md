@@ -42,6 +42,9 @@ appz lint      # run the linter
 appz format    # run the formatter
 appz backup    # snapshot local source and unpushed commits with Rustic
 appz deploy    # deploy via the target platform's own CLI
+appz build && appz deploy --prebuilt   # upload the existing build output, no rebuild
+appz remove    # delete deployments by ID or URL (alias: rm; refused while an alias points at one)
+appz promote <id-or-url>  # promote a ready appzdev deployment to production (--yes to skip the prompt)
 appz ci        # write a GitHub Actions deploy workflow
 appz doctor    # diagnose project stack, config, and suggestions
 appz mcp       # stdio MCP server exposing detect/doctor/run to AI agents
@@ -62,6 +65,11 @@ encrypted vault (`appz env set|ls|rm|...`) is unchanged.
 To recover a hosted Appz project, run `appz projects --target appzdev restore <slug-or-id>`
 within 30 days of removal. Restore before deploying again to the deleted slug,
 because a new deploy can replace the deleted project.
+
+To undo a bad production deploy on appz.dev, run `appz rollback` to repoint production at the
+previous ready production deployment (shows `current -> target`, confirms unless `--yes`), or
+`appz rollback <version-id|deployment-id|url>` for a specific one. A lone existing directory
+argument (`appz rollback ./site`) is the project directory.
 
 Set `APPZ_BACKUP_REPOSITORY` to a dedicated repository outside the project.
 Store its password with `appz vault set APPZ_BACKUP_PASSWORD` and run
@@ -203,6 +211,20 @@ integrity-checked resources keep their original URLs. Original asset paths
 also remain available for runtime imports and existing links. The filename uses
 the first 10 hex characters of the BLAKE3 digest of the uploaded bytes.
 Deploy manifests use the full digest prefixed with `b3:`.
+
+`appz open [ID_OR_URL] [DIR]` opens the production site (or the given
+deployment) in your browser; `--dashboard` opens the project's (or that
+deployment's) page on the my.appz.dev dashboard instead (set
+`APPZ_DASHBOARD_URL` to change the base). With
+`--json` or no terminal it prints `{url, kind}` / the URL instead. Other
+providers open the last production URL recorded by `appz deploy --prod`.
+
+Manage a hosted project's aliases with `appz alias --target appzdev`:
+`appz alias set <domain>` (or the shorthand `appz alias <domain>`) points a
+domain at the project, `appz alias ls` lists serving hosts and the deployments
+they point at, and `appz alias rm <host>` removes one after a confirmation
+(`--yes` skips it). The production host cannot be removed. Use `--json` for
+machine-readable output.
 
 ## Deploying to GitHub Pages, S3, and Render
 

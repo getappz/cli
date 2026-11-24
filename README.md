@@ -49,6 +49,7 @@ appz ci        # write a GitHub Actions deploy workflow
 appz doctor    # diagnose project stack, config, and suggestions
 appz mcp       # stdio MCP server exposing detect/doctor/run to AI agents
 appz skills add  # install the appz agent skill into detected AI agents (--global for user-wide)
+appz webhooks  # ls/add/inspect/rm/deliveries/test appz.dev webhooks; verify checks a signature locally
 ```
 
 Hosted Appz projects have versioned URL redirects. `appz redirects add|rm|import`

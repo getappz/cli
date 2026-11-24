@@ -368,6 +368,73 @@ pub trait DeployProvider: Send + Sync {
         })
     }
 
+    fn list_webhooks(
+        &self,
+        ctx: &DeployContext,
+        query: &crate::webhooks::WebhookQuery,
+    ) -> DeployResult<Page<crate::webhooks::Webhook>> {
+        let _ = (ctx, query);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "webhooks ls",
+        })
+    }
+
+    fn add_webhook(
+        &self,
+        ctx: &DeployContext,
+        url: &str,
+        events: &[String],
+        project: Option<&str>,
+    ) -> DeployResult<crate::webhooks::Webhook> {
+        let _ = (ctx, url, events, project);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "webhooks add",
+        })
+    }
+
+    fn get_webhook(&self, ctx: &DeployContext, id: &str) -> DeployResult<crate::webhooks::Webhook> {
+        let _ = (ctx, id);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "webhooks inspect",
+        })
+    }
+
+    fn remove_webhook(&self, ctx: &DeployContext, id: &str) -> DeployResult<bool> {
+        let _ = (ctx, id);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "webhooks rm",
+        })
+    }
+
+    fn list_webhook_deliveries(
+        &self,
+        ctx: &DeployContext,
+        id: &str,
+        query: &crate::webhooks::WebhookQuery,
+    ) -> DeployResult<Page<crate::webhooks::WebhookDelivery>> {
+        let _ = (ctx, id, query);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "webhooks deliveries",
+        })
+    }
+
+    fn test_webhook(
+        &self,
+        ctx: &DeployContext,
+        id: &str,
+    ) -> DeployResult<crate::webhooks::WebhookDelivery> {
+        let _ = (ctx, id);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "webhooks test",
+        })
+    }
+
     fn list_redirects(
         &self,
         ctx: &DeployContext,

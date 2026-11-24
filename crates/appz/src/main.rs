@@ -24,6 +24,7 @@ mod shield;
 mod skills;
 mod static_serve;
 mod update;
+mod webhooks;
 
 // ── CLI ─────────────────────────────────────────────────────────
 
@@ -105,6 +106,9 @@ enum AppzCmd {
     /// Manage custom domains and DNS verification on Cloudflare Edge
     #[command(alias = "domain")]
     Domains(DomainsArgs),
+    /// Manage appz.dev webhook endpoints and verify signatures
+    #[command(alias = "webhook")]
+    Webhooks(webhooks::WebhooksArgs),
     /// Manage URL redirects with staged versions (list, add, rm, import, promote)
     #[command(alias = "redirect")]
     Redirects(RedirectsArgs),
@@ -1903,6 +1907,7 @@ fn main() {
         AppzCmd::Open(a) => run_open(a, json),
         AppzCmd::Remove(a) => run_remove(a, json),
         AppzCmd::Domains(a) => run_domains(a, json),
+        AppzCmd::Webhooks(a) => webhooks::run(a, json),
         AppzCmd::Redirects(a) => redirects::run(a, json),
         AppzCmd::Projects(a) => run_projects(a, json),
         AppzCmd::Transfers(a) => run_transfers(a, json),

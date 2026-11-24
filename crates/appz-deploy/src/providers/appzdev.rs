@@ -2309,6 +2309,55 @@ impl DeployProvider for AppzdevProvider {
         rename_project(&api_base, token.as_deref(), id_or_slug, new_name)
     }
 
+    fn list_webhooks(
+        &self,
+        ctx: &DeployContext,
+        query: &crate::webhooks::WebhookQuery,
+    ) -> DeployResult<Page<crate::webhooks::Webhook>> {
+        let tok = resolve_auth_token(Some(ctx));
+        crate::webhooks::list_webhooks(&self.api_base(ctx), tok.as_deref(), query)
+    }
+
+    fn add_webhook(
+        &self,
+        ctx: &DeployContext,
+        url: &str,
+        events: &[String],
+        project: Option<&str>,
+    ) -> DeployResult<crate::webhooks::Webhook> {
+        let tok = resolve_auth_token(Some(ctx));
+        crate::webhooks::add_webhook(&self.api_base(ctx), tok.as_deref(), url, events, project)
+    }
+
+    fn get_webhook(&self, ctx: &DeployContext, id: &str) -> DeployResult<crate::webhooks::Webhook> {
+        let tok = resolve_auth_token(Some(ctx));
+        crate::webhooks::get_webhook(&self.api_base(ctx), tok.as_deref(), id)
+    }
+
+    fn remove_webhook(&self, ctx: &DeployContext, id: &str) -> DeployResult<bool> {
+        let tok = resolve_auth_token(Some(ctx));
+        crate::webhooks::remove_webhook(&self.api_base(ctx), tok.as_deref(), id)
+    }
+
+    fn list_webhook_deliveries(
+        &self,
+        ctx: &DeployContext,
+        id: &str,
+        query: &crate::webhooks::WebhookQuery,
+    ) -> DeployResult<Page<crate::webhooks::WebhookDelivery>> {
+        let tok = resolve_auth_token(Some(ctx));
+        crate::webhooks::list_webhook_deliveries(&self.api_base(ctx), tok.as_deref(), id, query)
+    }
+
+    fn test_webhook(
+        &self,
+        ctx: &DeployContext,
+        id: &str,
+    ) -> DeployResult<crate::webhooks::WebhookDelivery> {
+        let tok = resolve_auth_token(Some(ctx));
+        crate::webhooks::test_webhook(&self.api_base(ctx), tok.as_deref(), id)
+    }
+
     fn list_redirects(
         &self,
         ctx: &DeployContext,

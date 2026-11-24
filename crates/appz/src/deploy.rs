@@ -1139,6 +1139,14 @@ pub fn rename_project(
         .map_err(|e| e.to_string())
 }
 
+/// Provider and context for `appz webhooks` subcommands.
+pub fn webhook_provider(
+    project_dir: &Path,
+    target: Option<String>,
+) -> Result<(Box<dyn DeployProvider>, DeployContext), String> {
+    domain_ctx(project_dir, target)
+}
+
 pub fn restore_project(
     project_dir: &Path,
     target: Option<String>,

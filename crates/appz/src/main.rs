@@ -2336,6 +2336,43 @@ fn fmt_millis(ms: Option<i64>) -> String {
         .unwrap_or_else(|| "-".to_string())
 }
 
+/// The pre-team-wide listing, still used for providers other than appz.dev.
+fn run_list_legacy(dir: &Path, target: Option<String>, json: bool) {
+    match deploy::list(dir, target) {
+        Ok(deployments) => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&deployments).unwrap());
+            } else {
+                intro("appz list");
+                if deployments.is_empty() {
+                    info("no deployments found for this project");
+                } else {
+                    let lines: Vec<String> = deployments
+                        .iter()
+                        .map(|d| {
+                            let current_marker = if d.is_current { " (current)" } else { "" };
+                            let version = d.version_id.as_deref().unwrap_or("-");
+                            let url = d.url.as_deref().unwrap_or("-");
+                            let age = d
+                                .created_at
+                                .map(|t| format!("{}", t.format("%Y-%m-%d %H:%M UTC")))
+                                .unwrap_or_else(|| "-".to_string());
+                            let status = format!("{:?}", d.status).to_lowercase();
+                            format!(
+                                "{:<16}  {:<14}  {:<32}  {} [{status}{current_marker}]",
+                                d.id, version, url, age
+                            )
+                        })
+                        .collect();
+                    info(&lines.join("\n"));
+                }
+                outro("done");
+            }
+        }
+        Err(e) => error(&e),
+    }
+}
+
 fn run_list(args: ListArgs, json: bool) {
     let (dir, named) = match args.project {
         Some(p) if !Path::new(&p).is_dir() => (PathBuf::from("."), Some(p)),
@@ -2343,6 +2380,26 @@ fn run_list(args: ListArgs, json: bool) {
         None => (PathBuf::from("."), None),
     };
     let canonical = resolve_root(&dir);
+    match deploy::lists_via_appzdev(&canonical, args.target.as_deref()) {
+        Ok(true) => {}
+        Ok(false) => {
+            let new_flags = named.is_some()
+                || args.all
+                || args.prod
+                || args.environment.is_some()
+                || args.status.is_some()
+                || !args.meta.is_empty()
+                || args.limit.is_some()
+                || args.next.is_some();
+            if new_flags {
+                error(
+                    "project names, --all, --prod, --environment, --status, --meta, --limit and --next are only supported for appz.dev projects",
+                );
+            }
+            return run_list_legacy(&canonical, args.target, json);
+        }
+        Err(e) => error(&e),
+    }
     let project = named.or_else(|| {
         if args.all {
             None

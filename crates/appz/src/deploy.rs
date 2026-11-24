@@ -785,6 +785,20 @@ pub fn list(
     provider.list_deployments(&ctx).map_err(|e| e.to_string())
 }
 
+/// Whether listing for `project_dir` goes to appz.dev: the resolved provider
+/// (`--target`, then the configured default, then detection) is `appzdev`, or
+/// nothing is detected, in which case the team-wide listing applies.
+pub fn lists_via_appzdev(project_dir: &Path, target: Option<&str>) -> Result<bool, String> {
+    let config = read_deploy_config(project_dir)
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+    let slug = match target.map(String::from).or(config.default) {
+        Some(slug) => slug,
+        None => autodetect_target(project_dir).unwrap_or_else(|_| "appzdev".to_string()),
+    };
+    Ok(slug == "appzdev")
+}
+
 /// Project id of the project linked to `project_dir` (`.appz/project.json`), if any.
 pub fn linked_project(project_dir: &Path) -> Option<String> {
     project_dir
@@ -993,6 +1007,20 @@ mod tests {
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
+
+    #[test]
+    fn lists_via_appzdev_follows_the_resolved_provider() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(lists_via_appzdev(dir.path(), None).unwrap());
+        assert!(!lists_via_appzdev(dir.path(), Some("vercel")).unwrap());
+        std::fs::write(
+            dir.path().join("appz.jsonc"),
+            r#"{ "deploy": { "default": "vercel" } }"#,
+        )
+        .unwrap();
+        assert!(!lists_via_appzdev(dir.path(), None).unwrap());
+        assert!(lists_via_appzdev(dir.path(), Some("appzdev")).unwrap());
+    }
 
     struct UploadProbe {
         slug: &'static str,

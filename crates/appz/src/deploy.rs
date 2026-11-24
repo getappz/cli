@@ -938,6 +938,19 @@ pub fn remove_domain(
         .map_err(|e| e.to_string())
 }
 
+pub fn list_aliases(
+    project_dir: &Path,
+    target: Option<String>,
+) -> Result<Vec<appz_deploy::AliasInfo>, String> {
+    let (provider, ctx) = domain_ctx(project_dir, target)?;
+    provider.list_aliases(&ctx).map_err(|e| e.to_string())
+}
+
+pub fn remove_alias(project_dir: &Path, target: Option<String>, host: &str) -> Result<(), String> {
+    let (provider, ctx) = domain_ctx(project_dir, target)?;
+    provider.remove_alias(&ctx, host).map_err(|e| e.to_string())
+}
+
 pub fn list_projects(
     project_dir: &Path,
     target: Option<String>,

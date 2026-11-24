@@ -193,6 +193,13 @@ also remain available for runtime imports and existing links. The filename uses
 the first 10 hex characters of the BLAKE3 digest of the uploaded bytes.
 Deploy manifests use the full digest prefixed with `b3:`.
 
+Manage a hosted project's aliases with `appz alias --target appzdev`:
+`appz alias set <domain>` (or the shorthand `appz alias <domain>`) points a
+domain at the project, `appz alias ls` lists serving hosts and the deployments
+they point at, and `appz alias rm <host>` removes one after a confirmation
+(`--yes` skips it). The production host cannot be removed. Use `--json` for
+machine-readable output.
+
 ## Deploying to GitHub Pages, S3, and Render
 
 These targets publish to production; use `--prod`. A preview request fails

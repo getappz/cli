@@ -161,6 +161,18 @@ pub struct DomainQuery {
     pub cursor: Option<String>,
 }
 
+/// A host serving a project, as returned by `GET /v0/projects/{id}/aliases`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AliasInfo {
+    pub host: String,
+    pub deployment_id: String,
+    pub version_id: String,
+    /// Creation time in epoch milliseconds.
+    pub created_at: i64,
+    pub is_production: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TeamDomain {

@@ -778,6 +778,57 @@ pub fn remove_project_domain(
     Ok(true)
 }
 
+pub fn list_project_aliases(
+    api_base: &str,
+    project_id: &str,
+    token: Option<&str>,
+) -> DeployResult<Vec<crate::AliasInfo>> {
+    validate_project_ref(project_id)?;
+    let mut req = ureq::get(&format!("{api_base}/v0/projects/{project_id}/aliases"));
+    if let Some(tok) = token {
+        req = req.set("Authorization", &format!("Bearer {tok}"));
+    }
+    req.call()
+        .map_err(|e| parse_api_error(e, "AppzDev", "List aliases"))?
+        .into_json()
+        .map_err(|e| DeployError::DeployFailed {
+            provider: "AppzDev",
+            reason: format!("Invalid aliases response: {e}"),
+        })
+}
+
+pub fn remove_project_alias(
+    api_base: &str,
+    project_id: &str,
+    token: Option<&str>,
+    host: &str,
+) -> DeployResult<()> {
+    validate_project_ref(project_id)?;
+    let host = normalize_domain(host)?;
+    let mut req = ureq::delete(&format!(
+        "{api_base}/v0/projects/{project_id}/aliases/{host}"
+    ));
+    if let Some(tok) = token {
+        req = req.set("Authorization", &format!("Bearer {tok}"));
+    }
+    match req.call() {
+        Ok(_) => Ok(()),
+        // The server refuses to remove a project's production host.
+        Err(ureq::Error::Status(409, resp)) => {
+            let detail = resp
+                .into_json::<serde_json::Value>()
+                .ok()
+                .and_then(|j| j.get("error").and_then(|e| e.as_str().map(String::from)))
+                .unwrap_or_else(|| "conflict".into());
+            Err(DeployError::DeployFailed {
+                provider: "AppzDev",
+                reason: format!("{host} cannot be removed: {detail}"),
+            })
+        }
+        Err(e) => Err(parse_api_error(e, "AppzDev", "Remove alias")),
+    }
+}
+
 pub fn list_projects(api_base: &str, token: Option<&str>) -> DeployResult<Vec<ProjectInfo>> {
     let url = format!("{api_base}/v0/projects");
     let mut req = ureq::get(&url);
@@ -1500,6 +1551,18 @@ impl DeployProvider for AppzdevProvider {
         Ok(format!("https://{bound_domain}"))
     }
 
+    fn list_aliases(&self, ctx: &DeployContext) -> DeployResult<Vec<crate::AliasInfo>> {
+        let project_id = self.resolve_project_id(ctx);
+        let token = resolve_auth_token(Some(ctx));
+        list_project_aliases(&self.api_base(ctx), &project_id, token.as_deref())
+    }
+
+    fn remove_alias(&self, ctx: &DeployContext, host: &str) -> DeployResult<()> {
+        let project_id = self.resolve_project_id(ctx);
+        let token = resolve_auth_token(Some(ctx));
+        remove_project_alias(&self.api_base(ctx), &project_id, token.as_deref(), host)
+    }
+
     fn list_deployments(&self, ctx: &DeployContext) -> DeployResult<Vec<DeploymentInfo>> {
         let project_id = self.resolve_project_id(ctx);
         let api_base = self.api_base(ctx);
@@ -2090,6 +2153,20 @@ SPACED=hello world
                                     "200 OK",
                                     r#"[{"id":"prj_mock","name":"mock-app","slug":"mock-app","organizationId":"org_mock","createdAt":1762732800}]"#,
                                 )
+                            } else if method == "GET" && path.ends_with("/aliases") {
+                                (
+                                    "200 OK",
+                                    r#"[{"host":"app.example.com","deploymentId":"dpl_abc123def456","versionId":"ver_abc123def456","createdAt":1762732800000,"isProduction":true},{"host":"beta.example.com","deploymentId":"dpl_abc123def456","versionId":"ver_abc123def456","createdAt":1762732900000,"isProduction":false}]"#,
+                                )
+                            } else if method == "DELETE"
+                                && path.ends_with("/aliases/beta.example.com")
+                            {
+                                ("204 No Content", "")
+                            } else if method == "DELETE" && path.contains("/aliases/") {
+                                (
+                                    "409 Conflict",
+                                    r#"{"error":"the production host cannot be removed"}"#,
+                                )
                             } else if method == "GET"
                                 && path.starts_with("/v0/projects/")
                                 && !path.contains("/env")
@@ -2353,6 +2430,16 @@ SPACED=hello world
         let restored = provider.restore_project(&ctx, "mock-app").unwrap();
         assert_eq!(restored.id, got_proj.id);
         assert_eq!(restored.slug, got_proj.slug);
+        let aliases = provider.list_aliases(&ctx).unwrap();
+        assert_eq!(aliases.len(), 2);
+        assert!(aliases[0].is_production && !aliases[1].is_production);
+        assert_eq!(aliases[1].deployment_id, "dpl_abc123def456");
+        provider.remove_alias(&ctx, "Beta.Example.com").unwrap();
+        let err = provider.remove_alias(&ctx, "app.example.com").unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("production host cannot be removed")
+        );
         let err = provider.restore_project(&ctx, "missing").unwrap_err();
         assert!(err.to_string().contains("no restorable project"));
     }

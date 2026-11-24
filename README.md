@@ -42,6 +42,8 @@ appz lint      # run the linter
 appz format    # run the formatter
 appz backup    # snapshot local source and unpushed commits with Rustic
 appz deploy    # deploy via the target platform's own CLI
+appz remove    # delete deployments by ID or URL (alias: rm; refused while an alias points at one)
+appz promote <id-or-url>  # promote a ready appzdev deployment to production (--yes to skip the prompt)
 appz ci        # write a GitHub Actions deploy workflow
 appz doctor    # diagnose project stack, config, and suggestions
 appz mcp       # stdio MCP server exposing detect/doctor/run to AI agents
@@ -51,6 +53,11 @@ appz skills add  # install the appz agent skill into detected AI agents (--globa
 To recover a hosted Appz project, run `appz projects --target appzdev restore <slug-or-id>`
 within 30 days of removal. Restore before deploying again to the deleted slug,
 because a new deploy can replace the deleted project.
+
+To undo a bad production deploy on appz.dev, run `appz rollback` to repoint production at the
+previous ready production deployment (shows `current -> target`, confirms unless `--yes`), or
+`appz rollback <version-id|deployment-id|url>` for a specific one. A lone existing directory
+argument (`appz rollback ./site`) is the project directory.
 
 Set `APPZ_BACKUP_REPOSITORY` to a dedicated repository outside the project.
 Store its password with `appz vault set APPZ_BACKUP_PASSWORD` and run

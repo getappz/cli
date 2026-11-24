@@ -291,6 +291,17 @@ pub struct DeploymentInspect {
     pub files: Option<Vec<InspectFileEntry>>,
 }
 
+/// Result of promoting a ready deployment to production.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PromoteResult {
+    pub provider: String,
+    pub project_id: String,
+    pub deployment_id: String,
+    pub version_id: String,
+    /// Production URL serving the promoted deployment.
+    pub url: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DetectedConfig {
     pub config_file: String,

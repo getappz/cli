@@ -19,7 +19,7 @@ pub use output::{
     AliasInfo, ApexRecord, AuthState, BackupSummary, CnameRecord, DeployOutput, DeployStatus,
     DeploymentInfo, DeploymentInspect, DeploymentQuery, DetectedConfig, DnsRecordChallenge,
     DomainQuery, DomainVerificationRecord, DomainVerifyResult, InspectFileEntry, Page,
-    PrerequisiteStatus, ProjectDomain, ProjectInfo, TeamDeployment, TeamDomain,
+    PrerequisiteStatus, ProjectDomain, ProjectInfo, PromoteResult, TeamDeployment, TeamDomain,
 };
 pub use provider::{
     DEPLOY_TIMEOUT, DeployProvider, QUERY_TIMEOUT, available_provider_slugs,

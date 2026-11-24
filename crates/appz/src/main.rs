@@ -81,6 +81,8 @@ enum AppzCmd {
     Deploy(DeployArgs),
     /// Roll back a deployment on edge hosting to a previous version
     Rollback(RollbackArgs),
+    /// Promote a ready deployment to production
+    Promote(PromoteArgs),
     /// Link this directory to a project on the platform
     Link(LinkArgs),
     /// Point a custom domain or alias to the deployment
@@ -91,6 +93,9 @@ enum AppzCmd {
     List(ListArgs),
     /// Inspect edge deployment manifest, hosts, and CAS metrics
     Inspect(InspectArgs),
+    /// Delete deployments by ID or URL (refused while an alias points at one)
+    #[command(alias = "rm")]
+    Remove(RemoveArgs),
     /// Manage custom domains and DNS verification on Cloudflare Edge
     #[command(alias = "domain")]
     Domains(DomainsArgs),
@@ -335,10 +340,12 @@ struct DeployArgs {
 
 #[derive(Args)]
 struct RollbackArgs {
-    /// Version ID to roll back to
-    version: String,
-    #[arg(default_value = ".")]
-    dir: PathBuf,
+    /// Version ID, deployment ID or deployment URL to roll back to. Omit to
+    /// roll back to the previous ready production deployment. A lone existing
+    /// directory is treated as DIR.
+    version: Option<String>,
+    /// Project directory
+    dir: Option<PathBuf>,
     /// Provider slug (default: detects from project or config)
     #[arg(long)]
     target: Option<String>,
@@ -431,6 +438,31 @@ struct ListArgs {
     /// Cursor from a previous page
     #[arg(long)]
     next: Option<String>,
+    /// Provider slug (default: detects from project or config)
+    #[arg(long)]
+    target: Option<String>,
+}
+
+#[derive(Args)]
+struct RemoveArgs {
+    /// Deployment IDs or live URLs to delete
+    #[arg(required = true)]
+    deployments: Vec<String>,
+    /// Project directory (defaults to current directory)
+    #[arg(long, default_value = ".")]
+    dir: PathBuf,
+    /// Provider slug (default: detects from project or config)
+    #[arg(long)]
+    target: Option<String>,
+}
+
+#[derive(Args)]
+struct PromoteArgs {
+    /// Deployment ID or live URL to promote
+    id_or_url: String,
+    /// Project directory (defaults to current directory)
+    #[arg(default_value = ".")]
+    dir: PathBuf,
     /// Provider slug (default: detects from project or config)
     #[arg(long)]
     target: Option<String>,
@@ -1645,10 +1677,12 @@ fn main() {
         }
         AppzCmd::Deploy(a) => run_deploy(a, json),
         AppzCmd::Rollback(a) => run_rollback(a, json),
+        AppzCmd::Promote(a) => run_promote(a, json),
         AppzCmd::Link(a) => run_link(a, json),
         AppzCmd::Alias(a) => run_alias(a, json),
         AppzCmd::List(a) => run_list(a, json),
         AppzCmd::Inspect(a) => run_inspect(a, json),
+        AppzCmd::Remove(a) => run_remove(a, json),
         AppzCmd::Domains(a) => run_domains(a, json),
         AppzCmd::Projects(a) => run_projects(a, json),
         AppzCmd::Login(a) => run_login(a, json),
@@ -2299,18 +2333,74 @@ fn print_deploy_dry_run(output: &appz_deploy::DeployOutput) {
 }
 
 fn run_rollback(args: RollbackArgs, json: bool) {
-    let canonical = resolve_root(&args.dir);
+    // `appz rollback some/dir`: a lone existing path is the directory.
+    let (version, dir) = match (args.version, args.dir) {
+        (Some(v), None) if Path::new(&v).is_dir() => (None, PathBuf::from(v)),
+        (v, d) => (v, d.unwrap_or_else(|| PathBuf::from("."))),
+    };
+    let canonical = resolve_root(&dir);
     if !json {
         intro("appz rollback");
     }
-    match deploy::rollback(&canonical, args.target, &args.version) {
+    let resolved = match &version {
+        Some(v) => deploy::resolve_version(&canonical, args.target.clone(), v).map(|id| (id, None)),
+        None => deploy::plan_rollback(&canonical, args.target.clone()).map(|plan| {
+            (
+                plan.target.version_id.clone().unwrap_or_default(),
+                Some(plan),
+            )
+        }),
+    };
+    let (version_id, plan) = match resolved {
+        Ok(r) => r,
+        Err(e) => error(&e),
+    };
+    if let Some(plan) = &plan {
+        let label = |d: &appz_deploy::TeamDeployment| {
+            format!(
+                "{} ({})",
+                d.id,
+                d.url
+                    .as_deref()
+                    .unwrap_or(d.version_id.as_deref().unwrap_or("-"))
+            )
+        };
+        let from = plan
+            .current
+            .as_ref()
+            .map(label)
+            .unwrap_or_else(|| "-".into());
+        let msg = format!("roll back production: {from} -> {}", label(&plan.target));
+        if json {
+            // Non-interactive consumers must opt in with --yes.
+            if !assume_yes() {
+                println!(
+                    "{}",
+                    serde_json::json!({ "status": "confirmation_required", "plan": plan })
+                );
+                error("pass --yes to roll back to the previous production deployment");
+            }
+        } else {
+            info(&msg);
+            let ok = assume_yes()
+                || is_tty()
+                    && cliclack::confirm("Roll back?")
+                        .initial_value(false)
+                        .interact()
+                        .unwrap_or(false);
+            if !ok {
+                return outro("rollback cancelled");
+            }
+        }
+    }
+    match deploy::rollback(&canonical, args.target, &version_id) {
         Ok(output) => {
             if json {
                 println!("{}", serde_json::to_string_pretty(&output).unwrap());
             } else {
                 success(&format!(
                     "rolled back {} to version {}",
-                    output.provider, args.version
+                    output.provider, version_id
                 ));
                 if let Some(url) = &output.url {
                     info(url);
@@ -2318,6 +2408,48 @@ fn run_rollback(args: RollbackArgs, json: bool) {
                 outro("rollback complete");
             }
         }
+        Err(e) => error(&e),
+    }
+}
+
+fn run_promote(args: PromoteArgs, json: bool) {
+    let canonical = resolve_root(&args.dir);
+    if !assume_yes() && (json || !is_tty()) {
+        error("confirmation required — pass --yes to promote without prompting");
+    }
+    if !json {
+        intro("appz promote");
+    }
+    let confirm = |d: &appz_deploy::DeploymentInspect| {
+        if assume_yes() {
+            return true;
+        }
+        let current = d
+            .production_url
+            .as_deref()
+            .map(|u| format!(" (production now: {u})"))
+            .unwrap_or_default();
+        cliclack::confirm(format!(
+            "Promote deployment {} (version {}) to production? It replaces the current production deployment{current}.",
+            d.id, d.version_id
+        ))
+        .initial_value(false)
+        .interact()
+        .unwrap_or(false)
+    };
+    match deploy::promote(&canonical, args.target, &args.id_or_url, &confirm) {
+        Ok(Some(r)) if json => println!(
+            "{}",
+            serde_json::json!({ "status": "promoted", "provider": r.provider, "project_id": r.project_id,
+                "deployment_id": r.deployment_id, "version_id": r.version_id, "url": r.url })
+        ),
+        Ok(Some(r)) => {
+            success(&format!("promoted {} to production", r.deployment_id));
+            info(&r.url);
+            outro("promote complete");
+        }
+        Ok(None) if json => println!("{}", serde_json::json!({ "status": "canceled" })),
+        Ok(None) => outro("canceled"),
         Err(e) => error(&e),
     }
 }
@@ -2607,6 +2739,63 @@ fn run_list(args: ListArgs, json: bool) {
             }
         }
         Err(e) => error(&e),
+    }
+}
+
+fn run_remove(args: RemoveArgs, json: bool) {
+    let canonical = resolve_root(&args.dir);
+    let mut refs: Vec<String> = Vec::new();
+    for d in args.deployments {
+        if !refs.contains(&d) {
+            refs.push(d);
+        }
+    }
+    if !json {
+        intro("appz remove");
+        info(&format!("Deployments to delete:\n  {}", refs.join("\n  ")));
+    }
+    if !assume_yes() {
+        if json || !is_interactive_tty() {
+            error("confirmation required — pass --yes to delete without prompting");
+        }
+        let plural = if refs.len() == 1 { "" } else { "s" };
+        let ok = cliclack::confirm(format!("Delete {} deployment{plural}?", refs.len()))
+            .initial_value(false)
+            .interact()
+            .unwrap_or(false);
+        if !ok {
+            warning("cancelled, nothing deleted");
+            return;
+        }
+    }
+    let results = match deploy::remove_deployments(&canonical, args.target, &refs) {
+        Ok(r) => r,
+        Err(e) => error(&e),
+    };
+    let failed = results.iter().filter(|(_, r)| r.is_err()).count();
+    if json {
+        let out: Vec<_> = results
+            .iter()
+            .map(|(r, res)| match res {
+                Ok(id) => serde_json::json!({ "id": id, "removed": true, "error": null }),
+                Err(e) => serde_json::json!({ "id": r, "removed": false, "error": e }),
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&out).unwrap());
+    } else {
+        for (r, res) in &results {
+            match res {
+                Ok(id) => success(&format!("removed {id}")),
+                Err(e) => warning(&format!("{r}: {e}")),
+            }
+        }
+        outro(&format!(
+            "{} removed, {failed} failed",
+            results.len() - failed
+        ));
+    }
+    if failed > 0 {
+        std::process::exit(1);
     }
 }
 
@@ -3287,6 +3476,16 @@ mod tests {
     use clap::CommandFactory;
 
     #[test]
+    fn remove_parses_multiple_ids_and_rm_alias() {
+        let cli = AppzCli::try_parse_from(["appz", "rm", "dpl_a", "dpl_b", "--yes"]).unwrap();
+        let AppzCmd::Remove(a) = cli.command else {
+            panic!("expected remove")
+        };
+        assert_eq!(a.deployments, ["dpl_a", "dpl_b"]);
+        assert!(AppzCli::try_parse_from(["appz", "remove"]).is_err());
+    }
+
+    #[test]
     fn restore_hint_preserves_the_project_directory() {
         let dir = Path::new("team's project $archive");
         let hint = project_restore_command(dir, "demo");
@@ -3373,10 +3572,29 @@ mod tests {
     }
 
     #[test]
+    fn promote_takes_deployment_then_optional_dir() {
+        assert!(AppzCli::try_parse_from(["appz", "promote", "dpl_abc123def456"]).is_ok());
+        let cli = AppzCli::try_parse_from([
+            "appz",
+            "promote",
+            "https://x.appz.to",
+            "site",
+            "--target",
+            "appzdev",
+            "-y",
+            "--json",
+        ])
+        .unwrap();
+        assert!(cli.yes && cli.json);
+        assert!(AppzCli::try_parse_from(["appz", "promote"]).is_err());
+    }
+
+    #[test]
     fn rollback_and_alias_take_the_required_argument_first() {
         assert!(AppzCli::try_parse_from(["appz", "rollback", "v42"]).is_ok());
         assert!(AppzCli::try_parse_from(["appz", "rollback", "v42", "site"]).is_ok());
-        assert!(AppzCli::try_parse_from(["appz", "rollback"]).is_err());
+        assert!(AppzCli::try_parse_from(["appz", "rollback"]).is_ok());
+        assert!(AppzCli::try_parse_from(["appz", "rollback", "some/dir"]).is_ok());
         assert!(AppzCli::try_parse_from(["appz", "alias", "app.example.com"]).is_ok());
         assert!(AppzCli::try_parse_from(["appz", "alias", "ls", "extra", "more"]).is_err());
     }

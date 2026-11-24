@@ -6,7 +6,7 @@ use crate::error::{DeployError, DeployResult};
 use crate::output::{
     AuthState, DeployOutput, DeploymentInfo, DeploymentInspect, DeploymentQuery, DetectedConfig,
     DomainQuery, DomainVerifyResult, Page, PrerequisiteStatus, ProjectDomain, ProjectInfo,
-    TeamDeployment, TeamDomain,
+    PromoteResult, TeamDeployment, TeamDomain,
 };
 
 /// Timeout for the actual deploy invocation (platform CLIs can legitimately
@@ -216,6 +216,20 @@ pub trait DeployProvider: Send + Sync {
         })
     }
 
+    /// Promote a ready deployment to production. `confirm` sees the resolved
+    /// deployment before anything changes; `Ok(None)` means it declined.
+    fn promote_deployment(
+        &self,
+        _ctx: &DeployContext,
+        _id_or_url: &str,
+        _confirm: &dyn Fn(&DeploymentInspect) -> bool,
+    ) -> DeployResult<Option<PromoteResult>> {
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "promote",
+        })
+    }
+
     fn inspect_deployment(
         &self,
         ctx: &DeployContext,
@@ -225,6 +239,15 @@ pub trait DeployProvider: Send + Sync {
         Err(DeployError::Unsupported {
             provider: self.name(),
             operation: "inspect",
+        })
+    }
+
+    /// Delete one deployment by ID or URL; returns the resolved deployment ID.
+    fn remove_deployment(&self, ctx: &DeployContext, id_or_url: &str) -> DeployResult<String> {
+        let _ = (ctx, id_or_url);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "remove",
         })
     }
 

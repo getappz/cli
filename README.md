@@ -42,6 +42,7 @@ appz lint      # run the linter
 appz format    # run the formatter
 appz backup    # snapshot local source and unpushed commits with Rustic
 appz deploy    # deploy via the target platform's own CLI
+appz build && appz deploy --prebuilt   # upload the existing build output, no rebuild
 appz ci        # write a GitHub Actions deploy workflow
 appz doctor    # diagnose project stack, config, and suggestions
 appz mcp       # stdio MCP server exposing detect/doctor/run to AI agents

@@ -39,6 +39,12 @@ pub trait DeployProvider: Send + Sync {
     fn needs_prebuild(&self, _frameworks: &[String]) -> bool {
         true
     }
+    /// Whether this provider can deploy an already-built output directory
+    /// (`appz deploy --prebuilt`). False when its own CLI always builds or
+    /// deploys from source.
+    fn deploys_prebuilt_output(&self) -> bool {
+        true
+    }
     /// mise tool spec used to install this provider's CLI (`appz deploy --yes`).
     /// Empty means mise cannot install it: appz shows [`Self::install_hint`].
     fn mise_tool(&self) -> String {

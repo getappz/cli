@@ -324,6 +324,9 @@ struct DeployArgs {
     /// Deploy even if nothing changed since the last deploy of this target
     #[arg(long)]
     force: bool,
+    /// Deploy the existing build output as-is: skip install and build. Fails if the output directory is missing or empty (run `appz build` first) or the target builds itself (render, fly, railway, ...)
+    #[arg(long)]
+    prebuilt: bool,
     /// Deploy to every target configured under deploy.targets instead of one
     #[arg(long, conflicts_with_all = ["target", "project"])]
     all: bool,
@@ -2107,6 +2110,7 @@ fn run_deploy(args: DeployArgs, json: bool) {
         target: args.target,
         project: args.project,
         force: args.force,
+        prebuilt: args.prebuilt,
         prod: args.prod,
         env: args.env,
         build_env: args.build_env,
@@ -3229,6 +3233,11 @@ mod tests {
     #[test]
     fn cli_definition_is_valid() {
         AppzCli::command().debug_assert();
+    }
+
+    #[test]
+    fn deploy_accepts_prebuilt() {
+        assert!(AppzCli::try_parse_from(["appz", "deploy", "--prebuilt", "--prod"]).is_ok());
     }
 
     #[test]

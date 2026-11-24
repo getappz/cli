@@ -39,6 +39,8 @@ pub struct DeployRequest {
     pub project: Option<String>,
     /// Deploy even when nothing changed since the last deploy of the target.
     pub force: bool,
+    /// Deploy the build output already on disk: never install or build.
+    pub prebuilt: bool,
     pub env: Vec<String>,
     pub build_env: Vec<String>,
     pub dry_run: bool,
@@ -255,6 +257,27 @@ fn run_hook(ctx: &DeployContext, name: &str, argv: &[String]) -> Result<(), Stri
     })
 }
 
+/// `--prebuilt`: the build output must already exist. Vercel's own
+/// `.vercel/output` (from `vercel build`) counts too.
+fn check_prebuilt_output(slug: &str, project_dir: &Path, output_dir: &str) -> Result<(), String> {
+    if slug == "vercel" && project_dir.join(".vercel/output/config.json").is_file() {
+        return Ok(());
+    }
+    let has_files = std::fs::read_dir(project_dir.join(output_dir))
+        .is_ok_and(|mut entries| entries.next().is_some());
+    if has_files {
+        return Ok(());
+    }
+    Err(format!(
+        "--prebuilt: build output '{output_dir}' is missing or empty. Run `appz build` first{}",
+        if slug == "vercel" {
+            " (or `vercel build`, which writes .vercel/output)"
+        } else {
+            ""
+        }
+    ))
+}
+
 struct PreparedTarget {
     ctx: DeployContext,
     provider: Box<dyn DeployProvider>,
@@ -322,7 +345,9 @@ fn prepare_target(project_dir: &Path, req: DeployRequest) -> Result<PreparedTarg
     // the deploy goes ahead.
     // Render deploys its connected remote, whose revision isn't in this hash.
     // An explicitly supplied build may live outside the source fingerprint.
-    let cache_local_files = slug != "render" && prebuilt_output.is_none();
+    // `--prebuilt` output is excluded from the source fingerprint, so it
+    // cannot tell whether the output changed.
+    let cache_local_files = slug != "render" && prebuilt_output.is_none() && !req.prebuilt;
     if cache_local_files
         && !req.force
         && let Ok(fp) =
@@ -342,6 +367,32 @@ fn prepare_target(project_dir: &Path, req: DeployRequest) -> Result<PreparedTarg
         });
     }
 
+    let toolchains = if prebuilt_output.is_some() {
+        Vec::new()
+    } else {
+        appz_core::detect_toolchains(project_dir).map_err(|e| e.to_string())?
+    };
+    let frameworks: Vec<String> = toolchains
+        .iter()
+        .flat_map(|tc| tc.frameworks.iter())
+        .map(|f| f.name.to_string())
+        .collect();
+    let framework = frameworks.first().cloned();
+
+    // `--prebuilt` fails before any CLI is installed or credential is used.
+    if req.prebuilt {
+        if !provider.deploys_prebuilt_output() {
+            return Err(format!(
+                "--prebuilt is not supported for {}: it builds this project itself. Deploy without --prebuilt",
+                provider.name()
+            ));
+        }
+        let dir = prebuilt_output
+            .clone()
+            .unwrap_or_else(|| appz_core::primary_output_directory(&toolchains).to_string());
+        check_prebuilt_output(&slug, project_dir, &dir)?;
+    }
+
     // mise-installed CLIs (global config or this project's mise.toml) are
     // discovered via `mise bin-paths` and appended after the user's own PATH.
     let mut extra_path = appz_core::mise_bin_paths(project_dir);
@@ -356,18 +407,6 @@ fn prepare_target(project_dir: &Path, req: DeployRequest) -> Result<PreparedTarg
         }
     }
 
-    let toolchains = if prebuilt_output.is_some() {
-        Vec::new()
-    } else {
-        appz_core::detect_toolchains(project_dir).map_err(|e| e.to_string())?
-    };
-    let frameworks: Vec<String> = toolchains
-        .iter()
-        .flat_map(|tc| tc.frameworks.iter())
-        .map(|f| f.name.to_string())
-        .collect();
-    let framework = frameworks.first().cloned();
-
     // Vault values for this provider only (its token, link ids, `deploy.env`).
     // Precedence: vault < real environment < `-e`.
     let allowed: Vec<String> = std::iter::once(provider.auth_env_var().to_string())
@@ -379,7 +418,8 @@ fn prepare_target(project_dir: &Path, req: DeployRequest) -> Result<PreparedTarg
         crate::info("note: vault is locked; run `appz env unlock` to use stored credentials");
     }
 
-    ctx.prebuilt = prebuilt_output.is_some();
+    ctx.prebuilt = prebuilt_output.is_some() || req.prebuilt;
+    ctx.use_existing_output = req.prebuilt;
     ctx.output_dir = prebuilt_output
         .unwrap_or_else(|| appz_core::primary_output_directory(&toolchains).to_string());
     ctx.is_preview = !req.prod;
@@ -479,15 +519,16 @@ fn upload_target(target: &PreparedTarget) -> Result<(DeployOutput, Option<String
     }
     // Capture the uploaded revision before another target builds or any after hook runs.
     let slug = provider.slug();
-    let fingerprint = if !ctx.dry_run && slug != "render" && output.url.is_some() {
-        crate::deploy_state::fingerprint(
-            &ctx.project_dir,
-            &fingerprint_extra(slug, &target.req, &ctx.deploy_config),
-        )
-        .ok()
-    } else {
-        None
-    };
+    let fingerprint =
+        if !ctx.dry_run && slug != "render" && !target.req.prebuilt && output.url.is_some() {
+            crate::deploy_state::fingerprint(
+                &ctx.project_dir,
+                &fingerprint_extra(slug, &target.req, &ctx.deploy_config),
+            )
+            .ok()
+        } else {
+            None
+        };
     Ok((output, fingerprint))
 }
 
@@ -684,6 +725,76 @@ pub fn rollback(
         .map_err(|e| e.to_string())
 }
 
+/// What `appz rollback` is about to do: the live production deployment and
+/// the earlier one production will be repointed at.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RollbackPlan {
+    pub current: Option<appz_deploy::TeamDeployment>,
+    pub target: appz_deploy::TeamDeployment,
+}
+
+/// Pick the rollback target from a project's ready production deployments:
+/// the newest one older than the current (`isCurrent`, else newest) deployment.
+pub fn pick_rollback_target(
+    mut items: Vec<appz_deploy::TeamDeployment>,
+) -> Result<RollbackPlan, String> {
+    items.retain(|d| d.version_id.is_some());
+    items.sort_by_key(|d| std::cmp::Reverse(d.created_at));
+    let cur = items.iter().position(|d| d.is_current).unwrap_or(0);
+    if items.is_empty() {
+        return Err("no ready production deployments to roll back to".into());
+    }
+    let current = items[cur].clone();
+    let target = items
+        .into_iter()
+        .skip(cur + 1)
+        .find(|d| d.created_at < current.created_at && d.id != current.id)
+        .ok_or_else(|| {
+            "no earlier ready production deployment to roll back to; pass a version ID explicitly"
+                .to_string()
+        })?;
+    Ok(RollbackPlan {
+        current: Some(current),
+        target,
+    })
+}
+
+/// Find the previous ready production deployment for the project in `project_dir`.
+pub fn plan_rollback(project_dir: &Path, target: Option<String>) -> Result<RollbackPlan, String> {
+    if !lists_via_appzdev(project_dir, target.as_deref())? {
+        return Err(
+            "rolling back without a version is only supported on appz.dev; pass a version ID"
+                .into(),
+        );
+    }
+    let query = appz_deploy::DeploymentQuery {
+        project: Some(appz_deploy::resolve_project_id_from_dir(project_dir)),
+        production: true,
+        status: vec!["ready".into()],
+        limit: Some(100),
+        ..Default::default()
+    };
+    pick_rollback_target(list_page(project_dir, target, &query)?.items)
+}
+
+/// Whether `arg` is a version ID (`ver_...` or a 26-char ULID) rather than a
+/// deployment ID or URL.
+pub fn is_version_id(arg: &str) -> bool {
+    arg.starts_with("ver_") || (arg.len() == 26 && arg.chars().all(|c| c.is_ascii_alphanumeric()))
+}
+
+/// Accept a version ID as-is; resolve a deployment ID (`dpl_...`) or URL to its version.
+pub fn resolve_version(
+    project_dir: &Path,
+    target: Option<String>,
+    arg: &str,
+) -> Result<String, String> {
+    if is_version_id(arg) {
+        return Ok(arg.to_string());
+    }
+    inspect(project_dir, target, arg).map(|d| d.version_id)
+}
+
 pub fn link(
     project_dir: &Path,
     target: Option<String>,
@@ -867,6 +978,19 @@ pub fn inspect(
         .map_err(|e| e.to_string())
 }
 
+/// Promote a ready deployment to production. `Ok(None)` means `confirm` declined.
+pub fn promote(
+    project_dir: &Path,
+    target: Option<String>,
+    id_or_url: &str,
+    confirm: &dyn Fn(&appz_deploy::DeploymentInspect) -> bool,
+) -> Result<Option<appz_deploy::PromoteResult>, String> {
+    let (provider, ctx) = domain_ctx(project_dir, target)?;
+    provider
+        .promote_deployment(&ctx, id_or_url, confirm)
+        .map_err(|e| e.to_string())
+}
+
 /// Resolve the provider and a vault-backed context for a domain operation.
 fn domain_ctx(
     project_dir: &Path,
@@ -927,6 +1051,30 @@ pub fn verify_domain(
         .map_err(|e| e.to_string())
 }
 
+pub fn inspect_domain(
+    project_dir: &Path,
+    target: Option<String>,
+    domain: &str,
+) -> Result<Option<appz_deploy::TeamDomain>, String> {
+    let (provider, ctx) = domain_ctx(project_dir, target)?;
+    provider
+        .inspect_domain(&ctx, domain)
+        .map_err(|e| e.to_string())
+}
+
+pub fn move_domain(
+    project_dir: &Path,
+    target: Option<String>,
+    domain: &str,
+    to_org: &str,
+    project: &str,
+) -> Result<appz_deploy::DomainMove, String> {
+    let (provider, ctx) = domain_ctx(project_dir, target)?;
+    provider
+        .move_domain(&ctx, domain, to_org, project)
+        .map_err(|e| e.to_string())
+}
+
 pub fn remove_domain(
     project_dir: &Path,
     target: Option<String>,
@@ -936,6 +1084,19 @@ pub fn remove_domain(
     provider
         .remove_domain(&ctx, domain)
         .map_err(|e| e.to_string())
+}
+
+pub fn list_aliases(
+    project_dir: &Path,
+    target: Option<String>,
+) -> Result<Vec<appz_deploy::AliasInfo>, String> {
+    let (provider, ctx) = domain_ctx(project_dir, target)?;
+    provider.list_aliases(&ctx).map_err(|e| e.to_string())
+}
+
+pub fn remove_alias(project_dir: &Path, target: Option<String>, host: &str) -> Result<(), String> {
+    let (provider, ctx) = domain_ctx(project_dir, target)?;
+    provider.remove_alias(&ctx, host).map_err(|e| e.to_string())
 }
 
 pub fn list_projects(
@@ -999,6 +1160,28 @@ pub fn with_provider<T>(
     f(provider.as_ref(), &ctx).map_err(|e| e.to_string())
 }
 
+/// Per-deployment outcome of `remove_deployments`: the ref passed in, and the
+/// removed deployment ID or the error.
+pub type RemoveOutcome = (String, Result<String, String>);
+
+/// Delete deployments one by one; a failure does not stop the rest.
+pub fn remove_deployments(
+    project_dir: &Path,
+    target: Option<String>,
+    refs: &[String],
+) -> Result<Vec<RemoveOutcome>, String> {
+    let (provider, ctx) = domain_ctx(project_dir, target)?;
+    Ok(refs
+        .iter()
+        .map(|r| {
+            let res = provider
+                .remove_deployment(&ctx, r)
+                .map_err(|e| e.to_string());
+            (r.clone(), res)
+        })
+        .collect())
+}
+
 pub fn remove_project(
     project_dir: &Path,
     target: Option<String>,
@@ -1010,9 +1193,153 @@ pub fn remove_project(
         .map_err(|e| e.to_string())
 }
 
+/// What `appz open` resolved: the URL and whether it is a site or a dashboard page.
+#[derive(Debug, serde::Serialize)]
+pub struct OpenTarget {
+    pub url: String,
+    pub kind: &'static str,
+}
+
+fn with_scheme(u: &str) -> String {
+    if u.starts_with("http://") || u.starts_with("https://") {
+        u.to_string()
+    } else {
+        format!("https://{u}")
+    }
+}
+
+/// appz.dev dashboard (my.appz.dev) page for a project, or for one of its
+/// deployments. Mirrors the console routes `projects/:slug` and
+/// `projects/:slug/deployments/:deploymentId`. `APPZ_DASHBOARD_URL` overrides the base.
+fn dashboard_url(base: Option<&str>, slug: &str, deployment: Option<&str>) -> String {
+    let base = base
+        .filter(|b| !b.is_empty())
+        .unwrap_or("https://my.appz.dev");
+    let mut url = format!("{}/projects/{slug}", base.trim_end_matches('/'));
+    if let Some(id) = deployment {
+        url.push_str("/deployments/");
+        url.push_str(id);
+    }
+    url
+}
+
+fn dashboard_base(ctx: &appz_deploy::DeployContext) -> Option<String> {
+    ctx.run_env
+        .get("APPZ_DASHBOARD_URL")
+        .cloned()
+        .or_else(|| std::env::var("APPZ_DASHBOARD_URL").ok())
+}
+
+/// Resolve what `appz open` should open: a deployment (`id_or_url`), the
+/// project's dashboard page, or its production site.
+pub fn open_target(
+    project_dir: &Path,
+    target: Option<String>,
+    id_or_url: Option<&str>,
+    dashboard: bool,
+) -> Result<OpenTarget, String> {
+    let (provider, ctx) = domain_ctx(project_dir, target)?;
+    let is_appzdev = provider.slug() == "appzdev";
+    if let Some(id) = id_or_url {
+        if dashboard && !is_appzdev {
+            return Err("--dashboard is only available for appz.dev projects".into());
+        }
+        if !is_appzdev {
+            return if id.contains("://") || id.contains('.') {
+                Ok(OpenTarget {
+                    url: with_scheme(id),
+                    kind: "deployment",
+                })
+            } else {
+                Err(format!(
+                    "{} cannot look up deployment IDs; pass the deployment URL",
+                    provider.name()
+                ))
+            };
+        }
+        let insp = provider
+            .inspect_deployment(&ctx, id)
+            .map_err(|e| e.to_string())?;
+        if dashboard {
+            let p = provider
+                .get_project(&ctx, &insp.project_id)
+                .map_err(|e| e.to_string())?;
+            return Ok(OpenTarget {
+                url: dashboard_url(dashboard_base(&ctx).as_deref(), &p.slug, Some(&insp.id)),
+                kind: "dashboard",
+            });
+        }
+        let host = insp
+            .hosts
+            .first()
+            .ok_or_else(|| format!("deployment {} has no URL yet", insp.id))?;
+        return Ok(OpenTarget {
+            url: with_scheme(host),
+            kind: "deployment",
+        });
+    }
+
+    let mut project = None;
+    if is_appzdev {
+        let pid = ctx
+            .run_env
+            .get("APPZ_PROJECT_ID")
+            .filter(|v| !v.is_empty())
+            .map(|v| appz_deploy::slugify_project_id(v))
+            .unwrap_or_else(|| appz_deploy::resolve_project_id_from_dir(project_dir));
+        project = Some(
+            provider
+                .get_project(&ctx, &pid)
+                .map_err(|e| e.to_string())?,
+        );
+    }
+    if dashboard {
+        let p = project.ok_or("--dashboard is only available for appz.dev projects")?;
+        return Ok(OpenTarget {
+            url: dashboard_url(dashboard_base(&ctx).as_deref(), &p.slug, None),
+            kind: "dashboard",
+        });
+    }
+    let url = project
+        .and_then(|p| p.production_url)
+        .filter(|u| !u.is_empty())
+        .or_else(|| crate::deploy_state::last_url(project_dir, provider.slug(), true))
+        .ok_or("no production deployment found; run `appz deploy --prod` first")?;
+    Ok(OpenTarget {
+        url: with_scheme(&url),
+        kind: "production",
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dashboard_url_uses_base_or_default() {
+        assert_eq!(
+            dashboard_url(None, "blog", None),
+            "https://my.appz.dev/projects/blog"
+        );
+        assert_eq!(
+            dashboard_url(None, "blog", Some("dpl_1")),
+            "https://my.appz.dev/projects/blog/deployments/dpl_1"
+        );
+        assert_eq!(
+            dashboard_url(Some("https://console.example/"), "blog", None),
+            "https://console.example/projects/blog"
+        );
+        assert_eq!(
+            dashboard_url(Some(""), "a", None),
+            "https://my.appz.dev/projects/a"
+        );
+    }
+
+    #[test]
+    fn with_scheme_adds_https_only_when_missing() {
+        assert_eq!(with_scheme("a.appz.dev"), "https://a.appz.dev");
+        assert_eq!(with_scheme("http://a.dev"), "http://a.dev");
+    }
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -1304,6 +1631,7 @@ mod tests {
             target: None,
             project: project.map(String::from),
             force: false,
+            prebuilt: false,
             prod: false,
             env: env.iter().map(|s| s.to_string()).collect(),
             build_env: build.iter().map(|s| s.to_string()).collect(),
@@ -1314,6 +1642,54 @@ mod tests {
             login: Consent::Never,
             link: Consent::Never,
         }
+    }
+
+    #[test]
+    fn prebuilt_requires_existing_output() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("appz.jsonc"),
+            r#"{"deploy":{"default":"github-pages","targets":{"github-pages":{"outputDir":"site"}}}}"#,
+        )
+        .unwrap();
+        let mut request = req(&[], &[], None);
+        request.prod = true;
+        request.prebuilt = true;
+        request.dry_run = true;
+        let err = run(dir.path(), request.clone()).err().unwrap();
+        assert!(
+            err.contains("--prebuilt") && err.contains("appz build"),
+            "{err}"
+        );
+
+        std::fs::create_dir(dir.path().join("site")).unwrap();
+        assert!(run(dir.path(), request.clone()).is_err(), "empty dir");
+        std::fs::write(dir.path().join("site/index.html"), "<h1>x</h1>").unwrap();
+        run(dir.path(), request).unwrap();
+    }
+
+    #[test]
+    fn prebuilt_is_rejected_for_targets_that_build_themselves() {
+        let dir = tempfile::tempdir().unwrap();
+        for slug in ["render", "fly"] {
+            let mut request = req(&[], &[], None);
+            request.target = Some(slug.into());
+            request.prebuilt = true;
+            request.dry_run = true;
+            let err = run(dir.path(), request).err().unwrap();
+            assert!(err.contains("builds this project itself"), "{slug}: {err}");
+        }
+    }
+
+    #[test]
+    fn prebuilt_accepts_vercel_native_output() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(check_prebuilt_output("vercel", dir.path(), "dist").is_err());
+        let out = dir.path().join(".vercel/output");
+        std::fs::create_dir_all(&out).unwrap();
+        std::fs::write(out.join("config.json"), "{\"version\":3}").unwrap();
+        check_prebuilt_output("vercel", dir.path(), "dist").unwrap();
+        assert!(check_prebuilt_output("netlify", dir.path(), "dist").is_err());
     }
 
     #[test]
@@ -1661,5 +2037,57 @@ mod tests {
         assert!(
             crate::deploy_state::unchanged(dir.path(), "vercel", false, &pre_hook_fp).is_some()
         );
+    }
+}
+
+#[cfg(test)]
+mod rollback_tests {
+    use super::*;
+
+    fn dep(id: &str, at: i64, current: bool) -> appz_deploy::TeamDeployment {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "versionId": format!("ver_{id}"), "createdAt": at, "isCurrent": current
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn picks_next_older_than_current() {
+        let plan = pick_rollback_target(vec![
+            dep("a", 1, false),
+            dep("c", 3, true),
+            dep("b", 2, false),
+        ])
+        .unwrap();
+        assert_eq!(plan.current.unwrap().id, "c");
+        assert_eq!(plan.target.id, "b");
+    }
+
+    #[test]
+    fn skips_newer_than_current_and_defaults_to_newest() {
+        // After a rollback the current one is not the newest.
+        let plan = pick_rollback_target(vec![
+            dep("c", 3, false),
+            dep("b", 2, true),
+            dep("a", 1, false),
+        ])
+        .unwrap();
+        assert_eq!(plan.target.id, "a");
+        let plan = pick_rollback_target(vec![dep("b", 2, false), dep("a", 1, false)]).unwrap();
+        assert_eq!(plan.target.id, "a");
+    }
+
+    #[test]
+    fn errors_without_earlier_deployment() {
+        assert!(pick_rollback_target(vec![dep("a", 1, true)]).is_err());
+        assert!(pick_rollback_target(vec![]).is_err());
+    }
+
+    #[test]
+    fn tells_versions_from_deployments() {
+        assert!(is_version_id("ver_abc123def456"));
+        assert!(is_version_id("01HZX3J5K6M7N8P9Q0R1S2T3V4"));
+        assert!(!is_version_id("dpl_abc123def456"));
+        assert!(!is_version_id("https://x.appz.page"));
     }
 }

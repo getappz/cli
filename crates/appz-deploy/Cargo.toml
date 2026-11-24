@@ -25,6 +25,8 @@ regex = "1"
 url = "2"
 percent-encoding = "2"
 tempfile = "3"
+psl2 = { version = "0.1.49", default-features = false }
+deunicode = "1.6"
 
 [lints.rust]
 unsafe_code = "warn"

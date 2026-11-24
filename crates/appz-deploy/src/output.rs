@@ -103,8 +103,12 @@ pub struct DeploymentQuery {
     pub project: Option<String>,
     pub production: bool,
     pub environment: Option<String>,
-    /// Comma-separated status list (`ready,building,error,canceled`).
-    pub status: Option<String>,
+    /// Statuses to match (`ready`, `building`, `error`, `canceled`), sent as repeated params.
+    pub status: Vec<String>,
+    /// Only deployments created at or after this time (epoch milliseconds).
+    pub since: Option<i64>,
+    /// Only deployments created at or before this time (epoch milliseconds).
+    pub until: Option<i64>,
     /// `key=value` pairs matched against deployment metadata.
     pub meta: Vec<String>,
     pub limit: Option<u32>,
@@ -159,6 +163,18 @@ pub struct DomainQuery {
     pub project: Option<String>,
     pub limit: Option<u32>,
     pub cursor: Option<String>,
+}
+
+/// A host serving a project, as returned by `GET /v0/projects/{id}/aliases`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AliasInfo {
+    pub host: String,
+    pub deployment_id: String,
+    pub version_id: String,
+    /// Creation time in epoch milliseconds.
+    pub created_at: i64,
+    pub is_production: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -279,6 +295,17 @@ pub struct DeploymentInspect {
     pub files: Option<Vec<InspectFileEntry>>,
 }
 
+/// Result of promoting a ready deployment to production.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PromoteResult {
+    pub provider: String,
+    pub project_id: String,
+    pub deployment_id: String,
+    pub version_id: String,
+    /// Production URL serving the promoted deployment.
+    pub url: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DetectedConfig {
     pub config_file: String,
@@ -348,9 +375,42 @@ pub struct ProjectDomain {
     pub verification: Vec<DomainVerificationRecord>,
     #[serde(default, alias = "created_at")]
     pub created_at: Option<i64>,
+    /// When the domain's DNS stopped resolving to Appz, if it has lapsed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lapsed_at: Option<String>,
+    /// When a lapsed domain will be detached automatically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub removes_at: Option<String>,
+}
+
+/// Result of `POST /v0/projects/{id}/domains/{domain}/move`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DomainMove {
+    #[serde(default)]
+    pub id: Option<String>,
+    pub domain: String,
+    pub project_id: String,
+    pub organization_id: String,
+    /// `committed` / `completed`, or `pending` when routing reconciliation
+    /// (HTTP 202) had not finished after retries.
+    pub status: String,
 }
 
 impl ProjectDomain {
+    /// Whether traffic for this domain is currently being served.
+    pub fn serving_status(&self) -> &'static str {
+        if self.lapsed_at.is_some() {
+            "lapsed (DNS no longer points at Appz)"
+        } else if !self.verified {
+            "not serving (verification pending)"
+        } else if self.ssl_status.as_deref().is_some_and(|s| s != "active") {
+            "verified, TLS certificate pending"
+        } else {
+            "serving"
+        }
+    }
+
     pub fn display_status(&self) -> &str {
         if self.verified {
             self.ssl_status.as_deref().unwrap_or("active")

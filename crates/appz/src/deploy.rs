@@ -39,6 +39,8 @@ pub struct DeployRequest {
     pub project: Option<String>,
     /// Deploy even when nothing changed since the last deploy of the target.
     pub force: bool,
+    /// Deploy the build output already on disk: never install or build.
+    pub prebuilt: bool,
     pub env: Vec<String>,
     pub build_env: Vec<String>,
     pub dry_run: bool,
@@ -255,6 +257,27 @@ fn run_hook(ctx: &DeployContext, name: &str, argv: &[String]) -> Result<(), Stri
     })
 }
 
+/// `--prebuilt`: the build output must already exist. Vercel's own
+/// `.vercel/output` (from `vercel build`) counts too.
+fn check_prebuilt_output(slug: &str, project_dir: &Path, output_dir: &str) -> Result<(), String> {
+    if slug == "vercel" && project_dir.join(".vercel/output/config.json").is_file() {
+        return Ok(());
+    }
+    let has_files = std::fs::read_dir(project_dir.join(output_dir))
+        .is_ok_and(|mut entries| entries.next().is_some());
+    if has_files {
+        return Ok(());
+    }
+    Err(format!(
+        "--prebuilt: build output '{output_dir}' is missing or empty. Run `appz build` first{}",
+        if slug == "vercel" {
+            " (or `vercel build`, which writes .vercel/output)"
+        } else {
+            ""
+        }
+    ))
+}
+
 struct PreparedTarget {
     ctx: DeployContext,
     provider: Box<dyn DeployProvider>,
@@ -322,7 +345,9 @@ fn prepare_target(project_dir: &Path, req: DeployRequest) -> Result<PreparedTarg
     // the deploy goes ahead.
     // Render deploys its connected remote, whose revision isn't in this hash.
     // An explicitly supplied build may live outside the source fingerprint.
-    let cache_local_files = slug != "render" && prebuilt_output.is_none();
+    // `--prebuilt` output is excluded from the source fingerprint, so it
+    // cannot tell whether the output changed.
+    let cache_local_files = slug != "render" && prebuilt_output.is_none() && !req.prebuilt;
     if cache_local_files
         && !req.force
         && let Ok(fp) =
@@ -342,6 +367,32 @@ fn prepare_target(project_dir: &Path, req: DeployRequest) -> Result<PreparedTarg
         });
     }
 
+    let toolchains = if prebuilt_output.is_some() {
+        Vec::new()
+    } else {
+        appz_core::detect_toolchains(project_dir).map_err(|e| e.to_string())?
+    };
+    let frameworks: Vec<String> = toolchains
+        .iter()
+        .flat_map(|tc| tc.frameworks.iter())
+        .map(|f| f.name.to_string())
+        .collect();
+    let framework = frameworks.first().cloned();
+
+    // `--prebuilt` fails before any CLI is installed or credential is used.
+    if req.prebuilt {
+        if !provider.deploys_prebuilt_output() {
+            return Err(format!(
+                "--prebuilt is not supported for {}: it builds this project itself. Deploy without --prebuilt",
+                provider.name()
+            ));
+        }
+        let dir = prebuilt_output
+            .clone()
+            .unwrap_or_else(|| appz_core::primary_output_directory(&toolchains).to_string());
+        check_prebuilt_output(&slug, project_dir, &dir)?;
+    }
+
     // mise-installed CLIs (global config or this project's mise.toml) are
     // discovered via `mise bin-paths` and appended after the user's own PATH.
     let mut extra_path = appz_core::mise_bin_paths(project_dir);
@@ -356,18 +407,6 @@ fn prepare_target(project_dir: &Path, req: DeployRequest) -> Result<PreparedTarg
         }
     }
 
-    let toolchains = if prebuilt_output.is_some() {
-        Vec::new()
-    } else {
-        appz_core::detect_toolchains(project_dir).map_err(|e| e.to_string())?
-    };
-    let frameworks: Vec<String> = toolchains
-        .iter()
-        .flat_map(|tc| tc.frameworks.iter())
-        .map(|f| f.name.to_string())
-        .collect();
-    let framework = frameworks.first().cloned();
-
     // Vault values for this provider only (its token, link ids, `deploy.env`).
     // Precedence: vault < real environment < `-e`.
     let allowed: Vec<String> = std::iter::once(provider.auth_env_var().to_string())
@@ -379,7 +418,8 @@ fn prepare_target(project_dir: &Path, req: DeployRequest) -> Result<PreparedTarg
         crate::info("note: vault is locked; run `appz env unlock` to use stored credentials");
     }
 
-    ctx.prebuilt = prebuilt_output.is_some();
+    ctx.prebuilt = prebuilt_output.is_some() || req.prebuilt;
+    ctx.use_existing_output = req.prebuilt;
     ctx.output_dir = prebuilt_output
         .unwrap_or_else(|| appz_core::primary_output_directory(&toolchains).to_string());
     ctx.is_preview = !req.prod;
@@ -479,15 +519,16 @@ fn upload_target(target: &PreparedTarget) -> Result<(DeployOutput, Option<String
     }
     // Capture the uploaded revision before another target builds or any after hook runs.
     let slug = provider.slug();
-    let fingerprint = if !ctx.dry_run && slug != "render" && output.url.is_some() {
-        crate::deploy_state::fingerprint(
-            &ctx.project_dir,
-            &fingerprint_extra(slug, &target.req, &ctx.deploy_config),
-        )
-        .ok()
-    } else {
-        None
-    };
+    let fingerprint =
+        if !ctx.dry_run && slug != "render" && !target.req.prebuilt && output.url.is_some() {
+            crate::deploy_state::fingerprint(
+                &ctx.project_dir,
+                &fingerprint_extra(slug, &target.req, &ctx.deploy_config),
+            )
+            .ok()
+        } else {
+            None
+        };
     Ok((output, fingerprint))
 }
 
@@ -1556,6 +1597,7 @@ mod tests {
             target: None,
             project: project.map(String::from),
             force: false,
+            prebuilt: false,
             prod: false,
             env: env.iter().map(|s| s.to_string()).collect(),
             build_env: build.iter().map(|s| s.to_string()).collect(),
@@ -1566,6 +1608,54 @@ mod tests {
             login: Consent::Never,
             link: Consent::Never,
         }
+    }
+
+    #[test]
+    fn prebuilt_requires_existing_output() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("appz.jsonc"),
+            r#"{"deploy":{"default":"github-pages","targets":{"github-pages":{"outputDir":"site"}}}}"#,
+        )
+        .unwrap();
+        let mut request = req(&[], &[], None);
+        request.prod = true;
+        request.prebuilt = true;
+        request.dry_run = true;
+        let err = run(dir.path(), request.clone()).err().unwrap();
+        assert!(
+            err.contains("--prebuilt") && err.contains("appz build"),
+            "{err}"
+        );
+
+        std::fs::create_dir(dir.path().join("site")).unwrap();
+        assert!(run(dir.path(), request.clone()).is_err(), "empty dir");
+        std::fs::write(dir.path().join("site/index.html"), "<h1>x</h1>").unwrap();
+        run(dir.path(), request).unwrap();
+    }
+
+    #[test]
+    fn prebuilt_is_rejected_for_targets_that_build_themselves() {
+        let dir = tempfile::tempdir().unwrap();
+        for slug in ["render", "fly"] {
+            let mut request = req(&[], &[], None);
+            request.target = Some(slug.into());
+            request.prebuilt = true;
+            request.dry_run = true;
+            let err = run(dir.path(), request).err().unwrap();
+            assert!(err.contains("builds this project itself"), "{slug}: {err}");
+        }
+    }
+
+    #[test]
+    fn prebuilt_accepts_vercel_native_output() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(check_prebuilt_output("vercel", dir.path(), "dist").is_err());
+        let out = dir.path().join(".vercel/output");
+        std::fs::create_dir_all(&out).unwrap();
+        std::fs::write(out.join("config.json"), "{\"version\":3}").unwrap();
+        check_prebuilt_output("vercel", dir.path(), "dist").unwrap();
+        assert!(check_prebuilt_output("netlify", dir.path(), "dist").is_err());
     }
 
     #[test]

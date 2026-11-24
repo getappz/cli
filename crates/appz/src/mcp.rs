@@ -368,6 +368,7 @@ impl AppzServer {
             target: arg.target,
             project: arg.project,
             force: arg.force,
+            prebuilt: false,
             prod: arg.prod,
             env: vec![],
             build_env: vec![],

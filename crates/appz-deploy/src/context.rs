@@ -126,6 +126,9 @@ pub struct DeployContext {
     /// appz already installed and built the project (`output_dir` is fresh),
     /// so providers deploy that output instead of building again.
     pub prebuilt: bool,
+    /// `--prebuilt`: deploy what is on disk and never build, even when the
+    /// provider would otherwise fall back to its own build.
+    pub use_existing_output: bool,
 }
 
 impl DeployContext {
@@ -143,6 +146,7 @@ impl DeployContext {
             deploy_config: DeployConfig::default(),
             extra_path: Vec::new(),
             prebuilt: false,
+            use_existing_output: false,
         }
     }
 

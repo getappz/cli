@@ -1015,10 +1015,26 @@ fn with_scheme(u: &str) -> String {
     }
 }
 
-/// appz.dev dashboard page for a project. `APPZ_DASHBOARD_URL` overrides the base.
-fn dashboard_url(base: Option<&str>, project: &str) -> String {
-    let base = base.filter(|b| !b.is_empty()).unwrap_or("https://appz.dev");
-    format!("{}/projects/{project}", base.trim_end_matches('/'))
+/// appz.dev dashboard (my.appz.dev) page for a project, or for one of its
+/// deployments. Mirrors the console routes `projects/:slug` and
+/// `projects/:slug/deployments/:deploymentId`. `APPZ_DASHBOARD_URL` overrides the base.
+fn dashboard_url(base: Option<&str>, slug: &str, deployment: Option<&str>) -> String {
+    let base = base
+        .filter(|b| !b.is_empty())
+        .unwrap_or("https://my.appz.dev");
+    let mut url = format!("{}/projects/{slug}", base.trim_end_matches('/'));
+    if let Some(id) = deployment {
+        url.push_str("/deployments/");
+        url.push_str(id);
+    }
+    url
+}
+
+fn dashboard_base(ctx: &appz_deploy::DeployContext) -> Option<String> {
+    ctx.run_env
+        .get("APPZ_DASHBOARD_URL")
+        .cloned()
+        .or_else(|| std::env::var("APPZ_DASHBOARD_URL").ok())
 }
 
 /// Resolve what `appz open` should open: a deployment (`id_or_url`), the
@@ -1032,8 +1048,8 @@ pub fn open_target(
     let (provider, ctx) = domain_ctx(project_dir, target)?;
     let is_appzdev = provider.slug() == "appzdev";
     if let Some(id) = id_or_url {
-        if dashboard {
-            return Err("--dashboard cannot be combined with a deployment ID or URL".into());
+        if dashboard && !is_appzdev {
+            return Err("--dashboard is only available for appz.dev projects".into());
         }
         if !is_appzdev {
             return if id.contains("://") || id.contains('.') {
@@ -1051,6 +1067,15 @@ pub fn open_target(
         let insp = provider
             .inspect_deployment(&ctx, id)
             .map_err(|e| e.to_string())?;
+        if dashboard {
+            let p = provider
+                .get_project(&ctx, &insp.project_id)
+                .map_err(|e| e.to_string())?;
+            return Ok(OpenTarget {
+                url: dashboard_url(dashboard_base(&ctx).as_deref(), &p.slug, Some(&insp.id)),
+                kind: "dashboard",
+            });
+        }
         let host = insp
             .hosts
             .first()
@@ -1077,13 +1102,8 @@ pub fn open_target(
     }
     if dashboard {
         let p = project.ok_or("--dashboard is only available for appz.dev projects")?;
-        let base = ctx
-            .run_env
-            .get("APPZ_DASHBOARD_URL")
-            .cloned()
-            .or_else(|| std::env::var("APPZ_DASHBOARD_URL").ok());
         return Ok(OpenTarget {
-            url: dashboard_url(base.as_deref(), &p.slug),
+            url: dashboard_url(dashboard_base(&ctx).as_deref(), &p.slug, None),
             kind: "dashboard",
         });
     }
@@ -1105,14 +1125,21 @@ mod tests {
     #[test]
     fn dashboard_url_uses_base_or_default() {
         assert_eq!(
-            dashboard_url(None, "blog"),
-            "https://appz.dev/projects/blog"
+            dashboard_url(None, "blog", None),
+            "https://my.appz.dev/projects/blog"
         );
         assert_eq!(
-            dashboard_url(Some("https://console.example/"), "blog"),
+            dashboard_url(None, "blog", Some("dpl_1")),
+            "https://my.appz.dev/projects/blog/deployments/dpl_1"
+        );
+        assert_eq!(
+            dashboard_url(Some("https://console.example/"), "blog", None),
             "https://console.example/projects/blog"
         );
-        assert_eq!(dashboard_url(Some(""), "a"), "https://appz.dev/projects/a");
+        assert_eq!(
+            dashboard_url(Some(""), "a", None),
+            "https://my.appz.dev/projects/a"
+        );
     }
 
     #[test]

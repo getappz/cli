@@ -422,7 +422,7 @@ struct OpenArgs {
     /// Project directory (defaults to current directory)
     #[arg(default_value = ".")]
     dir: PathBuf,
-    /// Open the appz.dev dashboard page for the project instead
+    /// Open the project's (or the given deployment's) page on the my.appz.dev dashboard instead
     #[arg(long)]
     dashboard: bool,
     /// Provider slug (default: detects from project or config)

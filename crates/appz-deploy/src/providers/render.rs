@@ -83,6 +83,9 @@ impl DeployProvider for RenderProvider {
     fn needs_prebuild(&self, _: &[String]) -> bool {
         false
     }
+    fn deploys_prebuilt_output(&self) -> bool {
+        false
+    }
 
     fn check_prerequisites(&self) -> DeployResult<PrerequisiteStatus> {
         if command::shell::find_command_on_path(self.cli_tool()).is_none() {

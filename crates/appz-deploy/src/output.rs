@@ -103,8 +103,12 @@ pub struct DeploymentQuery {
     pub project: Option<String>,
     pub production: bool,
     pub environment: Option<String>,
-    /// Comma-separated status list (`ready,building,error,canceled`).
-    pub status: Option<String>,
+    /// Statuses to match (`ready`, `building`, `error`, `canceled`), sent as repeated params.
+    pub status: Vec<String>,
+    /// Only deployments created at or after this time (epoch milliseconds).
+    pub since: Option<i64>,
+    /// Only deployments created at or before this time (epoch milliseconds).
+    pub until: Option<i64>,
     /// `key=value` pairs matched against deployment metadata.
     pub meta: Vec<String>,
     pub limit: Option<u32>,
@@ -159,6 +163,18 @@ pub struct DomainQuery {
     pub project: Option<String>,
     pub limit: Option<u32>,
     pub cursor: Option<String>,
+}
+
+/// A host serving a project, as returned by `GET /v0/projects/{id}/aliases`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AliasInfo {
+    pub host: String,
+    pub deployment_id: String,
+    pub version_id: String,
+    /// Creation time in epoch milliseconds.
+    pub created_at: i64,
+    pub is_production: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -277,6 +293,17 @@ pub struct DeploymentInspect {
     pub headers: Vec<String>,
     #[serde(default)]
     pub files: Option<Vec<InspectFileEntry>>,
+}
+
+/// Result of promoting a ready deployment to production.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PromoteResult {
+    pub provider: String,
+    pub project_id: String,
+    pub deployment_id: String,
+    pub version_id: String,
+    /// Production URL serving the promoted deployment.
+    pub url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

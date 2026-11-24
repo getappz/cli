@@ -8,6 +8,7 @@ mod provider;
 mod providers;
 pub mod static_cas;
 pub mod tunnel;
+pub mod webhooks;
 
 pub use context::{
     DeployConfig, DeployContext, DeployHooks, MarkdownConfig, parse_kv, read_deploy_config,

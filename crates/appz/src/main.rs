@@ -20,6 +20,7 @@ mod shield;
 mod skills;
 mod static_serve;
 mod update;
+mod webhooks;
 
 // ── CLI ─────────────────────────────────────────────────────────
 
@@ -93,6 +94,9 @@ enum AppzCmd {
     /// Manage custom domains and DNS verification on Cloudflare Edge
     #[command(alias = "domain")]
     Domains(DomainsArgs),
+    /// Manage appz.dev webhook endpoints and verify signatures
+    #[command(alias = "webhook")]
+    Webhooks(webhooks::WebhooksArgs),
     /// Manage projects on the edge hosting platform
     #[command(alias = "project")]
     Projects(ProjectsArgs),
@@ -1612,6 +1616,7 @@ fn main() {
         AppzCmd::List(a) => run_list(a, json),
         AppzCmd::Inspect(a) => run_inspect(a, json),
         AppzCmd::Domains(a) => run_domains(a, json),
+        AppzCmd::Webhooks(a) => webhooks::run(a, json),
         AppzCmd::Projects(a) => run_projects(a, json),
         AppzCmd::Login(a) => run_login(a, json),
         AppzCmd::Logout => run_logout(json),

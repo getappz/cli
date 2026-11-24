@@ -165,6 +165,18 @@ pub struct DomainQuery {
     pub cursor: Option<String>,
 }
 
+/// A host serving a project, as returned by `GET /v0/projects/{id}/aliases`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AliasInfo {
+    pub host: String,
+    pub deployment_id: String,
+    pub version_id: String,
+    /// Creation time in epoch milliseconds.
+    pub created_at: i64,
+    pub is_production: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TeamDomain {
@@ -281,6 +293,17 @@ pub struct DeploymentInspect {
     pub headers: Vec<String>,
     #[serde(default)]
     pub files: Option<Vec<InspectFileEntry>>,
+}
+
+/// Result of promoting a ready deployment to production.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PromoteResult {
+    pub provider: String,
+    pub project_id: String,
+    pub deployment_id: String,
+    pub version_id: String,
+    /// Production URL serving the promoted deployment.
+    pub url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

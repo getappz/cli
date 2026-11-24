@@ -16,6 +16,7 @@ mod dev_install;
 mod init_source;
 mod list_filters;
 mod mcp;
+mod project_ops;
 mod secrets;
 mod share;
 mod shield;
@@ -106,6 +107,8 @@ enum AppzCmd {
     /// Manage projects on the edge hosting platform
     #[command(alias = "project")]
     Projects(ProjectsArgs),
+    /// Inspect, accept or cancel project transfers between organizations
+    Transfers(TransfersArgs),
     /// Log in to Appz via browser device flow
     Login(LoginArgs),
     /// Log out of Appz and remove the stored session token
@@ -656,6 +659,68 @@ enum ProjectsCmd {
     },
     /// Restore a hosted project by slug or ID within 30 days of deletion
     Restore { name: String },
+    /// Take a project's production aliases offline (asks first)
+    Pause { name: String },
+    /// Bring a paused project's production aliases back
+    Resume { name: String },
+    /// Make a temporary project permanent
+    Keep { name: String },
+    /// Change project settings (team owners and admins only)
+    Update {
+        /// Slug or ID of the project
+        project: String,
+        /// New display name
+        #[arg(long = "name")]
+        new_name: Option<String>,
+        /// Where the preview toolbar shows
+        #[arg(long, value_parser = ["off", "previews", "all"])]
+        toolbar_mode: Option<String>,
+        /// Serve markdown versions of pages
+        #[arg(long)]
+        markdown: Option<bool>,
+        /// Turn deployment protection off (true) or on (false)
+        #[arg(long)]
+        deployment_protection_disabled: Option<bool>,
+    },
+    /// Request a transfer to another organization and preview what moves
+    Transfer {
+        /// Slug or ID of the project
+        name: String,
+        /// Destination organization ID
+        #[arg(long)]
+        to: String,
+    },
+}
+
+#[derive(Args)]
+struct TransfersArgs {
+    #[command(subcommand)]
+    command: TransfersCmd,
+    /// Project directory (defaults to current directory)
+    #[arg(default_value = ".")]
+    dir: PathBuf,
+    /// Provider slug (default: detects from project or config)
+    #[arg(long)]
+    target: Option<String>,
+}
+
+#[derive(Subcommand, Debug)]
+enum TransfersCmd {
+    /// List incoming and outgoing transfers
+    #[command(alias = "list")]
+    Ls,
+    /// Show a transfer and what it moves
+    Inspect { id: String },
+    /// Accept an incoming transfer (asks first)
+    Accept {
+        id: String,
+        /// Seconds to wait while the server finishes reconciling
+        #[arg(long, default_value_t = 120)]
+        timeout: u64,
+    },
+    /// Cancel a pending transfer (asks first)
+    #[command(alias = "rm")]
+    Cancel { id: String },
 }
 
 #[derive(Args)]
@@ -1774,6 +1839,7 @@ fn main() {
         AppzCmd::Remove(a) => run_remove(a, json),
         AppzCmd::Domains(a) => run_domains(a, json),
         AppzCmd::Projects(a) => run_projects(a, json),
+        AppzCmd::Transfers(a) => run_transfers(a, json),
         AppzCmd::Login(a) => run_login(a, json),
         AppzCmd::Logout => run_logout(json),
         AppzCmd::Whoami => run_whoami(json),
@@ -3495,6 +3561,45 @@ fn run_projects(args: ProjectsArgs, json: bool) {
                 Err(e) => error(&e),
             }
         }
+        ProjectsCmd::Pause { name } => project_ops::lifecycle(
+            &canonical,
+            args.target,
+            &name,
+            project_ops::Lifecycle::Pause,
+            json,
+        ),
+        ProjectsCmd::Resume { name } => project_ops::lifecycle(
+            &canonical,
+            args.target,
+            &name,
+            project_ops::Lifecycle::Resume,
+            json,
+        ),
+        ProjectsCmd::Keep { name } => project_ops::lifecycle(
+            &canonical,
+            args.target,
+            &name,
+            project_ops::Lifecycle::Keep,
+            json,
+        ),
+        ProjectsCmd::Update {
+            project: name,
+            new_name,
+            toolbar_mode,
+            markdown,
+            deployment_protection_disabled,
+        } => {
+            let upd = appz_deploy::ProjectSettingsUpdate {
+                name: new_name,
+                toolbar_mode,
+                markdown,
+                deployment_protection_disabled,
+            };
+            project_ops::update(&canonical, args.target, &name, upd, json)
+        }
+        ProjectsCmd::Transfer { name, to } => {
+            project_ops::transfer(&canonical, args.target, &name, &to, json)
+        }
         ProjectsCmd::Remove { name } => {
             let deadline = chrono::Utc::now() + chrono::Duration::days(30);
             match deploy::remove_project(&canonical, args.target, &name) {
@@ -3519,6 +3624,19 @@ fn run_projects(args: ProjectsArgs, json: bool) {
                 Err(e) => error(&e),
             }
         }
+    }
+}
+
+fn run_transfers(args: TransfersArgs, json: bool) {
+    let dir = resolve_root(&args.dir);
+    let target = args.target;
+    match args.command {
+        TransfersCmd::Ls => project_ops::transfers_list(&dir, target, json),
+        TransfersCmd::Inspect { id } => project_ops::transfers_inspect(&dir, target, &id, json),
+        TransfersCmd::Accept { id, timeout } => {
+            project_ops::transfers_accept(&dir, target, &id, timeout, json)
+        }
+        TransfersCmd::Cancel { id } => project_ops::transfers_cancel(&dir, target, &id, json),
     }
 }
 
@@ -3741,6 +3859,50 @@ fn run_logout(json: bool) {
 mod tests {
     use super::*;
     use clap::CommandFactory;
+
+    #[test]
+    fn project_lifecycle_and_transfer_commands_parse() {
+        let parse = |args: &[&str]| {
+            AppzCli::try_parse_from(std::iter::once("appz").chain(args.iter().copied()))
+        };
+        let AppzCmd::Projects(a) = parse(&["projects", "pause", "demo", "--yes"])
+            .unwrap()
+            .command
+        else {
+            panic!()
+        };
+        assert!(matches!(a.command, ProjectsCmd::Pause { name } if name == "demo"));
+        let AppzCmd::Projects(a) = parse(&[
+            "projects",
+            "update",
+            "demo",
+            "--name",
+            "New",
+            "--toolbar-mode",
+            "all",
+            "--markdown",
+            "true",
+        ])
+        .unwrap()
+        .command
+        else {
+            panic!()
+        };
+        assert!(
+            matches!(a.command, ProjectsCmd::Update { project, new_name: Some(n), markdown: Some(true), .. }
+            if project == "demo" && n == "New")
+        );
+        assert!(parse(&["projects", "update", "demo", "--toolbar-mode", "bogus"]).is_err());
+        assert!(parse(&["projects", "transfer", "demo"]).is_err());
+        let AppzCmd::Transfers(t) = parse(&["transfers", "accept", "trf_1", "--timeout", "5"])
+            .unwrap()
+            .command
+        else {
+            panic!()
+        };
+        assert!(matches!(t.command, TransfersCmd::Accept { id, timeout: 5 } if id == "trf_1"));
+        assert!(parse(&["transfers", "rm", "trf_1"]).is_ok());
+    }
 
     #[test]
     fn domains_inspect_and_move_parse() {

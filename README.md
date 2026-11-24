@@ -66,6 +66,15 @@ To recover a hosted Appz project, run `appz projects --target appzdev restore <s
 within 30 days of removal. Restore before deploying again to the deleted slug,
 because a new deploy can replace the deleted project.
 
+Manage a hosted project's lifecycle with `appz projects pause|resume|keep <slug-or-id>`
+(pause asks first unless `--yes`) and change settings with
+`appz projects update <slug-or-id> --toolbar-mode previews --markdown true`
+(team owners and admins; prints a before/after diff). Move a project to another
+organization with `appz projects transfer <slug-or-id> --to <org-id>`, which
+shows what moves and which keys are revoked; the destination owner finishes it
+with `appz transfers accept <id>` (`transfers ls|inspect|cancel` also exist).
+All of these accept `--json`.
+
 Inspect a custom domain with `appz domains inspect <domain>` (project, verification, required DNS records,
 serving status; `--json` for the raw record). Move it to another organization with
 `appz domains move <domain> --to <org> --project <id> [--yes]` (`--project` is the destination project id) (owners of both organizations only).

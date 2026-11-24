@@ -26,6 +26,9 @@ pub use provider::{
     create_provider_registry, detect_providers, ensure_cli_available, get_provider,
     install_cli_with_mise,
 };
+pub use providers::appzdev::projects::{
+    ProjectSettingsUpdate, ProjectState, Transfer, TransferPreview,
+};
 pub use providers::appzdev::{
     CloudEnvMeta, CloudEnvVar, DeviceCodeResponse, DevicePollResult, ProjectEnvironment,
     StoredAuth, add_project, add_project_domain, add_project_environment, auth_file_path,

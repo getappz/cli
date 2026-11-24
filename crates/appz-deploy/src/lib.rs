@@ -18,10 +18,11 @@ pub use context::{
 pub use error::{DeployError, DeployResult};
 pub use exec::{ExecOutput, exec_captured, exec_captured_scrubbed};
 pub use output::{
-    AliasInfo, ApexRecord, AuthState, BackupSummary, CnameRecord, DeployOutput, DeployStatus,
-    DeploymentInfo, DeploymentInspect, DeploymentQuery, DetectedConfig, DnsRecordChallenge,
-    DomainMove, DomainQuery, DomainVerificationRecord, DomainVerifyResult, InspectFileEntry, Page,
-    PrerequisiteStatus, ProjectDomain, ProjectInfo, PromoteResult, TeamDeployment, TeamDomain,
+    ActivityEvent, ActivityPage, AliasInfo, ApexRecord, AuthState, BackupSummary, CnameRecord,
+    DeployOutput, DeployStatus, DeploymentInfo, DeploymentInspect, DeploymentQuery, DetectedConfig,
+    DnsRecordChallenge, DomainMove, DomainQuery, DomainVerificationRecord, DomainVerifyResult,
+    InspectFileEntry, Page, PrerequisiteStatus, ProjectDomain, ProjectInfo, PromoteResult,
+    TeamDeployment, TeamDomain, UsageEntry, UsageReport,
 };
 pub use provider::{
     DEPLOY_TIMEOUT, DeployProvider, QUERY_TIMEOUT, available_provider_slugs,

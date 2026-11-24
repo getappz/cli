@@ -4,9 +4,9 @@ use std::time::Duration;
 use crate::context::DeployContext;
 use crate::error::{DeployError, DeployResult};
 use crate::output::{
-    AuthState, DeployOutput, DeploymentInfo, DeploymentInspect, DeploymentQuery, DetectedConfig,
-    DomainMove, DomainQuery, DomainVerifyResult, Page, PrerequisiteStatus, ProjectDomain,
-    ProjectInfo, PromoteResult, TeamDeployment, TeamDomain,
+    ActivityPage, AuthState, DeployOutput, DeploymentInfo, DeploymentInspect, DeploymentQuery,
+    DetectedConfig, DomainMove, DomainQuery, DomainVerifyResult, Page, PrerequisiteStatus,
+    ProjectDomain, ProjectInfo, PromoteResult, TeamDeployment, TeamDomain, UsageReport,
 };
 use crate::providers::appzdev::projects::{ProjectSettingsUpdate, ProjectState, Transfer};
 use crate::redirects::{RedirectInput, RedirectList, RedirectVersionRef, RedirectVersions};
@@ -365,6 +365,27 @@ pub trait DeployProvider: Send + Sync {
         Err(DeployError::Unsupported {
             provider: self.name(),
             operation: "projects rename",
+        })
+    }
+
+    fn list_activity(
+        &self,
+        ctx: &DeployContext,
+        limit: Option<u32>,
+        cursor: Option<&str>,
+    ) -> DeployResult<ActivityPage> {
+        let _ = (ctx, limit, cursor);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "activity",
+        })
+    }
+
+    fn usage_report(&self, ctx: &DeployContext) -> DeployResult<UsageReport> {
+        let _ = ctx;
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "usage",
         })
     }
 

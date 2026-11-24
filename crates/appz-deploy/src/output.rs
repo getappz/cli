@@ -375,9 +375,42 @@ pub struct ProjectDomain {
     pub verification: Vec<DomainVerificationRecord>,
     #[serde(default, alias = "created_at")]
     pub created_at: Option<i64>,
+    /// When the domain's DNS stopped resolving to Appz, if it has lapsed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lapsed_at: Option<String>,
+    /// When a lapsed domain will be detached automatically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub removes_at: Option<String>,
+}
+
+/// Result of `POST /v0/projects/{id}/domains/{domain}/move`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DomainMove {
+    #[serde(default)]
+    pub id: Option<String>,
+    pub domain: String,
+    pub project_id: String,
+    pub organization_id: String,
+    /// `committed` / `completed`, or `pending` when routing reconciliation
+    /// (HTTP 202) had not finished after retries.
+    pub status: String,
 }
 
 impl ProjectDomain {
+    /// Whether traffic for this domain is currently being served.
+    pub fn serving_status(&self) -> &'static str {
+        if self.lapsed_at.is_some() {
+            "lapsed (DNS no longer points at Appz)"
+        } else if !self.verified {
+            "not serving (verification pending)"
+        } else if self.ssl_status.as_deref().is_some_and(|s| s != "active") {
+            "verified, TLS certificate pending"
+        } else {
+            "serving"
+        }
+    }
+
     pub fn display_status(&self) -> &str {
         if self.verified {
             self.ssl_status.as_deref().unwrap_or("active")

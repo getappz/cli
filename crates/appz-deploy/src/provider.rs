@@ -5,8 +5,8 @@ use crate::context::DeployContext;
 use crate::error::{DeployError, DeployResult};
 use crate::output::{
     AuthState, DeployOutput, DeploymentInfo, DeploymentInspect, DeploymentQuery, DetectedConfig,
-    DomainQuery, DomainVerifyResult, Page, PrerequisiteStatus, ProjectDomain, ProjectInfo,
-    PromoteResult, TeamDeployment, TeamDomain,
+    DomainMove, DomainQuery, DomainVerifyResult, Page, PrerequisiteStatus, ProjectDomain,
+    ProjectInfo, PromoteResult, TeamDeployment, TeamDomain,
 };
 
 /// Timeout for the actual deploy invocation (platform CLIs can legitimately
@@ -282,6 +282,34 @@ pub trait DeployProvider: Send + Sync {
         Err(DeployError::Unsupported {
             provider: self.name(),
             operation: "domains list",
+        })
+    }
+
+    /// Look up one domain across the team; `Ok(None)` when it is attached nowhere.
+    fn inspect_domain(
+        &self,
+        ctx: &DeployContext,
+        domain: &str,
+    ) -> DeployResult<Option<TeamDomain>> {
+        let _ = (ctx, domain);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "domains inspect",
+        })
+    }
+
+    /// Move a domain attachment to a project in another organization.
+    fn move_domain(
+        &self,
+        ctx: &DeployContext,
+        domain: &str,
+        to_org: &str,
+        project: &str,
+    ) -> DeployResult<DomainMove> {
+        let _ = (ctx, domain, to_org, project);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "domains move",
         })
     }
 

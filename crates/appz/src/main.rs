@@ -595,6 +595,22 @@ enum DomainsCmd {
         /// Domain name to remove
         domain: String,
     },
+    /// Show a domain's project, verification state, required DNS records and serving status
+    Inspect {
+        /// Domain name to inspect
+        domain: String,
+    },
+    /// Move a domain to a project in another organization (owners of both only)
+    Move {
+        /// Domain name to move
+        domain: String,
+        /// Destination organization id
+        #[arg(long, value_name = "ORG")]
+        to: String,
+        /// Destination project id (in the destination organization)
+        #[arg(long)]
+        project: String,
+    },
 }
 
 #[derive(Args)]
@@ -3231,6 +3247,122 @@ fn run_domains(args: DomainsArgs, json: bool) {
                 Err(e) => error(&e),
             }
         }
+        DomainsCmd::Inspect { domain } => {
+            match deploy::inspect_domain(&canonical, args.target, &domain) {
+                Ok(Some(t)) => {
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&t).unwrap());
+                    } else {
+                        intro("appz domains inspect");
+                        let d = &t.domain;
+                        let project = t
+                            .project_slug
+                            .as_deref()
+                            .or(t.project_name.as_deref())
+                            .or(t.project_id.as_deref())
+                            .unwrap_or("-");
+                        let mut details = vec![
+                            format!("domain:      {}", d.domain),
+                            format!("project:     {project}"),
+                            format!("status:      {}", d.display_status()),
+                            format!("serving:     {}", d.serving_status()),
+                        ];
+                        if let Some(ssl) = &d.ssl_status {
+                            details.push(format!("ssl:         {ssl}"));
+                        }
+                        if let Some(ts) = d
+                            .created_at
+                            .and_then(chrono::DateTime::from_timestamp_millis)
+                        {
+                            details
+                                .push(format!("added:       {}", ts.format("%Y-%m-%d %H:%M UTC")));
+                        }
+                        if let Some(l) = &d.lapsed_at {
+                            details.push(format!("lapsed at:   {l}"));
+                        }
+                        if let Some(r) = &d.removes_at {
+                            details.push(format!("removes at:  {r}"));
+                        }
+                        info(&details.join("\n"));
+                        if !d.verified {
+                            if let Some(ch) = &d.challenge {
+                                step("required ownership challenge");
+                                info(&format!("{:<8}  {:<36}  {}", ch.r#type, ch.name, ch.value));
+                            }
+                            if d.cname.is_some() || d.apex.is_some() {
+                                step("routing target");
+                                let mut targets = Vec::new();
+                                if let Some(c) = &d.cname {
+                                    targets.push(format!(
+                                        "{:<8}  {:<36}  {}",
+                                        "CNAME", c.name, c.target
+                                    ));
+                                }
+                                if let Some(a) = &d.apex {
+                                    targets.push(format!("{:<8}  {:<36}  {}", "A", a.name, a.ip));
+                                }
+                                info(&targets.join("\n"));
+                            }
+                            warning("domain is not verified");
+                            info(&format!(
+                                "Configure the DNS records above, then run `appz domains verify {}`",
+                                d.domain
+                            ));
+                        }
+                        info(
+                            "nameservers and registrar details are not shown: appz.dev is not a domain registrar",
+                        );
+                        outro("done");
+                    }
+                }
+                Ok(None) => error(&format!(
+                    "{domain} is not attached to any project. Run `appz domains add {domain}` to add it"
+                )),
+                Err(e) => error(&e),
+            }
+        }
+        DomainsCmd::Move {
+            domain,
+            to,
+            project,
+        } => {
+            if !assume_yes() {
+                if json || !is_interactive_tty() {
+                    error("confirmation required: pass --yes to move the domain without prompting");
+                }
+                let go = cliclack::confirm(format!(
+                    "Move {domain} to organization {to}? Traffic stops until its DNS and verification are set up there"
+                ))
+                .initial_value(false)
+                .interact()
+                .unwrap_or(false);
+                if !go {
+                    error("cancelled");
+                }
+            }
+            match deploy::move_domain(&canonical, args.target, &domain, &to, &project) {
+                Ok(res) => {
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&res).unwrap());
+                    } else {
+                        intro("appz domains move");
+                        if res.status == "pending" {
+                            warning(&format!(
+                                "{} moved to {}, but routing is still reconciling; re-run the same command to finish",
+                                res.domain, res.organization_id
+                            ));
+                        } else {
+                            success(&format!(
+                                "moved {} to organization {} (project {})",
+                                res.domain, res.organization_id, res.project_id
+                            ));
+                        }
+                        outro("done");
+                    }
+                }
+                Err(e) => error(&e),
+            }
+        }
         DomainsCmd::Remove { domain } => {
             match deploy::remove_domain(&canonical, args.target, &domain) {
                 Ok(_) => {
@@ -3609,6 +3741,41 @@ fn run_logout(json: bool) {
 mod tests {
     use super::*;
     use clap::CommandFactory;
+
+    #[test]
+    fn domains_inspect_and_move_parse() {
+        let cli = AppzCli::try_parse_from(["appz", "domains", "inspect", "a.example.com"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            AppzCmd::Domains(DomainsArgs {
+                command: DomainsCmd::Inspect { .. },
+                ..
+            })
+        ));
+        let cli = AppzCli::try_parse_from([
+            "appz",
+            "domains",
+            "move",
+            "a.example.com",
+            "--to",
+            "org_x",
+            "--project",
+            "prj_y",
+        ])
+        .unwrap();
+        match cli.command {
+            AppzCmd::Domains(DomainsArgs {
+                command: DomainsCmd::Move { to, project, .. },
+                ..
+            }) => assert_eq!((to.as_str(), project.as_str()), ("org_x", "prj_y")),
+            _ => panic!("expected domains move"),
+        }
+        assert!(
+            AppzCli::try_parse_from(["appz", "domains", "move", "a.example.com", "--to", "org_x"])
+                .is_err(),
+            "--project is required"
+        );
+    }
 
     #[test]
     fn remove_parses_multiple_ids_and_rm_alias() {

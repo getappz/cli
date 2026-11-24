@@ -20,8 +20,8 @@ use crate::fingerprint::prepare_upload;
 use crate::markdown::{HttpMarkdownConverter, add_markdown_siblings};
 use crate::output::{
     DeployOutput, DeployStatus, DeploymentInfo, DeploymentInspect, DeploymentQuery, DetectedConfig,
-    DomainQuery, DomainVerifyResult, Page, PrerequisiteStatus, ProjectDomain, ProjectInfo,
-    PromoteResult, TeamDeployment, TeamDomain,
+    DomainMove, DomainQuery, DomainVerifyResult, Page, PrerequisiteStatus, ProjectDomain,
+    ProjectInfo, PromoteResult, TeamDeployment, TeamDomain,
 };
 use crate::provider::DeployProvider;
 use crate::static_cas::ScannedFileEntry;
@@ -947,6 +947,98 @@ pub fn list_team_domains(
         params.push(("cursor", c.clone()));
     }
     get_page(api_base, "/v0/domains", token, &params, "List domains")
+}
+
+/// Find one domain in the team-wide listing (there is no single-domain GET).
+pub fn inspect_team_domain(
+    api_base: &str,
+    token: Option<&str>,
+    domain: &str,
+) -> DeployResult<Option<TeamDomain>> {
+    let domain = normalize_domain(domain)?;
+    let mut cursor: Option<String> = None;
+    loop {
+        let page = list_team_domains(
+            api_base,
+            token,
+            &DomainQuery {
+                project: None,
+                limit: Some(100),
+                cursor: cursor.clone(),
+            },
+        )?;
+        if let Some(found) = page.items.into_iter().find(|t| {
+            t.domain
+                .domain
+                .trim_end_matches('.')
+                .eq_ignore_ascii_case(&domain)
+        }) {
+            return Ok(Some(found));
+        }
+        match page.next {
+            Some(next) if cursor.as_deref() != Some(next.as_str()) => cursor = Some(next),
+            _ => return Ok(None),
+        }
+    }
+}
+
+/// Move a domain attachment to `project_id` in organization `org`.
+/// Retries a 202 (routing reconciliation pending) with the same
+/// Idempotency-Key, as the API asks, before reporting `pending`.
+pub fn move_project_domain(
+    api_base: &str,
+    token: Option<&str>,
+    from_project: &str,
+    domain: &str,
+    org: &str,
+    project_id: &str,
+) -> DeployResult<DomainMove> {
+    let domain = normalize_domain(domain)?;
+    let url = format!("{api_base}/v0/projects/{from_project}/domains/{domain}/move");
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    let seed = format!("{domain}:{org}:{project_id}:{nanos}:{}", std::process::id());
+    let key = format!(
+        "appz-move-{}",
+        &blake3::hash(seed.as_bytes()).to_hex()[..32]
+    );
+    let body = serde_json::json!({ "organizationId": org, "projectId": project_id });
+    let mut last = None;
+    for attempt in 0..4 {
+        if attempt > 0 {
+            std::thread::sleep(Duration::from_millis(if cfg!(test) { 10 } else { 1500 }));
+        }
+        let mut req = ureq::post(&url).set("Idempotency-Key", &key);
+        if let Some(tok) = token {
+            req = req.set("Authorization", &format!("Bearer {tok}"));
+        }
+        let resp = match req.send_json(body.clone()) {
+            Ok(r) => r,
+            Err(ureq::Error::Status(403, _)) => {
+                return Err(DeployError::DeployFailed {
+                    provider: "AppzDev",
+                    reason: format!(
+                        "not allowed to move {domain}: you must be an owner of both the current and the destination organization ({org})"
+                    ),
+                });
+            }
+            Err(e) => return Err(parse_api_error(e, "AppzDev", "Move custom domain")),
+        };
+        let accepted = resp.status() == 202;
+        let parsed: DomainMove = resp.into_json().map_err(|e| DeployError::DeployFailed {
+            provider: "AppzDev",
+            reason: format!("Invalid response from move domain: {e}"),
+        })?;
+        if !accepted {
+            return Ok(parsed);
+        }
+        last = Some(parsed);
+    }
+    let mut out = last.expect("loop ran at least once");
+    out.status = "pending".into();
+    Ok(out)
 }
 
 pub fn verify_project_domain(
@@ -2028,6 +2120,37 @@ impl DeployProvider for AppzdevProvider {
         list_team_domains(&self.api_base(ctx), token.as_deref(), query)
     }
 
+    fn inspect_domain(
+        &self,
+        ctx: &DeployContext,
+        domain: &str,
+    ) -> DeployResult<Option<TeamDomain>> {
+        let token = resolve_auth_token(Some(ctx));
+        inspect_team_domain(&self.api_base(ctx), token.as_deref(), domain)
+    }
+
+    fn move_domain(
+        &self,
+        ctx: &DeployContext,
+        domain: &str,
+        to_org: &str,
+        project: &str,
+    ) -> DeployResult<DomainMove> {
+        let api_base = self.api_base(ctx);
+        let token = resolve_auth_token(Some(ctx));
+        let current =
+            inspect_team_domain(&api_base, token.as_deref(), domain)?.ok_or_else(|| {
+                DeployError::DeployFailed {
+                    provider: "AppzDev",
+                    reason: format!("{domain} is not attached to any project"),
+                }
+            })?;
+        let from = current
+            .project_id
+            .unwrap_or_else(|| self.resolve_project_id(ctx));
+        move_project_domain(&api_base, token.as_deref(), &from, domain, to_org, project)
+    }
+
     fn verify_domain(&self, ctx: &DeployContext, domain: &str) -> DeployResult<DomainVerifyResult> {
         let project_id = self.resolve_project_id(ctx);
         let api_base = self.api_base(ctx);
@@ -2506,6 +2629,15 @@ SPACED=hello world
                                 ("200 OK", r#"{"success":true,"versionId":"ver_mock_1"}"#)
                             } else if method == "POST" && path.contains("/alias") {
                                 ("200 OK", r#"{"success":true,"domain":"custom.com"}"#)
+                            } else if method == "POST" && path.ends_with("/move") {
+                                if path.contains("/forbidden.example.com/") {
+                                    ("403 Forbidden", r#"{"error":"forbidden"}"#)
+                                } else {
+                                    (
+                                        "200 OK",
+                                        r#"{"id":"dom_1","domain":"custom.example.com","projectId":"prj_dest","organizationId":"org_dest","status":"completed"}"#,
+                                    )
+                                }
                             } else if method == "POST" && path.ends_with("/verify") {
                                 (
                                     "200 OK",
@@ -2767,6 +2899,34 @@ SPACED=hello world
         assert_eq!(doms.items[0].project_slug.as_deref(), Some("mock-app"));
         assert_eq!(doms.items[0].domain.created_at, Some(1762732800000));
 
+        let found = provider
+            .inspect_domain(&ctx, "Custom.Example.com")
+            .unwrap()
+            .expect("domain must be found");
+        assert_eq!(found.project_slug.as_deref(), Some("mock-app"));
+        assert!(
+            provider
+                .inspect_domain(&ctx, "nope.example.com")
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(found.domain.serving_status(), "serving");
+        let moved = provider
+            .move_domain(&ctx, "custom.example.com", "org_dest", "prj_dest")
+            .unwrap();
+        assert_eq!(moved.status, "completed");
+        assert_eq!(moved.project_id, "prj_dest");
+        let err = move_project_domain(
+            &provider.api_base(&ctx),
+            None,
+            "prj_mock",
+            "forbidden.example.com",
+            "org_dest",
+            "prj_dest",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("owner of both"), "{err}");
+
         // 4. Rollback
         provider
             .rollback(&ctx, "ver_mock_1")
@@ -2932,6 +3092,63 @@ SPACED=hello world
         );
         let err = provider.restore_project(&ctx, "missing").unwrap_err();
         assert!(err.to_string().contains("no restorable project"));
+    }
+
+    #[test]
+    fn move_domain_retries_202_with_the_same_idempotency_key() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let mut keys = Vec::new();
+            for status in ["202 Accepted", "200 OK"] {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buf = [0u8; 4096];
+                let n = stream.read(&mut buf).unwrap();
+                let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                let key = req
+                    .lines()
+                    .find_map(|l| {
+                        l.to_ascii_lowercase()
+                            .starts_with("idempotency-key:")
+                            .then(|| l.split_once(':').unwrap().1.trim().to_string())
+                    })
+                    .unwrap_or_default();
+                keys.push(key);
+                let body = format!(
+                    r#"{{"id":"dom_1","domain":"a.example.com","projectId":"prj_dest","organizationId":"org_dest","status":"{}"}}"#,
+                    if status.starts_with("202") {
+                        "committed"
+                    } else {
+                        "completed"
+                    }
+                );
+                let resp = format!(
+                    "HTTP/1.1 {status}
+Content-Type: application/json
+Content-Length: {}
+Connection: close
+
+{body}",
+                    body.len()
+                );
+                stream.write_all(resp.as_bytes()).unwrap();
+            }
+            keys
+        });
+        let out = move_project_domain(
+            &addr,
+            None,
+            "prj_src",
+            "a.example.com",
+            "org_dest",
+            "prj_dest",
+        )
+        .unwrap();
+        assert_eq!(out.status, "completed");
+        let keys = server.join().unwrap();
+        assert!(keys[0].starts_with("appz-move-"), "{keys:?}");
+        assert_eq!(keys[0], keys[1]);
     }
 
     #[test]

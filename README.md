@@ -66,6 +66,11 @@ To recover a hosted Appz project, run `appz projects --target appzdev restore <s
 within 30 days of removal. Restore before deploying again to the deleted slug,
 because a new deploy can replace the deleted project.
 
+Inspect a custom domain with `appz domains inspect <domain>` (project, verification, required DNS records,
+serving status; `--json` for the raw record). Move it to another organization with
+`appz domains move <domain> --to <org> --project <id> [--yes]` (`--project` is the destination project id) (owners of both organizations only).
+Nameserver and registrar details are not shown because appz.dev is not a registrar.
+
 To undo a bad production deploy on appz.dev, run `appz rollback` to repoint production at the
 previous ready production deployment (shows `current -> target`, confirms unless `--yes`), or
 `appz rollback <version-id|deployment-id|url>` for a specific one. A lone existing directory

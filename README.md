@@ -42,6 +42,7 @@ appz lint      # run the linter
 appz format    # run the formatter
 appz backup    # snapshot local source and unpushed commits with Rustic
 appz deploy    # deploy via the target platform's own CLI
+appz remove    # delete deployments by ID or URL (alias: rm; refused while an alias points at one)
 appz promote <id-or-url>  # promote a ready appzdev deployment to production (--yes to skip the prompt)
 appz ci        # write a GitHub Actions deploy workflow
 appz doctor    # diagnose project stack, config, and suggestions

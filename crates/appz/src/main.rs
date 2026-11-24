@@ -92,6 +92,9 @@ enum AppzCmd {
     List(ListArgs),
     /// Inspect edge deployment manifest, hosts, and CAS metrics
     Inspect(InspectArgs),
+    /// Delete deployments by ID or URL (refused while an alias points at one)
+    #[command(alias = "rm")]
+    Remove(RemoveArgs),
     /// Manage custom domains and DNS verification on Cloudflare Edge
     #[command(alias = "domain")]
     Domains(DomainsArgs),
@@ -397,6 +400,19 @@ struct ListArgs {
     /// Cursor from a previous page
     #[arg(long)]
     next: Option<String>,
+    /// Provider slug (default: detects from project or config)
+    #[arg(long)]
+    target: Option<String>,
+}
+
+#[derive(Args)]
+struct RemoveArgs {
+    /// Deployment IDs or live URLs to delete
+    #[arg(required = true)]
+    deployments: Vec<String>,
+    /// Project directory (defaults to current directory)
+    #[arg(long, default_value = ".")]
+    dir: PathBuf,
     /// Provider slug (default: detects from project or config)
     #[arg(long)]
     target: Option<String>,
@@ -1628,6 +1644,7 @@ fn main() {
         AppzCmd::Alias(a) => run_alias(a, json),
         AppzCmd::List(a) => run_list(a, json),
         AppzCmd::Inspect(a) => run_inspect(a, json),
+        AppzCmd::Remove(a) => run_remove(a, json),
         AppzCmd::Domains(a) => run_domains(a, json),
         AppzCmd::Projects(a) => run_projects(a, json),
         AppzCmd::Login(a) => run_login(a, json),
@@ -2584,6 +2601,63 @@ fn run_list(args: ListArgs, json: bool) {
     }
 }
 
+fn run_remove(args: RemoveArgs, json: bool) {
+    let canonical = resolve_root(&args.dir);
+    let mut refs: Vec<String> = Vec::new();
+    for d in args.deployments {
+        if !refs.contains(&d) {
+            refs.push(d);
+        }
+    }
+    if !json {
+        intro("appz remove");
+        info(&format!("Deployments to delete:\n  {}", refs.join("\n  ")));
+    }
+    if !assume_yes() {
+        if json || !is_interactive_tty() {
+            error("confirmation required — pass --yes to delete without prompting");
+        }
+        let plural = if refs.len() == 1 { "" } else { "s" };
+        let ok = cliclack::confirm(format!("Delete {} deployment{plural}?", refs.len()))
+            .initial_value(false)
+            .interact()
+            .unwrap_or(false);
+        if !ok {
+            warning("cancelled, nothing deleted");
+            return;
+        }
+    }
+    let results = match deploy::remove_deployments(&canonical, args.target, &refs) {
+        Ok(r) => r,
+        Err(e) => error(&e),
+    };
+    let failed = results.iter().filter(|(_, r)| r.is_err()).count();
+    if json {
+        let out: Vec<_> = results
+            .iter()
+            .map(|(r, res)| match res {
+                Ok(id) => serde_json::json!({ "id": id, "removed": true, "error": null }),
+                Err(e) => serde_json::json!({ "id": r, "removed": false, "error": e }),
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&out).unwrap());
+    } else {
+        for (r, res) in &results {
+            match res {
+                Ok(id) => success(&format!("removed {id}")),
+                Err(e) => warning(&format!("{r}: {e}")),
+            }
+        }
+        outro(&format!(
+            "{} removed, {failed} failed",
+            results.len() - failed
+        ));
+    }
+    if failed > 0 {
+        std::process::exit(1);
+    }
+}
+
 fn run_inspect(args: InspectArgs, json: bool) {
     let canonical = resolve_root(&args.dir);
     match deploy::inspect(&canonical, args.target, &args.id_or_url) {
@@ -3259,6 +3333,16 @@ fn run_logout(json: bool) {
 mod tests {
     use super::*;
     use clap::CommandFactory;
+
+    #[test]
+    fn remove_parses_multiple_ids_and_rm_alias() {
+        let cli = AppzCli::try_parse_from(["appz", "rm", "dpl_a", "dpl_b", "--yes"]).unwrap();
+        let AppzCmd::Remove(a) = cli.command else {
+            panic!("expected remove")
+        };
+        assert_eq!(a.deployments, ["dpl_a", "dpl_b"]);
+        assert!(AppzCli::try_parse_from(["appz", "remove"]).is_err());
+    }
 
     #[test]
     fn restore_hint_preserves_the_project_directory() {

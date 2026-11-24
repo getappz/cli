@@ -927,6 +927,61 @@ pub fn add_project(api_base: &str, token: Option<&str>, name: &str) -> DeployRes
     })
 }
 
+/// Resolve a deployment ID or live URL to a `dpl_` ID.
+fn deployment_id_from_ref(id_or_url: &str) -> DeployResult<String> {
+    let trimmed = id_or_url
+        .trim()
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
+    let id = trimmed
+        .split('/')
+        .next()
+        .unwrap_or(trimmed)
+        .split('.')
+        .next()
+        .unwrap_or(trimmed);
+    if id.starts_with("dpl_") && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+        return Ok(id.to_string());
+    }
+    Err(DeployError::DeployFailed {
+        provider: "AppzDev",
+        reason: format!(
+            "`{id_or_url}` is not a deployment ID or URL. To delete a project, use `appz projects remove <name>`"
+        ),
+    })
+}
+
+/// `DELETE /v0/deployments/{id}`. The server answers 409 while an alias points
+/// at the deployment; surface that with the way out.
+pub fn remove_deployment(
+    api_base: &str,
+    token: Option<&str>,
+    id_or_url: &str,
+) -> DeployResult<String> {
+    let id = deployment_id_from_ref(id_or_url)?;
+    let mut req = ureq::delete(&format!("{api_base}/v0/deployments/{id}"));
+    if let Some(tok) = token {
+        req = req.set("Authorization", &format!("Bearer {tok}"));
+    }
+    match req.call() {
+        Ok(_) => Ok(id),
+        Err(ureq::Error::Status(409, resp)) => {
+            let detail = resp
+                .into_json::<serde_json::Value>()
+                .ok()
+                .and_then(|j| j.get("error").and_then(|e| e.as_str()).map(str::to_string))
+                .unwrap_or_else(|| "an alias points at it".to_string());
+            Err(DeployError::DeployFailed {
+                provider: "AppzDev",
+                reason: format!(
+                    "{id} was not removed: {detail}. Remove the alias first with `appz alias rm <alias>`, then retry"
+                ),
+            })
+        }
+        Err(e) => Err(parse_api_error(e, "AppzDev", "Remove deployment")),
+    }
+}
+
 fn validate_project_ref(id_or_slug: &str) -> DeployResult<()> {
     if id_or_slug.starts_with(|c: char| c.is_ascii_alphanumeric())
         && id_or_slug
@@ -1816,6 +1871,14 @@ impl DeployProvider for AppzdevProvider {
         rename_project(&api_base, token.as_deref(), id_or_slug, new_name)
     }
 
+    fn remove_deployment(&self, ctx: &DeployContext, id_or_url: &str) -> DeployResult<String> {
+        remove_deployment(
+            &self.api_base(ctx),
+            resolve_auth_token(Some(ctx)).as_deref(),
+            id_or_url,
+        )
+    }
+
     fn restore_project(&self, ctx: &DeployContext, id_or_slug: &str) -> DeployResult<ProjectInfo> {
         let base = self.api_base(ctx);
         validate_project_ref(id_or_slug)?;
@@ -2297,6 +2360,13 @@ SPACED=hello world
                                     "200 OK",
                                     r#"{"id":"prj_new_mock","name":"new-app","slug":"new-app","organizationId":"org_mock","createdAt":1762732800}"#,
                                 )
+                            } else if method == "DELETE" && path == "/v0/deployments/dpl_mock_1" {
+                                ("204 No Content", "")
+                            } else if method == "DELETE" && path == "/v0/deployments/dpl_aliased" {
+                                (
+                                    "409 Conflict",
+                                    r#"{"error":"deployment is aliased by app.example.com"}"#,
+                                )
                             } else if method == "DELETE" && path.starts_with("/v0/projects/") {
                                 ("200 OK", r#"{"status":"deleted","id":"prj_mock"}"#)
                             } else {
@@ -2527,6 +2597,27 @@ SPACED=hello world
             .remove_project(&ctx, "mock-app")
             .expect("remove project must succeed");
         assert!(removed_proj);
+        assert_eq!(
+            provider
+                .remove_deployment(&ctx, "https://dpl_mock_1.appz.app/")
+                .unwrap(),
+            "dpl_mock_1"
+        );
+        let err = provider
+            .remove_deployment(&ctx, "dpl_aliased")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("aliased by app.example.com") && err.contains("appz alias rm"));
+        let err = provider
+            .remove_deployment(&ctx, "dpl_gone")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("404"));
+        let err = provider
+            .remove_deployment(&ctx, "my-app")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("appz projects remove"));
         let restored = provider.restore_project(&ctx, "mock-app").unwrap();
         assert_eq!(restored.id, got_proj.id);
         assert_eq!(restored.slug, got_proj.slug);

@@ -226,6 +226,15 @@ pub trait DeployProvider: Send + Sync {
         })
     }
 
+    /// Delete one deployment by ID or URL; returns the resolved deployment ID.
+    fn remove_deployment(&self, ctx: &DeployContext, id_or_url: &str) -> DeployResult<String> {
+        let _ = (ctx, id_or_url);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "remove",
+        })
+    }
+
     fn add_domain(&self, ctx: &DeployContext, domain: &str) -> DeployResult<ProjectDomain> {
         let _ = (ctx, domain);
         Err(DeployError::Unsupported {

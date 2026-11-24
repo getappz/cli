@@ -81,15 +81,23 @@ enum AppzCmd {
     Deploy(DeployArgs),
     /// Roll back a deployment on edge hosting to a previous version
     Rollback(RollbackArgs),
+    /// Promote a ready deployment to production
+    Promote(PromoteArgs),
     /// Link this directory to a project on the platform
     Link(LinkArgs),
     /// Point a custom domain or alias to the deployment
+    #[command(args_conflicts_with_subcommands = true)]
     Alias(AliasArgs),
     /// List deployments for a project, or for the whole team
     #[command(alias = "deployments", alias = "ls")]
     List(ListArgs),
     /// Inspect edge deployment manifest, hosts, and CAS metrics
     Inspect(InspectArgs),
+    /// Open the production site, a deployment, or the project dashboard in the browser
+    Open(OpenArgs),
+    /// Delete deployments by ID or URL (refused while an alias points at one)
+    #[command(alias = "rm")]
+    Remove(RemoveArgs),
     /// Manage custom domains and DNS verification on Cloudflare Edge
     #[command(alias = "domain")]
     Domains(DomainsArgs),
@@ -337,10 +345,12 @@ struct DeployArgs {
 
 #[derive(Args)]
 struct RollbackArgs {
-    /// Version ID to roll back to
-    version: String,
-    #[arg(default_value = ".")]
-    dir: PathBuf,
+    /// Version ID, deployment ID or deployment URL to roll back to. Omit to
+    /// roll back to the previous ready production deployment. A lone existing
+    /// directory is treated as DIR.
+    version: Option<String>,
+    /// Project directory
+    dir: Option<PathBuf>,
     /// Provider slug (default: detects from project or config)
     #[arg(long)]
     target: Option<String>,
@@ -358,15 +368,52 @@ struct LinkArgs {
     target: Option<String>,
 }
 
+/// `appz alias <DOMAIN> [DIR]` is shorthand for `appz alias set <DOMAIN> [DIR]`.
 #[derive(Args)]
 struct AliasArgs {
+    #[command(subcommand)]
+    command: Option<AliasCmd>,
     /// Custom domain or alias to assign (e.g. app.example.com)
-    domain: String,
+    domain: Option<String>,
     #[arg(default_value = ".")]
     dir: PathBuf,
     /// Provider slug (default: detects from project or config)
     #[arg(long)]
     target: Option<String>,
+}
+
+#[derive(Subcommand, Debug)]
+enum AliasCmd {
+    /// Point a custom domain or alias at the project's latest deployment
+    Set {
+        /// Custom domain or alias to assign (e.g. app.example.com)
+        domain: String,
+        #[arg(default_value = ".")]
+        dir: PathBuf,
+        /// Provider slug (default: detects from project or config)
+        #[arg(long)]
+        target: Option<String>,
+    },
+    /// List the hosts serving the project
+    #[command(alias = "list")]
+    Ls {
+        #[arg(default_value = ".")]
+        dir: PathBuf,
+        /// Provider slug (default: detects from project or config)
+        #[arg(long)]
+        target: Option<String>,
+    },
+    /// Remove an alias (the production host cannot be removed)
+    #[command(alias = "remove")]
+    Rm {
+        /// Alias host to remove (e.g. beta.example.com)
+        host: String,
+        #[arg(default_value = ".")]
+        dir: PathBuf,
+        /// Provider slug (default: detects from project or config)
+        #[arg(long)]
+        target: Option<String>,
+    },
 }
 
 #[derive(Args)]
@@ -402,6 +449,31 @@ struct ListArgs {
 }
 
 #[derive(Args)]
+struct RemoveArgs {
+    /// Deployment IDs or live URLs to delete
+    #[arg(required = true)]
+    deployments: Vec<String>,
+    /// Project directory (defaults to current directory)
+    #[arg(long, default_value = ".")]
+    dir: PathBuf,
+    /// Provider slug (default: detects from project or config)
+    #[arg(long)]
+    target: Option<String>,
+}
+
+#[derive(Args)]
+struct PromoteArgs {
+    /// Deployment ID or live URL to promote
+    id_or_url: String,
+    /// Project directory (defaults to current directory)
+    #[arg(default_value = ".")]
+    dir: PathBuf,
+    /// Provider slug (default: detects from project or config)
+    #[arg(long)]
+    target: Option<String>,
+}
+
+#[derive(Args)]
 struct InspectArgs {
     /// Deployment ID or live URL to inspect
     id_or_url: String,
@@ -411,6 +483,21 @@ struct InspectArgs {
     /// Also display all files contained in the deployment manifest
     #[arg(long)]
     files: bool,
+    /// Provider slug (default: detects from project or config)
+    #[arg(long)]
+    target: Option<String>,
+}
+
+#[derive(Args)]
+struct OpenArgs {
+    /// Deployment ID or URL to open (defaults to the production site)
+    id_or_url: Option<String>,
+    /// Project directory (defaults to current directory)
+    #[arg(default_value = ".")]
+    dir: PathBuf,
+    /// Open the project's (or the given deployment's) page on the my.appz.dev dashboard instead
+    #[arg(long)]
+    dashboard: bool,
     /// Provider slug (default: detects from project or config)
     #[arg(long)]
     target: Option<String>,
@@ -1610,10 +1697,13 @@ fn main() {
         }
         AppzCmd::Deploy(a) => run_deploy(a, json),
         AppzCmd::Rollback(a) => run_rollback(a, json),
+        AppzCmd::Promote(a) => run_promote(a, json),
         AppzCmd::Link(a) => run_link(a, json),
         AppzCmd::Alias(a) => run_alias(a, json),
         AppzCmd::List(a) => run_list(a, json),
         AppzCmd::Inspect(a) => run_inspect(a, json),
+        AppzCmd::Open(a) => run_open(a, json),
+        AppzCmd::Remove(a) => run_remove(a, json),
         AppzCmd::Domains(a) => run_domains(a, json),
         AppzCmd::Projects(a) => run_projects(a, json),
         AppzCmd::Login(a) => run_login(a, json),
@@ -2265,18 +2355,74 @@ fn print_deploy_dry_run(output: &appz_deploy::DeployOutput) {
 }
 
 fn run_rollback(args: RollbackArgs, json: bool) {
-    let canonical = resolve_root(&args.dir);
+    // `appz rollback some/dir`: a lone existing path is the directory.
+    let (version, dir) = match (args.version, args.dir) {
+        (Some(v), None) if Path::new(&v).is_dir() => (None, PathBuf::from(v)),
+        (v, d) => (v, d.unwrap_or_else(|| PathBuf::from("."))),
+    };
+    let canonical = resolve_root(&dir);
     if !json {
         intro("appz rollback");
     }
-    match deploy::rollback(&canonical, args.target, &args.version) {
+    let resolved = match &version {
+        Some(v) => deploy::resolve_version(&canonical, args.target.clone(), v).map(|id| (id, None)),
+        None => deploy::plan_rollback(&canonical, args.target.clone()).map(|plan| {
+            (
+                plan.target.version_id.clone().unwrap_or_default(),
+                Some(plan),
+            )
+        }),
+    };
+    let (version_id, plan) = match resolved {
+        Ok(r) => r,
+        Err(e) => error(&e),
+    };
+    if let Some(plan) = &plan {
+        let label = |d: &appz_deploy::TeamDeployment| {
+            format!(
+                "{} ({})",
+                d.id,
+                d.url
+                    .as_deref()
+                    .unwrap_or(d.version_id.as_deref().unwrap_or("-"))
+            )
+        };
+        let from = plan
+            .current
+            .as_ref()
+            .map(label)
+            .unwrap_or_else(|| "-".into());
+        let msg = format!("roll back production: {from} -> {}", label(&plan.target));
+        if json {
+            // Non-interactive consumers must opt in with --yes.
+            if !assume_yes() {
+                println!(
+                    "{}",
+                    serde_json::json!({ "status": "confirmation_required", "plan": plan })
+                );
+                error("pass --yes to roll back to the previous production deployment");
+            }
+        } else {
+            info(&msg);
+            let ok = assume_yes()
+                || is_tty()
+                    && cliclack::confirm("Roll back?")
+                        .initial_value(false)
+                        .interact()
+                        .unwrap_or(false);
+            if !ok {
+                return outro("rollback cancelled");
+            }
+        }
+    }
+    match deploy::rollback(&canonical, args.target, &version_id) {
         Ok(output) => {
             if json {
                 println!("{}", serde_json::to_string_pretty(&output).unwrap());
             } else {
                 success(&format!(
                     "rolled back {} to version {}",
-                    output.provider, args.version
+                    output.provider, version_id
                 ));
                 if let Some(url) = &output.url {
                     info(url);
@@ -2284,6 +2430,48 @@ fn run_rollback(args: RollbackArgs, json: bool) {
                 outro("rollback complete");
             }
         }
+        Err(e) => error(&e),
+    }
+}
+
+fn run_promote(args: PromoteArgs, json: bool) {
+    let canonical = resolve_root(&args.dir);
+    if !assume_yes() && (json || !is_tty()) {
+        error("confirmation required — pass --yes to promote without prompting");
+    }
+    if !json {
+        intro("appz promote");
+    }
+    let confirm = |d: &appz_deploy::DeploymentInspect| {
+        if assume_yes() {
+            return true;
+        }
+        let current = d
+            .production_url
+            .as_deref()
+            .map(|u| format!(" (production now: {u})"))
+            .unwrap_or_default();
+        cliclack::confirm(format!(
+            "Promote deployment {} (version {}) to production? It replaces the current production deployment{current}.",
+            d.id, d.version_id
+        ))
+        .initial_value(false)
+        .interact()
+        .unwrap_or(false)
+    };
+    match deploy::promote(&canonical, args.target, &args.id_or_url, &confirm) {
+        Ok(Some(r)) if json => println!(
+            "{}",
+            serde_json::json!({ "status": "promoted", "provider": r.provider, "project_id": r.project_id,
+                "deployment_id": r.deployment_id, "version_id": r.version_id, "url": r.url })
+        ),
+        Ok(Some(r)) => {
+            success(&format!("promoted {} to production", r.deployment_id));
+            info(&r.url);
+            outro("promote complete");
+        }
+        Ok(None) if json => println!("{}", serde_json::json!({ "status": "canceled" })),
+        Ok(None) => outro("canceled"),
         Err(e) => error(&e),
     }
 }
@@ -2310,20 +2498,123 @@ fn run_link(args: LinkArgs, json: bool) {
 }
 
 fn run_alias(args: AliasArgs, json: bool) {
-    let canonical = resolve_root(&args.dir);
+    match args.command {
+        Some(AliasCmd::Set {
+            domain,
+            dir,
+            target,
+        }) => run_alias_set(&dir, target, &domain, json),
+        Some(AliasCmd::Ls { dir, target }) => run_alias_ls(&dir, target, json),
+        Some(AliasCmd::Rm { host, dir, target }) => run_alias_rm(&dir, target, &host, json),
+        None => match args.domain {
+            Some(domain) => run_alias_set(&args.dir, args.target, &domain, json),
+            None => error("usage: appz alias <DOMAIN> [DIR] | set <DOMAIN> | ls | rm <HOST>"),
+        },
+    }
+}
+
+fn run_alias_set(dir: &Path, target: Option<String>, domain: &str, json: bool) {
+    let canonical = resolve_root(dir);
     if !json {
         intro("appz alias");
     }
-    match deploy::alias(&canonical, args.target, &args.domain) {
+    match deploy::alias(&canonical, target, domain) {
         Ok(url) => {
             if json {
                 println!("{}", serde_json::json!({ "status": "aliased", "url": url }));
             } else {
-                success(&format!("assigned alias {}", args.domain));
+                success(&format!("assigned alias {domain}"));
                 info(&url);
                 outro("alias complete");
             }
         }
+        Err(e) => error(&e),
+    }
+}
+
+fn alias_created(ms: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(ms)
+        .map(|t| t.format("%Y-%m-%d %H:%M UTC").to_string())
+        .unwrap_or_else(|| "-".into())
+}
+
+fn run_alias_ls(dir: &Path, target: Option<String>, json: bool) {
+    let canonical = resolve_root(dir);
+    match deploy::list_aliases(&canonical, target) {
+        Ok(aliases) if json => println!("{}", serde_json::to_string_pretty(&aliases).unwrap()),
+        Ok(aliases) => {
+            intro("appz alias ls");
+            if aliases.is_empty() {
+                info("no aliases found\nrun `appz alias set <domain>` to add one");
+            } else {
+                let lines: Vec<String> = aliases
+                    .iter()
+                    .map(|a| {
+                        format!(
+                            "{:<36}  {:<18}  {:<22}  {}",
+                            a.host,
+                            a.deployment_id,
+                            alias_created(a.created_at),
+                            if a.is_production { "production" } else { "" }
+                        )
+                    })
+                    .collect();
+                info(&format!(
+                    "{:<36}  {:<18}  {:<22}\n{}",
+                    "HOST",
+                    "DEPLOYMENT",
+                    "CREATED",
+                    lines.join("\n")
+                ));
+            }
+            outro("done");
+        }
+        Err(e) => error(&e),
+    }
+}
+
+fn run_alias_rm(dir: &Path, target: Option<String>, host: &str, json: bool) {
+    let canonical = resolve_root(dir);
+    let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
+    // Look the alias up first: it lets us refuse the production host and show what is
+    // about to be removed. The server enforces the same rule for races.
+    let aliases = match deploy::list_aliases(&canonical, target.clone()) {
+        Ok(a) => a,
+        Err(e) => error(&e),
+    };
+    let Some(alias) = aliases.iter().find(|a| a.host == host) else {
+        error(&format!(
+            "alias {host} not found; run `appz alias ls` to see this project's aliases"
+        ));
+    };
+    if alias.is_production {
+        error(&format!(
+            "{host} is the production host and cannot be removed"
+        ));
+    }
+    if !assume_yes() {
+        if json || !is_interactive_tty() {
+            error("confirmation required — pass --yes to remove the alias without prompting");
+        }
+        let prompt = format!(
+            "Remove alias {host} (deployment {}, created {})?",
+            alias.deployment_id,
+            alias_created(alias.created_at)
+        );
+        match cliclack::confirm(prompt).initial_value(false).interact() {
+            Ok(true) => {}
+            _ => {
+                info("canceled");
+                return;
+            }
+        }
+    }
+    match deploy::remove_alias(&canonical, target, &host) {
+        Ok(()) if json => println!(
+            "{}",
+            serde_json::json!({ "status": "removed", "host": host })
+        ),
+        Ok(()) => success(&format!("removed alias {host}")),
         Err(e) => error(&e),
     }
 }
@@ -2470,6 +2761,108 @@ fn run_list(args: ListArgs, json: bool) {
             }
         }
         Err(e) => error(&e),
+    }
+}
+
+/// Open `url` in the default browser (best effort).
+fn open_in_browser(url: &str) {
+    #[cfg(target_os = "windows")]
+    let _ = std::process::Command::new("cmd")
+        .args(["/c", "start", "", url])
+        .spawn();
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open").arg(url).spawn();
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+}
+
+fn run_open(mut args: OpenArgs, json: bool) {
+    // `appz open ./dir` means the directory, not a deployment ID.
+    if let Some(first) = &args.id_or_url
+        && args.dir == Path::new(".")
+        && Path::new(first).is_dir()
+    {
+        args.dir = PathBuf::from(args.id_or_url.take().unwrap());
+    }
+    let canonical = resolve_root(&args.dir);
+    match deploy::open_target(
+        &canonical,
+        args.target,
+        args.id_or_url.as_deref(),
+        args.dashboard,
+    ) {
+        Ok(t) => {
+            if json || !is_interactive_tty() {
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&t).unwrap());
+                } else {
+                    println!("{}", t.url);
+                }
+            } else {
+                intro("appz open");
+                info(&format!("opening {}", t.url));
+                open_in_browser(&t.url);
+                outro("done");
+            }
+        }
+        Err(e) => error(&e),
+    }
+}
+
+fn run_remove(args: RemoveArgs, json: bool) {
+    let canonical = resolve_root(&args.dir);
+    let mut refs: Vec<String> = Vec::new();
+    for d in args.deployments {
+        if !refs.contains(&d) {
+            refs.push(d);
+        }
+    }
+    if !json {
+        intro("appz remove");
+        info(&format!("Deployments to delete:\n  {}", refs.join("\n  ")));
+    }
+    if !assume_yes() {
+        if json || !is_interactive_tty() {
+            error("confirmation required — pass --yes to delete without prompting");
+        }
+        let plural = if refs.len() == 1 { "" } else { "s" };
+        let ok = cliclack::confirm(format!("Delete {} deployment{plural}?", refs.len()))
+            .initial_value(false)
+            .interact()
+            .unwrap_or(false);
+        if !ok {
+            warning("cancelled, nothing deleted");
+            return;
+        }
+    }
+    let results = match deploy::remove_deployments(&canonical, args.target, &refs) {
+        Ok(r) => r,
+        Err(e) => error(&e),
+    };
+    let failed = results.iter().filter(|(_, r)| r.is_err()).count();
+    if json {
+        let out: Vec<_> = results
+            .iter()
+            .map(|(r, res)| match res {
+                Ok(id) => serde_json::json!({ "id": id, "removed": true, "error": null }),
+                Err(e) => serde_json::json!({ "id": r, "removed": false, "error": e }),
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&out).unwrap());
+    } else {
+        for (r, res) in &results {
+            match res {
+                Ok(id) => success(&format!("removed {id}")),
+                Err(e) => warning(&format!("{r}: {e}")),
+            }
+        }
+        outro(&format!(
+            "{} removed, {failed} failed",
+            results.len() - failed
+        ));
+    }
+    if failed > 0 {
+        std::process::exit(1);
     }
 }
 
@@ -2953,22 +3346,7 @@ fn run_login(args: LoginArgs, json: bool) {
         info(&format!("2. Open URL:                  {}", verify_url));
 
         if !args.no_browser {
-            #[cfg(target_os = "windows")]
-            {
-                let _ = std::process::Command::new("cmd")
-                    .args(["/c", "start", verify_url])
-                    .spawn();
-            }
-            #[cfg(target_os = "macos")]
-            {
-                let _ = std::process::Command::new("open").arg(verify_url).spawn();
-            }
-            #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
-            {
-                let _ = std::process::Command::new("xdg-open")
-                    .arg(verify_url)
-                    .spawn();
-            }
+            open_in_browser(verify_url);
         }
 
         info("waiting for authorization...");
@@ -3150,6 +3528,16 @@ mod tests {
     use clap::CommandFactory;
 
     #[test]
+    fn remove_parses_multiple_ids_and_rm_alias() {
+        let cli = AppzCli::try_parse_from(["appz", "rm", "dpl_a", "dpl_b", "--yes"]).unwrap();
+        let AppzCmd::Remove(a) = cli.command else {
+            panic!("expected remove")
+        };
+        assert_eq!(a.deployments, ["dpl_a", "dpl_b"]);
+        assert!(AppzCli::try_parse_from(["appz", "remove"]).is_err());
+    }
+
+    #[test]
     fn restore_hint_preserves_the_project_directory() {
         let dir = Path::new("team's project $archive");
         let hint = project_restore_command(dir, "demo");
@@ -3241,12 +3629,67 @@ mod tests {
     }
 
     #[test]
+    fn promote_takes_deployment_then_optional_dir() {
+        assert!(AppzCli::try_parse_from(["appz", "promote", "dpl_abc123def456"]).is_ok());
+        let cli = AppzCli::try_parse_from([
+            "appz",
+            "promote",
+            "https://x.appz.to",
+            "site",
+            "--target",
+            "appzdev",
+            "-y",
+            "--json",
+        ])
+        .unwrap();
+        assert!(cli.yes && cli.json);
+        assert!(AppzCli::try_parse_from(["appz", "promote"]).is_err());
+    }
+
+    #[test]
     fn rollback_and_alias_take_the_required_argument_first() {
         assert!(AppzCli::try_parse_from(["appz", "rollback", "v42"]).is_ok());
         assert!(AppzCli::try_parse_from(["appz", "rollback", "v42", "site"]).is_ok());
-        assert!(AppzCli::try_parse_from(["appz", "rollback"]).is_err());
+        assert!(AppzCli::try_parse_from(["appz", "rollback"]).is_ok());
+        assert!(AppzCli::try_parse_from(["appz", "rollback", "some/dir"]).is_ok());
         assert!(AppzCli::try_parse_from(["appz", "alias", "app.example.com"]).is_ok());
-        assert!(AppzCli::try_parse_from(["appz", "alias"]).is_err());
+        assert!(AppzCli::try_parse_from(["appz", "alias", "ls", "extra", "more"]).is_err());
+    }
+
+    #[test]
+    fn alias_shorthand_and_subcommands_parse() {
+        let parse = |args: &[&str]| {
+            let cli = AppzCli::try_parse_from(std::iter::once("appz").chain(args.iter().copied()))
+                .unwrap();
+            let AppzCmd::Alias(a) = cli.command else {
+                panic!("expected alias")
+            };
+            a
+        };
+        let a = parse(&["alias", "app.example.com", "site", "--target", "appzdev"]);
+        assert!(a.command.is_none());
+        assert_eq!(a.domain.as_deref(), Some("app.example.com"));
+        assert_eq!(a.dir, PathBuf::from("site"));
+        assert_eq!(a.target.as_deref(), Some("appzdev"));
+        let a = parse(&["alias", "set", "app.example.com"]);
+        assert!(
+            matches!(a.command, Some(AliasCmd::Set { domain, .. }) if domain == "app.example.com")
+        );
+        assert!(matches!(
+            parse(&["alias", "ls"]).command,
+            Some(AliasCmd::Ls { .. })
+        ));
+        assert!(matches!(
+            parse(&["alias", "list"]).command,
+            Some(AliasCmd::Ls { .. })
+        ));
+        let a = parse(&["alias", "rm", "beta.example.com", "--target", "appzdev"]);
+        assert!(matches!(a.command, Some(AliasCmd::Rm { host, target, .. })
+            if host == "beta.example.com" && target.as_deref() == Some("appzdev")));
+        assert!(AppzCli::try_parse_from(["appz", "alias", "rm"]).is_err());
+        let cli =
+            AppzCli::try_parse_from(["appz", "alias", "rm", "b.example.com", "--yes"]).unwrap();
+        assert!(cli.yes);
 
         match AppzCli::try_parse_from(["appz", "deploy", "--no-backup"])
             .unwrap()
@@ -3292,6 +3735,19 @@ mod tests {
 
     /// The same options in any order mean the same thing. `--pin` takes its
     /// code only as `--pin=CODE`, so a port after a bare `--pin` stays a port.
+    #[test]
+    fn open_parses_optional_id_dir_and_dashboard() {
+        let parse = |args: &[&str]| match AppzCli::try_parse_from(args).unwrap().command {
+            AppzCmd::Open(a) => (a.id_or_url, a.dir, a.dashboard),
+            _ => panic!("not open"),
+        };
+        assert_eq!(parse(&["appz", "open"]), (None, PathBuf::from("."), false));
+        assert_eq!(
+            parse(&["appz", "open", "dpl_1", "app", "--dashboard"]),
+            (Some("dpl_1".into()), PathBuf::from("app"), true)
+        );
+    }
+
     #[test]
     fn share_options_parse_the_same_in_any_order() {
         let parse = |args: &[&str]| match AppzCli::try_parse_from(args).unwrap().command {

@@ -90,6 +90,8 @@ enum AppzCmd {
     List(ListArgs),
     /// Inspect edge deployment manifest, hosts, and CAS metrics
     Inspect(InspectArgs),
+    /// Open the production site, a deployment, or the project dashboard in the browser
+    Open(OpenArgs),
     /// Manage custom domains and DNS verification on Cloudflare Edge
     #[command(alias = "domain")]
     Domains(DomainsArgs),
@@ -408,6 +410,21 @@ struct InspectArgs {
     /// Also display all files contained in the deployment manifest
     #[arg(long)]
     files: bool,
+    /// Provider slug (default: detects from project or config)
+    #[arg(long)]
+    target: Option<String>,
+}
+
+#[derive(Args)]
+struct OpenArgs {
+    /// Deployment ID or URL to open (defaults to the production site)
+    id_or_url: Option<String>,
+    /// Project directory (defaults to current directory)
+    #[arg(default_value = ".")]
+    dir: PathBuf,
+    /// Open the appz.dev dashboard page for the project instead
+    #[arg(long)]
+    dashboard: bool,
     /// Provider slug (default: detects from project or config)
     #[arg(long)]
     target: Option<String>,
@@ -1611,6 +1628,7 @@ fn main() {
         AppzCmd::Alias(a) => run_alias(a, json),
         AppzCmd::List(a) => run_list(a, json),
         AppzCmd::Inspect(a) => run_inspect(a, json),
+        AppzCmd::Open(a) => run_open(a, json),
         AppzCmd::Domains(a) => run_domains(a, json),
         AppzCmd::Projects(a) => run_projects(a, json),
         AppzCmd::Login(a) => run_login(a, json),
@@ -2469,6 +2487,51 @@ fn run_list(args: ListArgs, json: bool) {
     }
 }
 
+/// Open `url` in the default browser (best effort).
+fn open_in_browser(url: &str) {
+    #[cfg(target_os = "windows")]
+    let _ = std::process::Command::new("cmd")
+        .args(["/c", "start", "", url])
+        .spawn();
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open").arg(url).spawn();
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+}
+
+fn run_open(mut args: OpenArgs, json: bool) {
+    // `appz open ./dir` means the directory, not a deployment ID.
+    if let Some(first) = &args.id_or_url
+        && args.dir == Path::new(".")
+        && Path::new(first).is_dir()
+    {
+        args.dir = PathBuf::from(args.id_or_url.take().unwrap());
+    }
+    let canonical = resolve_root(&args.dir);
+    match deploy::open_target(
+        &canonical,
+        args.target,
+        args.id_or_url.as_deref(),
+        args.dashboard,
+    ) {
+        Ok(t) => {
+            if json || !is_interactive_tty() {
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&t).unwrap());
+                } else {
+                    println!("{}", t.url);
+                }
+            } else {
+                intro("appz open");
+                info(&format!("opening {}", t.url));
+                open_in_browser(&t.url);
+                outro("done");
+            }
+        }
+        Err(e) => error(&e),
+    }
+}
+
 fn run_inspect(args: InspectArgs, json: bool) {
     let canonical = resolve_root(&args.dir);
     match deploy::inspect(&canonical, args.target, &args.id_or_url) {
@@ -2949,22 +3012,7 @@ fn run_login(args: LoginArgs, json: bool) {
         info(&format!("2. Open URL:                  {}", verify_url));
 
         if !args.no_browser {
-            #[cfg(target_os = "windows")]
-            {
-                let _ = std::process::Command::new("cmd")
-                    .args(["/c", "start", verify_url])
-                    .spawn();
-            }
-            #[cfg(target_os = "macos")]
-            {
-                let _ = std::process::Command::new("open").arg(verify_url).spawn();
-            }
-            #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
-            {
-                let _ = std::process::Command::new("xdg-open")
-                    .arg(verify_url)
-                    .spawn();
-            }
+            open_in_browser(verify_url);
         }
 
         info("waiting for authorization...");
@@ -3283,6 +3331,19 @@ mod tests {
 
     /// The same options in any order mean the same thing. `--pin` takes its
     /// code only as `--pin=CODE`, so a port after a bare `--pin` stays a port.
+    #[test]
+    fn open_parses_optional_id_dir_and_dashboard() {
+        let parse = |args: &[&str]| match AppzCli::try_parse_from(args).unwrap().command {
+            AppzCmd::Open(a) => (a.id_or_url, a.dir, a.dashboard),
+            _ => panic!("not open"),
+        };
+        assert_eq!(parse(&["appz", "open"]), (None, PathBuf::from("."), false));
+        assert_eq!(
+            parse(&["appz", "open", "dpl_1", "app", "--dashboard"]),
+            (Some("dpl_1".into()), PathBuf::from("app"), true)
+        );
+    }
+
     #[test]
     fn share_options_parse_the_same_in_any_order() {
         let parse = |args: &[&str]| match AppzCli::try_parse_from(args).unwrap().command {

@@ -193,6 +193,12 @@ also remain available for runtime imports and existing links. The filename uses
 the first 10 hex characters of the BLAKE3 digest of the uploaded bytes.
 Deploy manifests use the full digest prefixed with `b3:`.
 
+`appz open [ID_OR_URL] [DIR]` opens the production site (or the given
+deployment) in your browser; `--dashboard` opens the project's appz.dev
+dashboard page instead (set `APPZ_DASHBOARD_URL` to change the base). With
+`--json` or no terminal it prints `{url, kind}` / the URL instead. Other
+providers open the last production URL recorded by `appz deploy --prod`.
+
 ## Deploying to GitHub Pages, S3, and Render
 
 These targets publish to production; use `--prod`. A preview request fails

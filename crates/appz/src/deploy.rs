@@ -1000,9 +1000,126 @@ pub fn remove_project(
         .map_err(|e| e.to_string())
 }
 
+/// What `appz open` resolved: the URL and whether it is a site or a dashboard page.
+#[derive(Debug, serde::Serialize)]
+pub struct OpenTarget {
+    pub url: String,
+    pub kind: &'static str,
+}
+
+fn with_scheme(u: &str) -> String {
+    if u.starts_with("http://") || u.starts_with("https://") {
+        u.to_string()
+    } else {
+        format!("https://{u}")
+    }
+}
+
+/// appz.dev dashboard page for a project. `APPZ_DASHBOARD_URL` overrides the base.
+fn dashboard_url(base: Option<&str>, project: &str) -> String {
+    let base = base.filter(|b| !b.is_empty()).unwrap_or("https://appz.dev");
+    format!("{}/projects/{project}", base.trim_end_matches('/'))
+}
+
+/// Resolve what `appz open` should open: a deployment (`id_or_url`), the
+/// project's dashboard page, or its production site.
+pub fn open_target(
+    project_dir: &Path,
+    target: Option<String>,
+    id_or_url: Option<&str>,
+    dashboard: bool,
+) -> Result<OpenTarget, String> {
+    let (provider, ctx) = domain_ctx(project_dir, target)?;
+    let is_appzdev = provider.slug() == "appzdev";
+    if let Some(id) = id_or_url {
+        if dashboard {
+            return Err("--dashboard cannot be combined with a deployment ID or URL".into());
+        }
+        if !is_appzdev {
+            return if id.contains("://") || id.contains('.') {
+                Ok(OpenTarget {
+                    url: with_scheme(id),
+                    kind: "deployment",
+                })
+            } else {
+                Err(format!(
+                    "{} cannot look up deployment IDs; pass the deployment URL",
+                    provider.name()
+                ))
+            };
+        }
+        let insp = provider
+            .inspect_deployment(&ctx, id)
+            .map_err(|e| e.to_string())?;
+        let host = insp
+            .hosts
+            .first()
+            .ok_or_else(|| format!("deployment {} has no URL yet", insp.id))?;
+        return Ok(OpenTarget {
+            url: with_scheme(host),
+            kind: "deployment",
+        });
+    }
+
+    let mut project = None;
+    if is_appzdev {
+        let pid = ctx
+            .run_env
+            .get("APPZ_PROJECT_ID")
+            .filter(|v| !v.is_empty())
+            .map(|v| appz_deploy::slugify_project_id(v))
+            .unwrap_or_else(|| appz_deploy::resolve_project_id_from_dir(project_dir));
+        project = Some(
+            provider
+                .get_project(&ctx, &pid)
+                .map_err(|e| e.to_string())?,
+        );
+    }
+    if dashboard {
+        let p = project.ok_or("--dashboard is only available for appz.dev projects")?;
+        let base = ctx
+            .run_env
+            .get("APPZ_DASHBOARD_URL")
+            .cloned()
+            .or_else(|| std::env::var("APPZ_DASHBOARD_URL").ok());
+        return Ok(OpenTarget {
+            url: dashboard_url(base.as_deref(), &p.slug),
+            kind: "dashboard",
+        });
+    }
+    let url = project
+        .and_then(|p| p.production_url)
+        .filter(|u| !u.is_empty())
+        .or_else(|| crate::deploy_state::last_url(project_dir, provider.slug(), true))
+        .ok_or("no production deployment found; run `appz deploy --prod` first")?;
+    Ok(OpenTarget {
+        url: with_scheme(&url),
+        kind: "production",
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dashboard_url_uses_base_or_default() {
+        assert_eq!(
+            dashboard_url(None, "blog"),
+            "https://appz.dev/projects/blog"
+        );
+        assert_eq!(
+            dashboard_url(Some("https://console.example/"), "blog"),
+            "https://console.example/projects/blog"
+        );
+        assert_eq!(dashboard_url(Some(""), "a"), "https://appz.dev/projects/a");
+    }
+
+    #[test]
+    fn with_scheme_adds_https_only_when_missing() {
+        assert_eq!(with_scheme("a.appz.dev"), "https://a.appz.dev");
+        assert_eq!(with_scheme("http://a.dev"), "http://a.dev");
+    }
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},

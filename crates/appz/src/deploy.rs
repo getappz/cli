@@ -684,6 +684,76 @@ pub fn rollback(
         .map_err(|e| e.to_string())
 }
 
+/// What `appz rollback` is about to do: the live production deployment and
+/// the earlier one production will be repointed at.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RollbackPlan {
+    pub current: Option<appz_deploy::TeamDeployment>,
+    pub target: appz_deploy::TeamDeployment,
+}
+
+/// Pick the rollback target from a project's ready production deployments:
+/// the newest one older than the current (`isCurrent`, else newest) deployment.
+pub fn pick_rollback_target(
+    mut items: Vec<appz_deploy::TeamDeployment>,
+) -> Result<RollbackPlan, String> {
+    items.retain(|d| d.version_id.is_some());
+    items.sort_by_key(|d| std::cmp::Reverse(d.created_at));
+    let cur = items.iter().position(|d| d.is_current).unwrap_or(0);
+    if items.is_empty() {
+        return Err("no ready production deployments to roll back to".into());
+    }
+    let current = items[cur].clone();
+    let target = items
+        .into_iter()
+        .skip(cur + 1)
+        .find(|d| d.created_at < current.created_at && d.id != current.id)
+        .ok_or_else(|| {
+            "no earlier ready production deployment to roll back to; pass a version ID explicitly"
+                .to_string()
+        })?;
+    Ok(RollbackPlan {
+        current: Some(current),
+        target,
+    })
+}
+
+/// Find the previous ready production deployment for the project in `project_dir`.
+pub fn plan_rollback(project_dir: &Path, target: Option<String>) -> Result<RollbackPlan, String> {
+    if !lists_via_appzdev(project_dir, target.as_deref())? {
+        return Err(
+            "rolling back without a version is only supported on appz.dev; pass a version ID"
+                .into(),
+        );
+    }
+    let query = appz_deploy::DeploymentQuery {
+        project: Some(appz_deploy::resolve_project_id_from_dir(project_dir)),
+        production: true,
+        status: Some("ready".into()),
+        limit: Some(100),
+        ..Default::default()
+    };
+    pick_rollback_target(list_page(project_dir, target, &query)?.items)
+}
+
+/// Whether `arg` is a version ID (`ver_...` or a 26-char ULID) rather than a
+/// deployment ID or URL.
+pub fn is_version_id(arg: &str) -> bool {
+    arg.starts_with("ver_") || (arg.len() == 26 && arg.chars().all(|c| c.is_ascii_alphanumeric()))
+}
+
+/// Accept a version ID as-is; resolve a deployment ID (`dpl_...`) or URL to its version.
+pub fn resolve_version(
+    project_dir: &Path,
+    target: Option<String>,
+    arg: &str,
+) -> Result<String, String> {
+    if is_version_id(arg) {
+        return Ok(arg.to_string());
+    }
+    inspect(project_dir, target, arg).map(|d| d.version_id)
+}
+
 pub fn link(
     project_dir: &Path,
     target: Option<String>,
@@ -864,6 +934,19 @@ pub fn inspect(
 
     provider
         .inspect_deployment(&ctx, id_or_url)
+        .map_err(|e| e.to_string())
+}
+
+/// Promote a ready deployment to production. `Ok(None)` means `confirm` declined.
+pub fn promote(
+    project_dir: &Path,
+    target: Option<String>,
+    id_or_url: &str,
+    confirm: &dyn Fn(&appz_deploy::DeploymentInspect) -> bool,
+) -> Result<Option<appz_deploy::PromoteResult>, String> {
+    let (provider, ctx) = domain_ctx(project_dir, target)?;
+    provider
+        .promote_deployment(&ctx, id_or_url, confirm)
         .map_err(|e| e.to_string())
 }
 
@@ -1673,5 +1756,57 @@ mod tests {
         assert!(
             crate::deploy_state::unchanged(dir.path(), "vercel", false, &pre_hook_fp).is_some()
         );
+    }
+}
+
+#[cfg(test)]
+mod rollback_tests {
+    use super::*;
+
+    fn dep(id: &str, at: i64, current: bool) -> appz_deploy::TeamDeployment {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "versionId": format!("ver_{id}"), "createdAt": at, "isCurrent": current
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn picks_next_older_than_current() {
+        let plan = pick_rollback_target(vec![
+            dep("a", 1, false),
+            dep("c", 3, true),
+            dep("b", 2, false),
+        ])
+        .unwrap();
+        assert_eq!(plan.current.unwrap().id, "c");
+        assert_eq!(plan.target.id, "b");
+    }
+
+    #[test]
+    fn skips_newer_than_current_and_defaults_to_newest() {
+        // After a rollback the current one is not the newest.
+        let plan = pick_rollback_target(vec![
+            dep("c", 3, false),
+            dep("b", 2, true),
+            dep("a", 1, false),
+        ])
+        .unwrap();
+        assert_eq!(plan.target.id, "a");
+        let plan = pick_rollback_target(vec![dep("b", 2, false), dep("a", 1, false)]).unwrap();
+        assert_eq!(plan.target.id, "a");
+    }
+
+    #[test]
+    fn errors_without_earlier_deployment() {
+        assert!(pick_rollback_target(vec![dep("a", 1, true)]).is_err());
+        assert!(pick_rollback_target(vec![]).is_err());
+    }
+
+    #[test]
+    fn tells_versions_from_deployments() {
+        assert!(is_version_id("ver_abc123def456"));
+        assert!(is_version_id("01HZX3J5K6M7N8P9Q0R1S2T3V4"));
+        assert!(!is_version_id("dpl_abc123def456"));
+        assert!(!is_version_id("https://x.appz.page"));
     }
 }

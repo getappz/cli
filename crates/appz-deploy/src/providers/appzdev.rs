@@ -21,7 +21,7 @@ use crate::markdown::{HttpMarkdownConverter, add_markdown_siblings};
 use crate::output::{
     DeployOutput, DeployStatus, DeploymentInfo, DeploymentInspect, DeploymentQuery, DetectedConfig,
     DomainQuery, DomainVerifyResult, Page, PrerequisiteStatus, ProjectDomain, ProjectInfo,
-    TeamDeployment, TeamDomain,
+    PromoteResult, TeamDeployment, TeamDomain,
 };
 use crate::provider::DeployProvider;
 use crate::static_cas::ScannedFileEntry;
@@ -61,6 +61,10 @@ pub fn slugify_project_id(raw: &str) -> String {
     if raw.starts_with("prj_") {
         return raw.to_string();
     }
+    slugify(raw)
+}
+
+fn slugify(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len().min(40));
     let mut last_dash = true; // suppress leading dash
     for b in raw.bytes() {
@@ -170,6 +174,40 @@ pub fn resolve_auth_token(ctx: Option<&DeployContext>) -> Option<String> {
                 .filter(|t| !t.is_empty())
         })
         .or_else(|| load_stored_auth().map(|a| a.token))
+}
+
+/// POST the promote request, retrying transport/5xx failures with one
+/// Idempotency-Key so a retry cannot promote twice.
+fn post_promote(
+    url: &str,
+    token: Option<&str>,
+    deployment_id: &str,
+) -> Result<serde_json::Value, Box<ureq::Error>> {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let key = format!("appz-promote-{deployment_id}-{nanos:x}");
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        let mut req = ureq::post(url).set("Idempotency-Key", &key);
+        if let Some(token) = token {
+            req = req.set("Authorization", &format!("Bearer {token}"));
+        }
+        match req.send_json(serde_json::json!({ "deploymentId": deployment_id })) {
+            Ok(resp) => return resp.into_json().map_err(|e| Box::new(ureq::Error::from(e))),
+            Err(e) => {
+                let retryable = match &e {
+                    ureq::Error::Status(code, _) => *code >= 500,
+                    ureq::Error::Transport(_) => true,
+                };
+                if !retryable || attempt >= 3 {
+                    return Err(Box::new(e));
+                }
+                std::thread::sleep(Duration::from_millis(300 * attempt));
+            }
+        }
+    }
 }
 
 pub fn parse_api_error(
@@ -350,11 +388,59 @@ pub fn resolve_project_id_from_dir(dir: &Path) -> String {
     {
         return slugify_project_id(&id);
     }
+    // `.` / `..` / a trailing separator have no file name until resolved.
     let folder = dir
         .file_name()
+        .map(|s| s.to_os_string())
+        .or_else(|| {
+            dir.canonicalize()
+                .ok()?
+                .file_name()
+                .map(|s| s.to_os_string())
+        })
         .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| "default-project".to_string());
-    slugify_project_id(&folder)
+        .unwrap_or_default();
+    folder_slug(&folder)
+}
+
+/// Turns a folder name into a project slug:
+/// - transliterates non-ASCII (`Café` -> `cafe`, `रवि` -> `rvi`),
+/// - drops copy/download markers (`site (1)`, `site - Copy`, `site copy 2`,
+///   GitHub zip `site-main` / `site-master`),
+/// - strips a domain suffix (`rksolar.co.in` -> `rksolar`),
+/// - drops apostrophes (`John's Site` -> `johns-site`),
+/// - then slugifies. A folder named `prj_*` is slugified like any other name.
+fn folder_slug(folder: &str) -> String {
+    static COPY_MARKER: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"(?:\s*\(\d+\)|[\s_-]+(?:-\s*)?copy(?:\s*\d+)?|-(?:main|master))$")
+            .expect("valid regex")
+    });
+    let mut name = deunicode::deunicode(folder).to_ascii_lowercase();
+    loop {
+        let trimmed = name.trim();
+        let stripped = COPY_MARKER.replace(trimmed, "");
+        if stripped.is_empty() || stripped == trimmed {
+            name = trimmed.to_string();
+            break;
+        }
+        name = stripped.into_owned();
+    }
+    slugify(&strip_domain_suffix(&name).replace('\'', ""))
+}
+
+/// Strips a leading `www.` and a Public Suffix List suffix from a lowercase
+/// folder name that looks like a domain, so `rksolar.co.in`, `rksolar.in`
+/// and `www.rksolar.com` all map to `rksolar`. Unknown endings (`next.js`)
+/// and non-domain names are returned unchanged.
+fn strip_domain_suffix(lower: &str) -> String {
+    let s = lower.strip_prefix("www.").unwrap_or(lower);
+    match psl2::lookup(s) {
+        Some(d) if d.is_known() && !d.is_public_suffix() => {
+            let host = d.as_str();
+            host[..host.len() - d.suffix().len() - 1].to_string()
+        }
+        _ => s.to_string(),
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -1619,6 +1705,48 @@ impl DeployProvider for AppzdevProvider {
         list_team_deployments(&self.api_base(ctx), token.as_deref(), query)
     }
 
+    fn promote_deployment(
+        &self,
+        ctx: &DeployContext,
+        id_or_url: &str,
+        confirm: &dyn Fn(&DeploymentInspect) -> bool,
+    ) -> DeployResult<Option<PromoteResult>> {
+        let deployment = self.inspect_deployment(ctx, id_or_url)?;
+        if deployment.status != DeployStatus::Ready {
+            return Err(DeployError::DeployFailed {
+                provider: self.name(),
+                reason: format!(
+                    "deployment {} is {:?}; only ready deployments can be promoted",
+                    deployment.id, deployment.status
+                )
+                .to_lowercase(),
+            });
+        }
+        if !confirm(&deployment) {
+            return Ok(None);
+        }
+        // Promote inside the deployment's own project, whatever dir we run in.
+        let project_id = if deployment.project_id.is_empty() {
+            self.resolve_project_id(ctx)
+        } else {
+            deployment.project_id.clone()
+        };
+        let url = format!("{}/v0/projects/{}/promote", self.api_base(ctx), project_id);
+        let token = resolve_auth_token(Some(ctx));
+        let resp = post_promote(&url, token.as_deref(), &deployment.id)
+            .map_err(|e| parse_api_error(*e, self.name(), "Promote deployment"))?;
+        Ok(Some(PromoteResult {
+            provider: self.slug().to_string(),
+            project_id: resp["projectId"].as_str().unwrap_or(&project_id).into(),
+            deployment_id: resp["deploymentId"]
+                .as_str()
+                .unwrap_or(&deployment.id)
+                .into(),
+            version_id: resp["versionId"].as_str().unwrap_or_default().into(),
+            url: format!("https://{}", resp["host"].as_str().unwrap_or_default()),
+        }))
+    }
+
     fn inspect_deployment(
         &self,
         ctx: &DeployContext,
@@ -1795,6 +1923,55 @@ mod tests {
         let slug = slugify_project_id(&long_name);
         assert_eq!(slug.len(), 40);
         assert_eq!(slug, "a".repeat(40));
+    }
+
+    #[test]
+    fn test_folder_slug() {
+        for (input, want) in [
+            // domain suffixes
+            ("rksolar.co.in", "rksolar"),
+            ("rksolar.in", "rksolar"),
+            ("rksolar.com", "rksolar"),
+            ("RKSolar.COM", "rksolar"),
+            ("www.rksolar.com", "rksolar"),
+            ("shop.rksolar.com.au", "shop-rksolar"),
+            ("myapp.vercel.app", "myapp"),
+            ("com", "com"),
+            ("next.js", "next-js"),
+            (".com", "com"),
+            ("site.", "site"),
+            // copy / download markers
+            ("rksolar.com (1)", "rksolar"),
+            ("my site - Copy", "my-site"),
+            ("my site - Copy (2)", "my-site"),
+            ("my site copy 2", "my-site"),
+            ("rksolar.com-main", "rksolar"),
+            ("portfolio-master", "portfolio"),
+            ("main", "main"),
+            ("copy", "copy"),
+            // unicode, punctuation, empties
+            ("Café Münch", "cafe-munch"),
+            ("John's Site", "johns-site"),
+            ("my_site", "my-site"),
+            ("  spaced  ", "spaced"),
+            ("🚀🚀", "rocket-rocket"),
+            ("!!!", "default-project"),
+            ("", "default-project"),
+            ("prj_My Folder", "prj-my-folder"),
+        ] {
+            assert_eq!(folder_slug(input), want, "input: {input:?}");
+        }
+    }
+
+    #[test]
+    fn test_resolve_project_id_from_dot_dir() {
+        let dir = tempdir().unwrap();
+        let folder = dir.path().join("rksolar.co.in");
+        std::fs::create_dir_all(folder.join("sub")).unwrap();
+        assert_eq!(
+            resolve_project_id_from_dir(&folder.join("sub").join("..")),
+            "rksolar"
+        );
     }
 
     #[test]
@@ -2558,5 +2735,149 @@ SPACED=hello world
             let err = parse_api_error(status_error(401, body), "AppzDev", "List projects");
             assert!(matches!(err, DeployError::AuthMissing { .. }), "{err:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod promote_tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::sync::{Arc, Mutex};
+
+    /// Serves `responses` in order for successive requests; records raw requests.
+    fn serve(responses: Vec<(u16, String)>) -> (String, Arc<Mutex<Vec<String>>>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = format!("http://{}", listener.local_addr().unwrap());
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let log = seen.clone();
+        std::thread::spawn(move || {
+            for (status, body) in responses {
+                let Ok((mut s, _)) = listener.accept() else {
+                    return;
+                };
+                // Read the whole request (headers and body) before replying.
+                let mut raw = Vec::new();
+                let mut chunk = [0u8; 4096];
+                loop {
+                    let n = s.read(&mut chunk).unwrap_or(0);
+                    raw.extend_from_slice(&chunk[..n]);
+                    let text = String::from_utf8_lossy(&raw).to_lowercase();
+                    let Some(head_end) = text.find("\r\n\r\n") else {
+                        if n == 0 { break } else { continue }
+                    };
+                    let len = text
+                        .lines()
+                        .find_map(|l| l.strip_prefix("content-length:"))
+                        .and_then(|v| v.trim().parse::<usize>().ok())
+                        .unwrap_or(0);
+                    if n == 0 || raw.len() >= head_end + 4 + len {
+                        break;
+                    }
+                }
+                let n = raw.len();
+                let buf = raw;
+                log.lock()
+                    .unwrap()
+                    .push(String::from_utf8_lossy(&buf[..n]).into_owned());
+                let _ = write!(
+                    s,
+                    "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+        });
+        (addr, seen)
+    }
+
+    fn ctx(addr: String) -> DeployContext {
+        let mut ctx = DeployContext::new(std::env::temp_dir(), "dist".into());
+        ctx.run_env.insert("APPZ_API_URL".into(), addr);
+        ctx.run_env.insert("APPZ_TOKEN".into(), "tok".into());
+        ctx
+    }
+
+    fn inspect_body(status: &str) -> (u16, String) {
+        (
+            200,
+            format!(
+                r#"{{"id":"dpl_abcdefghijkl","projectId":"prj_abcdefghijkl","versionId":"ver_abcdefghijkl","status":"{status}","type":"preview"}}"#
+            ),
+        )
+    }
+
+    const PROMOTED: &str = r#"{"status":"promoted","projectId":"prj_abcdefghijkl","deploymentId":"dpl_abcdefghijkl","versionId":"ver_abcdefghijkl","host":"site.appz.to"}"#;
+
+    #[test]
+    fn promote_posts_deployment_id_with_idempotency_key() {
+        let (addr, seen) = serve(vec![inspect_body("ready"), (200, PROMOTED.into())]);
+        let out = AppzdevProvider
+            .promote_deployment(&ctx(addr), "https://dpl_abcdefghijkl.appz.to", &|_| true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(out.url, "https://site.appz.to");
+        assert_eq!(out.version_id, "ver_abcdefghijkl");
+        let reqs = seen.lock().unwrap();
+        assert!(reqs[1].starts_with("POST /v0/projects/prj_abcdefghijkl/promote"));
+        assert!(
+            reqs[1]
+                .to_lowercase()
+                .contains("idempotency-key: appz-promote-dpl_abcdefghijkl-")
+        );
+        assert!(reqs[1].contains(r#"{"deploymentId":"dpl_abcdefghijkl"}"#));
+    }
+
+    #[test]
+    fn promote_declined_makes_no_post() {
+        let (addr, seen) = serve(vec![inspect_body("ready")]);
+        let out = AppzdevProvider
+            .promote_deployment(&ctx(addr), "dpl_abcdefghijkl", &|_| false)
+            .unwrap();
+        assert!(out.is_none());
+        assert_eq!(seen.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn promote_rejects_deployments_that_are_not_ready() {
+        let (addr, seen) = serve(vec![inspect_body("building")]);
+        let err = AppzdevProvider
+            .promote_deployment(&ctx(addr), "dpl_abcdefghijkl", &|_| true)
+            .unwrap_err();
+        assert!(err.to_string().contains("only ready deployments"), "{err}");
+        assert_eq!(seen.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn promote_retries_server_errors_with_the_same_key() {
+        let (addr, seen) = serve(vec![
+            inspect_body("ready"),
+            (503, r#"{"error":"busy"}"#.into()),
+            (200, PROMOTED.into()),
+        ]);
+        AppzdevProvider
+            .promote_deployment(&ctx(addr), "dpl_abcdefghijkl", &|_| true)
+            .unwrap()
+            .unwrap();
+        let reqs = seen.lock().unwrap();
+        let key = |r: &str| {
+            r.lines()
+                .find(|l| l.to_lowercase().starts_with("idempotency-key:"))
+                .map(str::to_owned)
+        };
+        assert!(key(&reqs[1]).is_some());
+        assert_eq!(key(&reqs[1]), key(&reqs[2]));
+    }
+
+    #[test]
+    fn promote_does_not_retry_client_errors() {
+        let (addr, seen) = serve(vec![
+            inspect_body("ready"),
+            (409, r#"{"error":"conflict"}"#.into()),
+        ]);
+        assert!(
+            AppzdevProvider
+                .promote_deployment(&ctx(addr), "dpl_abcdefghijkl", &|_| true)
+                .is_err()
+        );
+        assert_eq!(seen.lock().unwrap().len(), 2);
     }
 }

@@ -103,8 +103,12 @@ pub struct DeploymentQuery {
     pub project: Option<String>,
     pub production: bool,
     pub environment: Option<String>,
-    /// Comma-separated status list (`ready,building,error,canceled`).
-    pub status: Option<String>,
+    /// Statuses to match (`ready`, `building`, `error`, `canceled`), sent as repeated params.
+    pub status: Vec<String>,
+    /// Only deployments created at or after this time (epoch milliseconds).
+    pub since: Option<i64>,
+    /// Only deployments created at or before this time (epoch milliseconds).
+    pub until: Option<i64>,
     /// `key=value` pairs matched against deployment metadata.
     pub meta: Vec<String>,
     pub limit: Option<u32>,

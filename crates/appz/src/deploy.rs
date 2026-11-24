@@ -927,6 +927,30 @@ pub fn verify_domain(
         .map_err(|e| e.to_string())
 }
 
+pub fn inspect_domain(
+    project_dir: &Path,
+    target: Option<String>,
+    domain: &str,
+) -> Result<Option<appz_deploy::TeamDomain>, String> {
+    let (provider, ctx) = domain_ctx(project_dir, target)?;
+    provider
+        .inspect_domain(&ctx, domain)
+        .map_err(|e| e.to_string())
+}
+
+pub fn move_domain(
+    project_dir: &Path,
+    target: Option<String>,
+    domain: &str,
+    to_org: &str,
+    project: Option<&str>,
+) -> Result<appz_deploy::DomainMove, String> {
+    let (provider, ctx) = domain_ctx(project_dir, target)?;
+    provider
+        .move_domain(&ctx, domain, to_org, project)
+        .map_err(|e| e.to_string())
+}
+
 pub fn remove_domain(
     project_dir: &Path,
     target: Option<String>,

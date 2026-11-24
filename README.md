@@ -52,6 +52,11 @@ To recover a hosted Appz project, run `appz projects --target appzdev restore <s
 within 30 days of removal. Restore before deploying again to the deleted slug,
 because a new deploy can replace the deleted project.
 
+Inspect a custom domain with `appz domains inspect <domain>` (project, verification, required DNS records,
+serving status; `--json` for the raw record). Move it to another organization with
+`appz domains move <domain> --to <org> [--project <id>] [--yes]` (owners of both organizations only).
+Nameserver and registrar details are not shown because appz.dev is not a registrar.
+
 Set `APPZ_BACKUP_REPOSITORY` to a dedicated repository outside the project.
 Store its password with `appz vault set APPZ_BACKUP_PASSWORD` and run
 `appz vault unlock` before backing up, or set `APPZ_BACKUP_PASSWORD` for

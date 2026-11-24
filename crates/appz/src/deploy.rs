@@ -989,12 +989,16 @@ pub fn restore_project(
         .map_err(|e| e.to_string())
 }
 
+/// Per-deployment outcome of `remove_deployments`: the ref passed in, and the
+/// removed deployment ID or the error.
+pub type RemoveOutcome = (String, Result<String, String>);
+
 /// Delete deployments one by one; a failure does not stop the rest.
 pub fn remove_deployments(
     project_dir: &Path,
     target: Option<String>,
     refs: &[String],
-) -> Result<Vec<(String, Result<String, String>)>, String> {
+) -> Result<Vec<RemoveOutcome>, String> {
     let (provider, ctx) = domain_ctx(project_dir, target)?;
     Ok(refs
         .iter()

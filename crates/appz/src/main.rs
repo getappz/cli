@@ -85,7 +85,7 @@ enum AppzCmd {
     Link(LinkArgs),
     /// Point a custom domain or alias to the deployment
     Alias(AliasArgs),
-    /// List deployments for the project
+    /// List deployments for a project, or for the whole team
     #[command(alias = "deployments", alias = "ls")]
     List(ListArgs),
     /// Inspect edge deployment manifest, hosts, and CAS metrics
@@ -368,8 +368,31 @@ struct AliasArgs {
 
 #[derive(Args)]
 struct ListArgs {
-    #[arg(default_value = ".")]
-    dir: PathBuf,
+    /// Project id or slug, or a project directory (an existing directory is treated as a
+    /// directory, anything else as a project name). Defaults to the linked project of the
+    /// current directory, else the whole team.
+    project: Option<String>,
+    /// List deployments for the whole team even when this directory is linked
+    #[arg(long)]
+    all: bool,
+    /// Only production deployments
+    #[arg(long)]
+    prod: bool,
+    /// Only deployments in this environment
+    #[arg(long)]
+    environment: Option<String>,
+    /// Comma-separated statuses: ready,building,error,canceled
+    #[arg(long)]
+    status: Option<String>,
+    /// Filter by metadata, key=value (repeatable)
+    #[arg(long = "meta", value_name = "KEY=VALUE")]
+    meta: Vec<String>,
+    /// Maximum deployments to return (1-100)
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..=100))]
+    limit: Option<u32>,
+    /// Cursor from a previous page
+    #[arg(long)]
+    next: Option<String>,
     /// Provider slug (default: detects from project or config)
     #[arg(long)]
     target: Option<String>,
@@ -409,9 +432,16 @@ enum DomainsCmd {
         /// Custom domain name (e.g. app.example.com or example.com)
         domain: String,
     },
-    /// List all custom domains configured for this project
+    /// List custom domains for the whole team (use --project to filter)
     #[command(alias = "ls")]
-    List,
+    List {
+        /// Only domains of this project (id or slug)
+        #[arg(long)]
+        project: Option<String>,
+        /// Cursor from a previous page
+        #[arg(long)]
+        next: Option<String>,
+    },
     /// Trigger DNS ownership and SSL verification check for a domain
     Verify {
         /// Domain name to verify
@@ -2294,35 +2324,86 @@ fn run_alias(args: AliasArgs, json: bool) {
     }
 }
 
+fn print_next_hint(next: &Option<String>, cmd: &str) {
+    if let Some(cursor) = next {
+        info(&format!("more results: {cmd} --next {cursor}"));
+    }
+}
+
+fn fmt_millis(ms: Option<i64>) -> String {
+    ms.and_then(chrono::DateTime::from_timestamp_millis)
+        .map(|t| t.format("%Y-%m-%d %H:%M UTC").to_string())
+        .unwrap_or_else(|| "-".to_string())
+}
+
 fn run_list(args: ListArgs, json: bool) {
-    let canonical = resolve_root(&args.dir);
-    match deploy::list(&canonical, args.target) {
-        Ok(deployments) => {
+    let (dir, named) = match args.project {
+        Some(p) if !Path::new(&p).is_dir() => (PathBuf::from("."), Some(p)),
+        Some(p) => (PathBuf::from(p), None),
+        None => (PathBuf::from("."), None),
+    };
+    let canonical = resolve_root(&dir);
+    let project = named.or_else(|| {
+        if args.all {
+            None
+        } else {
+            deploy::linked_project(&canonical)
+        }
+    });
+    let team_wide = project.is_none();
+    let query = appz_deploy::DeploymentQuery {
+        project,
+        production: args.prod,
+        environment: args.environment,
+        status: args.status,
+        meta: args.meta,
+        limit: args.limit,
+        cursor: args.next,
+    };
+    match deploy::list_page(&canonical, args.target, &query) {
+        Ok(page) => {
             if json {
-                println!("{}", serde_json::to_string_pretty(&deployments).unwrap());
+                println!("{}", serde_json::to_string_pretty(&page).unwrap());
             } else {
                 intro("appz list");
-                if deployments.is_empty() {
-                    info("no deployments found for this project");
+                if page.items.is_empty() {
+                    info(if team_wide {
+                        "no deployments found for this team"
+                    } else {
+                        "no deployments found for this project"
+                    });
                 } else {
-                    let lines: Vec<String> = deployments
+                    let lines: Vec<String> = page
+                        .items
                         .iter()
                         .map(|d| {
                             let current_marker = if d.is_current { " (current)" } else { "" };
                             let version = d.version_id.as_deref().unwrap_or("-");
                             let url = d.url.as_deref().unwrap_or("-");
-                            let age = d
-                                .created_at
-                                .map(|t| format!("{}", t.format("%Y-%m-%d %H:%M UTC")))
-                                .unwrap_or_else(|| "-".to_string());
-                            let status = format!("{:?}", d.status).to_lowercase();
+                            let status = d.status.as_deref().unwrap_or("unknown");
+                            let project_col = if team_wide {
+                                format!(
+                                    "{:<20}  ",
+                                    d.project_slug
+                                        .as_deref()
+                                        .or(d.project_name.as_deref())
+                                        .or(d.project_id.as_deref())
+                                        .unwrap_or("-")
+                                )
+                            } else {
+                                String::new()
+                            };
                             format!(
-                                "{:<16}  {:<14}  {:<32}  {} [{status}{current_marker}]",
-                                d.id, version, url, age
+                                "{project_col}{:<16}  {:<14}  {:<32}  {} [{status}{current_marker}]",
+                                d.id,
+                                version,
+                                url,
+                                fmt_millis(d.created_at)
                             )
                         })
                         .collect();
                     info(&lines.join("\n"));
+                    print_next_hint(&page.next, "appz ls");
                 }
                 outro("done");
             }
@@ -2499,38 +2580,56 @@ fn run_domains(args: DomainsArgs, json: bool) {
             }
             Err(e) => error(&e),
         },
-        DomainsCmd::List => match deploy::list_domains(&canonical, args.target) {
-            Ok(domains) => {
-                if json {
-                    println!("{}", serde_json::to_string_pretty(&domains).unwrap());
-                } else {
-                    intro("appz domains");
-                    if domains.is_empty() {
-                        info(
-                            "no custom domains configured for this project\nrun `appz domains add <domain>` to connect a custom domain",
-                        );
+        DomainsCmd::List { project, next } => {
+            let query = appz_deploy::DomainQuery {
+                project,
+                limit: None,
+                cursor: next,
+            };
+            match deploy::list_domains_page(&canonical, args.target, &query) {
+                Ok(page) => {
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&page).unwrap());
                     } else {
-                        let lines: Vec<String> = domains
-                            .iter()
-                            .map(|d| {
-                                let ssl = d.ssl_status.as_deref().unwrap_or("-");
-                                let verified_str = if d.verified { "verified" } else { "pending" };
-                                format!(
-                                    "{:<30}  status:{:<12}  ssl:{:<10}  {}",
-                                    d.domain,
-                                    d.display_status(),
-                                    ssl,
-                                    verified_str
-                                )
-                            })
-                            .collect();
-                        info(&lines.join("\n"));
+                        intro("appz domains");
+                        if page.items.is_empty() {
+                            info(
+                                "no custom domains found\nrun `appz domains add <domain>` to connect a custom domain",
+                            );
+                        } else {
+                            let lines: Vec<String> = page
+                                .items
+                                .iter()
+                                .map(|t| {
+                                    let d = &t.domain;
+                                    let ssl = d.ssl_status.as_deref().unwrap_or("-");
+                                    let verified_str =
+                                        if d.verified { "verified" } else { "pending" };
+                                    let project = t
+                                        .project_slug
+                                        .as_deref()
+                                        .or(t.project_name.as_deref())
+                                        .or(t.project_id.as_deref())
+                                        .unwrap_or("-");
+                                    format!(
+                                        "{:<30}  {:<20}  status:{:<12}  ssl:{:<10}  {}",
+                                        d.domain,
+                                        project,
+                                        d.display_status(),
+                                        ssl,
+                                        verified_str
+                                    )
+                                })
+                                .collect();
+                            info(&lines.join("\n"));
+                            print_next_hint(&page.next, "appz domains ls");
+                        }
+                        outro("done");
                     }
-                    outro("done");
                 }
+                Err(e) => error(&e),
             }
-            Err(e) => error(&e),
-        },
+        }
         DomainsCmd::Verify { domain } => {
             match deploy::verify_domain(&canonical, args.target, &domain) {
                 Ok(res) => {

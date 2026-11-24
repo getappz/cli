@@ -785,6 +785,39 @@ pub fn list(
     provider.list_deployments(&ctx).map_err(|e| e.to_string())
 }
 
+/// Project id of the project linked to `project_dir` (`.appz/project.json`), if any.
+pub fn linked_project(project_dir: &Path) -> Option<String> {
+    project_dir
+        .join(".appz")
+        .join("project.json")
+        .is_file()
+        .then(|| appz_deploy::resolve_project_id_from_dir(project_dir))
+}
+
+/// One page of deployments for a project, or for the whole team when
+/// `query.project` is `None`.
+pub fn list_page(
+    project_dir: &Path,
+    target: Option<String>,
+    query: &appz_deploy::DeploymentQuery,
+) -> Result<appz_deploy::Page<appz_deploy::TeamDeployment>, String> {
+    let (provider, ctx) = domain_ctx(project_dir, target)?;
+    provider
+        .list_team_deployments(&ctx, query)
+        .map_err(|e| e.to_string())
+}
+
+pub fn list_domains_page(
+    project_dir: &Path,
+    target: Option<String>,
+    query: &appz_deploy::DomainQuery,
+) -> Result<appz_deploy::Page<appz_deploy::TeamDomain>, String> {
+    let (provider, ctx) = domain_ctx(project_dir, target)?;
+    provider
+        .list_team_domains(&ctx, query)
+        .map_err(|e| e.to_string())
+}
+
 pub fn inspect(
     project_dir: &Path,
     target: Option<String>,

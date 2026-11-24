@@ -24,6 +24,7 @@ use crate::output::{
     ProjectInfo, PromoteResult, TeamDeployment, TeamDomain,
 };
 use crate::provider::DeployProvider;
+use crate::redirects::{RedirectInput, RedirectList, RedirectVersionRef, RedirectVersions};
 use crate::static_cas::ScannedFileEntry;
 use projects::{ProjectState, Transfer};
 
@@ -1089,6 +1090,118 @@ pub fn remove_project_domain(
         .map_err(|e| parse_api_error(e, "AppzDev", "Remove custom domain"))?;
 
     Ok(true)
+}
+
+fn redirects_url(api_base: &str, project: &str, tail: &str) -> DeployResult<String> {
+    validate_project_ref(project)?;
+    Ok(format!("{api_base}/v0/projects/{project}/redirects{tail}"))
+}
+
+fn redirect_call<T: serde::de::DeserializeOwned>(
+    mut req: ureq::Request,
+    token: Option<&str>,
+    body: Option<serde_json::Value>,
+    operation: &str,
+) -> DeployResult<T> {
+    if let Some(tok) = token {
+        req = req.set("Authorization", &format!("Bearer {tok}"));
+    }
+    let resp = match body {
+        Some(b) => req.send_json(b),
+        None => req.call(),
+    }
+    .map_err(|e| parse_api_error(e, "AppzDev", operation))?;
+    resp.into_json().map_err(|e| DeployError::DeployFailed {
+        provider: "AppzDev",
+        reason: format!("Invalid response from {operation}: {e}"),
+    })
+}
+
+pub fn list_project_redirects(
+    api_base: &str,
+    project: &str,
+    token: Option<&str>,
+    version: Option<u64>,
+) -> DeployResult<RedirectList> {
+    let mut req = ureq::get(&redirects_url(api_base, project, "")?);
+    if let Some(v) = version {
+        req = req.query("version", &v.to_string());
+    }
+    redirect_call(req, token, None, "List redirects")
+}
+
+pub fn add_project_redirect(
+    api_base: &str,
+    project: &str,
+    token: Option<&str>,
+    rule: &RedirectInput,
+) -> DeployResult<RedirectList> {
+    let req = ureq::post(&redirects_url(api_base, project, "")?);
+    redirect_call(req, token, Some(serde_json::json!(rule)), "Add redirect")
+}
+
+pub fn remove_project_redirect(
+    api_base: &str,
+    project: &str,
+    token: Option<&str>,
+    id: &str,
+) -> DeployResult<RedirectList> {
+    if id.is_empty()
+        || !id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+    {
+        return Err(DeployError::DeployFailed {
+            provider: "AppzDev",
+            reason: "Expected a redirect ID".into(),
+        });
+    }
+    let req = ureq::delete(&redirects_url(api_base, project, &format!("/{id}"))?);
+    redirect_call(req, token, None, "Remove redirect")
+}
+
+pub fn import_project_redirects(
+    api_base: &str,
+    project: &str,
+    token: Option<&str>,
+    rules: &[RedirectInput],
+) -> DeployResult<RedirectList> {
+    let req = ureq::post(&redirects_url(api_base, project, "/import")?);
+    redirect_call(
+        req,
+        token,
+        Some(serde_json::json!(rules)),
+        "Import redirects",
+    )
+}
+
+pub fn list_project_redirect_versions(
+    api_base: &str,
+    project: &str,
+    token: Option<&str>,
+) -> DeployResult<RedirectVersions> {
+    let req = ureq::get(&redirects_url(api_base, project, "/versions")?);
+    redirect_call(req, token, None, "List redirect versions")
+}
+
+pub fn update_project_redirect_version(
+    api_base: &str,
+    project: &str,
+    token: Option<&str>,
+    version: u64,
+    action: &str,
+) -> DeployResult<RedirectVersionRef> {
+    let (action, operation) = if action == "restore" {
+        ("restore", "Restore redirect version")
+    } else {
+        ("promote", "Promote redirect version")
+    };
+    let req = ureq::post(&redirects_url(
+        api_base,
+        project,
+        &format!("/versions/{version}/{action}"),
+    )?);
+    redirect_call(req, token, Some(serde_json::json!({})), operation)
 }
 
 pub fn list_project_aliases(
@@ -2196,6 +2309,60 @@ impl DeployProvider for AppzdevProvider {
         rename_project(&api_base, token.as_deref(), id_or_slug, new_name)
     }
 
+    fn list_redirects(
+        &self,
+        ctx: &DeployContext,
+        version: Option<u64>,
+    ) -> DeployResult<RedirectList> {
+        let project = self.resolve_project_id(ctx);
+        let token = resolve_auth_token(Some(ctx));
+        list_project_redirects(&self.api_base(ctx), &project, token.as_deref(), version)
+    }
+
+    fn add_redirect(
+        &self,
+        ctx: &DeployContext,
+        rule: &RedirectInput,
+    ) -> DeployResult<RedirectList> {
+        let project = self.resolve_project_id(ctx);
+        let token = resolve_auth_token(Some(ctx));
+        add_project_redirect(&self.api_base(ctx), &project, token.as_deref(), rule)
+    }
+
+    fn remove_redirect(&self, ctx: &DeployContext, id: &str) -> DeployResult<RedirectList> {
+        let project = self.resolve_project_id(ctx);
+        let token = resolve_auth_token(Some(ctx));
+        remove_project_redirect(&self.api_base(ctx), &project, token.as_deref(), id)
+    }
+
+    fn import_redirects(
+        &self,
+        ctx: &DeployContext,
+        rules: &[RedirectInput],
+    ) -> DeployResult<RedirectList> {
+        let project = self.resolve_project_id(ctx);
+        let token = resolve_auth_token(Some(ctx));
+        import_project_redirects(&self.api_base(ctx), &project, token.as_deref(), rules)
+    }
+
+    fn list_redirect_versions(&self, ctx: &DeployContext) -> DeployResult<RedirectVersions> {
+        let project = self.resolve_project_id(ctx);
+        let token = resolve_auth_token(Some(ctx));
+        list_project_redirect_versions(&self.api_base(ctx), &project, token.as_deref())
+    }
+
+    fn update_redirect_version(
+        &self,
+        ctx: &DeployContext,
+        version: u64,
+        action: &str,
+    ) -> DeployResult<RedirectVersionRef> {
+        let project = self.resolve_project_id(ctx);
+        let token = resolve_auth_token(Some(ctx));
+        let base = self.api_base(ctx);
+        update_project_redirect_version(&base, &project, token.as_deref(), version, action)
+    }
+
     fn remove_deployment(&self, ctx: &DeployContext, id_or_url: &str) -> DeployResult<String> {
         remove_deployment(
             &self.api_base(ctx),
@@ -2787,6 +2954,39 @@ SPACED=hello world
                                 ("200 OK", r#"{"status":"synced","count":1}"#)
                             } else if method == "DELETE" && path.contains("/env/") {
                                 ("204 No Content", "")
+                            } else if path.contains("/redirects") {
+                                let rule_body = r#"{"version":5,"rules":[{"id":"rdr_1","source":"/old","destination":"/new","status":308,"position":0}]}"#;
+                                match (method, path) {
+                                    ("GET", p) if p.ends_with("/redirects/versions") => (
+                                        "200 OK",
+                                        r#"{"liveVersion":4,"stagedVersion":5,"versions":[{"version":5,"createdAt":1762732900},{"version":4,"createdAt":1762732800}]}"#,
+                                    ),
+                                    ("GET", p) if p.ends_with("/redirects?version=4") => {
+                                        ("200 OK", r#"{"version":4,"rules":[]}"#)
+                                    }
+                                    ("GET", _) | ("POST", _) | ("DELETE", _)
+                                        if path.contains("/versions/") =>
+                                    {
+                                        ("200 OK", r#"{"version":5}"#)
+                                    }
+                                    ("POST", p) if p.ends_with("/redirects/import") => {
+                                        let rules: serde_json::Value =
+                                            serde_json::from_slice(&body).unwrap();
+                                        assert_eq!(rules[0]["status"], 301);
+                                        ("200 OK", r#"{"version":6,"rules":[]}"#)
+                                    }
+                                    ("POST", _) => {
+                                        let rule_in: serde_json::Value =
+                                            serde_json::from_slice(&body).unwrap();
+                                        assert_eq!(rule_in["source"], "/old");
+                                        ("200 OK", rule_body)
+                                    }
+                                    ("DELETE", p) if p.ends_with("/redirects/rdr_missing") => {
+                                        ("404 Not Found", r#"{"error":"redirect not found"}"#)
+                                    }
+                                    ("DELETE", _) => ("200 OK", r#"{"version":7,"rules":[]}"#),
+                                    _ => ("200 OK", rule_body),
+                                }
                             } else if method == "GET" && path == "/v0/projects" {
                                 (
                                     "200 OK",
@@ -3195,6 +3395,62 @@ SPACED=hello world
         );
         let err = provider.restore_project(&ctx, "missing").unwrap_err();
         assert!(err.to_string().contains("no restorable project"));
+
+        // 10. Redirects (staged versions)
+        let rule = RedirectInput {
+            source: "/old".into(),
+            destination: "/new".into(),
+            status: 308,
+        };
+        let added = provider.add_redirect(&ctx, &rule).unwrap();
+        assert_eq!(added.version, Some(5));
+        assert_eq!(added.rules[0].id, "rdr_1");
+        let listed = provider.list_redirects(&ctx, None).unwrap();
+        assert_eq!(listed.rules.len(), 1);
+        assert!(
+            provider
+                .list_redirects(&ctx, Some(4))
+                .unwrap()
+                .rules
+                .is_empty()
+        );
+        let imported = provider
+            .import_redirects(
+                &ctx,
+                &[RedirectInput {
+                    status: 301,
+                    ..rule
+                }],
+            )
+            .unwrap();
+        assert_eq!(imported.version, Some(6));
+        assert_eq!(
+            provider.remove_redirect(&ctx, "rdr_1").unwrap().version,
+            Some(7)
+        );
+        let err = provider.remove_redirect(&ctx, "rdr_missing").unwrap_err();
+        assert!(err.to_string().contains("redirect not found"));
+        assert!(provider.remove_redirect(&ctx, "../x").is_err());
+        let versions = provider.list_redirect_versions(&ctx).unwrap();
+        assert_eq!(
+            (versions.live_version, versions.staged_version),
+            (Some(4), Some(5))
+        );
+        assert_eq!(versions.versions.len(), 2);
+        assert_eq!(
+            provider
+                .update_redirect_version(&ctx, 5, "promote")
+                .unwrap()
+                .version,
+            5
+        );
+        assert_eq!(
+            provider
+                .update_redirect_version(&ctx, 3, "restore")
+                .unwrap()
+                .version,
+            5
+        );
     }
 
     #[test]
@@ -3236,6 +3492,10 @@ Connection: close
                     body.len()
                 );
                 stream.write_all(resp.as_bytes()).unwrap();
+                // Drain the rest of the request so closing doesn't RST the
+                // response (macOS reports that as EINVAL on the client).
+                let _ = stream.shutdown(std::net::Shutdown::Write);
+                let _ = stream.read_to_end(&mut Vec::new());
             }
             keys
         });

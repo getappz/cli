@@ -51,6 +51,12 @@ appz mcp       # stdio MCP server exposing detect/doctor/run to AI agents
 appz skills add  # install the appz agent skill into detected AI agents (--global for user-wide)
 ```
 
+Hosted Appz projects have versioned URL redirects. `appz redirects add|rm|import`
+stage a new version, and nothing changes live until `appz redirects promote <version>`.
+Use `ls`, `versions` and `restore <version>` to inspect and roll back. `import`
+takes a `.json` array or a `.csv` with `source,destination,status` columns and
+reports every bad row by line number before uploading.
+
 Cloud environment variables (appz.dev) are per environment: `production`,
 `preview`, `development` or a custom one. `appz env pull [--environment X]`
 writes decrypted values to a file (default environment: `development`, like

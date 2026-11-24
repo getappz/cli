@@ -6,6 +6,7 @@ pub mod markdown;
 mod output;
 mod provider;
 mod providers;
+pub mod redirects;
 pub mod static_cas;
 pub mod tunnel;
 

@@ -3492,6 +3492,10 @@ Connection: close
                     body.len()
                 );
                 stream.write_all(resp.as_bytes()).unwrap();
+                // Drain the rest of the request so closing doesn't RST the
+                // response (macOS reports that as EINVAL on the client).
+                let _ = stream.shutdown(std::net::Shutdown::Write);
+                let _ = stream.read_to_end(&mut Vec::new());
             }
             keys
         });

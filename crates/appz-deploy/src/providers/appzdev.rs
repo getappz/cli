@@ -60,6 +60,10 @@ pub fn slugify_project_id(raw: &str) -> String {
     if raw.starts_with("prj_") {
         return raw.to_string();
     }
+    slugify(raw)
+}
+
+fn slugify(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len().min(40));
     let mut last_dash = true; // suppress leading dash
     for b in raw.bytes() {
@@ -349,11 +353,59 @@ pub fn resolve_project_id_from_dir(dir: &Path) -> String {
     {
         return slugify_project_id(&id);
     }
+    // `.` / `..` / a trailing separator have no file name until resolved.
     let folder = dir
         .file_name()
+        .map(|s| s.to_os_string())
+        .or_else(|| {
+            dir.canonicalize()
+                .ok()?
+                .file_name()
+                .map(|s| s.to_os_string())
+        })
         .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| "default-project".to_string());
-    slugify_project_id(&folder)
+        .unwrap_or_default();
+    folder_slug(&folder)
+}
+
+/// Turns a folder name into a project slug:
+/// - transliterates non-ASCII (`Café` -> `cafe`, `रवि` -> `rvi`),
+/// - drops copy/download markers (`site (1)`, `site - Copy`, `site copy 2`,
+///   GitHub zip `site-main` / `site-master`),
+/// - strips a domain suffix (`rksolar.co.in` -> `rksolar`),
+/// - drops apostrophes (`John's Site` -> `johns-site`),
+/// - then slugifies. A folder named `prj_*` is slugified like any other name.
+fn folder_slug(folder: &str) -> String {
+    static COPY_MARKER: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"(?:\s*\(\d+\)|[\s_-]+(?:-\s*)?copy(?:\s*\d+)?|-(?:main|master))$")
+            .expect("valid regex")
+    });
+    let mut name = deunicode::deunicode(folder).to_ascii_lowercase();
+    loop {
+        let trimmed = name.trim();
+        let stripped = COPY_MARKER.replace(trimmed, "");
+        if stripped.is_empty() || stripped == trimmed {
+            name = trimmed.to_string();
+            break;
+        }
+        name = stripped.into_owned();
+    }
+    slugify(&strip_domain_suffix(&name).replace('\'', ""))
+}
+
+/// Strips a leading `www.` and a Public Suffix List suffix from a lowercase
+/// folder name that looks like a domain, so `rksolar.co.in`, `rksolar.in`
+/// and `www.rksolar.com` all map to `rksolar`. Unknown endings (`next.js`)
+/// and non-domain names are returned unchanged.
+fn strip_domain_suffix(lower: &str) -> String {
+    let s = lower.strip_prefix("www.").unwrap_or(lower);
+    match psl2::lookup(s) {
+        Some(d) if d.is_known() && !d.is_public_suffix() => {
+            let host = d.as_str();
+            host[..host.len() - d.suffix().len() - 1].to_string()
+        }
+        _ => s.to_string(),
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -1625,6 +1677,55 @@ mod tests {
         let slug = slugify_project_id(&long_name);
         assert_eq!(slug.len(), 40);
         assert_eq!(slug, "a".repeat(40));
+    }
+
+    #[test]
+    fn test_folder_slug() {
+        for (input, want) in [
+            // domain suffixes
+            ("rksolar.co.in", "rksolar"),
+            ("rksolar.in", "rksolar"),
+            ("rksolar.com", "rksolar"),
+            ("RKSolar.COM", "rksolar"),
+            ("www.rksolar.com", "rksolar"),
+            ("shop.rksolar.com.au", "shop-rksolar"),
+            ("myapp.vercel.app", "myapp"),
+            ("com", "com"),
+            ("next.js", "next-js"),
+            (".com", "com"),
+            ("site.", "site"),
+            // copy / download markers
+            ("rksolar.com (1)", "rksolar"),
+            ("my site - Copy", "my-site"),
+            ("my site - Copy (2)", "my-site"),
+            ("my site copy 2", "my-site"),
+            ("rksolar.com-main", "rksolar"),
+            ("portfolio-master", "portfolio"),
+            ("main", "main"),
+            ("copy", "copy"),
+            // unicode, punctuation, empties
+            ("Café Münch", "cafe-munch"),
+            ("John's Site", "johns-site"),
+            ("my_site", "my-site"),
+            ("  spaced  ", "spaced"),
+            ("🚀🚀", "rocket-rocket"),
+            ("!!!", "default-project"),
+            ("", "default-project"),
+            ("prj_My Folder", "prj-my-folder"),
+        ] {
+            assert_eq!(folder_slug(input), want, "input: {input:?}");
+        }
+    }
+
+    #[test]
+    fn test_resolve_project_id_from_dot_dir() {
+        let dir = tempdir().unwrap();
+        let folder = dir.path().join("rksolar.co.in");
+        std::fs::create_dir_all(folder.join("sub")).unwrap();
+        assert_eq!(
+            resolve_project_id_from_dir(&folder.join("sub").join("..")),
+            "rksolar"
+        );
     }
 
     #[test]

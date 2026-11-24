@@ -259,7 +259,7 @@ pub trait DeployProvider: Send + Sync {
         ctx: &DeployContext,
         domain: &str,
         to_org: &str,
-        project: Option<&str>,
+        project: &str,
     ) -> DeployResult<DomainMove> {
         let _ = (ctx, domain, to_org, project);
         Err(DeployError::Unsupported {

@@ -943,7 +943,7 @@ pub fn move_domain(
     target: Option<String>,
     domain: &str,
     to_org: &str,
-    project: Option<&str>,
+    project: &str,
 ) -> Result<appz_deploy::DomainMove, String> {
     let (provider, ctx) = domain_ctx(project_dir, target)?;
     provider

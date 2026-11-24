@@ -465,9 +465,9 @@ enum DomainsCmd {
         /// Destination organization id
         #[arg(long, value_name = "ORG")]
         to: String,
-        /// Destination project id (defaults to the domain's current project id)
+        /// Destination project id (in the destination organization)
         #[arg(long)]
-        project: Option<String>,
+        project: String,
     },
 }
 
@@ -2860,7 +2860,7 @@ fn run_domains(args: DomainsArgs, json: bool) {
                     error("cancelled");
                 }
             }
-            match deploy::move_domain(&canonical, args.target, &domain, &to, project.as_deref()) {
+            match deploy::move_domain(&canonical, args.target, &domain, &to, &project) {
                 Ok(res) => {
                     if json {
                         println!("{}", serde_json::to_string_pretty(&res).unwrap());
@@ -3302,10 +3302,14 @@ mod tests {
             AppzCmd::Domains(DomainsArgs {
                 command: DomainsCmd::Move { to, project, .. },
                 ..
-            }) => assert_eq!((to.as_str(), project.as_deref()), ("org_x", Some("prj_y"))),
+            }) => assert_eq!((to.as_str(), project.as_str()), ("org_x", "prj_y")),
             _ => panic!("expected domains move"),
         }
-        assert!(AppzCli::try_parse_from(["appz", "domains", "move", "a.example.com"]).is_err());
+        assert!(
+            AppzCli::try_parse_from(["appz", "domains", "move", "a.example.com", "--to", "org_x"])
+                .is_err(),
+            "--project is required"
+        );
     }
 
     #[test]

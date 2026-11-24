@@ -54,7 +54,7 @@ because a new deploy can replace the deleted project.
 
 Inspect a custom domain with `appz domains inspect <domain>` (project, verification, required DNS records,
 serving status; `--json` for the raw record). Move it to another organization with
-`appz domains move <domain> --to <org> [--project <id>] [--yes]` (owners of both organizations only).
+`appz domains move <domain> --to <org> --project <id> [--yes]` (`--project` is the destination project id) (owners of both organizations only).
 Nameserver and registrar details are not shown because appz.dev is not a registrar.
 
 Set `APPZ_BACKUP_REPOSITORY` to a dedicated repository outside the project.

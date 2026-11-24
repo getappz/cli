@@ -1751,7 +1751,7 @@ impl DeployProvider for AppzdevProvider {
         ctx: &DeployContext,
         domain: &str,
         to_org: &str,
-        project: Option<&str>,
+        project: &str,
     ) -> DeployResult<DomainMove> {
         let api_base = self.api_base(ctx);
         let token = resolve_auth_token(Some(ctx));
@@ -1765,8 +1765,7 @@ impl DeployProvider for AppzdevProvider {
         let from = current
             .project_id
             .unwrap_or_else(|| self.resolve_project_id(ctx));
-        let dest = project.map(str::to_string).unwrap_or_else(|| from.clone());
-        move_project_domain(&api_base, token.as_deref(), &from, domain, to_org, &dest)
+        move_project_domain(&api_base, token.as_deref(), &from, domain, to_org, project)
     }
 
     fn verify_domain(&self, ctx: &DeployContext, domain: &str) -> DeployResult<DomainVerifyResult> {
@@ -2391,7 +2390,7 @@ SPACED=hello world
         );
         assert_eq!(found.domain.serving_status(), "serving");
         let moved = provider
-            .move_domain(&ctx, "custom.example.com", "org_dest", Some("prj_dest"))
+            .move_domain(&ctx, "custom.example.com", "org_dest", "prj_dest")
             .unwrap();
         assert_eq!(moved.status, "completed");
         assert_eq!(moved.project_id, "prj_dest");
@@ -2516,6 +2515,63 @@ SPACED=hello world
         assert_eq!(restored.slug, got_proj.slug);
         let err = provider.restore_project(&ctx, "missing").unwrap_err();
         assert!(err.to_string().contains("no restorable project"));
+    }
+
+    #[test]
+    fn move_domain_retries_202_with_the_same_idempotency_key() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let mut keys = Vec::new();
+            for status in ["202 Accepted", "200 OK"] {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buf = [0u8; 4096];
+                let n = stream.read(&mut buf).unwrap();
+                let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                let key = req
+                    .lines()
+                    .find_map(|l| {
+                        l.to_ascii_lowercase()
+                            .starts_with("idempotency-key:")
+                            .then(|| l.split_once(':').unwrap().1.trim().to_string())
+                    })
+                    .unwrap_or_default();
+                keys.push(key);
+                let body = format!(
+                    r#"{{"id":"dom_1","domain":"a.example.com","projectId":"prj_dest","organizationId":"org_dest","status":"{}"}}"#,
+                    if status.starts_with("202") {
+                        "committed"
+                    } else {
+                        "completed"
+                    }
+                );
+                let resp = format!(
+                    "HTTP/1.1 {status}
+Content-Type: application/json
+Content-Length: {}
+Connection: close
+
+{body}",
+                    body.len()
+                );
+                stream.write_all(resp.as_bytes()).unwrap();
+            }
+            keys
+        });
+        let out = move_project_domain(
+            &addr,
+            None,
+            "prj_src",
+            "a.example.com",
+            "org_dest",
+            "prj_dest",
+        )
+        .unwrap();
+        assert_eq!(out.status, "completed");
+        let keys = server.join().unwrap();
+        assert!(keys[0].starts_with("appz-move-"), "{keys:?}");
+        assert_eq!(keys[0], keys[1]);
     }
 
     #[test]

@@ -458,7 +458,7 @@ impl AppzServer {
             &api_base,
             &project_id,
             token.as_deref(),
-            arg.target.as_deref(),
+            arg.target.as_deref().or(Some("development")),
         ) {
             Ok(vars) => {
                 let kvs: Vec<(String, String)> =

@@ -9,6 +9,7 @@ mod agents;
 mod backup;
 mod build_stage;
 mod ci;
+mod cloud_env;
 mod deploy;
 mod deploy_state;
 mod dev_install;
@@ -258,26 +259,70 @@ struct EnvArgs {
 enum EnvCmd {
     #[command(flatten)]
     Vault(VaultCmd),
-    /// Pull cloud environment variables from Cloudflare Edge into a local .env file
+    /// Pull decrypted cloud variables into a local .env file (needs the env:decrypt scope)
     Pull {
         /// Target file to write to (default: .env.local)
         #[arg(default_value = ".env.local")]
         file: PathBuf,
-        /// Target environment filter (production, preview, development)
-        #[arg(long)]
-        target: Option<String>,
+        /// Environment to pull: production, preview, development or a custom one; repeatable,
+        /// later ones win on conflicts (default: development, like `vercel env pull`)
+        #[arg(long = "environment", alias = "target", value_delimiter = ',')]
+        environment: Vec<String>,
     },
-    /// Push local environment variables from a .env file to Cloudflare Edge
+    /// Push local environment variables from a .env file to the cloud
     Push {
         /// Source file to read from (default: .env.local, falls back to .env)
         #[arg(default_value = ".env.local")]
         file: PathBuf,
-        /// Target environments to associate (default: production and preview)
-        #[arg(long, value_delimiter = ',')]
-        target: Option<Vec<String>>,
+        /// Environments to set the variables in; repeatable (default: production, preview and development)
+        #[arg(long = "environment", alias = "target", value_delimiter = ',')]
+        environment: Vec<String>,
+    },
+    /// Run a command with cloud variables injected (never written to disk or printed)
+    Run {
+        /// Environment to load; repeatable, later ones win (default: development)
+        #[arg(long = "environment", alias = "target", value_delimiter = ',')]
+        environment: Vec<String>,
+        /// Command and arguments, after `--`
+        #[arg(last = true, required = true, value_name = "CMD")]
+        cmd: Vec<String>,
+    },
+    /// List or remove cloud variables (the local vault is `appz env ls` / `rm`)
+    Cloud {
+        #[command(subcommand)]
+        command: CloudEnvCmd,
+    },
+    /// Manage custom environments beyond production, preview and development
+    Environments {
+        #[command(subcommand)]
+        command: EnvironmentsCmd,
     },
 }
-
+#[derive(Subcommand)]
+enum CloudEnvCmd {
+    /// List cloud variable keys and metadata (never values)
+    Ls {
+        /// Only variables in this environment; repeatable
+        #[arg(long = "environment", value_delimiter = ',')]
+        environment: Vec<String>,
+    },
+    /// Remove a cloud variable from EVERY environment (per-environment removal is not supported)
+    Rm { key: String },
+}
+#[derive(Subcommand)]
+enum EnvironmentsCmd {
+    /// List custom environments
+    Ls,
+    /// Create a custom environment
+    Add {
+        slug: String,
+        /// Git branch pattern deployed to this environment, e.g. "release/*"
+        #[arg(long)]
+        branch_pattern: Option<String>,
+    },
+    /// Remove a custom environment and its variable targets (asks unless --yes)
+    Rm { slug: String },
+}
 #[derive(Args)]
 struct CiArgs {
     #[command(subcommand)]
@@ -1999,65 +2044,31 @@ fn run_vault_cmd(cmd: VaultCmd, json: bool) {
 fn run_env(args: EnvArgs, json: bool) {
     match args.command {
         EnvCmd::Vault(cmd) => run_vault_cmd(cmd, json),
-        EnvCmd::Pull { file, target } => {
-            if !json {
-                intro("appz env pull");
-            }
+        EnvCmd::Pull { file, environment } => {
+            cloud_env::pull_to_file(&resolve_root(Path::new(".")), &file, &environment, json)
+        }
+        EnvCmd::Run { environment, cmd } => {
+            cloud_env::run(&resolve_root(Path::new(".")), &environment, &cmd)
+        }
+        EnvCmd::Cloud { command } => {
             let root = resolve_root(Path::new("."));
-            let project_id = appz_deploy::resolve_project_id_from_dir(&root);
-            let vault_tok = crate::secrets::deploy_env(&root, &["APPZ_TOKEN".to_string()])
-                .ok()
-                .and_then(|v| v.vars.get("APPZ_TOKEN").cloned());
-            let token = std::env::var("APPZ_TOKEN")
-                .ok()
-                .filter(|t| !t.is_empty())
-                .or(vault_tok)
-                .or_else(|| appz_deploy::resolve_auth_token(None));
-            if token.is_none() {
-                error("not authenticated. Run `appz login` or set APPZ_TOKEN");
-            }
-            let api_base = std::env::var("APPZ_API_URL")
-                .unwrap_or_else(|_| "https://api.appz.dev".to_string());
-            match appz_deploy::pull_cloud_env(
-                &api_base,
-                &project_id,
-                token.as_deref(),
-                target.as_deref(),
-            ) {
-                Ok(vars) => {
-                    let kvs: Vec<(String, String)> =
-                        vars.into_iter().map(|v| (v.key, v.value)).collect();
-                    let formatted = appz_deploy::format_env_file(&kvs);
-                    let target_path = match secrets::resolve_project_file(&root, &file) {
-                        Ok(p) => p,
-                        Err(e) => error(&e),
-                    };
-                    if let Some(parent) = target_path.parent()
-                        && let Err(e) = std::fs::create_dir_all(parent)
-                    {
-                        error(&format!("failed to create parent dir: {e}"));
-                    }
-                    if let Err(e) = std::fs::write(&target_path, formatted) {
-                        error(&format!("failed to write {}: {e}", target_path.display()));
-                    }
-                    if json {
-                        println!(
-                            "{}",
-                            serde_json::json!({ "pulled": kvs.len(), "file": target_path.display().to_string() })
-                        );
-                    } else {
-                        success(&format!(
-                            "downloaded {} environment variables to {}",
-                            kvs.len(),
-                            target_path.display()
-                        ));
-                        outro("done");
-                    }
-                }
-                Err(e) => error(&e.to_string()),
+            match command {
+                CloudEnvCmd::Ls { environment } => cloud_env::ls(&root, &environment, json),
+                CloudEnvCmd::Rm { key } => cloud_env::rm(&root, &key, json),
             }
         }
-        EnvCmd::Push { file, target } => {
+        EnvCmd::Environments { command } => {
+            let root = resolve_root(Path::new("."));
+            match command {
+                EnvironmentsCmd::Ls => cloud_env::environments_ls(&root, json),
+                EnvironmentsCmd::Add {
+                    slug,
+                    branch_pattern,
+                } => cloud_env::environments_add(&root, &slug, branch_pattern.as_deref(), json),
+                EnvironmentsCmd::Rm { slug } => cloud_env::environments_rm(&root, &slug, json),
+            }
+        }
+        EnvCmd::Push { file, environment } => {
             if !json {
                 intro("appz env push");
             }
@@ -2103,8 +2114,11 @@ fn run_env(args: EnvArgs, json: bool) {
                 return;
             }
 
-            let targets =
-                target.unwrap_or_else(|| vec!["production".to_string(), "preview".to_string()]);
+            let targets = if environment.is_empty() {
+                cloud_env::default_push_environments()
+            } else {
+                cloud_env::validate_environments(&environment)
+            };
             let cloud_vars: Vec<appz_deploy::CloudEnvVar> = kvs
                 .into_iter()
                 .map(|(key, value)| appz_deploy::CloudEnvVar {
@@ -3895,6 +3909,60 @@ mod tests {
         }
         assert!(AppzCli::try_parse_from(["appz", "env", "pull"]).is_ok());
         assert!(AppzCli::try_parse_from(["appz", "env", "push"]).is_ok());
+        // Per-environment cloud commands; the vault `ls`/`rm` keep working unchanged.
+        let ok = |a: &[&str]| AppzCli::try_parse_from(a).is_ok();
+        assert!(ok(&["appz", "env", "pull", "--environment", "staging"]));
+        assert!(ok(&["appz", "env", "pull", "--target", "preview"]));
+        assert!(ok(&[
+            "appz",
+            "env",
+            "push",
+            "--environment",
+            "production,preview"
+        ]));
+        assert!(ok(&[
+            "appz",
+            "env",
+            "cloud",
+            "ls",
+            "--environment",
+            "preview"
+        ]));
+        assert!(ok(&["appz", "env", "cloud", "rm", "API_KEY", "--yes"]));
+        assert!(ok(&["appz", "env", "environments", "ls"]));
+        assert!(ok(&[
+            "appz",
+            "env",
+            "environments",
+            "add",
+            "qa",
+            "--branch-pattern",
+            "qa/*"
+        ]));
+        assert!(ok(&["appz", "env", "environments", "rm", "qa", "--yes"]));
+        assert!(!ok(&["appz", "env", "run"]));
+        match AppzCli::try_parse_from([
+            "appz",
+            "env",
+            "run",
+            "--environment",
+            "preview",
+            "--",
+            "node",
+            "-e",
+            "1",
+        ])
+        .unwrap()
+        .command
+        {
+            AppzCmd::Env(EnvArgs {
+                command: EnvCmd::Run { environment, cmd },
+            }) => {
+                assert_eq!(environment, ["preview"]);
+                assert_eq!(cmd, ["node", "-e", "1"]);
+            }
+            _ => panic!("expected env run"),
+        }
         // Cloud .env sync stays under `appz env`, not `appz vault`.
         assert!(AppzCli::try_parse_from(["appz", "vault", "pull"]).is_err());
         assert!(AppzCli::try_parse_from(["appz", "vault", "push"]).is_err());

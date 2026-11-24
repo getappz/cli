@@ -20,16 +20,18 @@ use crate::fingerprint::prepare_upload;
 use crate::markdown::{HttpMarkdownConverter, add_markdown_siblings};
 use crate::output::{
     DeployOutput, DeployStatus, DeploymentInfo, DeploymentInspect, DeploymentQuery, DetectedConfig,
-    DomainQuery, DomainVerifyResult, Page, PrerequisiteStatus, ProjectDomain, ProjectInfo,
-    TeamDeployment, TeamDomain,
+    DomainMove, DomainQuery, DomainVerifyResult, Page, PrerequisiteStatus, ProjectDomain,
+    ProjectInfo, PromoteResult, TeamDeployment, TeamDomain,
 };
 use crate::provider::DeployProvider;
 use crate::redirects::{RedirectInput, RedirectList, RedirectVersionRef, RedirectVersions};
 use crate::static_cas::ScannedFileEntry;
+use projects::{ProjectState, Transfer};
 
 pub struct AppzdevProvider;
 
 mod interrupt;
+pub mod projects;
 pub use interrupt::enable_cli_deploy_interrupts;
 
 /// Body of `POST /v0/deployments`. `flags` is sent only when a feature is
@@ -62,6 +64,10 @@ pub fn slugify_project_id(raw: &str) -> String {
     if raw.starts_with("prj_") {
         return raw.to_string();
     }
+    slugify(raw)
+}
+
+fn slugify(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len().min(40));
     let mut last_dash = true; // suppress leading dash
     for b in raw.bytes() {
@@ -171,6 +177,40 @@ pub fn resolve_auth_token(ctx: Option<&DeployContext>) -> Option<String> {
                 .filter(|t| !t.is_empty())
         })
         .or_else(|| load_stored_auth().map(|a| a.token))
+}
+
+/// POST the promote request, retrying transport/5xx failures with one
+/// Idempotency-Key so a retry cannot promote twice.
+fn post_promote(
+    url: &str,
+    token: Option<&str>,
+    deployment_id: &str,
+) -> Result<serde_json::Value, Box<ureq::Error>> {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let key = format!("appz-promote-{deployment_id}-{nanos:x}");
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        let mut req = ureq::post(url).set("Idempotency-Key", &key);
+        if let Some(token) = token {
+            req = req.set("Authorization", &format!("Bearer {token}"));
+        }
+        match req.send_json(serde_json::json!({ "deploymentId": deployment_id })) {
+            Ok(resp) => return resp.into_json().map_err(|e| Box::new(ureq::Error::from(e))),
+            Err(e) => {
+                let retryable = match &e {
+                    ureq::Error::Status(code, _) => *code >= 500,
+                    ureq::Error::Transport(_) => true,
+                };
+                if !retryable || attempt >= 3 {
+                    return Err(Box::new(e));
+                }
+                std::thread::sleep(Duration::from_millis(300 * attempt));
+            }
+        }
+    }
 }
 
 pub fn parse_api_error(
@@ -351,11 +391,59 @@ pub fn resolve_project_id_from_dir(dir: &Path) -> String {
     {
         return slugify_project_id(&id);
     }
+    // `.` / `..` / a trailing separator have no file name until resolved.
     let folder = dir
         .file_name()
+        .map(|s| s.to_os_string())
+        .or_else(|| {
+            dir.canonicalize()
+                .ok()?
+                .file_name()
+                .map(|s| s.to_os_string())
+        })
         .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| "default-project".to_string());
-    slugify_project_id(&folder)
+        .unwrap_or_default();
+    folder_slug(&folder)
+}
+
+/// Turns a folder name into a project slug:
+/// - transliterates non-ASCII (`Café` -> `cafe`, `रवि` -> `rvi`),
+/// - drops copy/download markers (`site (1)`, `site - Copy`, `site copy 2`,
+///   GitHub zip `site-main` / `site-master`),
+/// - strips a domain suffix (`rksolar.co.in` -> `rksolar`),
+/// - drops apostrophes (`John's Site` -> `johns-site`),
+/// - then slugifies. A folder named `prj_*` is slugified like any other name.
+fn folder_slug(folder: &str) -> String {
+    static COPY_MARKER: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"(?:\s*\(\d+\)|[\s_-]+(?:-\s*)?copy(?:\s*\d+)?|-(?:main|master))$")
+            .expect("valid regex")
+    });
+    let mut name = deunicode::deunicode(folder).to_ascii_lowercase();
+    loop {
+        let trimmed = name.trim();
+        let stripped = COPY_MARKER.replace(trimmed, "");
+        if stripped.is_empty() || stripped == trimmed {
+            name = trimmed.to_string();
+            break;
+        }
+        name = stripped.into_owned();
+    }
+    slugify(&strip_domain_suffix(&name).replace('\'', ""))
+}
+
+/// Strips a leading `www.` and a Public Suffix List suffix from a lowercase
+/// folder name that looks like a domain, so `rksolar.co.in`, `rksolar.in`
+/// and `www.rksolar.com` all map to `rksolar`. Unknown endings (`next.js`)
+/// and non-domain names are returned unchanged.
+fn strip_domain_suffix(lower: &str) -> String {
+    let s = lower.strip_prefix("www.").unwrap_or(lower);
+    match psl2::lookup(s) {
+        Some(d) if d.is_known() && !d.is_public_suffix() => {
+            let host = d.as_str();
+            host[..host.len() - d.suffix().len() - 1].to_string()
+        }
+        _ => s.to_string(),
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -366,10 +454,44 @@ pub struct CloudEnvVar {
     pub value: String,
     #[serde(default = "default_targets")]
     pub target: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, alias = "gitBranch", skip_serializing_if = "Option::is_none")]
     pub git_branch: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, alias = "createdAt", skip_serializing_if = "Option::is_none")]
     pub created_at: Option<i64>,
+}
+
+/// Key and metadata of a cloud variable. The list endpoint never returns values.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudEnvMeta {
+    pub id: String,
+    pub key: String,
+    pub target: Vec<String>,
+    #[serde(default)]
+    pub git_branch: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<f64>,
+}
+
+/// A custom project environment (in addition to production/preview/development).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectEnvironment {
+    pub id: String,
+    pub slug: String,
+    #[serde(default)]
+    pub branch_pattern: Option<String>,
+}
+
+/// Whether `slug` is a valid environment name: `^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$`.
+pub fn is_valid_environment_slug(slug: &str) -> bool {
+    let b = slug.as_bytes();
+    let alnum = |c: &u8| c.is_ascii_lowercase() || c.is_ascii_digit();
+    !b.is_empty()
+        && b.len() <= 40
+        && b.iter().all(|c| alnum(c) || *c == b'-')
+        && alnum(&b[0])
+        && alnum(&b[b.len() - 1])
 }
 
 #[derive(serde::Serialize)]
@@ -444,32 +566,34 @@ pub fn format_env_file(vars: &[(String, String)]) -> String {
     out
 }
 
-pub fn pull_cloud_env(
-    api_base: &str,
-    project_id: &str,
-    token: Option<&str>,
-    target: Option<&str>,
-) -> DeployResult<Vec<CloudEnvVar>> {
+fn project_env_url(api_base: &str, project_id: &str, path: &str, target: Option<&str>) -> String {
     use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
     let encoded_project = utf8_percent_encode(project_id, NON_ALPHANUMERIC);
-    let mut url = format!("{api_base}/v0/projects/{encoded_project}/env");
+    let mut url = format!("{api_base}/v0/projects/{encoded_project}{path}");
     if let Some(t) = target {
         let encoded_target = utf8_percent_encode(t, NON_ALPHANUMERIC);
         url.push_str(&format!("?target={encoded_target}"));
     }
-    let mut req = ureq::get(&url);
+    url
+}
+
+fn get_env_array<T: serde::de::DeserializeOwned>(
+    url: &str,
+    token: Option<&str>,
+    operation: &str,
+) -> DeployResult<Vec<T>> {
+    let mut req = ureq::get(url);
     if let Some(tok) = token {
         req = req.set("Authorization", &format!("Bearer {tok}"));
     }
     let resp: serde_json::Value = req
         .call()
-        .map_err(|e| parse_api_error(e, "AppzDev", "Pull environment variables"))?
+        .map_err(|e| parse_api_error(e, "AppzDev", operation))?
         .into_json()
         .map_err(|e| DeployError::DeployFailed {
             provider: "AppzDev",
-            reason: format!("Invalid JSON response from pull env: {e}"),
+            reason: format!("Invalid JSON response from {operation}: {e}"),
         })?;
-
     let items = if let Some(arr) = resp.as_array() {
         arr
     } else if let Some(arr) = resp["env"].as_array() {
@@ -477,15 +601,98 @@ pub fn pull_cloud_env(
     } else {
         return Err(DeployError::DeployFailed {
             provider: "AppzDev",
-            reason: "Expected array of environment variables".into(),
+            reason: "Expected array in response".into(),
         });
     };
+    serde_json::from_value(serde_json::Value::Array(items.clone())).map_err(|e| {
+        DeployError::DeployFailed {
+            provider: "AppzDev",
+            reason: format!("Failed to parse response: {e}"),
+        }
+    })
+}
 
-    let vars: Vec<CloudEnvVar> = serde_json::from_value(serde_json::Value::Array(items.clone()))
+/// Keys and metadata for `target` (`GET /env`); never returns values.
+pub fn list_cloud_env(
+    api_base: &str,
+    project_id: &str,
+    token: Option<&str>,
+    target: Option<&str>,
+) -> DeployResult<Vec<CloudEnvMeta>> {
+    let url = project_env_url(api_base, project_id, "/env", target);
+    get_env_array(&url, token, "List environment variables")
+}
+
+/// Custom environments of a project.
+pub fn list_project_environments(
+    api_base: &str,
+    project_id: &str,
+    token: Option<&str>,
+) -> DeployResult<Vec<ProjectEnvironment>> {
+    let url = project_env_url(api_base, project_id, "/environments", None);
+    get_env_array(&url, token, "List environments")
+}
+
+pub fn add_project_environment(
+    api_base: &str,
+    project_id: &str,
+    token: Option<&str>,
+    slug: &str,
+    branch_pattern: Option<&str>,
+) -> DeployResult<ProjectEnvironment> {
+    if !is_valid_environment_slug(slug) {
+        return Err(DeployError::DeployFailed {
+            provider: "AppzDev",
+            reason: format!(
+                "Invalid environment name {slug:?}: use lowercase letters, digits and '-' (max 40)"
+            ),
+        });
+    }
+    let url = project_env_url(api_base, project_id, "/environments", None);
+    let mut req = ureq::post(&url);
+    if let Some(tok) = token {
+        req = req.set("Authorization", &format!("Bearer {tok}"));
+    }
+    req.send_json(serde_json::json!({ "slug": slug, "branchPattern": branch_pattern }))
+        .map_err(|e| parse_api_error(e, "AppzDev", "Create environment"))?
+        .into_json()
         .map_err(|e| DeployError::DeployFailed {
             provider: "AppzDev",
-            reason: format!("Failed to parse cloud env vars: {e}"),
-        })?;
+            reason: format!("Invalid JSON response from create environment: {e}"),
+        })
+}
+
+pub fn remove_project_environment(
+    api_base: &str,
+    project_id: &str,
+    token: Option<&str>,
+    slug: &str,
+) -> DeployResult<()> {
+    if !is_valid_environment_slug(slug) {
+        return Err(DeployError::DeployFailed {
+            provider: "AppzDev",
+            reason: format!("Invalid environment name {slug:?}"),
+        });
+    }
+    let url = project_env_url(api_base, project_id, &format!("/environments/{slug}"), None);
+    let mut req = ureq::delete(&url);
+    if let Some(tok) = token {
+        req = req.set("Authorization", &format!("Bearer {tok}"));
+    }
+    req.call()
+        .map_err(|e| parse_api_error(e, "AppzDev", "Remove environment"))?;
+    Ok(())
+}
+
+/// Decrypted variables for `target` (`GET /env/values`, needs the `env:decrypt` scope).
+pub fn pull_cloud_env(
+    api_base: &str,
+    project_id: &str,
+    token: Option<&str>,
+    target: Option<&str>,
+) -> DeployResult<Vec<CloudEnvVar>> {
+    let url = project_env_url(api_base, project_id, "/env/values", target);
+    let vars: Vec<CloudEnvVar> = get_env_array(&url, token, "Pull environment variables")?;
 
     for var in &vars {
         if !is_valid_env_key(&var.key) {
@@ -543,7 +750,9 @@ pub fn delete_cloud_env_var(
     token: Option<&str>,
     key: &str,
 ) -> DeployResult<bool> {
-    let url = format!("{api_base}/v0/projects/{project_id}/env/{key}");
+    use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
+    let key = utf8_percent_encode(key, NON_ALPHANUMERIC);
+    let url = project_env_url(api_base, project_id, &format!("/env/{key}"), None);
     let mut req = ureq::delete(&url);
     if let Some(tok) = token {
         req = req.set("Authorization", &format!("Bearer {tok}"));
@@ -667,43 +876,55 @@ fn get_page<T: serde::de::DeserializeOwned>(
         })
 }
 
+/// Query-string pairs for `GET /v0/deployments`.
+fn deployment_params(query: &DeploymentQuery) -> DeployResult<Vec<(String, String)>> {
+    let mut params: Vec<(String, String)> = Vec::new();
+    if let Some(p) = &query.project {
+        params.push(("projectId".into(), p.clone()));
+    }
+    if query.production {
+        params.push(("type".into(), "production".into()));
+    }
+    if let Some(e) = &query.environment {
+        params.push(("environment".into(), e.clone()));
+    }
+    for s in &query.status {
+        params.push(("status".into(), s.clone()));
+    }
+    if let Some(t) = query.since {
+        params.push(("since".into(), t.to_string()));
+    }
+    if let Some(t) = query.until {
+        params.push(("until".into(), t.to_string()));
+    }
+    for kv in &query.meta {
+        let (k, v) = kv
+            .split_once('=')
+            .ok_or_else(|| DeployError::DeployFailed {
+                provider: "AppzDev",
+                reason: format!("invalid --meta '{kv}': expected key=value"),
+            })?;
+        params.push((format!("meta.{k}"), v.to_string()));
+    }
+    if let Some(l) = query.limit {
+        params.push(("limit".into(), l.to_string()));
+    }
+    if let Some(c) = &query.cursor {
+        params.push(("cursor".into(), c.clone()));
+    }
+    Ok(params)
+}
+
 pub fn list_team_deployments(
     api_base: &str,
     token: Option<&str>,
     query: &DeploymentQuery,
 ) -> DeployResult<Page<TeamDeployment>> {
-    let mut params: Vec<(&str, String)> = Vec::new();
-    if let Some(p) = &query.project {
-        params.push(("projectId", p.clone()));
-    }
-    if query.production {
-        params.push(("type", "production".into()));
-    }
-    if let Some(e) = &query.environment {
-        params.push(("environment", e.clone()));
-    }
-    if let Some(s) = &query.status {
-        params.push(("status", s.clone()));
-    }
-    let meta: Vec<(String, String)> = query
-        .meta
+    let params = deployment_params(query)?;
+    let params: Vec<(&str, String)> = params
         .iter()
-        .map(|kv| {
-            kv.split_once('=')
-                .map(|(k, v)| (format!("meta.{k}"), v.to_string()))
-                .ok_or_else(|| DeployError::DeployFailed {
-                    provider: "AppzDev",
-                    reason: format!("invalid --meta '{kv}': expected key=value"),
-                })
-        })
-        .collect::<DeployResult<_>>()?;
-    params.extend(meta.iter().map(|(k, v)| (k.as_str(), v.clone())));
-    if let Some(l) = query.limit {
-        params.push(("limit", l.to_string()));
-    }
-    if let Some(c) = &query.cursor {
-        params.push(("cursor", c.clone()));
-    }
+        .map(|(k, v)| (k.as_str(), v.clone()))
+        .collect();
     get_page(
         api_base,
         "/v0/deployments",
@@ -729,6 +950,98 @@ pub fn list_team_domains(
         params.push(("cursor", c.clone()));
     }
     get_page(api_base, "/v0/domains", token, &params, "List domains")
+}
+
+/// Find one domain in the team-wide listing (there is no single-domain GET).
+pub fn inspect_team_domain(
+    api_base: &str,
+    token: Option<&str>,
+    domain: &str,
+) -> DeployResult<Option<TeamDomain>> {
+    let domain = normalize_domain(domain)?;
+    let mut cursor: Option<String> = None;
+    loop {
+        let page = list_team_domains(
+            api_base,
+            token,
+            &DomainQuery {
+                project: None,
+                limit: Some(100),
+                cursor: cursor.clone(),
+            },
+        )?;
+        if let Some(found) = page.items.into_iter().find(|t| {
+            t.domain
+                .domain
+                .trim_end_matches('.')
+                .eq_ignore_ascii_case(&domain)
+        }) {
+            return Ok(Some(found));
+        }
+        match page.next {
+            Some(next) if cursor.as_deref() != Some(next.as_str()) => cursor = Some(next),
+            _ => return Ok(None),
+        }
+    }
+}
+
+/// Move a domain attachment to `project_id` in organization `org`.
+/// Retries a 202 (routing reconciliation pending) with the same
+/// Idempotency-Key, as the API asks, before reporting `pending`.
+pub fn move_project_domain(
+    api_base: &str,
+    token: Option<&str>,
+    from_project: &str,
+    domain: &str,
+    org: &str,
+    project_id: &str,
+) -> DeployResult<DomainMove> {
+    let domain = normalize_domain(domain)?;
+    let url = format!("{api_base}/v0/projects/{from_project}/domains/{domain}/move");
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    let seed = format!("{domain}:{org}:{project_id}:{nanos}:{}", std::process::id());
+    let key = format!(
+        "appz-move-{}",
+        &blake3::hash(seed.as_bytes()).to_hex()[..32]
+    );
+    let body = serde_json::json!({ "organizationId": org, "projectId": project_id });
+    let mut last = None;
+    for attempt in 0..4 {
+        if attempt > 0 {
+            std::thread::sleep(Duration::from_millis(if cfg!(test) { 10 } else { 1500 }));
+        }
+        let mut req = ureq::post(&url).set("Idempotency-Key", &key);
+        if let Some(tok) = token {
+            req = req.set("Authorization", &format!("Bearer {tok}"));
+        }
+        let resp = match req.send_json(body.clone()) {
+            Ok(r) => r,
+            Err(ureq::Error::Status(403, _)) => {
+                return Err(DeployError::DeployFailed {
+                    provider: "AppzDev",
+                    reason: format!(
+                        "not allowed to move {domain}: you must be an owner of both the current and the destination organization ({org})"
+                    ),
+                });
+            }
+            Err(e) => return Err(parse_api_error(e, "AppzDev", "Move custom domain")),
+        };
+        let accepted = resp.status() == 202;
+        let parsed: DomainMove = resp.into_json().map_err(|e| DeployError::DeployFailed {
+            provider: "AppzDev",
+            reason: format!("Invalid response from move domain: {e}"),
+        })?;
+        if !accepted {
+            return Ok(parsed);
+        }
+        last = Some(parsed);
+    }
+    let mut out = last.expect("loop ran at least once");
+    out.status = "pending".into();
+    Ok(out)
 }
 
 pub fn verify_project_domain(
@@ -891,6 +1204,57 @@ pub fn update_project_redirect_version(
     redirect_call(req, token, Some(serde_json::json!({})), operation)
 }
 
+pub fn list_project_aliases(
+    api_base: &str,
+    project_id: &str,
+    token: Option<&str>,
+) -> DeployResult<Vec<crate::AliasInfo>> {
+    validate_project_ref(project_id)?;
+    let mut req = ureq::get(&format!("{api_base}/v0/projects/{project_id}/aliases"));
+    if let Some(tok) = token {
+        req = req.set("Authorization", &format!("Bearer {tok}"));
+    }
+    req.call()
+        .map_err(|e| parse_api_error(e, "AppzDev", "List aliases"))?
+        .into_json()
+        .map_err(|e| DeployError::DeployFailed {
+            provider: "AppzDev",
+            reason: format!("Invalid aliases response: {e}"),
+        })
+}
+
+pub fn remove_project_alias(
+    api_base: &str,
+    project_id: &str,
+    token: Option<&str>,
+    host: &str,
+) -> DeployResult<()> {
+    validate_project_ref(project_id)?;
+    let host = normalize_domain(host)?;
+    let mut req = ureq::delete(&format!(
+        "{api_base}/v0/projects/{project_id}/aliases/{host}"
+    ));
+    if let Some(tok) = token {
+        req = req.set("Authorization", &format!("Bearer {tok}"));
+    }
+    match req.call() {
+        Ok(_) => Ok(()),
+        // The server refuses to remove a project's production host.
+        Err(ureq::Error::Status(409, resp)) => {
+            let detail = resp
+                .into_json::<serde_json::Value>()
+                .ok()
+                .and_then(|j| j.get("error").and_then(|e| e.as_str().map(String::from)))
+                .unwrap_or_else(|| "conflict".into());
+            Err(DeployError::DeployFailed {
+                provider: "AppzDev",
+                reason: format!("{host} cannot be removed: {detail}"),
+            })
+        }
+        Err(e) => Err(parse_api_error(e, "AppzDev", "Remove alias")),
+    }
+}
+
 pub fn list_projects(api_base: &str, token: Option<&str>) -> DeployResult<Vec<ProjectInfo>> {
     let url = format!("{api_base}/v0/projects");
     let mut req = ureq::get(&url);
@@ -952,6 +1316,61 @@ pub fn add_project(api_base: &str, token: Option<&str>, name: &str) -> DeployRes
         provider: "AppzDev",
         reason: format!("Failed to parse created project: {e}"),
     })
+}
+
+/// Resolve a deployment ID or live URL to a `dpl_` ID.
+fn deployment_id_from_ref(id_or_url: &str) -> DeployResult<String> {
+    let trimmed = id_or_url
+        .trim()
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
+    let id = trimmed
+        .split('/')
+        .next()
+        .unwrap_or(trimmed)
+        .split('.')
+        .next()
+        .unwrap_or(trimmed);
+    if id.starts_with("dpl_") && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+        return Ok(id.to_string());
+    }
+    Err(DeployError::DeployFailed {
+        provider: "AppzDev",
+        reason: format!(
+            "`{id_or_url}` is not a deployment ID or URL. To delete a project, use `appz projects remove <name>`"
+        ),
+    })
+}
+
+/// `DELETE /v0/deployments/{id}`. The server answers 409 while an alias points
+/// at the deployment; surface that with the way out.
+pub fn remove_deployment(
+    api_base: &str,
+    token: Option<&str>,
+    id_or_url: &str,
+) -> DeployResult<String> {
+    let id = deployment_id_from_ref(id_or_url)?;
+    let mut req = ureq::delete(&format!("{api_base}/v0/deployments/{id}"));
+    if let Some(tok) = token {
+        req = req.set("Authorization", &format!("Bearer {tok}"));
+    }
+    match req.call() {
+        Ok(_) => Ok(id),
+        Err(ureq::Error::Status(409, resp)) => {
+            let detail = resp
+                .into_json::<serde_json::Value>()
+                .ok()
+                .and_then(|j| j.get("error").and_then(|e| e.as_str()).map(str::to_string))
+                .unwrap_or_else(|| "an alias points at it".to_string());
+            Err(DeployError::DeployFailed {
+                provider: "AppzDev",
+                reason: format!(
+                    "{id} was not removed: {detail}. Remove the alias first with `appz alias rm <alias>`, then retry"
+                ),
+            })
+        }
+        Err(e) => Err(parse_api_error(e, "AppzDev", "Remove deployment")),
+    }
 }
 
 fn validate_project_ref(id_or_slug: &str) -> DeployResult<()> {
@@ -1613,6 +2032,18 @@ impl DeployProvider for AppzdevProvider {
         Ok(format!("https://{bound_domain}"))
     }
 
+    fn list_aliases(&self, ctx: &DeployContext) -> DeployResult<Vec<crate::AliasInfo>> {
+        let project_id = self.resolve_project_id(ctx);
+        let token = resolve_auth_token(Some(ctx));
+        list_project_aliases(&self.api_base(ctx), &project_id, token.as_deref())
+    }
+
+    fn remove_alias(&self, ctx: &DeployContext, host: &str) -> DeployResult<()> {
+        let project_id = self.resolve_project_id(ctx);
+        let token = resolve_auth_token(Some(ctx));
+        remove_project_alias(&self.api_base(ctx), &project_id, token.as_deref(), host)
+    }
+
     fn list_deployments(&self, ctx: &DeployContext) -> DeployResult<Vec<DeploymentInfo>> {
         let project_id = self.resolve_project_id(ctx);
         let api_base = self.api_base(ctx);
@@ -1633,10 +2064,14 @@ impl DeployProvider for AppzdevProvider {
                 reason: format!("Invalid JSON from list deployments: {e}"),
             })?;
 
-        let items = resp.as_array().ok_or_else(|| DeployError::DeployFailed {
-            provider: self.name(),
-            reason: "Expected JSON array of deployments".into(),
-        })?;
+        // The API returns `{items, next}`; older servers returned a bare array.
+        let items = resp
+            .as_array()
+            .or_else(|| resp.get("items").and_then(|v| v.as_array()))
+            .ok_or_else(|| DeployError::DeployFailed {
+                provider: self.name(),
+                reason: "Expected deployments as `{items}` or a JSON array".into(),
+            })?;
 
         let mut out = Vec::new();
         for item in items {
@@ -1675,6 +2110,48 @@ impl DeployProvider for AppzdevProvider {
     ) -> DeployResult<Page<TeamDeployment>> {
         let token = resolve_auth_token(Some(ctx));
         list_team_deployments(&self.api_base(ctx), token.as_deref(), query)
+    }
+
+    fn promote_deployment(
+        &self,
+        ctx: &DeployContext,
+        id_or_url: &str,
+        confirm: &dyn Fn(&DeploymentInspect) -> bool,
+    ) -> DeployResult<Option<PromoteResult>> {
+        let deployment = self.inspect_deployment(ctx, id_or_url)?;
+        if deployment.status != DeployStatus::Ready {
+            return Err(DeployError::DeployFailed {
+                provider: self.name(),
+                reason: format!(
+                    "deployment {} is {:?}; only ready deployments can be promoted",
+                    deployment.id, deployment.status
+                )
+                .to_lowercase(),
+            });
+        }
+        if !confirm(&deployment) {
+            return Ok(None);
+        }
+        // Promote inside the deployment's own project, whatever dir we run in.
+        let project_id = if deployment.project_id.is_empty() {
+            self.resolve_project_id(ctx)
+        } else {
+            deployment.project_id.clone()
+        };
+        let url = format!("{}/v0/projects/{}/promote", self.api_base(ctx), project_id);
+        let token = resolve_auth_token(Some(ctx));
+        let resp = post_promote(&url, token.as_deref(), &deployment.id)
+            .map_err(|e| parse_api_error(*e, self.name(), "Promote deployment"))?;
+        Ok(Some(PromoteResult {
+            provider: self.slug().to_string(),
+            project_id: resp["projectId"].as_str().unwrap_or(&project_id).into(),
+            deployment_id: resp["deploymentId"]
+                .as_str()
+                .unwrap_or(&deployment.id)
+                .into(),
+            version_id: resp["versionId"].as_str().unwrap_or_default().into(),
+            url: format!("https://{}", resp["host"].as_str().unwrap_or_default()),
+        }))
     }
 
     fn inspect_deployment(
@@ -1756,6 +2233,37 @@ impl DeployProvider for AppzdevProvider {
     ) -> DeployResult<Page<TeamDomain>> {
         let token = resolve_auth_token(Some(ctx));
         list_team_domains(&self.api_base(ctx), token.as_deref(), query)
+    }
+
+    fn inspect_domain(
+        &self,
+        ctx: &DeployContext,
+        domain: &str,
+    ) -> DeployResult<Option<TeamDomain>> {
+        let token = resolve_auth_token(Some(ctx));
+        inspect_team_domain(&self.api_base(ctx), token.as_deref(), domain)
+    }
+
+    fn move_domain(
+        &self,
+        ctx: &DeployContext,
+        domain: &str,
+        to_org: &str,
+        project: &str,
+    ) -> DeployResult<DomainMove> {
+        let api_base = self.api_base(ctx);
+        let token = resolve_auth_token(Some(ctx));
+        let current =
+            inspect_team_domain(&api_base, token.as_deref(), domain)?.ok_or_else(|| {
+                DeployError::DeployFailed {
+                    provider: "AppzDev",
+                    reason: format!("{domain} is not attached to any project"),
+                }
+            })?;
+        let from = current
+            .project_id
+            .unwrap_or_else(|| self.resolve_project_id(ctx));
+        move_project_domain(&api_base, token.as_deref(), &from, domain, to_org, project)
     }
 
     fn verify_domain(&self, ctx: &DeployContext, domain: &str) -> DeployResult<DomainVerifyResult> {
@@ -1855,6 +2363,14 @@ impl DeployProvider for AppzdevProvider {
         update_project_redirect_version(&base, &project, token.as_deref(), version, action)
     }
 
+    fn remove_deployment(&self, ctx: &DeployContext, id_or_url: &str) -> DeployResult<String> {
+        remove_deployment(
+            &self.api_base(ctx),
+            resolve_auth_token(Some(ctx)).as_deref(),
+            id_or_url,
+        )
+    }
+
     fn restore_project(&self, ctx: &DeployContext, id_or_slug: &str) -> DeployResult<ProjectInfo> {
         let base = self.api_base(ctx);
         validate_project_ref(id_or_slug)?;
@@ -1869,6 +2385,107 @@ impl DeployProvider for AppzdevProvider {
                 provider: self.name(),
                 reason: format!("Invalid project in restore response: {e}"),
             })
+    }
+
+    fn project_state(&self, ctx: &DeployContext, id: &str) -> DeployResult<ProjectState> {
+        projects::get_project_state(
+            &self.api_base(ctx),
+            resolve_auth_token(Some(ctx)).as_deref(),
+            id,
+        )
+    }
+
+    fn pause_project(&self, ctx: &DeployContext, id: &str) -> DeployResult<ProjectState> {
+        projects::project_action(
+            &self.api_base(ctx),
+            resolve_auth_token(Some(ctx)).as_deref(),
+            id,
+            "pause",
+        )
+    }
+
+    fn resume_project(&self, ctx: &DeployContext, id: &str) -> DeployResult<ProjectState> {
+        projects::project_action(
+            &self.api_base(ctx),
+            resolve_auth_token(Some(ctx)).as_deref(),
+            id,
+            "resume",
+        )
+    }
+
+    fn keep_project(&self, ctx: &DeployContext, id: &str) -> DeployResult<ProjectState> {
+        projects::project_action(
+            &self.api_base(ctx),
+            resolve_auth_token(Some(ctx)).as_deref(),
+            id,
+            "keep",
+        )
+    }
+
+    fn update_project(
+        &self,
+        ctx: &DeployContext,
+        id: &str,
+        update: &projects::ProjectSettingsUpdate,
+    ) -> DeployResult<ProjectState> {
+        projects::update_project(
+            &self.api_base(ctx),
+            resolve_auth_token(Some(ctx)).as_deref(),
+            id,
+            update,
+        )
+    }
+
+    fn request_transfer(
+        &self,
+        ctx: &DeployContext,
+        id: &str,
+        to_org: &str,
+    ) -> DeployResult<Transfer> {
+        projects::request_transfer(
+            &self.api_base(ctx),
+            resolve_auth_token(Some(ctx)).as_deref(),
+            id,
+            to_org,
+        )
+    }
+
+    fn list_transfers(&self, ctx: &DeployContext) -> DeployResult<Vec<Transfer>> {
+        projects::list_transfers(
+            &self.api_base(ctx),
+            resolve_auth_token(Some(ctx)).as_deref(),
+        )
+    }
+
+    fn get_transfer(&self, ctx: &DeployContext, id: &str) -> DeployResult<Transfer> {
+        projects::get_transfer(
+            &self.api_base(ctx),
+            resolve_auth_token(Some(ctx)).as_deref(),
+            id,
+        )
+    }
+
+    fn accept_transfer(
+        &self,
+        ctx: &DeployContext,
+        id: &str,
+        timeout: Duration,
+    ) -> DeployResult<Transfer> {
+        projects::accept_transfer(
+            &self.api_base(ctx),
+            resolve_auth_token(Some(ctx)).as_deref(),
+            id,
+            timeout,
+            Duration::from_secs(2),
+        )
+    }
+
+    fn cancel_transfer(&self, ctx: &DeployContext, id: &str) -> DeployResult<Transfer> {
+        projects::cancel_transfer(
+            &self.api_base(ctx),
+            resolve_auth_token(Some(ctx)).as_deref(),
+            id,
+        )
     }
 
     fn remove_project(&self, ctx: &DeployContext, id_or_slug: &str) -> DeployResult<bool> {
@@ -1899,6 +2516,55 @@ mod tests {
         let slug = slugify_project_id(&long_name);
         assert_eq!(slug.len(), 40);
         assert_eq!(slug, "a".repeat(40));
+    }
+
+    #[test]
+    fn test_folder_slug() {
+        for (input, want) in [
+            // domain suffixes
+            ("rksolar.co.in", "rksolar"),
+            ("rksolar.in", "rksolar"),
+            ("rksolar.com", "rksolar"),
+            ("RKSolar.COM", "rksolar"),
+            ("www.rksolar.com", "rksolar"),
+            ("shop.rksolar.com.au", "shop-rksolar"),
+            ("myapp.vercel.app", "myapp"),
+            ("com", "com"),
+            ("next.js", "next-js"),
+            (".com", "com"),
+            ("site.", "site"),
+            // copy / download markers
+            ("rksolar.com (1)", "rksolar"),
+            ("my site - Copy", "my-site"),
+            ("my site - Copy (2)", "my-site"),
+            ("my site copy 2", "my-site"),
+            ("rksolar.com-main", "rksolar"),
+            ("portfolio-master", "portfolio"),
+            ("main", "main"),
+            ("copy", "copy"),
+            // unicode, punctuation, empties
+            ("Café Münch", "cafe-munch"),
+            ("John's Site", "johns-site"),
+            ("my_site", "my-site"),
+            ("  spaced  ", "spaced"),
+            ("🚀🚀", "rocket-rocket"),
+            ("!!!", "default-project"),
+            ("", "default-project"),
+            ("prj_My Folder", "prj-my-folder"),
+        ] {
+            assert_eq!(folder_slug(input), want, "input: {input:?}");
+        }
+    }
+
+    #[test]
+    fn test_resolve_project_id_from_dot_dir() {
+        let dir = tempdir().unwrap();
+        let folder = dir.path().join("rksolar.co.in");
+        std::fs::create_dir_all(folder.join("sub")).unwrap();
+        assert_eq!(
+            resolve_project_id_from_dir(&folder.join("sub").join("..")),
+            "rksolar"
+        );
     }
 
     #[test]
@@ -2041,6 +2707,16 @@ mod tests {
             unsafe {
                 std::env::remove_var("APPZ_VAULT_HOME_OVERRIDE");
             }
+        }
+    }
+
+    #[test]
+    fn environment_slug_validation() {
+        for ok in ["a", "staging", "qa-2", "0a"] {
+            assert!(is_valid_environment_slug(ok), "{ok}");
+        }
+        for bad in ["", "-a", "a-", "A", "a_b", "a b", &"a".repeat(41)] {
+            assert!(!is_valid_environment_slug(bad), "{bad}");
         }
     }
 
@@ -2223,6 +2899,15 @@ SPACED=hello world
                                 ("200 OK", r#"{"success":true,"versionId":"ver_mock_1"}"#)
                             } else if method == "POST" && path.contains("/alias") {
                                 ("200 OK", r#"{"success":true,"domain":"custom.com"}"#)
+                            } else if method == "POST" && path.ends_with("/move") {
+                                if path.contains("/forbidden.example.com/") {
+                                    ("403 Forbidden", r#"{"error":"forbidden"}"#)
+                                } else {
+                                    (
+                                        "200 OK",
+                                        r#"{"id":"dom_1","domain":"custom.example.com","projectId":"prj_dest","organizationId":"org_dest","status":"completed"}"#,
+                                    )
+                                }
                             } else if method == "POST" && path.ends_with("/verify") {
                                 (
                                     "200 OK",
@@ -2243,10 +2928,27 @@ SPACED=hello world
                                     "200 OK",
                                     r#"{"status":"deleted","domain":"custom.example.com"}"#,
                                 )
-                            } else if method == "GET" && path.contains("/env") {
+                            } else if method == "GET" && path.contains("/environments") {
+                                (
+                                    "200 OK",
+                                    r#"[{"id":"pen_abcdefghijkl","slug":"staging","branchPattern":"release/*"}]"#,
+                                )
+                            } else if method == "POST" && path.contains("/environments") {
+                                (
+                                    "201 Created",
+                                    r#"{"id":"pen_abcdefghijkl","slug":"staging","branchPattern":null}"#,
+                                )
+                            } else if method == "DELETE" && path.contains("/environments/") {
+                                ("204 No Content", "")
+                            } else if method == "GET" && path.contains("/env/values") {
                                 (
                                     "200 OK",
                                     r#"[{"id":"env_1","key":"MOCK_VAR","value":"test_val_123","target":["production"],"gitBranch":null,"createdAt":1762732800}]"#,
+                                )
+                            } else if method == "GET" && path.contains("/env") {
+                                (
+                                    "200 OK",
+                                    r#"[{"id":"env_1","key":"MOCK_VAR","target":["production"],"gitBranch":"main","createdAt":1762732800}]"#,
                                 )
                             } else if method == "POST" && path.contains("/env") {
                                 ("200 OK", r#"{"status":"synced","count":1}"#)
@@ -2290,6 +2992,20 @@ SPACED=hello world
                                     "200 OK",
                                     r#"[{"id":"prj_mock","name":"mock-app","slug":"mock-app","organizationId":"org_mock","createdAt":1762732800}]"#,
                                 )
+                            } else if method == "GET" && path.ends_with("/aliases") {
+                                (
+                                    "200 OK",
+                                    r#"[{"host":"app.example.com","deploymentId":"dpl_abc123def456","versionId":"ver_abc123def456","createdAt":1762732800000,"isProduction":true},{"host":"beta.example.com","deploymentId":"dpl_abc123def456","versionId":"ver_abc123def456","createdAt":1762732900000,"isProduction":false}]"#,
+                                )
+                            } else if method == "DELETE"
+                                && path.ends_with("/aliases/beta.example.com")
+                            {
+                                ("204 No Content", "")
+                            } else if method == "DELETE" && path.contains("/aliases/") {
+                                (
+                                    "409 Conflict",
+                                    r#"{"error":"the production host cannot be removed"}"#,
+                                )
                             } else if method == "GET"
                                 && path.starts_with("/v0/projects/")
                                 && !path.contains("/env")
@@ -2319,6 +3035,13 @@ SPACED=hello world
                                 (
                                     "200 OK",
                                     r#"{"id":"prj_new_mock","name":"new-app","slug":"new-app","organizationId":"org_mock","createdAt":1762732800}"#,
+                                )
+                            } else if method == "DELETE" && path == "/v0/deployments/dpl_mock_1" {
+                                ("204 No Content", "")
+                            } else if method == "DELETE" && path == "/v0/deployments/dpl_aliased" {
+                                (
+                                    "409 Conflict",
+                                    r#"{"error":"deployment is aliased by app.example.com"}"#,
                                 )
                             } else if method == "DELETE" && path.starts_with("/v0/projects/") {
                                 ("200 OK", r#"{"status":"deleted","id":"prj_mock"}"#)
@@ -2359,6 +3082,40 @@ SPACED=hello world
                 let _ = h.join();
             }
         }
+    }
+
+    #[test]
+    fn deployment_params_encode_filters() {
+        let p = deployment_params(&DeploymentQuery {
+            production: true,
+            environment: Some("staging".into()),
+            status: vec!["ready".into(), "error".into()],
+            since: Some(10),
+            until: Some(20),
+            meta: vec!["a=b=c".into()],
+            ..Default::default()
+        })
+        .unwrap();
+        let pairs: Vec<(&str, &str)> = p.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        assert_eq!(
+            pairs,
+            [
+                ("type", "production"),
+                ("environment", "staging"),
+                ("status", "ready"),
+                ("status", "error"),
+                ("since", "10"),
+                ("until", "20"),
+                ("meta.a", "b=c"),
+            ]
+        );
+        assert!(
+            deployment_params(&DeploymentQuery {
+                meta: vec!["nokv".into()],
+                ..Default::default()
+            })
+            .is_err()
+        );
     }
 
     #[test]
@@ -2445,6 +3202,34 @@ SPACED=hello world
         assert_eq!(doms.items[0].project_slug.as_deref(), Some("mock-app"));
         assert_eq!(doms.items[0].domain.created_at, Some(1762732800000));
 
+        let found = provider
+            .inspect_domain(&ctx, "Custom.Example.com")
+            .unwrap()
+            .expect("domain must be found");
+        assert_eq!(found.project_slug.as_deref(), Some("mock-app"));
+        assert!(
+            provider
+                .inspect_domain(&ctx, "nope.example.com")
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(found.domain.serving_status(), "serving");
+        let moved = provider
+            .move_domain(&ctx, "custom.example.com", "org_dest", "prj_dest")
+            .unwrap();
+        assert_eq!(moved.status, "completed");
+        assert_eq!(moved.project_id, "prj_dest");
+        let err = move_project_domain(
+            &provider.api_base(&ctx),
+            None,
+            "prj_mock",
+            "forbidden.example.com",
+            "org_dest",
+            "prj_dest",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("owner of both"), "{err}");
+
         // 4. Rollback
         provider
             .rollback(&ctx, "ver_mock_1")
@@ -2467,6 +3252,30 @@ SPACED=hello world
         assert_eq!(pulled_vars.len(), 1);
         assert_eq!(pulled_vars[0].key, "MOCK_VAR");
         assert_eq!(pulled_vars[0].value, "test_val_123");
+
+        let meta = list_cloud_env(&server.addr, "prj_mock", Some("mock_token_123"), None)
+            .expect("env list must succeed");
+        assert_eq!(meta[0].key, "MOCK_VAR");
+        assert_eq!(meta[0].git_branch.as_deref(), Some("main"));
+        assert!(!serde_json::to_string(&meta).unwrap().contains("test_val"));
+
+        // 6b. Custom environments
+        let envs = list_project_environments(&server.addr, "prj_mock", Some("mock_token_123"))
+            .expect("list environments must succeed");
+        assert_eq!(envs[0].slug, "staging");
+        assert_eq!(envs[0].branch_pattern.as_deref(), Some("release/*"));
+        let created = add_project_environment(
+            &server.addr,
+            "prj_mock",
+            Some("mock_token_123"),
+            "staging",
+            None,
+        )
+        .expect("create environment must succeed");
+        assert_eq!(created.id, "pen_abcdefghijkl");
+        assert!(add_project_environment(&server.addr, "prj_mock", None, "Bad Slug", None).is_err());
+        remove_project_environment(&server.addr, "prj_mock", Some("mock_token_123"), "staging")
+            .expect("remove environment must succeed");
 
         // 7. Env push
         let push_count = push_cloud_env(
@@ -2550,9 +3359,40 @@ SPACED=hello world
             .remove_project(&ctx, "mock-app")
             .expect("remove project must succeed");
         assert!(removed_proj);
+        assert_eq!(
+            provider
+                .remove_deployment(&ctx, "https://dpl_mock_1.appz.app/")
+                .unwrap(),
+            "dpl_mock_1"
+        );
+        let err = provider
+            .remove_deployment(&ctx, "dpl_aliased")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("aliased by app.example.com") && err.contains("appz alias rm"));
+        let err = provider
+            .remove_deployment(&ctx, "dpl_gone")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("404"));
+        let err = provider
+            .remove_deployment(&ctx, "my-app")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("appz projects remove"));
         let restored = provider.restore_project(&ctx, "mock-app").unwrap();
         assert_eq!(restored.id, got_proj.id);
         assert_eq!(restored.slug, got_proj.slug);
+        let aliases = provider.list_aliases(&ctx).unwrap();
+        assert_eq!(aliases.len(), 2);
+        assert!(aliases[0].is_production && !aliases[1].is_production);
+        assert_eq!(aliases[1].deployment_id, "dpl_abc123def456");
+        provider.remove_alias(&ctx, "Beta.Example.com").unwrap();
+        let err = provider.remove_alias(&ctx, "app.example.com").unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("production host cannot be removed")
+        );
         let err = provider.restore_project(&ctx, "missing").unwrap_err();
         assert!(err.to_string().contains("no restorable project"));
 
@@ -2611,6 +3451,63 @@ SPACED=hello world
                 .version,
             5
         );
+    }
+
+    #[test]
+    fn move_domain_retries_202_with_the_same_idempotency_key() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let mut keys = Vec::new();
+            for status in ["202 Accepted", "200 OK"] {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buf = [0u8; 4096];
+                let n = stream.read(&mut buf).unwrap();
+                let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                let key = req
+                    .lines()
+                    .find_map(|l| {
+                        l.to_ascii_lowercase()
+                            .starts_with("idempotency-key:")
+                            .then(|| l.split_once(':').unwrap().1.trim().to_string())
+                    })
+                    .unwrap_or_default();
+                keys.push(key);
+                let body = format!(
+                    r#"{{"id":"dom_1","domain":"a.example.com","projectId":"prj_dest","organizationId":"org_dest","status":"{}"}}"#,
+                    if status.starts_with("202") {
+                        "committed"
+                    } else {
+                        "completed"
+                    }
+                );
+                let resp = format!(
+                    "HTTP/1.1 {status}
+Content-Type: application/json
+Content-Length: {}
+Connection: close
+
+{body}",
+                    body.len()
+                );
+                stream.write_all(resp.as_bytes()).unwrap();
+            }
+            keys
+        });
+        let out = move_project_domain(
+            &addr,
+            None,
+            "prj_src",
+            "a.example.com",
+            "org_dest",
+            "prj_dest",
+        )
+        .unwrap();
+        assert_eq!(out.status, "completed");
+        let keys = server.join().unwrap();
+        assert!(keys[0].starts_with("appz-move-"), "{keys:?}");
+        assert_eq!(keys[0], keys[1]);
     }
 
     #[test]
@@ -2723,5 +3620,149 @@ SPACED=hello world
             let err = parse_api_error(status_error(401, body), "AppzDev", "List projects");
             assert!(matches!(err, DeployError::AuthMissing { .. }), "{err:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod promote_tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::sync::{Arc, Mutex};
+
+    /// Serves `responses` in order for successive requests; records raw requests.
+    fn serve(responses: Vec<(u16, String)>) -> (String, Arc<Mutex<Vec<String>>>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = format!("http://{}", listener.local_addr().unwrap());
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let log = seen.clone();
+        std::thread::spawn(move || {
+            for (status, body) in responses {
+                let Ok((mut s, _)) = listener.accept() else {
+                    return;
+                };
+                // Read the whole request (headers and body) before replying.
+                let mut raw = Vec::new();
+                let mut chunk = [0u8; 4096];
+                loop {
+                    let n = s.read(&mut chunk).unwrap_or(0);
+                    raw.extend_from_slice(&chunk[..n]);
+                    let text = String::from_utf8_lossy(&raw).to_lowercase();
+                    let Some(head_end) = text.find("\r\n\r\n") else {
+                        if n == 0 { break } else { continue }
+                    };
+                    let len = text
+                        .lines()
+                        .find_map(|l| l.strip_prefix("content-length:"))
+                        .and_then(|v| v.trim().parse::<usize>().ok())
+                        .unwrap_or(0);
+                    if n == 0 || raw.len() >= head_end + 4 + len {
+                        break;
+                    }
+                }
+                let n = raw.len();
+                let buf = raw;
+                log.lock()
+                    .unwrap()
+                    .push(String::from_utf8_lossy(&buf[..n]).into_owned());
+                let _ = write!(
+                    s,
+                    "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+        });
+        (addr, seen)
+    }
+
+    fn ctx(addr: String) -> DeployContext {
+        let mut ctx = DeployContext::new(std::env::temp_dir(), "dist".into());
+        ctx.run_env.insert("APPZ_API_URL".into(), addr);
+        ctx.run_env.insert("APPZ_TOKEN".into(), "tok".into());
+        ctx
+    }
+
+    fn inspect_body(status: &str) -> (u16, String) {
+        (
+            200,
+            format!(
+                r#"{{"id":"dpl_abcdefghijkl","projectId":"prj_abcdefghijkl","versionId":"ver_abcdefghijkl","status":"{status}","type":"preview"}}"#
+            ),
+        )
+    }
+
+    const PROMOTED: &str = r#"{"status":"promoted","projectId":"prj_abcdefghijkl","deploymentId":"dpl_abcdefghijkl","versionId":"ver_abcdefghijkl","host":"site.appz.to"}"#;
+
+    #[test]
+    fn promote_posts_deployment_id_with_idempotency_key() {
+        let (addr, seen) = serve(vec![inspect_body("ready"), (200, PROMOTED.into())]);
+        let out = AppzdevProvider
+            .promote_deployment(&ctx(addr), "https://dpl_abcdefghijkl.appz.to", &|_| true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(out.url, "https://site.appz.to");
+        assert_eq!(out.version_id, "ver_abcdefghijkl");
+        let reqs = seen.lock().unwrap();
+        assert!(reqs[1].starts_with("POST /v0/projects/prj_abcdefghijkl/promote"));
+        assert!(
+            reqs[1]
+                .to_lowercase()
+                .contains("idempotency-key: appz-promote-dpl_abcdefghijkl-")
+        );
+        assert!(reqs[1].contains(r#"{"deploymentId":"dpl_abcdefghijkl"}"#));
+    }
+
+    #[test]
+    fn promote_declined_makes_no_post() {
+        let (addr, seen) = serve(vec![inspect_body("ready")]);
+        let out = AppzdevProvider
+            .promote_deployment(&ctx(addr), "dpl_abcdefghijkl", &|_| false)
+            .unwrap();
+        assert!(out.is_none());
+        assert_eq!(seen.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn promote_rejects_deployments_that_are_not_ready() {
+        let (addr, seen) = serve(vec![inspect_body("building")]);
+        let err = AppzdevProvider
+            .promote_deployment(&ctx(addr), "dpl_abcdefghijkl", &|_| true)
+            .unwrap_err();
+        assert!(err.to_string().contains("only ready deployments"), "{err}");
+        assert_eq!(seen.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn promote_retries_server_errors_with_the_same_key() {
+        let (addr, seen) = serve(vec![
+            inspect_body("ready"),
+            (503, r#"{"error":"busy"}"#.into()),
+            (200, PROMOTED.into()),
+        ]);
+        AppzdevProvider
+            .promote_deployment(&ctx(addr), "dpl_abcdefghijkl", &|_| true)
+            .unwrap()
+            .unwrap();
+        let reqs = seen.lock().unwrap();
+        let key = |r: &str| {
+            r.lines()
+                .find(|l| l.to_lowercase().starts_with("idempotency-key:"))
+                .map(str::to_owned)
+        };
+        assert!(key(&reqs[1]).is_some());
+        assert_eq!(key(&reqs[1]), key(&reqs[2]));
+    }
+
+    #[test]
+    fn promote_does_not_retry_client_errors() {
+        let (addr, seen) = serve(vec![
+            inspect_body("ready"),
+            (409, r#"{"error":"conflict"}"#.into()),
+        ]);
+        assert!(
+            AppzdevProvider
+                .promote_deployment(&ctx(addr), "dpl_abcdefghijkl", &|_| true)
+                .is_err()
+        );
+        assert_eq!(seen.lock().unwrap().len(), 2);
     }
 }

@@ -292,6 +292,10 @@ impl GenericProvider {
 }
 
 impl DeployProvider for GenericProvider {
+    fn deploys_prebuilt_output(&self) -> bool {
+        uses_output_dir(&self.0.spec.production) || uses_output_dir(&self.0.spec.preview)
+    }
+
     fn name(&self) -> &'static str {
         &self.0.spec.name
     }

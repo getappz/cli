@@ -5,9 +5,10 @@ use crate::context::DeployContext;
 use crate::error::{DeployError, DeployResult};
 use crate::output::{
     AuthState, DeployOutput, DeploymentInfo, DeploymentInspect, DeploymentQuery, DetectedConfig,
-    DomainQuery, DomainVerifyResult, Page, PrerequisiteStatus, ProjectDomain, ProjectInfo,
-    TeamDeployment, TeamDomain,
+    DomainMove, DomainQuery, DomainVerifyResult, Page, PrerequisiteStatus, ProjectDomain,
+    ProjectInfo, PromoteResult, TeamDeployment, TeamDomain,
 };
+use crate::providers::appzdev::projects::{ProjectSettingsUpdate, ProjectState, Transfer};
 use crate::redirects::{RedirectInput, RedirectList, RedirectVersionRef, RedirectVersions};
 
 /// Timeout for the actual deploy invocation (platform CLIs can legitimately
@@ -38,6 +39,12 @@ pub trait DeployProvider: Send + Sync {
     /// its own build for some projects (Vercel for server frameworks) says
     /// no, so they are not built twice.
     fn needs_prebuild(&self, _frameworks: &[String]) -> bool {
+        true
+    }
+    /// Whether this provider can deploy an already-built output directory
+    /// (`appz deploy --prebuilt`). False when its own CLI always builds or
+    /// deploys from source.
+    fn deploys_prebuilt_output(&self) -> bool {
         true
     }
     /// mise tool spec used to install this provider's CLI (`appz deploy --yes`).
@@ -201,6 +208,36 @@ pub trait DeployProvider: Send + Sync {
         })
     }
 
+    fn list_aliases(&self, ctx: &DeployContext) -> DeployResult<Vec<crate::AliasInfo>> {
+        let _ = ctx;
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "alias ls",
+        })
+    }
+
+    fn remove_alias(&self, ctx: &DeployContext, host: &str) -> DeployResult<()> {
+        let _ = (ctx, host);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "alias rm",
+        })
+    }
+
+    /// Promote a ready deployment to production. `confirm` sees the resolved
+    /// deployment before anything changes; `Ok(None)` means it declined.
+    fn promote_deployment(
+        &self,
+        _ctx: &DeployContext,
+        _id_or_url: &str,
+        _confirm: &dyn Fn(&DeploymentInspect) -> bool,
+    ) -> DeployResult<Option<PromoteResult>> {
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "promote",
+        })
+    }
+
     fn inspect_deployment(
         &self,
         ctx: &DeployContext,
@@ -210,6 +247,15 @@ pub trait DeployProvider: Send + Sync {
         Err(DeployError::Unsupported {
             provider: self.name(),
             operation: "inspect",
+        })
+    }
+
+    /// Delete one deployment by ID or URL; returns the resolved deployment ID.
+    fn remove_deployment(&self, ctx: &DeployContext, id_or_url: &str) -> DeployResult<String> {
+        let _ = (ctx, id_or_url);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "remove",
         })
     }
 
@@ -238,6 +284,34 @@ pub trait DeployProvider: Send + Sync {
         Err(DeployError::Unsupported {
             provider: self.name(),
             operation: "domains list",
+        })
+    }
+
+    /// Look up one domain across the team; `Ok(None)` when it is attached nowhere.
+    fn inspect_domain(
+        &self,
+        ctx: &DeployContext,
+        domain: &str,
+    ) -> DeployResult<Option<TeamDomain>> {
+        let _ = (ctx, domain);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "domains inspect",
+        })
+    }
+
+    /// Move a domain attachment to a project in another organization.
+    fn move_domain(
+        &self,
+        ctx: &DeployContext,
+        domain: &str,
+        to_org: &str,
+        project: &str,
+    ) -> DeployResult<DomainMove> {
+        let _ = (ctx, domain, to_org, project);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "domains move",
         })
     }
 
@@ -372,6 +446,92 @@ pub trait DeployProvider: Send + Sync {
         Err(DeployError::Unsupported {
             provider: self.name(),
             operation: "projects restore",
+        })
+    }
+
+    fn project_state(&self, _ctx: &DeployContext, _id: &str) -> DeployResult<ProjectState> {
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "projects get",
+        })
+    }
+
+    fn pause_project(&self, _ctx: &DeployContext, _id: &str) -> DeployResult<ProjectState> {
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "projects pause",
+        })
+    }
+
+    fn resume_project(&self, _ctx: &DeployContext, _id: &str) -> DeployResult<ProjectState> {
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "projects resume",
+        })
+    }
+
+    fn keep_project(&self, _ctx: &DeployContext, _id: &str) -> DeployResult<ProjectState> {
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "projects keep",
+        })
+    }
+
+    fn update_project(
+        &self,
+        _ctx: &DeployContext,
+        _id: &str,
+        _update: &ProjectSettingsUpdate,
+    ) -> DeployResult<ProjectState> {
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "projects update",
+        })
+    }
+
+    fn request_transfer(
+        &self,
+        _ctx: &DeployContext,
+        _id: &str,
+        _to_org: &str,
+    ) -> DeployResult<Transfer> {
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "projects transfer",
+        })
+    }
+
+    fn list_transfers(&self, _ctx: &DeployContext) -> DeployResult<Vec<Transfer>> {
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "transfers list",
+        })
+    }
+
+    fn get_transfer(&self, _ctx: &DeployContext, _id: &str) -> DeployResult<Transfer> {
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "transfers inspect",
+        })
+    }
+
+    /// Accept a transfer, polling while the server reports it is reconciling.
+    fn accept_transfer(
+        &self,
+        _ctx: &DeployContext,
+        _id: &str,
+        _timeout: Duration,
+    ) -> DeployResult<Transfer> {
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "transfers accept",
+        })
+    }
+
+    fn cancel_transfer(&self, _ctx: &DeployContext, _id: &str) -> DeployResult<Transfer> {
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "transfers cancel",
         })
     }
 

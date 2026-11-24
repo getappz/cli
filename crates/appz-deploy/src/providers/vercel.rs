@@ -74,11 +74,26 @@ impl VercelProvider {
 
         // A static site appz already built: hand Vercel that output directly
         // (no `vercel pull` / `vercel build`, which start from scratch).
-        let static_site = ctx.prebuilt
-            && assemble_static_output(ctx).map_err(|reason| DeployError::DeployFailed {
+        // `--prebuilt` with a `vercel build` result already in `.vercel/output`
+        // deploys that as is.
+        let native_output =
+            ctx.use_existing_output && ctx.project_dir.join(".vercel/output/config.json").is_file();
+        let static_site = native_output
+            || ctx.prebuilt
+                && assemble_static_output(ctx).map_err(|reason| DeployError::DeployFailed {
+                    provider: self.name(),
+                    reason,
+                })?;
+
+        if ctx.use_existing_output && !static_site {
+            return Err(DeployError::DeployFailed {
                 provider: self.name(),
-                reason,
-            })?;
+                reason: format!(
+                    "'{}' is not a static site and .vercel/output is missing: run `vercel build` first, or deploy without --prebuilt",
+                    ctx.output_dir
+                ),
+            });
+        }
 
         if !static_site {
             // Pull the linked project's settings; `vercel build` needs them locally.

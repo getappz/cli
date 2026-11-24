@@ -53,6 +53,11 @@ To recover a hosted Appz project, run `appz projects --target appzdev restore <s
 within 30 days of removal. Restore before deploying again to the deleted slug,
 because a new deploy can replace the deleted project.
 
+To undo a bad production deploy on appz.dev, run `appz rollback` to repoint production at the
+previous ready production deployment (shows `current -> target`, confirms unless `--yes`), or
+`appz rollback <version-id|deployment-id|url>` for a specific one. A lone existing directory
+argument (`appz rollback ./site`) is the project directory.
+
 Set `APPZ_BACKUP_REPOSITORY` to a dedicated repository outside the project.
 Store its password with `appz vault set APPZ_BACKUP_PASSWORD` and run
 `appz vault unlock` before backing up, or set `APPZ_BACKUP_PASSWORD` for

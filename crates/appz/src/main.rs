@@ -336,10 +336,12 @@ struct DeployArgs {
 
 #[derive(Args)]
 struct RollbackArgs {
-    /// Version ID to roll back to
-    version: String,
-    #[arg(default_value = ".")]
-    dir: PathBuf,
+    /// Version ID, deployment ID or deployment URL to roll back to. Omit to
+    /// roll back to the previous ready production deployment. A lone existing
+    /// directory is treated as DIR.
+    version: Option<String>,
+    /// Project directory
+    dir: Option<PathBuf>,
     /// Provider slug (default: detects from project or config)
     #[arg(long)]
     target: Option<String>,
@@ -2276,18 +2278,74 @@ fn print_deploy_dry_run(output: &appz_deploy::DeployOutput) {
 }
 
 fn run_rollback(args: RollbackArgs, json: bool) {
-    let canonical = resolve_root(&args.dir);
+    // `appz rollback some/dir`: a lone existing path is the directory.
+    let (version, dir) = match (args.version, args.dir) {
+        (Some(v), None) if Path::new(&v).is_dir() => (None, PathBuf::from(v)),
+        (v, d) => (v, d.unwrap_or_else(|| PathBuf::from("."))),
+    };
+    let canonical = resolve_root(&dir);
     if !json {
         intro("appz rollback");
     }
-    match deploy::rollback(&canonical, args.target, &args.version) {
+    let resolved = match &version {
+        Some(v) => deploy::resolve_version(&canonical, args.target.clone(), v).map(|id| (id, None)),
+        None => deploy::plan_rollback(&canonical, args.target.clone()).map(|plan| {
+            (
+                plan.target.version_id.clone().unwrap_or_default(),
+                Some(plan),
+            )
+        }),
+    };
+    let (version_id, plan) = match resolved {
+        Ok(r) => r,
+        Err(e) => error(&e),
+    };
+    if let Some(plan) = &plan {
+        let label = |d: &appz_deploy::TeamDeployment| {
+            format!(
+                "{} ({})",
+                d.id,
+                d.url
+                    .as_deref()
+                    .unwrap_or(d.version_id.as_deref().unwrap_or("-"))
+            )
+        };
+        let from = plan
+            .current
+            .as_ref()
+            .map(label)
+            .unwrap_or_else(|| "-".into());
+        let msg = format!("roll back production: {from} -> {}", label(&plan.target));
+        if json {
+            // Non-interactive consumers must opt in with --yes.
+            if !assume_yes() {
+                println!(
+                    "{}",
+                    serde_json::json!({ "status": "confirmation_required", "plan": plan })
+                );
+                error("pass --yes to roll back to the previous production deployment");
+            }
+        } else {
+            info(&msg);
+            let ok = assume_yes()
+                || is_tty()
+                    && cliclack::confirm("Roll back?")
+                        .initial_value(false)
+                        .interact()
+                        .unwrap_or(false);
+            if !ok {
+                return outro("rollback cancelled");
+            }
+        }
+    }
+    match deploy::rollback(&canonical, args.target, &version_id) {
         Ok(output) => {
             if json {
                 println!("{}", serde_json::to_string_pretty(&output).unwrap());
             } else {
                 success(&format!(
                     "rolled back {} to version {}",
-                    output.provider, args.version
+                    output.provider, version_id
                 ));
                 if let Some(url) = &output.url {
                     info(url);
@@ -3310,7 +3368,8 @@ mod tests {
     fn rollback_and_alias_take_the_required_argument_first() {
         assert!(AppzCli::try_parse_from(["appz", "rollback", "v42"]).is_ok());
         assert!(AppzCli::try_parse_from(["appz", "rollback", "v42", "site"]).is_ok());
-        assert!(AppzCli::try_parse_from(["appz", "rollback"]).is_err());
+        assert!(AppzCli::try_parse_from(["appz", "rollback"]).is_ok());
+        assert!(AppzCli::try_parse_from(["appz", "rollback", "some/dir"]).is_ok());
         assert!(AppzCli::try_parse_from(["appz", "alias", "app.example.com"]).is_ok());
         assert!(AppzCli::try_parse_from(["appz", "alias"]).is_err());
 

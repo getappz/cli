@@ -200,6 +200,13 @@ also remain available for runtime imports and existing links. The filename uses
 the first 10 hex characters of the BLAKE3 digest of the uploaded bytes.
 Deploy manifests use the full digest prefixed with `b3:`.
 
+`appz open [ID_OR_URL] [DIR]` opens the production site (or the given
+deployment) in your browser; `--dashboard` opens the project's (or that
+deployment's) page on the my.appz.dev dashboard instead (set
+`APPZ_DASHBOARD_URL` to change the base). With
+`--json` or no terminal it prints `{url, kind}` / the URL instead. Other
+providers open the last production URL recorded by `appz deploy --prod`.
+
 Manage a hosted project's aliases with `appz alias --target appzdev`:
 `appz alias set <domain>` (or the shorthand `appz alias <domain>`) points a
 domain at the project, `appz alias ls` lists serving hosts and the deployments

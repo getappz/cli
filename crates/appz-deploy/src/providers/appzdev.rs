@@ -19,8 +19,9 @@ use crate::error::{DeployError, DeployResult};
 use crate::fingerprint::prepare_upload;
 use crate::markdown::{HttpMarkdownConverter, add_markdown_siblings};
 use crate::output::{
-    DeployOutput, DeployStatus, DeploymentInfo, DeploymentInspect, DetectedConfig,
-    DomainVerifyResult, PrerequisiteStatus, ProjectDomain, ProjectInfo,
+    DeployOutput, DeployStatus, DeploymentInfo, DeploymentInspect, DeploymentQuery, DetectedConfig,
+    DomainQuery, DomainVerifyResult, Page, PrerequisiteStatus, ProjectDomain, ProjectInfo,
+    TeamDeployment, TeamDomain,
 };
 use crate::provider::DeployProvider;
 use crate::static_cas::ScannedFileEntry;
@@ -30,7 +31,7 @@ pub struct AppzdevProvider;
 mod interrupt;
 pub use interrupt::enable_cli_deploy_interrupts;
 
-/// Body of `POST /api/v0/deployments`. `flags` is sent only when a feature is
+/// Body of `POST /v0/deployments`. `flags` is sent only when a feature is
 /// on, so deploys without opt-ins keep the exact pre-existing payload.
 pub(crate) fn negotiate_payload(
     project_id: &str,
@@ -450,7 +451,7 @@ pub fn pull_cloud_env(
 ) -> DeployResult<Vec<CloudEnvVar>> {
     use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
     let encoded_project = utf8_percent_encode(project_id, NON_ALPHANUMERIC);
-    let mut url = format!("{api_base}/api/v0/projects/{encoded_project}/env");
+    let mut url = format!("{api_base}/v0/projects/{encoded_project}/env");
     if let Some(t) = target {
         let encoded_target = utf8_percent_encode(t, NON_ALPHANUMERIC);
         url.push_str(&format!("?target={encoded_target}"));
@@ -503,7 +504,7 @@ pub fn push_cloud_env(
     token: Option<&str>,
     vars: &[CloudEnvVar],
 ) -> DeployResult<usize> {
-    let url = format!("{api_base}/api/v0/projects/{project_id}/env");
+    let url = format!("{api_base}/v0/projects/{project_id}/env");
     let mut req = ureq::post(&url);
     if let Some(tok) = token {
         req = req.set("Authorization", &format!("Bearer {tok}"));
@@ -541,7 +542,7 @@ pub fn delete_cloud_env_var(
     token: Option<&str>,
     key: &str,
 ) -> DeployResult<bool> {
-    let url = format!("{api_base}/api/v0/projects/{project_id}/env/{key}");
+    let url = format!("{api_base}/v0/projects/{project_id}/env/{key}");
     let mut req = ureq::delete(&url);
     if let Some(tok) = token {
         req = req.set("Authorization", &format!("Bearer {tok}"));
@@ -585,7 +586,7 @@ pub fn add_project_domain(
 ) -> DeployResult<ProjectDomain> {
     let domain = normalize_domain(domain)?;
     let domain = domain.as_str();
-    let url = format!("{api_base}/api/v0/projects/{project_id}/domains");
+    let url = format!("{api_base}/v0/projects/{project_id}/domains");
     let mut req = ureq::post(&url);
     if let Some(tok) = token {
         req = req.set("Authorization", &format!("Bearer {tok}"));
@@ -610,7 +611,7 @@ pub fn list_project_domains(
     project_id: &str,
     token: Option<&str>,
 ) -> DeployResult<Vec<ProjectDomain>> {
-    let url = format!("{api_base}/api/v0/projects/{project_id}/domains");
+    let url = format!("{api_base}/v0/projects/{project_id}/domains");
     let mut req = ureq::get(&url);
     if let Some(tok) = token {
         req = req.set("Authorization", &format!("Bearer {tok}"));
@@ -641,6 +642,94 @@ pub fn list_project_domains(
     })
 }
 
+/// GET `{api_base}{path}` with query params, decoded as a `{ items, next }` page.
+fn get_page<T: serde::de::DeserializeOwned>(
+    api_base: &str,
+    path: &str,
+    token: Option<&str>,
+    params: &[(&str, String)],
+    operation: &str,
+) -> DeployResult<Page<T>> {
+    let mut req = ureq::get(&format!("{api_base}{path}"));
+    for (k, v) in params {
+        req = req.query(k, v);
+    }
+    if let Some(tok) = token {
+        req = req.set("Authorization", &format!("Bearer {tok}"));
+    }
+    req.call()
+        .map_err(|e| parse_api_error(e, "AppzDev", operation))?
+        .into_json()
+        .map_err(|e| DeployError::DeployFailed {
+            provider: "AppzDev",
+            reason: format!("Invalid response from {operation}: {e}"),
+        })
+}
+
+pub fn list_team_deployments(
+    api_base: &str,
+    token: Option<&str>,
+    query: &DeploymentQuery,
+) -> DeployResult<Page<TeamDeployment>> {
+    let mut params: Vec<(&str, String)> = Vec::new();
+    if let Some(p) = &query.project {
+        params.push(("projectId", p.clone()));
+    }
+    if query.production {
+        params.push(("type", "production".into()));
+    }
+    if let Some(e) = &query.environment {
+        params.push(("environment", e.clone()));
+    }
+    if let Some(s) = &query.status {
+        params.push(("status", s.clone()));
+    }
+    let meta: Vec<(String, String)> = query
+        .meta
+        .iter()
+        .map(|kv| {
+            kv.split_once('=')
+                .map(|(k, v)| (format!("meta.{k}"), v.to_string()))
+                .ok_or_else(|| DeployError::DeployFailed {
+                    provider: "AppzDev",
+                    reason: format!("invalid --meta '{kv}': expected key=value"),
+                })
+        })
+        .collect::<DeployResult<_>>()?;
+    params.extend(meta.iter().map(|(k, v)| (k.as_str(), v.clone())));
+    if let Some(l) = query.limit {
+        params.push(("limit", l.to_string()));
+    }
+    if let Some(c) = &query.cursor {
+        params.push(("cursor", c.clone()));
+    }
+    get_page(
+        api_base,
+        "/v0/deployments",
+        token,
+        &params,
+        "List deployments",
+    )
+}
+
+pub fn list_team_domains(
+    api_base: &str,
+    token: Option<&str>,
+    query: &DomainQuery,
+) -> DeployResult<Page<TeamDomain>> {
+    let mut params: Vec<(&str, String)> = Vec::new();
+    if let Some(p) = &query.project {
+        params.push(("projectId", p.clone()));
+    }
+    if let Some(l) = query.limit {
+        params.push(("limit", l.to_string()));
+    }
+    if let Some(c) = &query.cursor {
+        params.push(("cursor", c.clone()));
+    }
+    get_page(api_base, "/v0/domains", token, &params, "List domains")
+}
+
 pub fn verify_project_domain(
     api_base: &str,
     project_id: &str,
@@ -649,7 +738,7 @@ pub fn verify_project_domain(
 ) -> DeployResult<DomainVerifyResult> {
     let domain = normalize_domain(domain)?;
     let domain = domain.as_str();
-    let url = format!("{api_base}/api/v0/projects/{project_id}/domains/{domain}/verify");
+    let url = format!("{api_base}/v0/projects/{project_id}/domains/{domain}/verify");
     let mut req = ureq::post(&url);
     if let Some(tok) = token {
         req = req.set("Authorization", &format!("Bearer {tok}"));
@@ -677,7 +766,7 @@ pub fn remove_project_domain(
 ) -> DeployResult<bool> {
     let domain = normalize_domain(domain)?;
     let domain = domain.as_str();
-    let url = format!("{api_base}/api/v0/projects/{project_id}/domains/{domain}");
+    let url = format!("{api_base}/v0/projects/{project_id}/domains/{domain}");
     let mut req = ureq::delete(&url);
     if let Some(tok) = token {
         req = req.set("Authorization", &format!("Bearer {tok}"));
@@ -690,7 +779,7 @@ pub fn remove_project_domain(
 }
 
 pub fn list_projects(api_base: &str, token: Option<&str>) -> DeployResult<Vec<ProjectInfo>> {
-    let url = format!("{api_base}/api/v0/projects");
+    let url = format!("{api_base}/v0/projects");
     let mut req = ureq::get(&url);
     if let Some(tok) = token {
         req = req.set("Authorization", &format!("Bearer {tok}"));
@@ -722,7 +811,7 @@ pub fn list_projects(api_base: &str, token: Option<&str>) -> DeployResult<Vec<Pr
 }
 
 pub fn add_project(api_base: &str, token: Option<&str>, name: &str) -> DeployResult<ProjectInfo> {
-    let url = format!("{api_base}/api/v0/projects");
+    let url = format!("{api_base}/v0/projects");
     let slug = slugify_project_id(name);
     let mut req = ureq::post(&url);
     if let Some(tok) = token {
@@ -768,7 +857,7 @@ fn validate_project_ref(id_or_slug: &str) -> DeployResult<()> {
 
 pub fn remove_project(api_base: &str, token: Option<&str>, id_or_slug: &str) -> DeployResult<bool> {
     validate_project_ref(id_or_slug)?;
-    let url = format!("{api_base}/api/v0/projects/{id_or_slug}");
+    let url = format!("{api_base}/v0/projects/{id_or_slug}");
     let mut req = ureq::delete(&url);
     if let Some(tok) = token {
         req = req.set("Authorization", &format!("Bearer {tok}"));
@@ -785,7 +874,7 @@ pub fn get_project(
     token: Option<&str>,
     id_or_slug: &str,
 ) -> DeployResult<ProjectInfo> {
-    let url = format!("{api_base}/api/v0/projects/{id_or_slug}");
+    let url = format!("{api_base}/v0/projects/{id_or_slug}");
     let mut req = ureq::get(&url);
     if let Some(tok) = token {
         req = req.set("Authorization", &format!("Bearer {tok}"));
@@ -824,7 +913,7 @@ pub fn rename_project(
             reason: "Project name must be between 1 and 100 characters".into(),
         });
     }
-    let url = format!("{api_base}/api/v0/projects/{id_or_slug}");
+    let url = format!("{api_base}/v0/projects/{id_or_slug}");
     let mut req = ureq::patch(&url);
     if let Some(tok) = token {
         req = req.set("Authorization", &format!("Bearer {tok}"));
@@ -929,8 +1018,8 @@ impl AppzdevProvider {
 
         let payload = negotiate_payload(&project_id, target, &scanned.files, markdown_enabled);
 
-        // Step 1: POST /api/v0/deployments - Handshake & missing blob diff
-        let create_url = format!("{}/api/v0/deployments", api_base);
+        // Step 1: POST /v0/deployments - Handshake & missing blob diff
+        let create_url = format!("{}/v0/deployments", api_base);
         let mut req = ureq::post(&create_url).set("User-Agent", DEPLOY_USER_AGENT);
         if let Some(token) = &token_opt {
             req = req.set("Authorization", &format!("Bearer {token}"));
@@ -1102,7 +1191,7 @@ impl AppzdevProvider {
                             }
 
                             let upload_url = format!(
-                                "{}/api/v0/deployments/{}/files/{}",
+                                "{}/v0/deployments/{}/files/{}",
                                 api_base, deployment_id, hash
                             );
 
@@ -1166,7 +1255,7 @@ impl AppzdevProvider {
         // Step 3: Commit deployment if blobs were uploaded, or if inline publish failed on 500
         let final_url = if !missing.is_empty() || inline_publish_failed {
             interrupt::check_interrupted();
-            let commit_url = format!("{}/api/v0/deployments/{}/commit", api_base, deployment_id);
+            let commit_url = format!("{}/v0/deployments/{}/commit", api_base, deployment_id);
             let mut commit_req = ureq::post(&commit_url).set("User-Agent", DEPLOY_USER_AGENT);
             if let Some(token) = &token_opt {
                 commit_req = commit_req.set("Authorization", &format!("Bearer {token}"));
@@ -1351,7 +1440,7 @@ impl DeployProvider for AppzdevProvider {
         let start = Instant::now();
         let project_id = self.resolve_project_id(ctx);
         let api_base = self.api_base(ctx);
-        let rollback_url = format!("{}/api/v0/projects/{}/rollback", api_base, project_id);
+        let rollback_url = format!("{}/v0/projects/{}/rollback", api_base, project_id);
         let token_opt = resolve_auth_token(Some(ctx));
 
         let mut req = ureq::post(&rollback_url);
@@ -1390,7 +1479,7 @@ impl DeployProvider for AppzdevProvider {
     fn alias(&self, ctx: &DeployContext, domain: &str) -> DeployResult<String> {
         let project_id = self.resolve_project_id(ctx);
         let api_base = self.api_base(ctx);
-        let alias_url = format!("{}/api/v0/projects/{}/alias", api_base, project_id);
+        let alias_url = format!("{}/v0/projects/{}/alias", api_base, project_id);
         let token_opt = resolve_auth_token(Some(ctx));
 
         let mut req = ureq::post(&alias_url);
@@ -1414,7 +1503,7 @@ impl DeployProvider for AppzdevProvider {
     fn list_deployments(&self, ctx: &DeployContext) -> DeployResult<Vec<DeploymentInfo>> {
         let project_id = self.resolve_project_id(ctx);
         let api_base = self.api_base(ctx);
-        let list_url = format!("{}/api/v0/projects/{}/deployments", api_base, project_id);
+        let list_url = format!("{}/v0/projects/{}/deployments", api_base, project_id);
         let token_opt = resolve_auth_token(Some(ctx));
 
         let mut req = ureq::get(&list_url);
@@ -1466,6 +1555,15 @@ impl DeployProvider for AppzdevProvider {
         Ok(out)
     }
 
+    fn list_team_deployments(
+        &self,
+        ctx: &DeployContext,
+        query: &DeploymentQuery,
+    ) -> DeployResult<Page<TeamDeployment>> {
+        let token = resolve_auth_token(Some(ctx));
+        list_team_deployments(&self.api_base(ctx), token.as_deref(), query)
+    }
+
     fn inspect_deployment(
         &self,
         ctx: &DeployContext,
@@ -1483,7 +1581,7 @@ impl DeployProvider for AppzdevProvider {
             .next()
             .unwrap_or(trimmed);
 
-        let inspect_url = format!("{}/api/v0/deployments/{}", api_base, dpl_id);
+        let inspect_url = format!("{}/v0/deployments/{}", api_base, dpl_id);
         let token_opt = resolve_auth_token(Some(ctx));
 
         let mut req = ureq::get(&inspect_url);
@@ -1538,6 +1636,15 @@ impl DeployProvider for AppzdevProvider {
         list_project_domains(&api_base, &project_id, token.as_deref())
     }
 
+    fn list_team_domains(
+        &self,
+        ctx: &DeployContext,
+        query: &DomainQuery,
+    ) -> DeployResult<Page<TeamDomain>> {
+        let token = resolve_auth_token(Some(ctx));
+        list_team_domains(&self.api_base(ctx), token.as_deref(), query)
+    }
+
     fn verify_domain(&self, ctx: &DeployContext, domain: &str) -> DeployResult<DomainVerifyResult> {
         let project_id = self.resolve_project_id(ctx);
         let api_base = self.api_base(ctx);
@@ -1584,7 +1691,7 @@ impl DeployProvider for AppzdevProvider {
     fn restore_project(&self, ctx: &DeployContext, id_or_slug: &str) -> DeployResult<ProjectInfo> {
         let base = self.api_base(ctx);
         validate_project_ref(id_or_slug)?;
-        let mut req = ureq::post(&format!("{base}/api/v0/projects/{id_or_slug}/restore"));
+        let mut req = ureq::post(&format!("{base}/v0/projects/{id_or_slug}/restore"));
         if let Some(token) = resolve_auth_token(Some(ctx)) {
             req = req.set("Authorization", &format!("Bearer {token}"));
         }
@@ -1870,7 +1977,7 @@ SPACED=hello world
                             let method = parts.first().copied().unwrap_or("");
                             let path = parts.get(1).copied().unwrap_or("");
 
-                            if matches!((method, path), ("POST", "/api/v0/deployments"))
+                            if matches!((method, path), ("POST", "/v0/deployments"))
                                 || (method == "PUT" && path.contains("/files/"))
                                 || (method == "POST" && path.ends_with("/commit"))
                             {
@@ -1881,7 +1988,7 @@ SPACED=hello world
                             }
                             let handshake;
                             let (status, resp_body) = if method == "POST"
-                                && path == "/api/v0/deployments"
+                                && path == "/v0/deployments"
                             {
                                 let manifest: serde_json::Value =
                                     serde_json::from_slice(&body).unwrap();
@@ -1915,11 +2022,30 @@ SPACED=hello world
                             } else if method == "POST" && path.ends_with("/commit") {
                                 ("200 OK", r#"{"url":"https://mock.appz.page"}"#)
                             } else if method == "GET"
-                                && path.starts_with("/api/v0/deployments/dpl_mock_1")
+                                && path.starts_with("/v0/deployments/dpl_mock_1")
                             {
                                 (
                                     "200 OK",
                                     r#"{"id":"dpl_mock_1","projectId":"prj_mock","versionId":"ver_mock_1","status":"ready","target":"production","hosts":["mock.appz.page"],"fileCount":2,"totalBytes":128,"files":[{"path":"/index.html","size":64,"hash":"h1"},{"path":"/app.js","size":64,"hash":"h2"}]}"#,
+                                )
+                            } else if method == "GET"
+                                && (path == "/v0/deployments"
+                                    || path.starts_with("/v0/deployments?"))
+                            {
+                                if path.contains("projectId=prj_mock") {
+                                    (
+                                        "200 OK",
+                                        r#"{"items":[{"id":"dpl_mock_1","projectId":"prj_mock","projectSlug":"mock-app","projectName":"mock-app","url":"https://mock.appz.page","status":"ready","type":"production","createdAt":1762732800000,"isCurrent":true}],"next":"cur_2"}"#,
+                                    )
+                                } else {
+                                    ("200 OK", r#"{"items":[],"next":null}"#)
+                                }
+                            } else if method == "GET"
+                                && (path == "/v0/domains" || path.starts_with("/v0/domains?"))
+                            {
+                                (
+                                    "200 OK",
+                                    r#"{"items":[{"id":"dom_1","domain":"custom.example.com","verified":true,"sslStatus":"active","projectId":"prj_mock","projectSlug":"mock-app","projectName":"mock-app","createdAt":1762732800000}],"next":null}"#,
                                 )
                             } else if method == "GET" && path.contains("/deployments") {
                                 (
@@ -1959,13 +2085,13 @@ SPACED=hello world
                                 ("200 OK", r#"{"status":"synced","count":1}"#)
                             } else if method == "DELETE" && path.contains("/env/") {
                                 ("204 No Content", "")
-                            } else if method == "GET" && path == "/api/v0/projects" {
+                            } else if method == "GET" && path == "/v0/projects" {
                                 (
                                     "200 OK",
                                     r#"[{"id":"prj_mock","name":"mock-app","slug":"mock-app","organizationId":"org_mock","createdAt":1762732800}]"#,
                                 )
                             } else if method == "GET"
-                                && path.starts_with("/api/v0/projects/")
+                                && path.starts_with("/v0/projects/")
                                 && !path.contains("/env")
                                 && !path.contains("/domains")
                                 && !path.contains("/deployments")
@@ -1974,30 +2100,27 @@ SPACED=hello world
                                     "200 OK",
                                     r#"{"id":"prj_mock","name":"mock-app","slug":"mock-app","organizationId":"org_mock","createdAt":1762732800}"#,
                                 )
-                            } else if method == "POST"
-                                && path == "/api/v0/projects/mock-app/restore"
-                            {
+                            } else if method == "POST" && path == "/v0/projects/mock-app/restore" {
                                 (
                                     "200 OK",
                                     r#"{"id":"prj_mock","name":"renamed-app","slug":"mock-app","createdAt":1762732800000,"pausedAt":null,"expiresAt":null}"#,
                                 )
-                            } else if method == "POST" && path == "/api/v0/projects/missing/restore"
-                            {
+                            } else if method == "POST" && path == "/v0/projects/missing/restore" {
                                 (
                                     "404 Not Found",
                                     r#"{"error":"no restorable project with that name"}"#,
                                 )
-                            } else if method == "PATCH" && path.starts_with("/api/v0/projects/") {
+                            } else if method == "PATCH" && path.starts_with("/v0/projects/") {
                                 (
                                     "200 OK",
                                     r#"{"id":"prj_mock","name":"renamed-app","slug":"mock-app","organizationId":"org_mock","createdAt":1762732800}"#,
                                 )
-                            } else if method == "POST" && path == "/api/v0/projects" {
+                            } else if method == "POST" && path == "/v0/projects" {
                                 (
                                     "200 OK",
                                     r#"{"id":"prj_new_mock","name":"new-app","slug":"new-app","organizationId":"org_mock","createdAt":1762732800}"#,
                                 )
-                            } else if method == "DELETE" && path.starts_with("/api/v0/projects/") {
+                            } else if method == "DELETE" && path.starts_with("/v0/projects/") {
                                 ("200 OK", r#"{"status":"deleted","id":"prj_mock"}"#)
                             } else {
                                 ("404 Not Found", r#"{"error":"Not found"}"#)
@@ -2083,6 +2206,44 @@ SPACED=hello world
         let list_out = provider.list_deployments(&ctx).expect("list must succeed");
         assert_eq!(list_out.len(), 1);
         assert_eq!(list_out[0].id, "dpl_mock_1");
+
+        // 3b. Team-wide pages
+        let page = provider
+            .list_team_deployments(
+                &ctx,
+                &DeploymentQuery {
+                    project: Some("prj_mock".into()),
+                    production: true,
+                    meta: vec!["k=v".into()],
+                    limit: Some(5),
+                    ..Default::default()
+                },
+            )
+            .expect("team deployments must succeed");
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].project_slug.as_deref(), Some("mock-app"));
+        assert_eq!(page.next.as_deref(), Some("cur_2"));
+        let all = provider
+            .list_team_deployments(&ctx, &DeploymentQuery::default())
+            .expect("team-wide deployments must succeed");
+        assert!(all.items.is_empty() && all.next.is_none());
+        assert!(
+            provider
+                .list_team_deployments(
+                    &ctx,
+                    &DeploymentQuery {
+                        meta: vec!["nokv".into()],
+                        ..Default::default()
+                    },
+                )
+                .is_err()
+        );
+        let doms = provider
+            .list_team_domains(&ctx, &DomainQuery::default())
+            .expect("team domains must succeed");
+        assert_eq!(doms.items[0].domain.domain, "custom.example.com");
+        assert_eq!(doms.items[0].project_slug.as_deref(), Some("mock-app"));
+        assert_eq!(doms.items[0].domain.created_at, Some(1762732800000));
 
         // 4. Rollback
         provider
@@ -2221,15 +2382,13 @@ SPACED=hello world
                         let method = parts[0];
                         let path = parts[1];
 
-                        let (status, resp_body) = if method == "POST"
-                            && path == "/api/v0/deployments"
-                        {
+                        let (status, resp_body) = if method == "POST" && path == "/v0/deployments" {
                             (
                                 "500 Internal Server Error",
                                 r#"{"error":"publish failed; retry with POST /deployments/:id/commit","deploymentId":"dpl_inline_retry_1"}"#,
                             )
                         } else if method == "POST"
-                            && path == "/api/v0/deployments/dpl_inline_retry_1/commit"
+                            && path == "/v0/deployments/dpl_inline_retry_1/commit"
                         {
                             (
                                 "200 OK",

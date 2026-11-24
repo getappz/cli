@@ -25,7 +25,7 @@ def check(binary, phase, reject=False):
     release = threading.Event()
     requests = []
     cancel_auth = []
-    prefix = "/api/v0/deployments"
+    prefix = "/v0/deployments"
     deployment = prefix + "/dpl_smoke"
 
     class Api(BaseHTTPRequestHandler):

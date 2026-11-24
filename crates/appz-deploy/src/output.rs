@@ -96,6 +96,84 @@ pub struct DeploymentInfo {
     pub is_current: bool,
 }
 
+/// Filters for the team-wide `GET /v0/deployments` listing.
+#[derive(Debug, Clone, Default)]
+pub struct DeploymentQuery {
+    /// Project id or slug; `None` lists the whole team.
+    pub project: Option<String>,
+    pub production: bool,
+    pub environment: Option<String>,
+    /// Comma-separated status list (`ready,building,error,canceled`).
+    pub status: Option<String>,
+    /// `key=value` pairs matched against deployment metadata.
+    pub meta: Vec<String>,
+    pub limit: Option<u32>,
+    pub cursor: Option<String>,
+}
+
+/// One page of a cursor-paginated listing (`{ items, next }`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Page<T> {
+    pub items: Vec<T>,
+    #[serde(default)]
+    pub next: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamDeployment {
+    pub id: String,
+    #[serde(default)]
+    pub project_id: Option<String>,
+    #[serde(default)]
+    pub project_slug: Option<String>,
+    #[serde(default)]
+    pub project_name: Option<String>,
+    #[serde(default)]
+    pub version_id: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default, rename = "type")]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub environment: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<i64>,
+    #[serde(default)]
+    pub file_count: Option<u64>,
+    #[serde(default)]
+    pub total_bytes: Option<u64>,
+    #[serde(default)]
+    pub meta: Option<serde_json::Value>,
+    #[serde(default)]
+    pub production_url: Option<String>,
+    #[serde(default)]
+    pub is_current: bool,
+}
+
+/// Filters for the team-wide `GET /v0/domains` listing.
+#[derive(Debug, Clone, Default)]
+pub struct DomainQuery {
+    pub project: Option<String>,
+    pub limit: Option<u32>,
+    pub cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamDomain {
+    #[serde(flatten)]
+    pub domain: ProjectDomain,
+    #[serde(default)]
+    pub project_id: Option<String>,
+    #[serde(default)]
+    pub project_slug: Option<String>,
+    #[serde(default)]
+    pub project_name: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InspectFileEntry {

@@ -439,7 +439,7 @@ fn http_converter_posts_html_with_auth_and_origin_header() {
         "# Hosted\n"
     );
     let head = log.lock().unwrap()[0].to_lowercase();
-    assert!(head.starts_with("post /api/v0/markdown/convert "), "{head}");
+    assert!(head.starts_with("post /v0/markdown/convert "), "{head}");
     assert!(head.contains("authorization: bearer tok123"));
     assert!(head.contains("content-type: text/html; charset=utf-8"));
     assert!(head.contains("x-page-origin: https://example.com/a"));
@@ -624,7 +624,7 @@ fn batch_packs_by_count_maps_by_id_dedupes_hashes_and_caps_concurrency() {
     let (base, log) = mock_batch_server(move |head, body, _| {
         assert!(
             head.to_lowercase()
-                .starts_with("post /api/v0/markdown/convert-batch ")
+                .starts_with("post /v0/markdown/convert-batch ")
         );
         assert!(head.to_lowercase().contains("authorization: bearer tok"));
         let cur = active_c.fetch_add(1, Ordering::SeqCst) + 1;
@@ -833,7 +833,7 @@ fn batch_404_falls_back_to_single_page_endpoint() {
     let (base, log) = mock_batch_server(|head, _, _| {
         if head
             .to_lowercase()
-            .starts_with("post /api/v0/markdown/convert-batch ")
+            .starts_with("post /v0/markdown/convert-batch ")
         {
             (404, vec![], r#"{"error":"not found"}"#.into())
         } else {
@@ -850,11 +850,11 @@ fn batch_404_falls_back_to_single_page_endpoint() {
         .iter()
         .map(|(h, _)| h.lines().next().unwrap().to_lowercase())
         .collect();
-    assert!(heads[0].starts_with("post /api/v0/markdown/convert-batch "));
+    assert!(heads[0].starts_with("post /v0/markdown/convert-batch "));
     assert_eq!(
         heads
             .iter()
-            .filter(|h| h.starts_with("post /api/v0/markdown/convert "))
+            .filter(|h| h.starts_with("post /v0/markdown/convert "))
             .count(),
         2
     );
@@ -871,7 +871,7 @@ fn batch_fallback_keeps_pages_converted_before_a_fatal_status() {
     let (base, log) = mock_batch_server(|head, body, _| {
         if head
             .to_lowercase()
-            .starts_with("post /api/v0/markdown/convert-batch ")
+            .starts_with("post /v0/markdown/convert-batch ")
         {
             (404, vec![], r#"{"error":"not found"}"#.into())
         } else if body.contains("boom") {

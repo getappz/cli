@@ -4,8 +4,9 @@ use std::time::Duration;
 use crate::context::DeployContext;
 use crate::error::{DeployError, DeployResult};
 use crate::output::{
-    AuthState, DeployOutput, DeploymentInfo, DeploymentInspect, DetectedConfig, DomainVerifyResult,
-    PrerequisiteStatus, ProjectDomain, ProjectInfo,
+    AuthState, DeployOutput, DeploymentInfo, DeploymentInspect, DeploymentQuery, DetectedConfig,
+    DomainQuery, DomainVerifyResult, Page, PrerequisiteStatus, ProjectDomain, ProjectInfo,
+    TeamDeployment, TeamDomain,
 };
 
 /// Timeout for the actual deploy invocation (platform CLIs can legitimately
@@ -171,6 +172,18 @@ pub trait DeployProvider: Send + Sync {
         })
     }
 
+    fn list_team_deployments(
+        &self,
+        ctx: &DeployContext,
+        query: &DeploymentQuery,
+    ) -> DeployResult<Page<TeamDeployment>> {
+        let _ = (ctx, query);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "list_team_deployments",
+        })
+    }
+
     fn rollback(&self, ctx: &DeployContext, deployment_id: &str) -> DeployResult<DeployOutput> {
         let _ = (ctx, deployment_id);
         Err(DeployError::Unsupported {
@@ -209,6 +222,18 @@ pub trait DeployProvider: Send + Sync {
 
     fn list_domains(&self, ctx: &DeployContext) -> DeployResult<Vec<ProjectDomain>> {
         let _ = ctx;
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "domains list",
+        })
+    }
+
+    fn list_team_domains(
+        &self,
+        ctx: &DeployContext,
+        query: &DomainQuery,
+    ) -> DeployResult<Page<TeamDomain>> {
+        let _ = (ctx, query);
         Err(DeployError::Unsupported {
             provider: self.name(),
             operation: "domains list",

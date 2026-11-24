@@ -8,6 +8,7 @@ use crate::output::{
     DomainQuery, DomainVerifyResult, Page, PrerequisiteStatus, ProjectDomain, ProjectInfo,
     TeamDeployment, TeamDomain,
 };
+use crate::redirects::{RedirectInput, RedirectList, RedirectVersionRef, RedirectVersions};
 
 /// Timeout for the actual deploy invocation (platform CLIs can legitimately
 /// take minutes to build+upload).
@@ -290,6 +291,76 @@ pub trait DeployProvider: Send + Sync {
         Err(DeployError::Unsupported {
             provider: self.name(),
             operation: "projects rename",
+        })
+    }
+
+    fn list_redirects(
+        &self,
+        ctx: &DeployContext,
+        version: Option<u64>,
+    ) -> DeployResult<RedirectList> {
+        let _ = (ctx, version);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "redirects list",
+        })
+    }
+
+    fn add_redirect(
+        &self,
+        ctx: &DeployContext,
+        rule: &RedirectInput,
+    ) -> DeployResult<RedirectList> {
+        let _ = (ctx, rule);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "redirects add",
+        })
+    }
+
+    fn remove_redirect(&self, ctx: &DeployContext, id: &str) -> DeployResult<RedirectList> {
+        let _ = (ctx, id);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "redirects rm",
+        })
+    }
+
+    fn import_redirects(
+        &self,
+        ctx: &DeployContext,
+        rules: &[RedirectInput],
+    ) -> DeployResult<RedirectList> {
+        let _ = (ctx, rules);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "redirects import",
+        })
+    }
+
+    fn list_redirect_versions(&self, ctx: &DeployContext) -> DeployResult<RedirectVersions> {
+        let _ = ctx;
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "redirects versions",
+        })
+    }
+
+    /// `action` is `promote` or `restore`.
+    fn update_redirect_version(
+        &self,
+        ctx: &DeployContext,
+        version: u64,
+        action: &str,
+    ) -> DeployResult<RedirectVersionRef> {
+        let _ = (ctx, version);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: if action == "restore" {
+                "redirects restore"
+            } else {
+                "redirects promote"
+            },
         })
     }
 

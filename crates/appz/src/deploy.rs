@@ -899,6 +899,16 @@ fn domain_ctx(
     Ok((provider, ctx))
 }
 
+/// Run one provider operation (redirects) against the resolved project.
+pub fn with_provider<T>(
+    project_dir: &Path,
+    target: Option<String>,
+    f: impl FnOnce(&dyn DeployProvider, &DeployContext) -> appz_deploy::DeployResult<T>,
+) -> Result<T, String> {
+    let (provider, ctx) = domain_ctx(project_dir, target)?;
+    f(provider.as_ref(), &ctx).map_err(|e| e.to_string())
+}
+
 pub fn add_domain(
     project_dir: &Path,
     target: Option<String>,

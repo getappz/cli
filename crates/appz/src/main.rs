@@ -14,6 +14,7 @@ mod deploy_state;
 mod dev_install;
 mod init_source;
 mod mcp;
+mod redirects;
 mod secrets;
 mod share;
 mod shield;
@@ -93,6 +94,9 @@ enum AppzCmd {
     /// Manage custom domains and DNS verification on Cloudflare Edge
     #[command(alias = "domain")]
     Domains(DomainsArgs),
+    /// Manage URL redirects with staged versions (list, add, rm, import, promote)
+    #[command(alias = "redirect")]
+    Redirects(RedirectsArgs),
     /// Manage projects on the edge hosting platform
     #[command(alias = "project")]
     Projects(ProjectsArgs),
@@ -452,6 +456,67 @@ enum DomainsCmd {
     Remove {
         /// Domain name to remove
         domain: String,
+    },
+}
+
+#[derive(Args)]
+struct RedirectsArgs {
+    #[command(subcommand)]
+    command: RedirectsCmd,
+    /// Project directory (defaults to current directory)
+    #[arg(default_value = ".")]
+    dir: PathBuf,
+    /// Provider slug (default: detects from project or config)
+    #[arg(long)]
+    target: Option<String>,
+}
+
+#[derive(Subcommand, Debug)]
+enum RedirectsCmd {
+    /// List redirects (staged version if there is one, otherwise live)
+    #[command(alias = "list")]
+    Ls {
+        /// Show this version instead
+        #[arg(long)]
+        version: Option<u64>,
+        /// Only redirects whose source or destination contains this text
+        #[arg(long)]
+        search: Option<String>,
+    },
+    /// Add a redirect in a new staged version
+    Add {
+        /// Path to redirect from, starting with `/`
+        source: String,
+        /// Where to redirect to
+        destination: String,
+        /// Redirect status code: 301, 302, 307 or 308
+        #[arg(long, default_value_t = 307)]
+        status: u16,
+    },
+    /// Remove a redirect (by ID or source) in a new staged version
+    #[command(alias = "remove")]
+    Rm {
+        /// Redirect ID (see `redirects ls`) or its source
+        id: String,
+    },
+    /// Import redirects from a .json or .csv file as a new staged version
+    #[command(alias = "upload")]
+    Import {
+        /// File with `source`, `destination` and optional `status` per redirect
+        file: PathBuf,
+    },
+    /// List redirect versions and which are live and staged
+    #[command(alias = "list-versions")]
+    Versions,
+    /// Make a staged version live
+    Promote {
+        /// Version number (see `redirects versions`)
+        version: u64,
+    },
+    /// Restore an earlier version
+    Restore {
+        /// Version number (see `redirects versions`)
+        version: u64,
     },
 }
 
@@ -1612,6 +1677,7 @@ fn main() {
         AppzCmd::List(a) => run_list(a, json),
         AppzCmd::Inspect(a) => run_inspect(a, json),
         AppzCmd::Domains(a) => run_domains(a, json),
+        AppzCmd::Redirects(a) => redirects::run(a, json),
         AppzCmd::Projects(a) => run_projects(a, json),
         AppzCmd::Login(a) => run_login(a, json),
         AppzCmd::Logout => run_logout(json),

@@ -989,6 +989,24 @@ pub fn restore_project(
         .map_err(|e| e.to_string())
 }
 
+/// Delete deployments one by one; a failure does not stop the rest.
+pub fn remove_deployments(
+    project_dir: &Path,
+    target: Option<String>,
+    refs: &[String],
+) -> Result<Vec<(String, Result<String, String>)>, String> {
+    let (provider, ctx) = domain_ctx(project_dir, target)?;
+    Ok(refs
+        .iter()
+        .map(|r| {
+            let res = provider
+                .remove_deployment(&ctx, r)
+                .map_err(|e| e.to_string());
+            (r.clone(), res)
+        })
+        .collect())
+}
+
 pub fn remove_project(
     project_dir: &Path,
     target: Option<String>,

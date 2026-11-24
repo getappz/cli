@@ -50,7 +50,7 @@ impl PendingUpload {
         id: &str,
         token: Option<&str>,
     ) -> Self {
-        let mut request = ureq::post(&format!("{base}/api/v0/deployments/{id}/cancel"))
+        let mut request = ureq::post(&format!("{base}/v0/deployments/{id}/cancel"))
             .set("User-Agent", DEPLOY_USER_AGENT)
             .timeout(Duration::from_secs(5));
         if let Some(token) = token {

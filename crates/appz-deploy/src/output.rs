@@ -96,7 +96,7 @@ pub struct DeploymentInfo {
     pub is_current: bool,
 }
 
-/// Filters for the team-wide `GET /api/v0/deployments` listing.
+/// Filters for the team-wide `GET /v0/deployments` listing.
 #[derive(Debug, Clone, Default)]
 pub struct DeploymentQuery {
     /// Project id or slug; `None` lists the whole team.
@@ -153,7 +153,7 @@ pub struct TeamDeployment {
     pub is_current: bool,
 }
 
-/// Filters for the team-wide `GET /api/v0/domains` listing.
+/// Filters for the team-wide `GET /v0/domains` listing.
 #[derive(Debug, Clone, Default)]
 pub struct DomainQuery {
     pub project: Option<String>,

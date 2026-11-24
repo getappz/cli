@@ -16,9 +16,9 @@ use tempfile::TempDir;
 const MARKDOWN_MIME: &str = "text/markdown; charset=utf-8";
 
 /// Path of the hosted single-page conversion endpoint, relative to the API base.
-pub const MARKDOWN_CONVERT_PATH: &str = "/api/v0/markdown/convert";
+pub const MARKDOWN_CONVERT_PATH: &str = "/v0/markdown/convert";
 /// Path of the hosted batch conversion endpoint, relative to the API base.
-pub const MARKDOWN_CONVERT_BATCH_PATH: &str = "/api/v0/markdown/convert-batch";
+pub const MARKDOWN_CONVERT_BATCH_PATH: &str = "/v0/markdown/convert-batch";
 /// Optional request header carrying the absolute URL the page is served at.
 pub const PAGE_ORIGIN_HEADER: &str = "X-Page-Origin";
 /// Pages larger than this are not sent for conversion.
@@ -162,8 +162,8 @@ struct BatchCallError {
     retry_after_secs: Option<u64>,
 }
 
-/// Converter backed by `POST {api_base}/api/v0/markdown/convert-batch` (with
-/// fallback to `/api/v0/markdown/convert` for older APIs).
+/// Converter backed by `POST {api_base}/v0/markdown/convert-batch` (with
+/// fallback to `/v0/markdown/convert` for older APIs).
 pub struct HttpMarkdownConverter {
     endpoint: String,
     batch_endpoint: String,

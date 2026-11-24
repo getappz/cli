@@ -8,6 +8,13 @@ use crate::{error, info, intro, is_tty, outro, success};
 /// Environment used when `--environment` is omitted, matching `vercel env pull`.
 pub(crate) const DEFAULT_ENVIRONMENT: &str = "development";
 
+/// Environments `env push` writes to by default: all three, so a plain push then pull round-trips.
+pub(crate) fn default_push_environments() -> Vec<String> {
+    ["production", "preview", "development"]
+        .map(String::from)
+        .to_vec()
+}
+
 pub(crate) struct CloudCtx {
     pub project_id: String,
     pub token: Option<String>,
@@ -294,5 +301,15 @@ pub(crate) fn pull_to_file(root: &Path, file: &Path, envs: &[String], json: bool
             target_path.display()
         ));
         outro("done");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn push_default_includes_development() {
+        let d = super::default_push_environments();
+        assert!(d.contains(&super::DEFAULT_ENVIRONMENT.to_string()));
+        assert_eq!(d.len(), 3);
     }
 }

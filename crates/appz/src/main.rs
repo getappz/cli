@@ -265,7 +265,7 @@ enum EnvCmd {
         /// Source file to read from (default: .env.local, falls back to .env)
         #[arg(default_value = ".env.local")]
         file: PathBuf,
-        /// Environments to set the variables in; repeatable (default: production and preview)
+        /// Environments to set the variables in; repeatable (default: production, preview and development)
         #[arg(long = "environment", alias = "target", value_delimiter = ',')]
         environment: Vec<String>,
     },
@@ -2015,7 +2015,7 @@ fn run_env(args: EnvArgs, json: bool) {
             }
 
             let targets = if environment.is_empty() {
-                vec!["production".to_string(), "preview".to_string()]
+                cloud_env::default_push_environments()
             } else {
                 cloud_env::validate_environments(&environment)
             };

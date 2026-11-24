@@ -51,7 +51,7 @@ appz skills add  # install the appz agent skill into detected AI agents (--globa
 Cloud environment variables (appz.dev) are per environment: `production`,
 `preview`, `development` or a custom one. `appz env pull [--environment X]`
 writes decrypted values to a file (default environment: `development`, like
-`vercel env pull`; needs the `env:decrypt` scope), `appz env push` uploads a
+`vercel env pull`; needs the `env:decrypt` scope), `appz env push` (default: all three environments) uploads a
 `.env` file, `appz env cloud ls` lists keys and metadata without values, and
 `appz env cloud rm KEY` removes a key from every environment. Manage custom
 environments with `appz env environments ls|add|rm`. `appz env run

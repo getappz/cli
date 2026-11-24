@@ -365,10 +365,44 @@ pub struct CloudEnvVar {
     pub value: String,
     #[serde(default = "default_targets")]
     pub target: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, alias = "gitBranch", skip_serializing_if = "Option::is_none")]
     pub git_branch: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, alias = "createdAt", skip_serializing_if = "Option::is_none")]
     pub created_at: Option<i64>,
+}
+
+/// Key and metadata of a cloud variable. The list endpoint never returns values.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudEnvMeta {
+    pub id: String,
+    pub key: String,
+    pub target: Vec<String>,
+    #[serde(default)]
+    pub git_branch: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<f64>,
+}
+
+/// A custom project environment (in addition to production/preview/development).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectEnvironment {
+    pub id: String,
+    pub slug: String,
+    #[serde(default)]
+    pub branch_pattern: Option<String>,
+}
+
+/// Whether `slug` is a valid environment name: `^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$`.
+pub fn is_valid_environment_slug(slug: &str) -> bool {
+    let b = slug.as_bytes();
+    let alnum = |c: &u8| c.is_ascii_lowercase() || c.is_ascii_digit();
+    !b.is_empty()
+        && b.len() <= 40
+        && b.iter().all(|c| alnum(c) || *c == b'-')
+        && alnum(&b[0])
+        && alnum(&b[b.len() - 1])
 }
 
 #[derive(serde::Serialize)]
@@ -443,32 +477,34 @@ pub fn format_env_file(vars: &[(String, String)]) -> String {
     out
 }
 
-pub fn pull_cloud_env(
-    api_base: &str,
-    project_id: &str,
-    token: Option<&str>,
-    target: Option<&str>,
-) -> DeployResult<Vec<CloudEnvVar>> {
+fn project_env_url(api_base: &str, project_id: &str, path: &str, target: Option<&str>) -> String {
     use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
     let encoded_project = utf8_percent_encode(project_id, NON_ALPHANUMERIC);
-    let mut url = format!("{api_base}/v0/projects/{encoded_project}/env");
+    let mut url = format!("{api_base}/v0/projects/{encoded_project}{path}");
     if let Some(t) = target {
         let encoded_target = utf8_percent_encode(t, NON_ALPHANUMERIC);
         url.push_str(&format!("?target={encoded_target}"));
     }
-    let mut req = ureq::get(&url);
+    url
+}
+
+fn get_env_array<T: serde::de::DeserializeOwned>(
+    url: &str,
+    token: Option<&str>,
+    operation: &str,
+) -> DeployResult<Vec<T>> {
+    let mut req = ureq::get(url);
     if let Some(tok) = token {
         req = req.set("Authorization", &format!("Bearer {tok}"));
     }
     let resp: serde_json::Value = req
         .call()
-        .map_err(|e| parse_api_error(e, "AppzDev", "Pull environment variables"))?
+        .map_err(|e| parse_api_error(e, "AppzDev", operation))?
         .into_json()
         .map_err(|e| DeployError::DeployFailed {
             provider: "AppzDev",
-            reason: format!("Invalid JSON response from pull env: {e}"),
+            reason: format!("Invalid JSON response from {operation}: {e}"),
         })?;
-
     let items = if let Some(arr) = resp.as_array() {
         arr
     } else if let Some(arr) = resp["env"].as_array() {
@@ -476,15 +512,98 @@ pub fn pull_cloud_env(
     } else {
         return Err(DeployError::DeployFailed {
             provider: "AppzDev",
-            reason: "Expected array of environment variables".into(),
+            reason: "Expected array in response".into(),
         });
     };
+    serde_json::from_value(serde_json::Value::Array(items.clone())).map_err(|e| {
+        DeployError::DeployFailed {
+            provider: "AppzDev",
+            reason: format!("Failed to parse response: {e}"),
+        }
+    })
+}
 
-    let vars: Vec<CloudEnvVar> = serde_json::from_value(serde_json::Value::Array(items.clone()))
+/// Keys and metadata for `target` (`GET /env`); never returns values.
+pub fn list_cloud_env(
+    api_base: &str,
+    project_id: &str,
+    token: Option<&str>,
+    target: Option<&str>,
+) -> DeployResult<Vec<CloudEnvMeta>> {
+    let url = project_env_url(api_base, project_id, "/env", target);
+    get_env_array(&url, token, "List environment variables")
+}
+
+/// Custom environments of a project.
+pub fn list_project_environments(
+    api_base: &str,
+    project_id: &str,
+    token: Option<&str>,
+) -> DeployResult<Vec<ProjectEnvironment>> {
+    let url = project_env_url(api_base, project_id, "/environments", None);
+    get_env_array(&url, token, "List environments")
+}
+
+pub fn add_project_environment(
+    api_base: &str,
+    project_id: &str,
+    token: Option<&str>,
+    slug: &str,
+    branch_pattern: Option<&str>,
+) -> DeployResult<ProjectEnvironment> {
+    if !is_valid_environment_slug(slug) {
+        return Err(DeployError::DeployFailed {
+            provider: "AppzDev",
+            reason: format!(
+                "Invalid environment name {slug:?}: use lowercase letters, digits and '-' (max 40)"
+            ),
+        });
+    }
+    let url = project_env_url(api_base, project_id, "/environments", None);
+    let mut req = ureq::post(&url);
+    if let Some(tok) = token {
+        req = req.set("Authorization", &format!("Bearer {tok}"));
+    }
+    req.send_json(serde_json::json!({ "slug": slug, "branchPattern": branch_pattern }))
+        .map_err(|e| parse_api_error(e, "AppzDev", "Create environment"))?
+        .into_json()
         .map_err(|e| DeployError::DeployFailed {
             provider: "AppzDev",
-            reason: format!("Failed to parse cloud env vars: {e}"),
-        })?;
+            reason: format!("Invalid JSON response from create environment: {e}"),
+        })
+}
+
+pub fn remove_project_environment(
+    api_base: &str,
+    project_id: &str,
+    token: Option<&str>,
+    slug: &str,
+) -> DeployResult<()> {
+    if !is_valid_environment_slug(slug) {
+        return Err(DeployError::DeployFailed {
+            provider: "AppzDev",
+            reason: format!("Invalid environment name {slug:?}"),
+        });
+    }
+    let url = project_env_url(api_base, project_id, &format!("/environments/{slug}"), None);
+    let mut req = ureq::delete(&url);
+    if let Some(tok) = token {
+        req = req.set("Authorization", &format!("Bearer {tok}"));
+    }
+    req.call()
+        .map_err(|e| parse_api_error(e, "AppzDev", "Remove environment"))?;
+    Ok(())
+}
+
+/// Decrypted variables for `target` (`GET /env/values`, needs the `env:decrypt` scope).
+pub fn pull_cloud_env(
+    api_base: &str,
+    project_id: &str,
+    token: Option<&str>,
+    target: Option<&str>,
+) -> DeployResult<Vec<CloudEnvVar>> {
+    let url = project_env_url(api_base, project_id, "/env/values", target);
+    let vars: Vec<CloudEnvVar> = get_env_array(&url, token, "Pull environment variables")?;
 
     for var in &vars {
         if !is_valid_env_key(&var.key) {
@@ -542,7 +661,9 @@ pub fn delete_cloud_env_var(
     token: Option<&str>,
     key: &str,
 ) -> DeployResult<bool> {
-    let url = format!("{api_base}/v0/projects/{project_id}/env/{key}");
+    use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
+    let key = utf8_percent_encode(key, NON_ALPHANUMERIC);
+    let url = project_env_url(api_base, project_id, &format!("/env/{key}"), None);
     let mut req = ureq::delete(&url);
     if let Some(tok) = token {
         req = req.set("Authorization", &format!("Bearer {tok}"));
@@ -1878,6 +1999,16 @@ mod tests {
     }
 
     #[test]
+    fn environment_slug_validation() {
+        for ok in ["a", "staging", "qa-2", "0a"] {
+            assert!(is_valid_environment_slug(ok), "{ok}");
+        }
+        for bad in ["", "-a", "a-", "A", "a_b", "a b", &"a".repeat(41)] {
+            assert!(!is_valid_environment_slug(bad), "{bad}");
+        }
+    }
+
+    #[test]
     fn test_parse_and_format_env_file() {
         let content = r#"
 # Comment line
@@ -2076,10 +2207,27 @@ SPACED=hello world
                                     "200 OK",
                                     r#"{"status":"deleted","domain":"custom.example.com"}"#,
                                 )
-                            } else if method == "GET" && path.contains("/env") {
+                            } else if method == "GET" && path.contains("/environments") {
+                                (
+                                    "200 OK",
+                                    r#"[{"id":"pen_abcdefghijkl","slug":"staging","branchPattern":"release/*"}]"#,
+                                )
+                            } else if method == "POST" && path.contains("/environments") {
+                                (
+                                    "201 Created",
+                                    r#"{"id":"pen_abcdefghijkl","slug":"staging","branchPattern":null}"#,
+                                )
+                            } else if method == "DELETE" && path.contains("/environments/") {
+                                ("204 No Content", "")
+                            } else if method == "GET" && path.contains("/env/values") {
                                 (
                                     "200 OK",
                                     r#"[{"id":"env_1","key":"MOCK_VAR","value":"test_val_123","target":["production"],"gitBranch":null,"createdAt":1762732800}]"#,
+                                )
+                            } else if method == "GET" && path.contains("/env") {
+                                (
+                                    "200 OK",
+                                    r#"[{"id":"env_1","key":"MOCK_VAR","target":["production"],"gitBranch":"main","createdAt":1762732800}]"#,
                                 )
                             } else if method == "POST" && path.contains("/env") {
                                 ("200 OK", r#"{"status":"synced","count":1}"#)
@@ -2267,6 +2415,30 @@ SPACED=hello world
         assert_eq!(pulled_vars.len(), 1);
         assert_eq!(pulled_vars[0].key, "MOCK_VAR");
         assert_eq!(pulled_vars[0].value, "test_val_123");
+
+        let meta = list_cloud_env(&server.addr, "prj_mock", Some("mock_token_123"), None)
+            .expect("env list must succeed");
+        assert_eq!(meta[0].key, "MOCK_VAR");
+        assert_eq!(meta[0].git_branch.as_deref(), Some("main"));
+        assert!(!serde_json::to_string(&meta).unwrap().contains("test_val"));
+
+        // 6b. Custom environments
+        let envs = list_project_environments(&server.addr, "prj_mock", Some("mock_token_123"))
+            .expect("list environments must succeed");
+        assert_eq!(envs[0].slug, "staging");
+        assert_eq!(envs[0].branch_pattern.as_deref(), Some("release/*"));
+        let created = add_project_environment(
+            &server.addr,
+            "prj_mock",
+            Some("mock_token_123"),
+            "staging",
+            None,
+        )
+        .expect("create environment must succeed");
+        assert_eq!(created.id, "pen_abcdefghijkl");
+        assert!(add_project_environment(&server.addr, "prj_mock", None, "Bad Slug", None).is_err());
+        remove_project_environment(&server.addr, "prj_mock", Some("mock_token_123"), "staging")
+            .expect("remove environment must succeed");
 
         // 7. Env push
         let push_count = push_cloud_env(

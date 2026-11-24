@@ -86,6 +86,7 @@ enum AppzCmd {
     /// Link this directory to a project on the platform
     Link(LinkArgs),
     /// Point a custom domain or alias to the deployment
+    #[command(args_conflicts_with_subcommands = true)]
     Alias(AliasArgs),
     /// List deployments for a project, or for the whole team
     #[command(alias = "deployments", alias = "ls")]
@@ -362,15 +363,52 @@ struct LinkArgs {
     target: Option<String>,
 }
 
+/// `appz alias <DOMAIN> [DIR]` is shorthand for `appz alias set <DOMAIN> [DIR]`.
 #[derive(Args)]
 struct AliasArgs {
+    #[command(subcommand)]
+    command: Option<AliasCmd>,
     /// Custom domain or alias to assign (e.g. app.example.com)
-    domain: String,
+    domain: Option<String>,
     #[arg(default_value = ".")]
     dir: PathBuf,
     /// Provider slug (default: detects from project or config)
     #[arg(long)]
     target: Option<String>,
+}
+
+#[derive(Subcommand, Debug)]
+enum AliasCmd {
+    /// Point a custom domain or alias at the project's latest deployment
+    Set {
+        /// Custom domain or alias to assign (e.g. app.example.com)
+        domain: String,
+        #[arg(default_value = ".")]
+        dir: PathBuf,
+        /// Provider slug (default: detects from project or config)
+        #[arg(long)]
+        target: Option<String>,
+    },
+    /// List the hosts serving the project
+    #[command(alias = "list")]
+    Ls {
+        #[arg(default_value = ".")]
+        dir: PathBuf,
+        /// Provider slug (default: detects from project or config)
+        #[arg(long)]
+        target: Option<String>,
+    },
+    /// Remove an alias (the production host cannot be removed)
+    #[command(alias = "remove")]
+    Rm {
+        /// Alias host to remove (e.g. beta.example.com)
+        host: String,
+        #[arg(default_value = ".")]
+        dir: PathBuf,
+        /// Provider slug (default: detects from project or config)
+        #[arg(long)]
+        target: Option<String>,
+    },
 }
 
 #[derive(Args)]
@@ -2438,20 +2476,123 @@ fn run_link(args: LinkArgs, json: bool) {
 }
 
 fn run_alias(args: AliasArgs, json: bool) {
-    let canonical = resolve_root(&args.dir);
+    match args.command {
+        Some(AliasCmd::Set {
+            domain,
+            dir,
+            target,
+        }) => run_alias_set(&dir, target, &domain, json),
+        Some(AliasCmd::Ls { dir, target }) => run_alias_ls(&dir, target, json),
+        Some(AliasCmd::Rm { host, dir, target }) => run_alias_rm(&dir, target, &host, json),
+        None => match args.domain {
+            Some(domain) => run_alias_set(&args.dir, args.target, &domain, json),
+            None => error("usage: appz alias <DOMAIN> [DIR] | set <DOMAIN> | ls | rm <HOST>"),
+        },
+    }
+}
+
+fn run_alias_set(dir: &Path, target: Option<String>, domain: &str, json: bool) {
+    let canonical = resolve_root(dir);
     if !json {
         intro("appz alias");
     }
-    match deploy::alias(&canonical, args.target, &args.domain) {
+    match deploy::alias(&canonical, target, domain) {
         Ok(url) => {
             if json {
                 println!("{}", serde_json::json!({ "status": "aliased", "url": url }));
             } else {
-                success(&format!("assigned alias {}", args.domain));
+                success(&format!("assigned alias {domain}"));
                 info(&url);
                 outro("alias complete");
             }
         }
+        Err(e) => error(&e),
+    }
+}
+
+fn alias_created(ms: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(ms)
+        .map(|t| t.format("%Y-%m-%d %H:%M UTC").to_string())
+        .unwrap_or_else(|| "-".into())
+}
+
+fn run_alias_ls(dir: &Path, target: Option<String>, json: bool) {
+    let canonical = resolve_root(dir);
+    match deploy::list_aliases(&canonical, target) {
+        Ok(aliases) if json => println!("{}", serde_json::to_string_pretty(&aliases).unwrap()),
+        Ok(aliases) => {
+            intro("appz alias ls");
+            if aliases.is_empty() {
+                info("no aliases found\nrun `appz alias set <domain>` to add one");
+            } else {
+                let lines: Vec<String> = aliases
+                    .iter()
+                    .map(|a| {
+                        format!(
+                            "{:<36}  {:<18}  {:<22}  {}",
+                            a.host,
+                            a.deployment_id,
+                            alias_created(a.created_at),
+                            if a.is_production { "production" } else { "" }
+                        )
+                    })
+                    .collect();
+                info(&format!(
+                    "{:<36}  {:<18}  {:<22}\n{}",
+                    "HOST",
+                    "DEPLOYMENT",
+                    "CREATED",
+                    lines.join("\n")
+                ));
+            }
+            outro("done");
+        }
+        Err(e) => error(&e),
+    }
+}
+
+fn run_alias_rm(dir: &Path, target: Option<String>, host: &str, json: bool) {
+    let canonical = resolve_root(dir);
+    let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
+    // Look the alias up first: it lets us refuse the production host and show what is
+    // about to be removed. The server enforces the same rule for races.
+    let aliases = match deploy::list_aliases(&canonical, target.clone()) {
+        Ok(a) => a,
+        Err(e) => error(&e),
+    };
+    let Some(alias) = aliases.iter().find(|a| a.host == host) else {
+        error(&format!(
+            "alias {host} not found; run `appz alias ls` to see this project's aliases"
+        ));
+    };
+    if alias.is_production {
+        error(&format!(
+            "{host} is the production host and cannot be removed"
+        ));
+    }
+    if !assume_yes() {
+        if json || !is_interactive_tty() {
+            error("confirmation required — pass --yes to remove the alias without prompting");
+        }
+        let prompt = format!(
+            "Remove alias {host} (deployment {}, created {})?",
+            alias.deployment_id,
+            alias_created(alias.created_at)
+        );
+        match cliclack::confirm(prompt).initial_value(false).interact() {
+            Ok(true) => {}
+            _ => {
+                info("canceled");
+                return;
+            }
+        }
+    }
+    match deploy::remove_alias(&canonical, target, &host) {
+        Ok(()) if json => println!(
+            "{}",
+            serde_json::json!({ "status": "removed", "host": host })
+        ),
+        Ok(()) => success(&format!("removed alias {host}")),
         Err(e) => error(&e),
     }
 }
@@ -3455,7 +3596,43 @@ mod tests {
         assert!(AppzCli::try_parse_from(["appz", "rollback"]).is_ok());
         assert!(AppzCli::try_parse_from(["appz", "rollback", "some/dir"]).is_ok());
         assert!(AppzCli::try_parse_from(["appz", "alias", "app.example.com"]).is_ok());
-        assert!(AppzCli::try_parse_from(["appz", "alias"]).is_err());
+        assert!(AppzCli::try_parse_from(["appz", "alias", "ls", "extra", "more"]).is_err());
+    }
+
+    #[test]
+    fn alias_shorthand_and_subcommands_parse() {
+        let parse = |args: &[&str]| {
+            let cli = AppzCli::try_parse_from(std::iter::once("appz").chain(args.iter().copied()))
+                .unwrap();
+            let AppzCmd::Alias(a) = cli.command else {
+                panic!("expected alias")
+            };
+            a
+        };
+        let a = parse(&["alias", "app.example.com", "site", "--target", "appzdev"]);
+        assert!(a.command.is_none());
+        assert_eq!(a.domain.as_deref(), Some("app.example.com"));
+        assert_eq!(a.dir, PathBuf::from("site"));
+        assert_eq!(a.target.as_deref(), Some("appzdev"));
+        let a = parse(&["alias", "set", "app.example.com"]);
+        assert!(
+            matches!(a.command, Some(AliasCmd::Set { domain, .. }) if domain == "app.example.com")
+        );
+        assert!(matches!(
+            parse(&["alias", "ls"]).command,
+            Some(AliasCmd::Ls { .. })
+        ));
+        assert!(matches!(
+            parse(&["alias", "list"]).command,
+            Some(AliasCmd::Ls { .. })
+        ));
+        let a = parse(&["alias", "rm", "beta.example.com", "--target", "appzdev"]);
+        assert!(matches!(a.command, Some(AliasCmd::Rm { host, target, .. })
+            if host == "beta.example.com" && target.as_deref() == Some("appzdev")));
+        assert!(AppzCli::try_parse_from(["appz", "alias", "rm"]).is_err());
+        let cli =
+            AppzCli::try_parse_from(["appz", "alias", "rm", "b.example.com", "--yes"]).unwrap();
+        assert!(cli.yes);
 
         match AppzCli::try_parse_from(["appz", "deploy", "--no-backup"])
             .unwrap()

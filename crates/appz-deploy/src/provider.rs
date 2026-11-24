@@ -200,6 +200,22 @@ pub trait DeployProvider: Send + Sync {
         })
     }
 
+    fn list_aliases(&self, ctx: &DeployContext) -> DeployResult<Vec<crate::AliasInfo>> {
+        let _ = ctx;
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "alias ls",
+        })
+    }
+
+    fn remove_alias(&self, ctx: &DeployContext, host: &str) -> DeployResult<()> {
+        let _ = (ctx, host);
+        Err(DeployError::Unsupported {
+            provider: self.name(),
+            operation: "alias rm",
+        })
+    }
+
     /// Promote a ready deployment to production. `confirm` sees the resolved
     /// deployment before anything changes; `Ok(None)` means it declined.
     fn promote_deployment(

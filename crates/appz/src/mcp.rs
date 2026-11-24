@@ -368,6 +368,7 @@ impl AppzServer {
             target: arg.target,
             project: arg.project,
             force: arg.force,
+            prebuilt: false,
             prod: arg.prod,
             env: vec![],
             build_env: vec![],
@@ -457,7 +458,7 @@ impl AppzServer {
             &api_base,
             &project_id,
             token.as_deref(),
-            arg.target.as_deref(),
+            arg.target.as_deref().or(Some("development")),
         ) {
             Ok(vars) => {
                 let kvs: Vec<(String, String)> =

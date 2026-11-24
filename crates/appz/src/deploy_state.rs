@@ -138,6 +138,11 @@ pub fn unchanged(root: &Path, slug: &str, prod: bool, fingerprint: &str) -> Opti
         .filter(|last| last.fingerprint == fingerprint)
 }
 
+/// The URL of the last recorded deploy of this target, whatever its fingerprint.
+pub fn last_url(root: &Path, slug: &str, prod: bool) -> Option<String> {
+    load(root).remove(&key(slug, prod)).map(|l| l.url)
+}
+
 pub fn record(root: &Path, slug: &str, prod: bool, fingerprint: &str, url: &str) {
     let _guard = STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut all = load(root);

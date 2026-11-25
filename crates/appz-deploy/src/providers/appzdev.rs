@@ -169,18 +169,28 @@ pub fn clear_stored_auth() -> Result<(), std::io::Error> {
 }
 
 pub fn resolve_auth_token(ctx: Option<&DeployContext>) -> Option<String> {
-    std::env::var("APPZ_TOKEN")
+    let (token, login) = auth_token(ctx);
+    crate::team::note_login_token(login);
+    token
+}
+
+/// The token and whether it is the `appz login` session (vs `APPZ_TOKEN` from
+/// env or vault), without recording it for team scoping.
+pub(crate) fn auth_token(ctx: Option<&DeployContext>) -> (Option<String>, bool) {
+    let explicit = std::env::var("APPZ_TOKEN")
         .ok()
         .filter(|t| !t.is_empty())
         .or_else(|| {
             ctx.and_then(|c| c.run_env.get("APPZ_TOKEN").cloned())
                 .filter(|t| !t.is_empty())
-        })
-        .or_else(|| {
-            load_stored_auth()
-                .map(|a| a.token)
-                .filter(|t| !t.is_empty())
-        })
+        });
+    if explicit.is_some() {
+        return (explicit, false);
+    }
+    let stored = load_stored_auth()
+        .map(|a| a.token)
+        .filter(|t| !t.is_empty());
+    (stored, true)
 }
 
 /// POST the promote request, retrying transport/5xx failures with one

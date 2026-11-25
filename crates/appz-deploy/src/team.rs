@@ -5,11 +5,25 @@
 //! `.appz/project.json` `orgId` > `organization_id` in `~/.appz/auth.json`
 //! (written by `appz switch`). None: no param, so the server uses the
 //! session's active organization.
+//!
+//! The project/stored team belongs to the `appz login` session, so it is only
+//! sent when that session token authenticates the request. A token from
+//! `APPZ_TOKEN` (env or vault) is bound to its own team (an org API key), and
+//! sending the login's team with it is rejected; only an explicit `--scope` /
+//! `APPZ_TEAM_ID` is sent with such a token.
 
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 static SCOPE: OnceLock<Option<String>> = OnceLock::new();
-static TEAM: OnceLock<Option<String>> = OnceLock::new();
+/// The resolved team and whether it was asked for explicitly (`--scope`/env).
+static TEAM: OnceLock<Option<(String, bool)>> = OnceLock::new();
+/// Set by `resolve_auth_token`: the token in use is the `appz login` session.
+static LOGIN_TOKEN: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn note_login_token(login: bool) {
+    LOGIN_TOKEN.store(login, Ordering::Relaxed);
+}
 
 /// Record `--scope` (call once at startup, before any request).
 pub fn set_scope(scope: Option<String>) {
@@ -51,7 +65,8 @@ fn project_org() -> Option<String> {
 /// and the server's membership check reports a bad one.
 fn lookup(q: &str) -> String {
     let base = std::env::var("APPZ_API_URL").unwrap_or_else(|_| "https://api.appz.dev".to_string());
-    crate::resolve_auth_token(None)
+    crate::providers::appzdev::auth_token(None)
+        .0
         .and_then(|t| {
             ureq::get(&format!("{base}/api/auth/organization/list"))
                 .set("Authorization", &format!("Bearer {t}"))
@@ -64,22 +79,33 @@ fn lookup(q: &str) -> String {
         .unwrap_or_else(|| q.to_string())
 }
 
-/// The team id for this run, if any.
-pub fn current_team() -> Option<String> {
+fn resolved() -> Option<(String, bool)> {
     // Unit tests mock the API and assert exact paths: never read the developer's login.
     if cfg!(test) {
         return None;
     }
     TEAM.get_or_init(|| {
-        let (v, needs_lookup) = pick(
+        let (v, explicit) = pick(
             SCOPE.get().cloned().flatten(),
             std::env::var("APPZ_TEAM_ID").ok(),
             project_org(),
             crate::load_stored_auth().and_then(|a| a.organization_id),
         )?;
-        Some(if needs_lookup { lookup(&v) } else { v })
+        Some((if explicit { lookup(&v) } else { v }, explicit))
     })
     .clone()
+}
+
+/// The team id for this run, if any.
+pub fn current_team() -> Option<String> {
+    resolved().map(|(id, _)| id)
+}
+
+/// Whether a resolved team goes on a request: always when explicit, else only
+/// with the login session token it belongs to.
+fn sendable(team: Option<(String, bool)>, login_token: bool) -> Option<String> {
+    team.filter(|(_, explicit)| *explicit || login_token)
+        .map(|(id, _)| id)
 }
 
 /// Add `teamId` to a `/v0/` request.
@@ -94,7 +120,10 @@ pub fn scoped(req: ureq::Request) -> ureq::Request {
     if !req.url().contains("/v0/") {
         return req;
     }
-    scoped_with(req, current_team().as_deref())
+    scoped_with(
+        req,
+        sendable(resolved(), LOGIN_TOKEN.load(Ordering::Relaxed)).as_deref(),
+    )
 }
 
 pub fn request(method: &str, url: &str) -> ureq::Request {
@@ -132,6 +161,23 @@ mod tests {
 
     fn s(v: &str) -> Option<String> {
         Some(v.to_string())
+    }
+
+    #[test]
+    fn implicit_team_only_rides_the_login_token() {
+        let t = |explicit| Some(("t1".to_string(), explicit));
+        assert_eq!(sendable(t(false), true).as_deref(), Some("t1"));
+        assert_eq!(
+            sendable(t(false), false),
+            None,
+            "vault/env key keeps its own team"
+        );
+        assert_eq!(
+            sendable(t(true), false).as_deref(),
+            Some("t1"),
+            "--scope is always sent"
+        );
+        assert_eq!(sendable(None, true), None);
     }
 
     #[test]

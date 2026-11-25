@@ -59,7 +59,7 @@ fn gitignore_project_vault(vault: &Path) {
         && root.ancestors().any(|a| a.join(".git").exists())
         && let Err(e) = appz_core::ensure_gitignored(root)
     {
-        eprintln!("warning: could not git-ignore the project vault: {e}");
+        crate::warning(&format!("Could not git-ignore the project vault: {e}"));
     }
 }
 

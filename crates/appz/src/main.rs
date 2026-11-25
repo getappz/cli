@@ -2026,20 +2026,19 @@ fn vault_path_for(global: bool) -> PathBuf {
     secrets::vault_path(Path::new("."), global).unwrap_or_else(|e| error(&e))
 }
 
-/// One `ls`/`check` line: the name, plus its recorded expiry when there is one.
-fn vault_row(row: &appz_vault::SecretExpiry) -> String {
+/// `[Name, Expires, Status]` for `vault ls`/`check`.
+fn vault_cells(row: &appz_vault::SecretExpiry) -> Vec<String> {
     use appz_vault::ExpiryStatus::*;
-    let (name, at, status) = (&row.name, &row.expires_at, row.status);
-    let Some(at) = at else {
-        return name.clone();
+    let Some(at) = &row.expires_at else {
+        return vec![row.name.clone(), String::new(), String::new()];
     };
     let days = (*at - chrono::Utc::now()).num_days();
-    let note = match status {
-        Expired => format!("EXPIRED {}", at.format("%Y-%m-%d")),
-        Expiring => format!("expires in {days}d ({})", at.format("%Y-%m-%d")),
-        _ => format!("expires {} (in {days}d)", at.format("%Y-%m-%d")),
+    let status = match row.status {
+        Expired => ui::fmt::status("expired"),
+        Expiring => format!("{} in {days}d", ui::fmt::status("expiring")),
+        _ => format!("{} {days}d left", ui::fmt::status("active")),
     };
-    format!("{name}  {note}")
+    vec![row.name.clone(), at.format("%Y-%m-%d").to_string(), status]
 }
 
 fn run_vault_cmd(cmd: VaultCmd, json: bool) {
@@ -2055,7 +2054,7 @@ fn run_vault_cmd(cmd: VaultCmd, json: bool) {
                 secrets::parse_expiry(expires.as_deref(), ttl.as_deref(), chrono::Utc::now())
                     .unwrap_or_else(|e| error(&e));
             match secrets::set(&vault_path_for(global), &name, value, expires_at) {
-                Ok(()) => success(&format!("stored {name}")),
+                Ok(()) => success(&format!("Stored {name}")),
                 Err(e) => error(&e),
             }
         }
@@ -2065,11 +2064,17 @@ fn run_vault_cmd(cmd: VaultCmd, json: bool) {
                     let names: Vec<_> = rows.into_iter().map(|r| r.name).collect();
                     println!("{}", serde_json::to_string(&names).unwrap());
                 }
-                Ok(rows) if rows.is_empty() => info("no secrets stored"),
-                Ok(rows) => info(&rows.iter().map(vault_row).collect::<Vec<_>>().join(
-                    "
-",
-                )),
+                Ok(rows) if rows.is_empty() => ui::empty(
+                    "secrets",
+                    Some("Run `appz env set <NAME>` to store one"),
+                ),
+                Ok(rows) => {
+                    let mut t = ui::Table::new(&["Name", "Expires", "Status"]);
+                    for r in &rows {
+                        t.row(vault_cells(r));
+                    }
+                    t.print();
+                }
                 Err(e) => error(&e),
             }
         }
@@ -2086,7 +2091,7 @@ fn run_vault_cmd(cmd: VaultCmd, json: bool) {
                 error("give --expires YYYY-MM-DD or --ttl 90d");
             }
             match secrets::set_expiry(&vault_path_for(global), &name, expires_at) {
-                Ok(()) => success(&format!("recorded expiry for {name}")),
+                Ok(()) => success(&format!("Recorded expiry for {name}")),
                 Err(e) => error(&e),
             }
         }
@@ -2109,28 +2114,28 @@ fn run_vault_cmd(cmd: VaultCmd, json: bool) {
                     std::process::exit(1);
                 }
             } else if due.is_empty() {
-                success("no secrets expired or expiring soon");
+                success("No secrets expired or expiring soon");
             } else {
-                let lines: Vec<_> = due.into_iter().map(vault_row).collect();
+                let mut t = ui::Table::new(&["Name", "Expires", "Status"]);
+                for r in &due {
+                    t.row(vault_cells(r));
+                }
+                t.print();
                 error(&format!(
-                    "rotate these:
-{}",
-                    lines.join(
-                        "
-"
-                    )
+                    "{} to rotate",
+                    ui::fmt::plural(due.len(), "secret")
                 ));
             }
         }
         VaultCmd::Rm { name, global } => match secrets::remove(&vault_path_for(global), &name) {
-            Ok(true) => success(&format!("removed {name}")),
+            Ok(true) => success(&format!("Removed {name}")),
             Ok(false) => error(&format!("{name} is not stored")),
             Err(e) => error(&e),
         },
         VaultCmd::Unlock { global } => match secrets::unlock(&vault_path_for(global)) {
-            Ok((_, true)) => success("vault unlocked"),
+            Ok((_, true)) => success("Vault unlocked"),
             Ok((_, false)) => warning(concat!(
-                "vault unlocked for this command only: the OS keyring is unavailable, ",
+                "Vault unlocked for this command only: the OS keyring is unavailable, ",
                 "so it will ask again. Set APPZ_VAULT_PASSPHRASE, or pass the platform ",
                 "token as an environment variable instead"
             )),
@@ -2138,7 +2143,7 @@ fn run_vault_cmd(cmd: VaultCmd, json: bool) {
         },
         VaultCmd::Lock { global } => {
             secrets::lock(&vault_path_for(global));
-            success("vault locked");
+            success("Vault locked");
         }
     }
 }
@@ -2210,8 +2215,8 @@ fn run_env(args: EnvArgs, json: bool) {
                 if json {
                     println!("{}", serde_json::json!({ "pushed": 0 }));
                 } else {
-                    info("no environment variables found in file");
-                    outro("nothing to push");
+                    ui::empty("environment variables in the file", None);
+                    outro("Nothing to push");
                 }
                 return;
             }
@@ -2243,10 +2248,10 @@ fn run_env(args: EnvArgs, json: bool) {
                         );
                     } else {
                         success(&format!(
-                            "uploaded {} environment variables to project '{}'",
-                            count, project_id
+                            "Uploaded {} to project '{project_id}'",
+                            ui::fmt::plural(count, "environment variable")
                         ));
-                        outro("done");
+                        outro("Done");
                     }
                 }
                 Err(e) => error(&e.to_string()),
@@ -2292,27 +2297,28 @@ fn run_ci(args: CiArgs, json: bool) {
     }
 
     intro("appz ci");
-    success(&format!("wrote {}", report.workflow));
-    info(&format!(
-        "repo: {}\ntarget: {}\nbranch: {}",
-        report.repo, report.target, report.branch
-    ));
+    success(&format!("Wrote {}", report.workflow));
+    ui::print_kv(&[
+        ("Repo", report.repo.to_string()),
+        ("Target", report.target.to_string()),
+        ("Branch", report.branch.to_string()),
+    ]);
     for secret in &report.secrets {
         match secret.status {
-            "set" => success(&format!("set repository secret {}", secret.name)),
+            "set" => success(&format!("Set repository secret {}", secret.name)),
             "failed" => warning(&format!(
-                "could not set {}: {}",
+                "Could not set {}: {}",
                 secret.name,
                 secret.detail.as_deref().unwrap_or("unknown error")
             )),
-            _ => info(&format!(
-                "secret {} not set: {}",
+            _ => ui::hint(&format!(
+                "Secret {} not set: {}",
                 secret.name,
                 secret.detail.as_deref().unwrap_or("no value")
             )),
         }
     }
-    outro("commit the workflow to turn on deploy-on-push");
+    outro("Commit the workflow to turn on deploy-on-push");
 }
 
 fn run_deploy(args: DeployArgs, json: bool) {

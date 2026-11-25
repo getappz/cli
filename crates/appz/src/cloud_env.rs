@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use crate::{error, info, intro, is_tty, outro, success};
+use crate::{error, intro, is_tty, outro, success, ui};
 
 /// Environment used when `--environment` is omitted, matching `vercel env pull`.
 pub(crate) const DEFAULT_ENVIRONMENT: &str = "development";
@@ -126,20 +126,20 @@ pub(crate) fn ls(root: &Path, envs: &[String], json: bool) {
     if json {
         println!("{}", serde_json::to_string(&rows).unwrap());
     } else if rows.is_empty() {
-        info("no environment variables");
+        ui::empty(
+            "environment variables",
+            Some("Run `appz env push` to upload a .env file"),
+        );
     } else {
-        let lines: Vec<String> = rows
-            .iter()
-            .map(|r| {
-                let branch = r
-                    .git_branch
-                    .as_deref()
-                    .map(|b| format!(" (branch {b})"))
-                    .unwrap_or_default();
-                format!("{}  [{}]{branch}", r.key, r.target.join(", "))
-            })
-            .collect();
-        info(&lines.join("\n"));
+        let mut t = ui::Table::new(&["Key", "Environments", "Branch"]);
+        for r in &rows {
+            t.row(vec![
+                r.key.clone(),
+                r.target.join(", "),
+                r.git_branch.clone().unwrap_or_default(),
+            ]);
+        }
+        t.print();
     }
 }
 
@@ -150,7 +150,7 @@ pub(crate) fn rm(root: &Path, key: &str, json: bool) {
         "Remove {key} from every environment of project '{}'?",
         ctx.project_id
     )) {
-        error("cancelled");
+        error("Cancelled");
     }
     match appz_deploy::delete_cloud_env_var(
         &ctx.api_base,
@@ -159,7 +159,7 @@ pub(crate) fn rm(root: &Path, key: &str, json: bool) {
         key,
     ) {
         Ok(_) if json => println!("{}", serde_json::json!({ "removed": key })),
-        Ok(_) => success(&format!("removed {key} from every environment")),
+        Ok(_) => success(&format!("Removed {key} from every environment")),
         Err(e) => error(&e.to_string()),
     }
 }
@@ -172,17 +172,17 @@ pub(crate) fn environments_ls(root: &Path, json: bool) {
         ctx.token.as_deref(),
     ) {
         Ok(rows) if json => println!("{}", serde_json::to_string(&rows).unwrap()),
-        Ok(rows) if rows.is_empty() => info("no custom environments"),
-        Ok(rows) => info(
-            &rows
-                .iter()
-                .map(|r| match &r.branch_pattern {
-                    Some(p) => format!("{}  (branches {p})", r.slug),
-                    None => r.slug.clone(),
-                })
-                .collect::<Vec<_>>()
-                .join("\n"),
-        ),
+        Ok(rows) if rows.is_empty() => ui::empty("custom environments", None),
+        Ok(rows) => {
+            let mut t = ui::Table::new(&["Environment", "Branches"]);
+            for r in &rows {
+                t.row(vec![
+                    r.slug.clone(),
+                    r.branch_pattern.clone().unwrap_or_default(),
+                ]);
+            }
+            t.print();
+        }
         Err(e) => error(&e.to_string()),
     }
 }
@@ -197,7 +197,7 @@ pub(crate) fn environments_add(root: &Path, slug: &str, branch_pattern: Option<&
         branch_pattern,
     ) {
         Ok(env) if json => println!("{}", serde_json::to_string(&env).unwrap()),
-        Ok(env) => success(&format!("created environment {}", env.slug)),
+        Ok(env) => success(&format!("Created environment {}", env.slug)),
         Err(e) => error(&e.to_string()),
     }
 }
@@ -207,7 +207,7 @@ pub(crate) fn environments_rm(root: &Path, slug: &str, json: bool) {
     if !confirm(&format!(
         "Remove environment '{slug}' and its variable targets? Existing deployments remain."
     )) {
-        error("cancelled");
+        error("Cancelled");
     }
     match appz_deploy::remove_project_environment(
         &ctx.api_base,
@@ -216,7 +216,7 @@ pub(crate) fn environments_rm(root: &Path, slug: &str, json: bool) {
         slug,
     ) {
         Ok(()) if json => println!("{}", serde_json::json!({ "removed": slug })),
-        Ok(()) => success(&format!("removed environment {slug}")),
+        Ok(()) => success(&format!("Removed environment {slug}")),
         Err(e) => error(&e.to_string()),
     }
 }
@@ -289,18 +289,18 @@ pub(crate) fn pull_to_file(root: &Path, file: &Path, envs: &[String], json: bool
         );
     } else {
         if kvs.is_empty() {
-            info(&format!(
-                "no variables in {}; pick another with --environment",
+            ui::hint(&format!(
+                "No variables in {}; pick another with --environment",
                 shown.join(", ")
             ));
         }
         success(&format!(
-            "downloaded {} environment variables ({}) to {}",
-            kvs.len(),
+            "Downloaded {} ({}) to {}",
+            ui::fmt::plural(kvs.len(), "environment variable"),
             shown.join(", "),
             target_path.display()
         ));
-        outro("done");
+        outro("Done");
     }
 }
 

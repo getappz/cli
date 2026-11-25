@@ -12,7 +12,7 @@ pub(crate) mod fmt;
 pub(crate) mod table;
 pub(crate) mod theme;
 
-pub(crate) use table::{Table, kv, print_kv};
+pub(crate) use table::{Table, print_kv};
 
 use theme::err;
 

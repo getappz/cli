@@ -2655,13 +2655,13 @@ fn run_alias_set(dir: &Path, target: Option<String>, domain: &str, json: bool) {
     }
 }
 
-fn fmt_event_time(t: Option<f64>) -> String {
+fn event_ms(t: Option<f64>) -> Option<i64> {
     // The API does not document the unit; treat small values as seconds.
     t.map(|t| if t < 1e11 { t * 1000.0 } else { t } as i64)
-        .map_or_else(|| "-".to_string(), |ms| fmt_millis(Some(ms)))
 }
 
 fn run_activity(args: ActivityArgs, json: bool) {
+    let fetch = ui::fetching("activity");
     let page = match deploy::list_activity(
         Path::new("."),
         args.target,
@@ -2681,48 +2681,63 @@ fn run_activity(args: ActivityArgs, json: bool) {
         println!("{}", serde_json::to_string_pretty(&out).unwrap());
         return;
     }
-    intro("appz activity");
+    fetch.done(&format!("{} found", ui::fmt::plural(items.len(), "event")));
     if items.is_empty() {
-        info("no activity events found");
+        ui::empty("activity events", None);
     } else {
-        let lines: Vec<String> = items
-            .iter()
-            .map(|e| {
-                let actor = e
-                    .actor_user_id
-                    .as_deref()
-                    .or(e.actor_key_id.as_deref())
-                    .or(e.actor_type.as_deref())
-                    .unwrap_or("-");
-                let target = match (e.resource_type.as_deref(), e.resource_id.as_deref()) {
-                    (Some(t), Some(id)) => format!("{t}:{id}"),
-                    (Some(t), None) => t.to_string(),
-                    _ => "-".to_string(),
-                };
-                format!(
-                    "{:<20}  {:<14}  {:<26}  {:<32}  {}",
-                    fmt_event_time(e.created_at),
-                    actor,
-                    e.action,
-                    target,
-                    e.ip.as_deref().unwrap_or("-")
-                )
-            })
-            .collect();
-        info(&lines.join(
-            "
-",
-        ));
+        let now = ui::fmt::now_ms();
+        let mut t = ui::Table::new(&["Age", "Actor", "Action", "Target", "IP"]);
+        for e in &items {
+            let actor = e
+                .actor_user_id
+                .as_deref()
+                .or(e.actor_key_id.as_deref())
+                .or(e.actor_type.as_deref())
+                .unwrap_or("");
+            let target = match (e.resource_type.as_deref(), e.resource_id.as_deref()) {
+                (Some(t), Some(id)) => format!("{t}:{id}"),
+                (Some(t), None) => t.to_string(),
+                _ => String::new(),
+            };
+            let age = event_ms(e.created_at).map_or_else(String::new, |ms| ui::fmt::age(ms, now));
+            t.row(vec![
+                age,
+                actor.to_string(),
+                e.action.clone(),
+                target,
+                e.ip.clone().unwrap_or_default(),
+            ]);
+        }
+        t.print();
     }
     print_next_hint(&page.next_cursor, "appz activity");
-    outro("done");
 }
 
 fn usage_percent(used: f64, limit: f64) -> Option<f64> {
     (limit > 0.0).then(|| used / limit * 100.0)
 }
 
+/// One usage row: `[label, "20 of 100", "20%"]`; the percent is colored as it
+/// nears the limit.
+fn usage_row(u: &appz_deploy::UsageEntry) -> Vec<String> {
+    let amount = if !u.detail.trim().is_empty() {
+        u.detail.clone()
+    } else if u.limit > 0.0 {
+        format!("{} of {}", u.used, u.limit)
+    } else {
+        format!("{} (unlimited)", u.used)
+    };
+    let pct = match usage_percent(u.used, u.limit) {
+        Some(p) if p >= 100.0 => ui::theme::out::red(&format!("{p:.0}%")),
+        Some(p) if p >= 80.0 => ui::theme::out::yellow(&format!("{p:.0}%")),
+        Some(p) => format!("{p:.0}%"),
+        None => String::new(),
+    };
+    vec![u.label.clone(), amount, pct]
+}
+
 fn run_usage(args: UsageArgs, json: bool) {
+    let fetch = ui::fetching("usage");
     let report = match deploy::usage_report(Path::new("."), args.target) {
         Ok(r) => r,
         Err(e) => error(&e),
@@ -2731,43 +2746,22 @@ fn run_usage(args: UsageArgs, json: bool) {
         println!("{}", serde_json::to_string_pretty(&report).unwrap());
         return;
     }
-    intro("appz usage");
-    let mut lines: Vec<String> = report
-        .usage
-        .iter()
-        .map(|u| {
-            let (pct, flag) = match usage_percent(u.used, u.limit) {
-                Some(p) => (
-                    format!("{p:.0}%"),
-                    if p >= 80.0 { "  !! near limit" } else { "" },
-                ),
-                None => ("-".to_string(), ""),
-            };
-            let limit = if u.limit > 0.0 {
-                u.limit.to_string()
-            } else {
-                "unlimited".into()
-            };
-            format!(
-                "{:<24}  {} / {}  ({}){}  {}",
-                u.label, u.used, limit, pct, flag, u.detail
-            )
-        })
-        .collect();
-    if lines.is_empty() {
-        lines.push("no usage reported".into());
+    fetch.done("Usage against plan limits");
+    if report.usage.is_empty() {
+        ui::empty("usage", None);
+    } else {
+        let mut t = ui::Table::new(&["Resource", "Usage", "%"]);
+        for u in &report.usage {
+            t.row(usage_row(u));
+        }
+        t.print();
     }
-    info(&lines.join(
-        "
-",
-    ));
     let features = if report.entitlements.is_empty() {
         "none".to_string()
     } else {
         report.entitlements.join(", ")
     };
-    info(&format!("Plan features: {features}"));
-    outro("done");
+    ui::hint(&format!("Plan features: {features}"));
 }
 
 fn alias_created(ms: i64) -> String {
@@ -2859,7 +2853,7 @@ fn run_alias_rm(dir: &Path, target: Option<String>, host: &str, json: bool) {
 
 fn print_next_hint(next: &Option<String>, cmd: &str) {
     if let Some(cursor) = next {
-        info(&format!("more results: {cmd} --next {cursor}"));
+        ui::hint(&format!("Next page: {cmd} --next {cursor}"));
     }
 }
 
@@ -3882,7 +3876,7 @@ fn run_login(args: LoginArgs, json: bool) {
                     println!("{}", serde_json::to_string_pretty(&stored).unwrap());
                 } else {
                     success(&format!(
-                        "successfully logged in as {}{}",
+                        "Logged in as {}{}",
                         email.unwrap_or_else(|| "authorized user".to_string()),
                         organization_id
                             .map(|o| format!(" (org: {o})"))
@@ -3905,73 +3899,56 @@ fn run_login(args: LoginArgs, json: bool) {
 
 fn run_whoami(json: bool) {
     let token = appz_deploy::resolve_auth_token(None);
-    match token {
-        None => {
-            if json {
-                println!("{}", serde_json::json!({ "authenticated": false }));
-            } else {
-                info("not logged in. Run `appz login` or set APPZ_TOKEN");
-            }
+    let Some(t) = token else {
+        if json {
+            println!("{}", serde_json::json!({ "authenticated": false }));
+        } else {
+            ui::hint("Not logged in. Run `appz login` or set APPZ_TOKEN");
         }
-        Some(t) => {
-            let stored = appz_deploy::load_stored_auth();
-            let api_base = std::env::var("APPZ_API_URL")
-                .unwrap_or_else(|_| "https://api.appz.dev".to_string());
-            let session_url = format!("{api_base}/api/auth/get-session");
-            let session_res = ureq::get(&session_url)
-                .set("Authorization", &format!("Bearer {t}"))
-                .call();
-
-            let (email, org) = if let Ok(resp) = session_res {
-                if let Ok(v) = resp.into_json::<serde_json::Value>() {
-                    let email = v
-                        .get("user")
-                        .and_then(|u| u.get("email"))
-                        .and_then(|s| s.as_str())
-                        .map(String::from);
-                    let org = v
-                        .get("session")
-                        .and_then(|s| s.get("activeOrganizationId"))
-                        .and_then(|s| s.as_str())
-                        .map(String::from);
-                    (email, org)
-                } else {
-                    (
-                        stored.as_ref().and_then(|s| s.email.clone()),
-                        stored.as_ref().and_then(|s| s.organization_id.clone()),
-                    )
-                }
-            } else {
-                (
-                    stored.as_ref().and_then(|s| s.email.clone()),
-                    stored.as_ref().and_then(|s| s.organization_id.clone()),
-                )
-            };
-
-            if json {
-                println!(
-                    "{}",
-                    serde_json::json!({
-                        "authenticated": true,
-                        "email": email,
-                        "organizationId": org,
-                    })
-                );
-            } else {
-                intro("appz whoami");
-                let mut lines = Vec::new();
-                if let Some(e) = email {
-                    lines.push(format!("user:         {e}"));
-                } else {
-                    lines.push("user:         authenticated via token".to_string());
-                }
-                if let Some(o) = org {
-                    lines.push(format!("organization: {o}"));
-                }
-                info(&lines.join("\n"));
-                outro("done");
-            }
-        }
+        return;
+    };
+    let stored = appz_deploy::load_stored_auth();
+    let api_base =
+        std::env::var("APPZ_API_URL").unwrap_or_else(|_| "https://api.appz.dev".to_string());
+    let session_url = format!("{api_base}/api/auth/get-session");
+    let session = ureq::get(&session_url)
+        .set("Authorization", &format!("Bearer {t}"))
+        .call()
+        .ok()
+        .and_then(|r| r.into_json::<serde_json::Value>().ok());
+    let (email, org) = match session {
+        Some(v) => (
+            v.get("user")
+                .and_then(|u| u.get("email"))
+                .and_then(|s| s.as_str())
+                .map(String::from),
+            v.get("session")
+                .and_then(|s| s.get("activeOrganizationId"))
+                .and_then(|s| s.as_str())
+                .map(String::from),
+        ),
+        None => (
+            stored.as_ref().and_then(|s| s.email.clone()),
+            stored.as_ref().and_then(|s| s.organization_id.clone()),
+        ),
+    };
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "authenticated": true,
+                "email": email,
+                "organizationId": org,
+            })
+        );
+    } else {
+        ui::print_kv(&[
+            (
+                "User",
+                email.unwrap_or_else(|| "authenticated via token".into()),
+            ),
+            ("Organization", org.unwrap_or_default()),
+        ]);
     }
 }
 
@@ -3981,9 +3958,7 @@ fn run_logout(json: bool) {
             if json {
                 println!("{}", serde_json::json!({ "status": "logged_out" }));
             } else {
-                intro("appz logout");
-                success("logged out successfully");
-                outro("done");
+                success("Logged out");
             }
         }
         Err(e) => error(&format!("failed to clear session token: {e}")),
@@ -3994,6 +3969,37 @@ fn run_logout(json: bool) {
 mod tests {
     use super::*;
     use clap::CommandFactory;
+
+    fn usage(label: &str, used: f64, limit: f64, detail: &str) -> appz_deploy::UsageEntry {
+        appz_deploy::UsageEntry {
+            label: label.into(),
+            used,
+            limit,
+            detail: detail.into(),
+        }
+    }
+
+    #[test]
+    fn usage_row_prefers_api_detail_and_shows_percent() {
+        console::set_colors_enabled(false);
+        assert_eq!(
+            usage_row(&usage(
+                "Stored bytes",
+                335005295.0,
+                5368709120.0,
+                "0.31 GB of 5.00 GB"
+            )),
+            vec!["Stored bytes", "0.31 GB of 5.00 GB", "6%"]
+        );
+        assert_eq!(
+            usage_row(&usage("Projects", 20.0, 100.0, "")),
+            vec!["Projects", "20 of 100", "20%"]
+        );
+        assert_eq!(
+            usage_row(&usage("Seats", 3.0, 0.0, "")),
+            vec!["Seats", "3 (unlimited)", ""]
+        );
+    }
 
     #[test]
     fn project_lifecycle_and_transfer_commands_parse() {

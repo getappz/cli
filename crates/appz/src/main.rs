@@ -22,8 +22,6 @@ mod share;
 mod shield;
 mod skills;
 mod static_serve;
-// Some ui primitives land before every command adopts them.
-#[allow(dead_code)]
 mod ui;
 mod update;
 mod webhooks;
@@ -998,8 +996,6 @@ struct PreviewArgs {
 
 // ── UI helpers ──────────────────────────────────────────────────
 
-/// Shown once, at `appz init` — a clean, subtle header.
-/// Skipped outside a real terminal so it never lands in piped/CI output.
 // ── Core logic ──────────────────────────────────────────────────
 
 fn resolve_root(dir: &Path) -> PathBuf {
@@ -3316,7 +3312,7 @@ fn run_domains(args: DomainsArgs, json: bool) {
                 success(&format!("Added {}", dom.domain));
                 ui::print_kv(&[
                     ("Domain", dom.domain.clone()),
-                    ("Status", ui::fmt::status(&dom.display_status())),
+                    ("Status", ui::fmt::status(dom.display_status())),
                     (
                         "SSL",
                         ui::fmt::status(dom.ssl_status.as_deref().unwrap_or("")),
@@ -3363,7 +3359,7 @@ fn run_domains(args: DomainsArgs, json: bool) {
                         t.row(vec![
                             d.domain.clone(),
                             domain_project(item),
-                            ui::fmt::status(&d.display_status()),
+                            ui::fmt::status(d.display_status()),
                             ui::fmt::status(d.ssl_status.as_deref().unwrap_or("")),
                             if d.verified {
                                 "✓".into()
@@ -3392,7 +3388,7 @@ fn run_domains(args: DomainsArgs, json: bool) {
                     }
                     ui::print_kv(&[
                         ("Domain", res.domain.clone()),
-                        ("Status", ui::fmt::status(&res.display_status())),
+                        ("Status", ui::fmt::status(res.display_status())),
                         (
                             "SSL",
                             ui::fmt::status(res.ssl_status.as_deref().unwrap_or("")),
@@ -3416,7 +3412,7 @@ fn run_domains(args: DomainsArgs, json: bool) {
                     let mut rows = vec![
                         ("Domain", d.domain.clone()),
                         ("Project", domain_project(&t)),
-                        ("Status", ui::fmt::status(&d.display_status())),
+                        ("Status", ui::fmt::status(d.display_status())),
                         ("Serving", d.serving_status().to_string()),
                         (
                             "SSL",

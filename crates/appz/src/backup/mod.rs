@@ -519,7 +519,7 @@ fn list_view(out: &ListOutput, now_ms: i64) -> String {
             commit,
         ]);
     }
-    view.push_str("\n");
+    view.push('\n');
     view.push_str(&table.render(None));
     view
 }

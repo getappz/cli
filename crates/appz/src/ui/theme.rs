@@ -9,7 +9,9 @@ macro_rules! palette {
                 console::style(s).$method().to_string()
             })*
         }
-        /// Styles for text printed to stderr (chrome).
+        /// Styles for text printed to stderr (chrome). Mirrors `out`, so
+        /// some colors may go unused on this stream.
+        #[allow(dead_code)]
         pub(crate) mod err {
             $(pub(crate) fn $name(s: &str) -> String {
                 console::style(s).for_stderr().$method().to_string()

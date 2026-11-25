@@ -39,10 +39,6 @@ impl Table {
         self
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
-        self.rows.is_empty()
-    }
-
     /// With `Some(width)`, only the last column is truncated (with `…`) so
     /// every line fits.
     pub(crate) fn render(&self, width: Option<usize>) -> String {

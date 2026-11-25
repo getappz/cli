@@ -3599,40 +3599,49 @@ fn project_restore_command(dir: &Path, name: &str) -> String {
 fn run_projects(args: ProjectsArgs, json: bool) {
     let canonical = resolve_root(&args.dir);
     match args.command {
-        ProjectsCmd::List => match deploy::list_projects(&canonical, args.target) {
-            Ok(projects) => {
-                if json {
-                    println!("{}", serde_json::to_string_pretty(&projects).unwrap());
-                } else {
-                    intro("appz projects");
-                    if projects.is_empty() {
-                        info(
-                            "no projects found in active organization\nrun `appz projects add <name>` to create a project",
-                        );
-                    } else {
-                        let lines: Vec<String> = projects
-                            .iter()
-                            .map(|p| {
-                                let fw = p.framework.as_deref().unwrap_or("-");
-                                format!("{:<30}  id:{:<24}  framework:{:<12}", p.name, p.id, fw)
-                            })
-                            .collect();
-                        info(&lines.join("\n"));
+        ProjectsCmd::List => {
+            let fetch = ui::fetching("projects");
+            match deploy::list_projects(&canonical, args.target) {
+                Ok(projects) => {
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&projects).unwrap());
+                        return;
                     }
-                    outro("done");
+                    fetch.done(&format!(
+                        "{} found",
+                        ui::fmt::plural(projects.len(), "project")
+                    ));
+                    if projects.is_empty() {
+                        ui::empty(
+                            "projects in the active organization",
+                            Some("Run `appz projects add <name>` to create one"),
+                        );
+                        return;
+                    }
+                    let mut t = ui::Table::new(&["Name", "ID", "Framework", "Updated"]);
+                    for p in &projects {
+                        t.row(vec![
+                            p.name.clone(),
+                            p.id.clone(),
+                            p.framework.clone().unwrap_or_default(),
+                            p.updated_at
+                                .or(p.created_at)
+                                .map(ui::fmt::ago)
+                                .unwrap_or_default(),
+                        ]);
+                    }
+                    t.print();
                 }
+                Err(e) => error(&e),
             }
-            Err(e) => error(&e),
-        },
+        }
         ProjectsCmd::Add { name } => match deploy::add_project(&canonical, args.target, &name) {
             Ok(p) => {
                 if json {
                     println!("{}", serde_json::to_string_pretty(&p).unwrap());
                 } else {
-                    intro("appz projects add");
-                    success(&format!("created project {}", p.name));
-                    info(&format!("id:   {}\nslug: {}", p.id, p.slug));
-                    outro("done");
+                    success(&format!("Created project {}", p.name));
+                    ui::print_kv(&[("ID", p.id.clone()), ("Slug", p.slug.clone())]);
                 }
             }
             Err(e) => error(&e),
@@ -3643,20 +3652,19 @@ fn run_projects(args: ProjectsArgs, json: bool) {
                     if json {
                         println!("{}", serde_json::to_string_pretty(&p).unwrap());
                     } else {
-                        intro("appz projects inspect");
-                        let mut lines = vec![
-                            format!("name:            {}", p.name),
-                            format!("id:              {}", p.id),
-                            format!("slug:            {}", p.slug),
-                        ];
-                        if let Some(org) = &p.organization_id {
-                            lines.push(format!("organization:    {}", org));
-                        }
-                        if let Some(url) = &p.production_url {
-                            lines.push(format!("production url:  {}", url));
-                        }
-                        info(&lines.join("\n"));
-                        outro("done");
+                        ui::print_kv(&[
+                            ("Name", p.name.clone()),
+                            ("ID", p.id.clone()),
+                            ("Slug", p.slug.clone()),
+                            (
+                                "Organization",
+                                p.organization_id.clone().unwrap_or_default(),
+                            ),
+                            (
+                                "Production URL",
+                                p.production_url.clone().unwrap_or_default(),
+                            ),
+                        ]);
                     }
                 }
                 Err(e) => error(&e),
@@ -3668,10 +3676,8 @@ fn run_projects(args: ProjectsArgs, json: bool) {
                     if json {
                         println!("{}", serde_json::to_string_pretty(&p).unwrap());
                     } else {
-                        intro("appz projects rename");
-                        success(&format!("renamed project to {}", p.name));
-                        info(&format!("id:   {}\nslug: {}", p.id, p.slug));
-                        outro("done");
+                        success(&format!("Renamed project to {}", p.name));
+                        ui::print_kv(&[("ID", p.id.clone()), ("Slug", p.slug.clone())]);
                     }
                 }
                 Err(e) => error(&e),
@@ -3683,12 +3689,13 @@ fn run_projects(args: ProjectsArgs, json: bool) {
                     println!("{}", serde_json::to_string_pretty(&project).unwrap())
                 }
                 Ok(project) => success(&format!(
-                    "restored project {} ({})",
+                    "Restored project {} ({})",
                     project.slug, project.id
                 )),
                 Err(e) => error(&e),
             }
         }
+
         ProjectsCmd::Pause { name } => project_ops::lifecycle(
             &canonical,
             args.target,
@@ -3741,14 +3748,13 @@ fn run_projects(args: ProjectsArgs, json: bool) {
                                 "estimated_restore_deadline": deadline, "restore_command": command })
                         );
                     } else {
-                        intro("appz projects remove");
-                        success(&format!("removed project {name}"));
-                        info(&format!(
-                            "Recover within 30 days (approximately {deadline}). Restore before deploying to the same slug again.\nRun: {command}"
+                        success(&format!("Removed project {name}"));
+                        ui::hint(&format!(
+                            "Recover within 30 days (approximately {deadline}). Restore before deploying to the same slug again: {command}"
                         ));
-                        outro("done");
                     }
                 }
+
                 Err(e) => error(&e),
             }
         }

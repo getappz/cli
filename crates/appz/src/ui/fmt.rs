@@ -19,6 +19,20 @@ pub(crate) fn datetime(ts: i64) -> String {
         .unwrap_or_else(|| "-".into())
 }
 
+/// Epoch seconds or milliseconds → milliseconds.
+pub(crate) fn to_ms(ts: i64) -> i64 {
+    if ts.abs() < 100_000_000_000 {
+        ts * 1000
+    } else {
+        ts
+    }
+}
+
+/// `age` against now, for a timestamp in seconds or milliseconds.
+pub(crate) fn ago(ts: i64) -> String {
+    age(to_ms(ts), now_ms())
+}
+
 /// Compact relative age for tables: `just now`, `5m`, `3h`, `5d`, then a date.
 pub(crate) fn age(ts_ms: i64, now_ms: i64) -> String {
     let secs = (now_ms - ts_ms) / 1000;
@@ -130,6 +144,12 @@ mod tests {
     fn datetime_accepts_secs_and_ms() {
         assert_eq!(datetime(1_790_812_800), "2026-10-01 00:00 UTC");
         assert_eq!(datetime(1_790_812_800_000), "2026-10-01 00:00 UTC");
+    }
+
+    #[test]
+    fn to_ms_normalizes_seconds() {
+        assert_eq!(to_ms(1_790_812_800), 1_790_812_800_000);
+        assert_eq!(to_ms(1_790_812_800_000), 1_790_812_800_000);
     }
 
     #[test]

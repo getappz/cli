@@ -81,9 +81,9 @@ fn ensure_linked(
         Consent::Yes => false,
     };
     if interactive {
-        crate::step(&format!("linking with `{} link`...", p.cli_tool()));
+        crate::step(&format!("Linking with `{} link`…", p.cli_tool()));
     } else {
-        crate::step(&format!("linking {} project '{name}'...", p.name()));
+        crate::step(&format!("Linking {} project '{name}'…", p.name()));
     }
     p.link(ctx, interactive).map_err(|e| e.to_string())?;
     if p.is_linked(ctx) {
@@ -118,7 +118,7 @@ pub(crate) fn confirm_mise_install(
         }
         Consent::Yes => {}
     }
-    crate::step(&format!("installing {tool} with mise..."));
+    crate::step(&format!("Installing {tool} with mise…"));
     Ok(())
 }
 
@@ -240,7 +240,7 @@ fn run_hook(ctx: &DeployContext, name: &str, argv: &[String]) -> Result<(), Stri
     }
     let (bin, args) = argv.split_first().expect("non-empty argv");
     if !ctx.json_output {
-        crate::step(&format!("running {name} hook: {}", argv.join(" ")));
+        crate::step(&format!("Running {name} hook: {}", argv.join(" ")));
     }
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     // exec_live resolves `bin` against PATH then extra_path (mise-installed tools).
@@ -415,7 +415,7 @@ fn prepare_target(project_dir: &Path, req: DeployRequest) -> Result<PreparedTarg
         .collect();
     let vault = crate::secrets::deploy_env(project_dir, &allowed)?;
     if vault.locked && std::env::var_os(provider.auth_env_var()).is_none() {
-        crate::info("note: vault is locked; run `appz env unlock` to use stored credentials");
+        crate::ui::hint("Vault is locked; run `appz env unlock` to use stored credentials");
     }
 
     ctx.prebuilt = prebuilt_output.is_some() || req.prebuilt;
@@ -472,8 +472,8 @@ fn prepare_target(project_dir: &Path, req: DeployRequest) -> Result<PreparedTarg
         if provider.needs_prebuild(&frameworks) {
             ctx.prebuilt = crate::build_stage::run(&ctx)?;
         } else if !req.json {
-            crate::info(&format!(
-                "note: {} builds this project itself; skipping appz's build stage",
+            crate::ui::hint(&format!(
+                "{} builds this project itself; skipping appz's build stage",
                 provider.name()
             ));
         }

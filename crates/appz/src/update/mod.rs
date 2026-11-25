@@ -111,16 +111,10 @@ fn resolve_target_version(
                 Ok(Some(v)) => v,
                 Ok(None) => {
                     if !quiet {
-                        if check_only {
-                            crate::intro("appz update --check");
-                        }
                         crate::success(&format!(
                             "appz is up to date (v{})",
                             env!("CARGO_PKG_VERSION")
                         ));
-                        if check_only {
-                            crate::outro("Nothing to update");
-                        }
                     }
                     return None;
                 }

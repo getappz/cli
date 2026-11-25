@@ -1926,7 +1926,7 @@ fn run_skills(args: SkillsArgs, json: bool) {
     }
 
     intro("appz skills");
-    info(&report.context);
+    ui::hint(&report.context);
 
     if !report.excluded_large_sources.is_empty() {
         warning(&format!(

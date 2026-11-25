@@ -3300,7 +3300,8 @@ fn print_dns_rows(rows: Vec<Vec<String>>) {
     for r in rows {
         t.row(r);
     }
-    t.print();
+    // Never truncate: users copy these values into their DNS provider.
+    print!("{}", t.render(None));
 }
 
 fn domain_project(t: &appz_deploy::TeamDomain) -> String {

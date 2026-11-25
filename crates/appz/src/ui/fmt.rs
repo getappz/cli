@@ -211,11 +211,11 @@ mod tests {
     }
 
     #[test]
-    fn status_colors_ok_and_expiring() {
-        console::set_colors_enabled(true);
+    fn status_labels_ok_and_expiring() {
+        // Colors are process-wide in `console`; enabling them here would leak
+        // ANSI codes into parallel plain-text assertions.
         assert_ne!(status("ok"), status("unknown-state"));
         assert_ne!(status("expiring"), status("unknown-state"));
-        console::set_colors_enabled(false);
     }
 
     #[test]

@@ -3257,6 +3257,72 @@ fn run_inspect(args: InspectArgs, json: bool) {
     }
 }
 
+/// DNS records a domain still needs, as `[Purpose, Type, Name, Value]` rows.
+/// Works for every domain record shape the API returns (add/verify/inspect).
+macro_rules! dns_rows {
+    ($d:expr) => {{
+        let d = $d;
+        let mut rows: Vec<Vec<String>> = Vec::new();
+        if !d.verified {
+            if let Some(ch) = &d.challenge {
+                rows.push(vec![
+                    "Ownership".into(),
+                    ch.r#type.to_string(),
+                    ch.name.to_string(),
+                    ch.value.to_string(),
+                ]);
+            }
+        }
+        if let Some(c) = &d.cname {
+            rows.push(vec![
+                "Routing".into(),
+                "CNAME".into(),
+                c.name.to_string(),
+                c.target.to_string(),
+            ]);
+        }
+        if let Some(a) = &d.apex {
+            rows.push(vec![
+                "Routing".into(),
+                "A".into(),
+                a.name.to_string(),
+                a.ip.to_string(),
+            ]);
+        }
+        if d.cname.is_none() && d.apex.is_none() {
+            for v in &d.verification {
+                rows.push(vec![
+                    "Verify".into(),
+                    v.r#type.to_uppercase(),
+                    v.domain.to_string(),
+                    v.value.to_string(),
+                ]);
+            }
+        }
+        rows
+    }};
+}
+
+fn print_dns_rows(rows: Vec<Vec<String>>) {
+    if rows.is_empty() {
+        return;
+    }
+    ui::heading("DNS records");
+    let mut t = ui::Table::new(&["Purpose", "Type", "Name", "Value"]);
+    for r in rows {
+        t.row(r);
+    }
+    t.print();
+}
+
+fn domain_project(t: &appz_deploy::TeamDomain) -> String {
+    t.project_slug
+        .clone()
+        .or_else(|| t.project_name.clone())
+        .or_else(|| t.project_id.clone())
+        .unwrap_or_default()
+}
+
 fn run_domains(args: DomainsArgs, json: bool) {
     let canonical = resolve_root(&args.dir);
     match args.command {
@@ -3264,66 +3330,25 @@ fn run_domains(args: DomainsArgs, json: bool) {
             Ok(dom) => {
                 if json {
                     println!("{}", serde_json::to_string_pretty(&dom).unwrap());
-                } else {
-                    intro("appz domains add");
-                    let mut details = vec![
-                        format!("domain:      {}", dom.domain),
-                        format!("status:      {}", dom.display_status()),
-                    ];
-                    if let Some(ssl) = &dom.ssl_status {
-                        details.push(format!("ssl:         {ssl}"));
-                    }
-                    info(&details.join("\n"));
-
-                    if let Some(ch) = &dom.challenge
-                        && !dom.verified
-                    {
-                        step("1. Ownership verification (required once):");
-                        info(&format!("{:<8}  {:<36}  {}", ch.r#type, ch.name, ch.value));
-                    }
-                    if dom.cname.is_some() || dom.apex.is_some() {
-                        step("2. DNS routing target:");
-                        let mut dns_targets = Vec::new();
-                        if let Some(cname) = &dom.cname {
-                            dns_targets.push(format!(
-                                "{:<8}  {:<36}  {}",
-                                "CNAME", cname.name, cname.target
-                            ));
-                        }
-                        if let Some(apex) = &dom.apex {
-                            dns_targets.push(format!("{:<8}  {:<36}  {}", "A", apex.name, apex.ip));
-                        }
-                        info(&dns_targets.join("\n"));
-                    } else if !dom.verification.is_empty() {
-                        step("dns configuration records");
-                        let recs: Vec<String> = dom
-                            .verification
-                            .iter()
-                            .map(|v| {
-                                let reason = v.reason.as_deref().unwrap_or("-");
-                                format!(
-                                    "{:<8}  {:<32}  {}  ({})",
-                                    v.r#type.to_uppercase(),
-                                    v.domain,
-                                    v.value,
-                                    reason
-                                )
-                            })
-                            .collect();
-                        info(&recs.join("\n"));
-                    }
-                    if let Some(hint) = dom.dns_setup_hint() {
-                        step("DNS routing at your provider");
-                        info(&hint);
-                    }
-                    step("next steps");
-                    info(&format!(
-                        "1. Configure the DNS records above\n\
-                         2. Run `appz domains verify {}` once configured",
-                        dom.domain
-                    ));
-                    outro("domain added");
+                    return;
                 }
+                success(&format!("Added {}", dom.domain));
+                ui::print_kv(&[
+                    ("Domain", dom.domain.clone()),
+                    ("Status", ui::fmt::status(&dom.display_status())),
+                    (
+                        "SSL",
+                        ui::fmt::status(dom.ssl_status.as_deref().unwrap_or("")),
+                    ),
+                ]);
+                print_dns_rows(dns_rows!(&dom));
+                if let Some(hint) = dom.dns_setup_hint() {
+                    ui::hint(&hint);
+                }
+                ui::hint(&format!(
+                    "Configure the DNS records above, then run `appz domains verify {}`",
+                    dom.domain
+                ));
             }
             Err(e) => error(&e),
         },
@@ -3333,46 +3358,41 @@ fn run_domains(args: DomainsArgs, json: bool) {
                 limit: None,
                 cursor: next,
             };
+            let fetch = ui::fetching("domains");
             match deploy::list_domains_page(&canonical, args.target, &query) {
                 Ok(page) => {
                     if json {
                         println!("{}", serde_json::to_string_pretty(&page).unwrap());
-                    } else {
-                        intro("appz domains");
-                        if page.items.is_empty() {
-                            info(
-                                "no custom domains found\nrun `appz domains add <domain>` to connect a custom domain",
-                            );
-                        } else {
-                            let lines: Vec<String> = page
-                                .items
-                                .iter()
-                                .map(|t| {
-                                    let d = &t.domain;
-                                    let ssl = d.ssl_status.as_deref().unwrap_or("-");
-                                    let verified_str =
-                                        if d.verified { "verified" } else { "pending" };
-                                    let project = t
-                                        .project_slug
-                                        .as_deref()
-                                        .or(t.project_name.as_deref())
-                                        .or(t.project_id.as_deref())
-                                        .unwrap_or("-");
-                                    format!(
-                                        "{:<30}  {:<20}  status:{:<12}  ssl:{:<10}  {}",
-                                        d.domain,
-                                        project,
-                                        d.display_status(),
-                                        ssl,
-                                        verified_str
-                                    )
-                                })
-                                .collect();
-                            info(&lines.join("\n"));
-                            print_next_hint(&page.next, "appz domains ls");
-                        }
-                        outro("done");
+                        return;
                     }
+                    fetch.done(&format!(
+                        "{} found",
+                        ui::fmt::plural(page.items.len(), "domain")
+                    ));
+                    if page.items.is_empty() {
+                        ui::empty(
+                            "custom domains",
+                            Some("Run `appz domains add <domain>` to connect one"),
+                        );
+                        return;
+                    }
+                    let mut t = ui::Table::new(&["Domain", "Project", "Status", "SSL", "Verified"]);
+                    for item in &page.items {
+                        let d = &item.domain;
+                        t.row(vec![
+                            d.domain.clone(),
+                            domain_project(item),
+                            ui::fmt::status(&d.display_status()),
+                            ui::fmt::status(d.ssl_status.as_deref().unwrap_or("")),
+                            if d.verified {
+                                "✓".into()
+                            } else {
+                                String::new()
+                            },
+                        ]);
+                    }
+                    t.print();
+                    print_next_hint(&page.next, "appz domains ls");
                 }
                 Err(e) => error(&e),
             }
@@ -3382,60 +3402,23 @@ fn run_domains(args: DomainsArgs, json: bool) {
                 Ok(res) => {
                     if json {
                         println!("{}", serde_json::to_string_pretty(&res).unwrap());
+                        return;
+                    }
+                    if res.verified {
+                        success(&format!("{} is verified and active", res.domain));
                     } else {
-                        intro("appz domains verify");
-                        let mut details = vec![
-                            format!("domain:      {}", res.domain),
-                            format!("status:      {}", res.display_status()),
-                        ];
-                        if let Some(ssl) = &res.ssl_status {
-                            details.push(format!("ssl:         {ssl}"));
-                        }
-                        info(&details.join("\n"));
-
-                        if res.verified {
-                            success(&format!("{} is verified and active!", res.domain));
-                        } else {
-                            warning("verification still pending");
-                            if let Some(ch) = &res.challenge {
-                                step("required ownership challenge");
-                                info(&format!("{:<8}  {:<36}  {}", ch.r#type, ch.name, ch.value));
-                            }
-                            if res.cname.is_some() || res.apex.is_some() {
-                                step("routing target");
-                                let mut targets = Vec::new();
-                                if let Some(cname) = &res.cname {
-                                    targets.push(format!(
-                                        "{:<8}  {:<36}  {}",
-                                        "CNAME", cname.name, cname.target
-                                    ));
-                                }
-                                if let Some(apex) = &res.apex {
-                                    targets.push(format!(
-                                        "{:<8}  {:<36}  {}",
-                                        "A", apex.name, apex.ip
-                                    ));
-                                }
-                                info(&targets.join("\n"));
-                            }
-                            if !res.verification.is_empty() {
-                                step("required dns records");
-                                let dns_lines: Vec<String> = res
-                                    .verification
-                                    .iter()
-                                    .map(|v| {
-                                        format!(
-                                            "{:<8}  {:<32}  {}",
-                                            v.r#type.to_uppercase(),
-                                            v.domain,
-                                            v.value
-                                        )
-                                    })
-                                    .collect();
-                                info(&dns_lines.join("\n"));
-                            }
-                        }
-                        outro("done");
+                        warning(&format!("{}: verification still pending", res.domain));
+                    }
+                    ui::print_kv(&[
+                        ("Domain", res.domain.clone()),
+                        ("Status", ui::fmt::status(&res.display_status())),
+                        (
+                            "SSL",
+                            ui::fmt::status(res.ssl_status.as_deref().unwrap_or("")),
+                        ),
+                    ]);
+                    if !res.verified {
+                        print_dns_rows(dns_rows!(&res));
                     }
                 }
                 Err(e) => error(&e),
@@ -3446,68 +3429,41 @@ fn run_domains(args: DomainsArgs, json: bool) {
                 Ok(Some(t)) => {
                     if json {
                         println!("{}", serde_json::to_string_pretty(&t).unwrap());
-                    } else {
-                        intro("appz domains inspect");
-                        let d = &t.domain;
-                        let project = t
-                            .project_slug
-                            .as_deref()
-                            .or(t.project_name.as_deref())
-                            .or(t.project_id.as_deref())
-                            .unwrap_or("-");
-                        let mut details = vec![
-                            format!("domain:      {}", d.domain),
-                            format!("project:     {project}"),
-                            format!("status:      {}", d.display_status()),
-                            format!("serving:     {}", d.serving_status()),
-                        ];
-                        if let Some(ssl) = &d.ssl_status {
-                            details.push(format!("ssl:         {ssl}"));
-                        }
-                        if let Some(ts) = d
-                            .created_at
-                            .and_then(chrono::DateTime::from_timestamp_millis)
-                        {
-                            details
-                                .push(format!("added:       {}", ts.format("%Y-%m-%d %H:%M UTC")));
-                        }
-                        if let Some(l) = &d.lapsed_at {
-                            details.push(format!("lapsed at:   {l}"));
-                        }
-                        if let Some(r) = &d.removes_at {
-                            details.push(format!("removes at:  {r}"));
-                        }
-                        info(&details.join("\n"));
-                        if !d.verified {
-                            if let Some(ch) = &d.challenge {
-                                step("required ownership challenge");
-                                info(&format!("{:<8}  {:<36}  {}", ch.r#type, ch.name, ch.value));
-                            }
-                            if d.cname.is_some() || d.apex.is_some() {
-                                step("routing target");
-                                let mut targets = Vec::new();
-                                if let Some(c) = &d.cname {
-                                    targets.push(format!(
-                                        "{:<8}  {:<36}  {}",
-                                        "CNAME", c.name, c.target
-                                    ));
-                                }
-                                if let Some(a) = &d.apex {
-                                    targets.push(format!("{:<8}  {:<36}  {}", "A", a.name, a.ip));
-                                }
-                                info(&targets.join("\n"));
-                            }
-                            warning("domain is not verified");
-                            info(&format!(
-                                "Configure the DNS records above, then run `appz domains verify {}`",
-                                d.domain
-                            ));
-                        }
-                        info(
-                            "nameservers and registrar details are not shown: appz.dev is not a domain registrar",
-                        );
-                        outro("done");
+                        return;
                     }
+                    let d = &t.domain;
+                    let mut rows = vec![
+                        ("Domain", d.domain.clone()),
+                        ("Project", domain_project(&t)),
+                        ("Status", ui::fmt::status(&d.display_status())),
+                        ("Serving", d.serving_status().to_string()),
+                        (
+                            "SSL",
+                            ui::fmt::status(d.ssl_status.as_deref().unwrap_or("")),
+                        ),
+                        (
+                            "Added",
+                            d.created_at.map(ui::fmt::datetime).unwrap_or_default(),
+                        ),
+                    ];
+                    if let Some(l) = &d.lapsed_at {
+                        rows.push(("Lapsed at", l.to_string()));
+                    }
+                    if let Some(r) = &d.removes_at {
+                        rows.push(("Removes at", r.to_string()));
+                    }
+                    ui::print_kv(&rows);
+                    if !d.verified {
+                        print_dns_rows(dns_rows!(d));
+                        warning("Domain is not verified");
+                        ui::hint(&format!(
+                            "Configure the DNS records above, then run `appz domains verify {}`",
+                            d.domain
+                        ));
+                    }
+                    ui::hint(
+                        "Nameservers and registrar details are not shown: appz.dev is not a domain registrar",
+                    );
                 }
                 Ok(None) => error(&format!(
                     "{domain} is not attached to any project. Run `appz domains add {domain}` to add it"
@@ -3531,27 +3487,23 @@ fn run_domains(args: DomainsArgs, json: bool) {
                 .interact()
                 .unwrap_or(false);
                 if !go {
-                    error("cancelled");
+                    error("Cancelled");
                 }
             }
             match deploy::move_domain(&canonical, args.target, &domain, &to, &project) {
                 Ok(res) => {
                     if json {
                         println!("{}", serde_json::to_string_pretty(&res).unwrap());
+                    } else if res.status == "pending" {
+                        warning(&format!(
+                            "{} moved to {}, but routing is still reconciling; re-run the same command to finish",
+                            res.domain, res.organization_id
+                        ));
                     } else {
-                        intro("appz domains move");
-                        if res.status == "pending" {
-                            warning(&format!(
-                                "{} moved to {}, but routing is still reconciling; re-run the same command to finish",
-                                res.domain, res.organization_id
-                            ));
-                        } else {
-                            success(&format!(
-                                "moved {} to organization {} (project {})",
-                                res.domain, res.organization_id, res.project_id
-                            ));
-                        }
-                        outro("done");
+                        success(&format!(
+                            "Moved {} to organization {} (project {})",
+                            res.domain, res.organization_id, res.project_id
+                        ));
                     }
                 }
                 Err(e) => error(&e),
@@ -3566,9 +3518,7 @@ fn run_domains(args: DomainsArgs, json: bool) {
                             serde_json::json!({ "status": "removed", "domain": domain })
                         );
                     } else {
-                        intro("appz domains remove");
-                        success(&format!("removed domain {domain} from project"));
-                        outro("done");
+                        success(&format!("Removed domain {domain} from project"));
                     }
                 }
                 Err(e) => error(&e),

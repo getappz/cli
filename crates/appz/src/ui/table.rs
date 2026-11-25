@@ -1,7 +1,6 @@
 //! Aligned tables and key/value blocks for stdout.
 
-use console::{measure_text_width, truncate_str};
-
+use super::link::{truncate as truncate_str, width as measure_text_width};
 use super::theme::out;
 
 const INDENT: &str = "  ";
@@ -63,7 +62,7 @@ impl Table {
             let avail = total.saturating_sub(used);
             if avail > 0 && widths[last] > avail {
                 for r in &mut rows {
-                    r[last] = truncate_str(&r[last], avail, "…").into_owned();
+                    r[last] = truncate_str(&r[last], avail, "…");
                 }
                 widths[last] = avail;
             }
@@ -120,7 +119,6 @@ pub(crate) fn print_kv(pairs: &[(&str, String)]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use console::measure_text_width;
 
     fn plain() {
         console::set_colors_enabled(false);
@@ -196,5 +194,20 @@ mod tests {
             out,
             "  User          x\n  Organization  y\n  Empty         -\n"
         );
+    }
+
+    #[test]
+    fn link_cells_align_by_visible_width() {
+        let l = super::super::link::osc8("https://example.test/very/long/target", "a.test");
+        let mut t = Table::new(&["URL", "N"]);
+        t.row(vec![l, "1".into()])
+            .row(vec!["b.test".into(), "2".into()]);
+        let out = t.render(None);
+        let cols: Vec<usize> = out
+            .lines()
+            .skip(1)
+            .map(|l| measure_text_width(&l[..l.rfind(' ').unwrap() + 1]))
+            .collect();
+        assert_eq!(cols[0], cols[1], "{out:?}");
     }
 }

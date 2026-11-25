@@ -288,7 +288,7 @@ pub(super) fn staged_fingerprints(
         use std::fmt::Write as _;
         let _ = write!(&mut hex, "{byte:02x}");
     }
-    Ok((hex, format!("mode:{:x}", permissions.finalize())))
+    Ok((hex, format!("mode:{}", crate::hex(&permissions.finalize()))))
 }
 
 fn hash_selected_entry(

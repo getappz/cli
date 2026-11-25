@@ -236,7 +236,7 @@ fn parse_checksum(sums: &str, asset: &str) -> Option<String> {
 pub(crate) fn verify_checksum(data: &[u8], expected: &str) -> Result<(), String> {
     let mut hasher = Sha256::new();
     hasher.update(data);
-    let actual = format!("{:x}", hasher.finalize());
+    let actual = crate::hex(&hasher.finalize());
     if actual == expected {
         Ok(())
     } else {

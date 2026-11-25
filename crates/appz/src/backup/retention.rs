@@ -151,7 +151,9 @@ pub fn forget_args(retention: &Retention) -> Vec<String> {
 
 fn state_file(project: &Path, repository: &str) -> PathBuf {
     let key = Sha256::digest(repository.as_bytes());
-    project.join(".appz").join(format!("backup-{key:x}.json"))
+    project
+        .join(".appz")
+        .join(format!("backup-{}.json", crate::hex(&key)))
 }
 
 fn read_state(state_file: &Path) -> BackupState {
@@ -253,7 +255,10 @@ fn maintenance_lock(project: &Path, repository: &str) -> std::io::Result<Mainten
             .unwrap_or_else(|| project.join(".appz"))
             .join("appz/backup");
         std::fs::create_dir_all(&dir)?;
-        dir.join(format!("{:x}.lock", Sha256::digest(repository.as_bytes())))
+        dir.join(format!(
+            "{}.lock",
+            crate::hex(&Sha256::digest(repository.as_bytes()))
+        ))
     };
     let file = std::fs::OpenOptions::new()
         .write(true)

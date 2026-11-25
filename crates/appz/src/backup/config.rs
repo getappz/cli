@@ -65,7 +65,7 @@ pub fn project_id(root: &Path) -> String {
         raw
     };
     let digest = Sha256::digest(normalized.as_bytes());
-    format!("{digest:x}")[..16].to_string()
+    crate::hex(&digest)[..16].to_string()
 }
 
 /// Resolve the backup repository location for `root`: `~/.appz/backups/<project_id>` for

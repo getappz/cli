@@ -85,7 +85,7 @@ async fn handle_websocket_connection(
                         format!(r#"{{"type":"reload","path":"{}"}}"#, path.display())
                     }
                 };
-                if ws_sender.send(Message::Text(message)).await.is_err() {
+                if ws_sender.send(Message::Text(message.into())).await.is_err() {
                     break;
                 }
             }

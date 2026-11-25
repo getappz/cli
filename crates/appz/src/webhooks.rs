@@ -4,7 +4,7 @@ use clap::{Args, Subcommand};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
-use crate::{assume_yes, error, is_tty, success, ui, warning};
+use crate::{assume_yes, error, hex, is_tty, success, ui, warning};
 use appz_deploy::webhooks::{Webhook, WebhookDelivery, WebhookQuery};
 
 #[derive(Args)]
@@ -91,10 +91,6 @@ fn hmac_sha256(key: &[u8], msg: &[u8]) -> [u8; 32] {
     outer.update(k.map(|b| b ^ 0x5c));
     outer.update(inner.finalize());
     outer.finalize().into()
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Verify `t=<secs>,v1=<hex HMAC-SHA256 of "<secs>.<body>">`. `now` is unix seconds.

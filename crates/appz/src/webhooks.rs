@@ -319,7 +319,7 @@ pub fn run(args: WebhooksArgs, json: bool) {
                 return print_json(&page);
             }
             if page.items.is_empty() {
-                return ui::empty("deliveries in the last 7 days", None);
+                return ui::empty("deliveries", Some("Only the last 7 days are kept"));
             }
             deliveries_table(&page.items);
             crate::print_next_hint(&page.next, &format!("appz webhooks deliveries {id}"));

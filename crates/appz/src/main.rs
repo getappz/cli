@@ -2180,7 +2180,7 @@ fn run_env(args: EnvArgs, json: bool) {
                 if json {
                     println!("{}", serde_json::json!({ "pushed": 0 }));
                 } else {
-                    ui::empty("environment variables in the file", None);
+                    ui::empty("environment variables", None);
                     outro("Nothing to push");
                 }
                 return;
@@ -2702,8 +2702,8 @@ fn usage_percent(used: f64, limit: f64) -> Option<f64> {
     (limit > 0.0).then(|| used / limit * 100.0)
 }
 
-/// One usage row: `[label, "20 of 100", "20%"]`; the percent is colored as it
-/// nears the limit.
+/// One usage row: `[label, "20 of 100", "20%"]`; near or over the limit the
+/// percent is colored and says so in text, which survives `NO_COLOR`/pipes.
 fn usage_row(u: &appz_deploy::UsageEntry) -> Vec<String> {
     let amount = if !u.detail.trim().is_empty() {
         u.detail.clone()
@@ -2713,8 +2713,8 @@ fn usage_row(u: &appz_deploy::UsageEntry) -> Vec<String> {
         format!("{} (unlimited)", u.used)
     };
     let pct = match usage_percent(u.used, u.limit) {
-        Some(p) if p >= 100.0 => ui::theme::out::red(&format!("{p:.0}%")),
-        Some(p) if p >= 80.0 => ui::theme::out::yellow(&format!("{p:.0}%")),
+        Some(p) if p >= 100.0 => ui::theme::out::red(&format!("{p:.0}% over limit")),
+        Some(p) if p >= 80.0 => ui::theme::out::yellow(&format!("{p:.0}% near limit")),
         Some(p) => format!("{p:.0}%"),
         None => String::new(),
     };
@@ -2863,7 +2863,7 @@ fn run_list_legacy(dir: &Path, target: Option<String>, json: bool) {
                 ui::fmt::plural(deployments.len(), "deployment")
             ));
             if deployments.is_empty() {
-                ui::empty("deployments for this project", None);
+                ui::empty("deployments", None);
                 return;
             }
             let now = ui::fmt::now_ms();
@@ -3554,7 +3554,7 @@ fn run_projects(args: ProjectsArgs, json: bool) {
                     ));
                     if projects.is_empty() {
                         ui::empty(
-                            "projects in the active organization",
+                            "projects",
                             Some("Run `appz projects add <name>` to create one"),
                         );
                         return;
@@ -3565,10 +3565,7 @@ fn run_projects(args: ProjectsArgs, json: bool) {
                             p.name.clone(),
                             p.id.clone(),
                             p.framework.clone().unwrap_or_default(),
-                            p.updated_at
-                                .or(p.created_at)
-                                .map(ui::fmt::ago)
-                                .unwrap_or_default(),
+                            p.updated_at.map(ui::fmt::ago).unwrap_or_default(),
                         ]);
                     }
                     t.print();

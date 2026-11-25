@@ -95,6 +95,8 @@ impl Table {
             .flatten()
             .map(|(_, cols)| cols as usize);
         print!("{}", self.render(width));
+        // A following heading() separates itself with a blank line.
+        super::HEADING_SHOWN.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 }
 

@@ -6,7 +6,7 @@
 //! this module.
 
 use std::io::IsTerminal;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 pub(crate) mod fmt;
@@ -18,9 +18,9 @@ pub(crate) use table::{Table, print_kv};
 use theme::err;
 
 static JSON_MODE: AtomicBool = AtomicBool::new(false);
-/// Bumped by every ui line written to stderr, so a live fetch line only
-/// erases itself when nothing else was printed after it.
-static STDERR_WRITES: AtomicUsize = AtomicUsize::new(0);
+/// A live `> Fetching …` line is on stderr without its newline; the next
+/// ui line ends it first.
+static LIVE_PENDING: AtomicBool = AtomicBool::new(false);
 /// Set once a fetch line (`> 0 webhooks found [T]`) has reported the count,
 /// so the empty state doesn't repeat it.
 static FETCH_REPORTED: AtomicBool = AtomicBool::new(false);
@@ -32,8 +32,14 @@ fn no_color_env() -> bool {
 }
 
 fn eline(s: &str) {
-    STDERR_WRITES.fetch_add(1, Ordering::Relaxed);
+    end_live_line();
     eprintln!("{s}");
+}
+
+fn end_live_line() {
+    if LIVE_PENDING.swap(false, Ordering::Relaxed) {
+        eprintln!();
+    }
 }
 
 /// Apply `NO_COLOR` / `TERM=dumb` to both streams (console ignores them) and
@@ -169,20 +175,29 @@ pub(crate) fn empty(what: &str, next: Option<&str>) {
 
 /// A timed fetch: `> Fetching {what}…` while running (stderr TTY, not
 /// `--json`), then `> {summary} [312ms]`.
+///
+/// The live line is written without a newline and replaced in place with
+/// a carriage return + clear-line, never by moving the cursor up: provider CLIs, prompts
+/// and cliclack can write to the terminal meanwhile without going through
+/// `eline`, and erasing "the last line" would then erase their output.
 pub(crate) struct Fetch {
     started: Instant,
-    /// `STDERR_WRITES` right after the live line, when one was shown.
-    live_at: Option<usize>,
 }
 
 pub(crate) fn fetching(what: &str) -> Fetch {
-    let live_at = (is_stderr_tty() && !JSON_MODE.load(Ordering::Relaxed)).then(|| {
-        eline(&err::dim(&format!("> Fetching {what}…")));
-        STDERR_WRITES.load(Ordering::Relaxed)
-    });
+    if is_stderr_tty() && !JSON_MODE.load(Ordering::Relaxed) {
+        end_live_line();
+        eprint!("{}", err::dim(&format!("> Fetching {what}…")));
+        LIVE_PENDING.store(true, Ordering::Relaxed);
+    }
     Fetch {
         started: Instant::now(),
-        live_at,
+    }
+}
+
+impl Drop for Fetch {
+    fn drop(&mut self) {
+        end_live_line();
     }
 }
 
@@ -190,9 +205,10 @@ impl Fetch {
     /// Pass a summary that states the count (`20 projects found`): the empty
     /// state then skips its own `No … found.` line.
     pub(crate) fn done(self, summary: &str) {
-        // Only erase the live line if it is still the last thing on stderr.
-        if self.live_at == Some(STDERR_WRITES.load(Ordering::Relaxed)) {
-            let _ = console::Term::stderr().clear_last_lines(1);
+        // Clears the live line if it is still unfinished, or else the empty
+        // line the cursor sits on after someone else's output: never theirs.
+        if LIVE_PENDING.swap(false, Ordering::Relaxed) {
+            let _ = console::Term::stderr().clear_line();
         }
         let took = fmt::duration_ms(self.started.elapsed().as_millis() as u64);
         eline(&format!("> {summary} {}", err::dim(&format!("[{took}]"))));

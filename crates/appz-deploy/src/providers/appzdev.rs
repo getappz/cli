@@ -601,7 +601,7 @@ fn get_env_array<T: serde::de::DeserializeOwned>(
     } else {
         return Err(DeployError::Api {
             provider: "AppzDev",
-            reason: "Expected array in response".into(),
+            reason: format!("Expected an array in the {operation} response"),
         });
     };
     serde_json::from_value(serde_json::Value::Array(items.clone())).map_err(|e| DeployError::Api {
@@ -1934,7 +1934,7 @@ impl DeployProvider for AppzdevProvider {
         if project_json.is_file() {
             let content = std::fs::read_to_string(&project_json).map_err(|e| DeployError::Api {
                 provider: self.name(),
-                reason: e.to_string(),
+                reason: format!("Failed to read .appz/project.json: {e}"),
             })?;
             let (name, team) = serde_json::from_str::<serde_json::Value>(&content)
                 .ok()

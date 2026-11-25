@@ -502,11 +502,19 @@ fn list_view(out: &ListOutput, now_ms: i64) -> String {
     if out.snapshots.is_empty() {
         return view;
     }
-    let mut table = crate::ui::Table::new(&["Snapshot", "Age", "Size", "Target", "Commit"]);
+    let mut table = crate::ui::Table::new(&[
+        "Snapshot",
+        "Age",
+        "Size",
+        "Target",
+        "Environment",
+        "Commit",
+        "URL",
+    ]);
     for row in &out.snapshots {
         let age = chrono::DateTime::parse_from_rfc3339(&row.time)
             .map(|t| crate::ui::fmt::age(t.timestamp_millis(), now_ms))
-            .unwrap_or_default();
+            .unwrap_or_else(|_| row.time.clone());
         let commit = row
             .commit
             .as_deref()
@@ -517,7 +525,9 @@ fn list_view(out: &ListOutput, now_ms: i64) -> String {
             age,
             crate::ui::fmt::bytes(row.added_bytes),
             row.target.clone().unwrap_or_default(),
+            row.environment.clone().unwrap_or_default(),
             commit,
+            row.url.clone().unwrap_or_default(),
         ]);
     }
     view.push('\n');
@@ -872,15 +882,15 @@ mod tests {
                 id: "abc12345".into(),
                 time: "2026-11-20T12:00:00Z".into(),
                 target: Some("vercel".into()),
-                environment: None,
+                environment: Some("production".into()),
                 commit: Some("0123456789".into()),
-                url: None,
+                url: Some("https://x.vercel.app".into()),
                 added_bytes: 2048,
             }],
         );
         assert_eq!(
             list_view(&out, now),
-            "  Repository  local:.appz/backup (local)\n  Size        4.0 KB / 1.0 MB\n\n  Snapshot   Age   Size     Target   Commit\n  abc12345   3h    2.0 KB   vercel   0123456\n"
+            "  Repository  local:.appz/backup (local)\n  Size        4.0 KB / 1.0 MB\n\n  Snapshot   Age   Size     Target   Environment   Commit    URL\n  abc12345   3h    2.0 KB   vercel   production    0123456   https://x.vercel.app\n"
         );
     }
 

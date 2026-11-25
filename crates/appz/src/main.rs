@@ -1930,46 +1930,36 @@ fn run_skills(args: SkillsArgs, json: bool) {
 
     if !report.excluded_large_sources.is_empty() {
         warning(&format!(
-            "skipped {} large source repo(s) (slow full-repo download): {} — pass --include-large to include them",
+            "Skipped {} large source repo(s) (slow full-repo download): {}. Pass --include-large to include them",
             report.excluded_large_sources.len(),
             report.excluded_large_sources.join(", ")
         ));
     }
 
     if report.hits.is_empty() {
-        outro("no matching skills found — try `appz skills <query>`");
+        outro("No matching skills found, try `appz skills <query>`");
         return;
     }
 
-    step("matching skills");
-    let skill_lines: Vec<String> = report
-        .hits
-        .iter()
-        .map(|hit| {
-            let mark = if hit.installed { " (installed)" } else { "" };
-            format!(
-                "{}  {} installs  {}{mark}",
-                hit.name,
-                skills::format_installs(hit.installs),
-                hit.source
-            )
-        })
-        .collect();
-    info(&skill_lines.join("\n"));
+    let mut table = ui::Table::new(&["Skill", "Installs", "Source"]);
+    for hit in &report.hits {
+        table.row(skills::hit_row(hit));
+    }
+    table.print();
 
     let installable: Vec<skills::SkillHit> =
         report.hits.into_iter().filter(|h| !h.installed).collect();
     if installable.is_empty() {
-        outro("all recommended skills are already installed");
+        outro("All recommended skills are already installed");
         return;
     }
 
     let selected: Vec<skills::SkillHit> = if assume_yes() {
         installable
     } else if !is_interactive_tty() {
-        error("confirmation required — pass --yes to install without prompting");
+        error("confirmation required, pass --yes to install without prompting");
     } else {
-        let mut ms = cliclack::multiselect("select skills to install");
+        let mut ms = cliclack::multiselect("Select skills to install");
         for hit in &installable {
             ms = ms.item(hit.skill_id.clone(), hit.name.clone(), hit.source.clone());
         }
@@ -1979,30 +1969,30 @@ fn run_skills(args: SkillsArgs, json: bool) {
                 .filter(|h| ids.contains(&h.skill_id))
                 .collect(),
             Err(_) => {
-                warning("selection cancelled");
+                warning("Selection cancelled");
                 return;
             }
         }
     };
 
     if selected.is_empty() {
-        outro("no skills selected");
+        outro("No skills selected");
         return;
     }
 
-    let summary = with_spinner("installing skills...", "installation complete", || {
+    let summary = with_spinner("Installing skills…", "Skills installed", || {
         skills::install(&root, &selected)
     });
 
     match summary {
         Ok(s) => {
             for name in &s.installed {
-                success(&format!("installed {name}"));
+                success(&format!("Installed {name}"));
             }
             for name in &s.failed {
-                warning(&format!("failed to install {name}"));
+                warning(&format!("Failed to install {name}"));
             }
-            outro("done — review skills before use; they run with full agent permissions");
+            outro("Review skills before use, they run with full agent permissions");
         }
         Err(e) => error(&e),
     }

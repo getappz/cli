@@ -162,6 +162,15 @@ fn webhook_kv(w: &Webhook) {
     ]);
 }
 
+/// Delivery HTTP code: 2xx green, 4xx/5xx red, others plain.
+fn http_code(c: u16) -> String {
+    match c {
+        200..=299 => ui::theme::out::green(&c.to_string()),
+        400..=599 => ui::theme::out::red(&c.to_string()),
+        _ => c.to_string(),
+    }
+}
+
 fn deliveries_table(items: &[WebhookDelivery]) {
     let mut t = ui::Table::new(&["Age", "ID", "Event", "Status", "HTTP", "Attempt", "Retry"]);
     for d in items {
@@ -170,7 +179,7 @@ fn deliveries_table(items: &[WebhookDelivery]) {
             d.id.clone(),
             d.event.clone(),
             ui::fmt::status(&d.status),
-            d.response_status.map_or(String::new(), |c| c.to_string()),
+            d.response_status.map_or(String::new(), http_code),
             d.attempt.to_string(),
             d.next_attempt_at.map_or(String::new(), ui::fmt::datetime),
         ]);

@@ -2791,7 +2791,7 @@ fn run_alias_ls(dir: &Path, target: Option<String>, json: bool) {
                     a.deployment_id.clone(),
                     ui::fmt::age(a.created_at, now),
                     if a.is_production {
-                        "✓".into()
+                        ui::theme::out::green("✓")
                     } else {
                         String::new()
                     },
@@ -3199,7 +3199,7 @@ fn run_inspect(args: InspectArgs, json: bool) {
             let clean = h
                 .trim_start_matches("https://")
                 .trim_start_matches("http://");
-            println!("  https://{clean}");
+            println!("  {}", ui::theme::out::cyan(&format!("https://{clean}")));
         }
     }
     ui::heading("Edge storage");
@@ -3392,7 +3392,7 @@ fn run_domains(args: DomainsArgs, json: bool) {
                             ui::fmt::status(d.display_status()),
                             ui::fmt::status(d.ssl_status.as_deref().unwrap_or("")),
                             if d.verified {
-                                "✓".into()
+                                ui::theme::out::green("✓")
                             } else {
                                 String::new()
                             },

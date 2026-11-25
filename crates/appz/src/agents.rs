@@ -49,8 +49,12 @@ fn detect(json: bool, mgr: &SkillManager) -> Vec<AgentId> {
 
 /// One `agents list` table row: Agent, ID, Skills dir, Installed.
 fn list_row(display: &str, id: &str, skills_dir: &str, installed: bool) -> Vec<String> {
-    let mark = if installed { "✓" } else { "" };
-    vec![display.into(), id.into(), skills_dir.into(), mark.into()]
+    let mark = if installed {
+        crate::ui::theme::out::green("✓")
+    } else {
+        String::new()
+    };
+    vec![display.into(), id.into(), skills_dir.into(), mark]
 }
 
 /// One `agents doctor` table row: Agent, ID, Detected, Skills.
@@ -58,7 +62,11 @@ fn doctor_row(e: &DoctorAgentEntry) -> Vec<String> {
     vec![
         e.display_name.clone(),
         e.id.clone(),
-        if e.detected { "✓" } else { "" }.into(),
+        if e.detected {
+            crate::ui::theme::out::green("✓")
+        } else {
+            String::new()
+        },
         e.skills_installed.to_string(),
     ]
 }

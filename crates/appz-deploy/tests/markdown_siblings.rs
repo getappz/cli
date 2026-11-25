@@ -376,8 +376,21 @@ type Log = Arc<Mutex<Vec<String>>>;
 
 /// Serves every connection on a background thread (it ends with the test
 /// process); `respond(request_head, request_index)` -> (status, json body).
+/// Keep the developer's real login (and its saved team) out of the mocked requests.
+#[allow(unsafe_code)]
+fn isolate_login() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let dir = TempDir::new().unwrap();
+        // SAFETY: runs once before the first mock server starts any request.
+        unsafe { std::env::set_var("APPZ_VAULT_HOME_OVERRIDE", dir.path()) };
+        std::mem::forget(dir);
+    });
+}
+
 fn mock_server(respond: impl Fn(&str, usize) -> (u16, String) + Send + 'static) -> (String, Log) {
     use std::io::{Read, Write};
+    isolate_login();
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let log: Log = Arc::default();
@@ -538,6 +551,7 @@ fn mock_batch_server(
     + 'static,
 ) -> (String, ReqLog) {
     use std::io::{Read, Write};
+    isolate_login();
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let log: ReqLog = Arc::default();

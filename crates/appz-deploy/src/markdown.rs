@@ -180,6 +180,7 @@ impl HttpMarkdownConverter {
             batch_endpoint: format!("{base}{MARKDOWN_CONVERT_BATCH_PATH}"),
             auth_header: token.map(|t| format!("Bearer {t}")),
             agent: ureq::builder()
+                .middleware(crate::team::middleware)
                 .timeout_read(Duration::from_secs(30))
                 .timeout_write(Duration::from_secs(30))
                 .max_idle_connections_per_host(CONCURRENCY)

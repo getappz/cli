@@ -110,7 +110,7 @@ fn send(
     body: Option<serde_json::Value>,
     op: &str,
 ) -> DeployResult<(u16, serde_json::Value)> {
-    let mut req = ureq::request(method, url);
+    let mut req = crate::team::request(method, url);
     if let Some(tok) = token {
         req = req.set("Authorization", &format!("Bearer {tok}"));
     }

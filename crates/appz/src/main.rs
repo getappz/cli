@@ -43,6 +43,9 @@ struct AppzCli {
     /// secrets, starting the dev server)
     #[arg(short = 'y', long, global = true)]
     yes: bool,
+    /// Team slug or id to act as (default: the `appz switch` choice, then the account's active team)
+    #[arg(short = 'S', long, global = true, value_name = "TEAM")]
+    scope: Option<String>,
     #[command(subcommand)]
     command: AppzCmd,
 }
@@ -1803,6 +1806,7 @@ fn main() {
     let json = cli.json;
     ui::init(json);
     ASSUME_YES.store(cli.yes, std::sync::atomic::Ordering::Relaxed);
+    appz_deploy::team::set_scope(cli.scope);
     match cli.command {
         AppzCmd::Init(a) => run_init(a, json),
         AppzCmd::Install(a) => run_install(a, json),

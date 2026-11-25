@@ -150,7 +150,7 @@ fn send(
     body: Option<serde_json::Value>,
     operation: &str,
 ) -> DeployResult<ureq::Response> {
-    let mut req = ureq::request(method, &format!("{api_base}{path}"));
+    let mut req = crate::team::request(method, &format!("{api_base}{path}"));
     for (k, v) in query {
         req = req.query(k, v);
     }

@@ -91,13 +91,13 @@ pub trait DeployProvider: Send + Sync {
     fn login(&self, ctx: &DeployContext) -> DeployResult<()> {
         match ctx.exec_interactive(self.cli_tool(), self.login_args()) {
             Ok(true) => Ok(()),
-            Ok(false) => Err(DeployError::DeployFailed {
+            Ok(false) => Err(DeployError::Api {
                 provider: self.name(),
-                reason: format!("`{}` did not complete", self.login_hint()),
+                reason: format!("{}: `{}` did not complete", self.name(), self.login_hint()),
             }),
-            Err(reason) => Err(DeployError::DeployFailed {
+            Err(reason) => Err(DeployError::Api {
                 provider: self.name(),
-                reason,
+                reason: format!("{}: {reason}", self.name()),
             }),
         }
     }
@@ -128,9 +128,9 @@ pub trait DeployProvider: Send + Sync {
             return Ok(());
         };
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        let fail = |reason: String| DeployError::DeployFailed {
+        let fail = |reason: String| DeployError::Api {
             provider: self.name(),
-            reason,
+            reason: format!("{}: {reason}", self.name()),
         };
         if interactive {
             return match ctx.exec_interactive(self.cli_tool(), &refs) {
@@ -639,9 +639,9 @@ pub(crate) fn validate_deployment_id(provider: &'static str, id: &str) -> Deploy
         || id.chars().any(char::is_whitespace)
         || id.chars().any(char::is_control)
     {
-        return Err(DeployError::DeployFailed {
+        return Err(DeployError::Api {
             provider,
-            reason: "invalid deployment ID".into(),
+            reason: format!("{provider}: invalid deployment ID {id:?}"),
         });
     }
     Ok(())

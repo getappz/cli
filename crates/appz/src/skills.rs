@@ -237,6 +237,16 @@ fn merge_best(map: &mut HashMap<String, ApiSkill>, results: Vec<ApiSkill>) {
     }
 }
 
+/// One `appz skills` table row: Skill, Installs, Source.
+pub fn hit_row(hit: &SkillHit) -> Vec<String> {
+    let name = if hit.installed {
+        format!("{} (installed)", hit.name)
+    } else {
+        hit.name.clone()
+    };
+    vec![name, format_installs(hit.installs), hit.source.clone()]
+}
+
 pub fn format_installs(n: u64) -> String {
     if n >= 1000 {
         format!("{:.1}k", n as f64 / 1000.0)
@@ -612,4 +622,25 @@ pub fn install_bundled(root: &Path, global: bool) -> Result<InstallSummary, Stri
         }
         Ok(summary)
     })
+}
+
+#[cfg(test)]
+mod hit_row_tests {
+    use super::*;
+
+    #[test]
+    fn hit_row_formats_installs_and_marks_installed() {
+        let hit = SkillHit {
+            skill_id: "x".into(),
+            name: "react".into(),
+            installs: 1500,
+            source: "acme/skills".into(),
+            installed: true,
+            resolved_subpath: None,
+        };
+        assert_eq!(
+            hit_row(&hit),
+            vec!["react (installed)", "1.5k", "acme/skills"]
+        );
+    }
 }

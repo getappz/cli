@@ -4,7 +4,7 @@ use clap::{Args, Subcommand};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
-use crate::{assume_yes, error, hex, info, intro, is_tty, outro, success, warning};
+use crate::{assume_yes, error, hex, is_tty, success, ui, warning};
 use appz_deploy::webhooks::{Webhook, WebhookDelivery, WebhookQuery};
 
 #[derive(Args)]
@@ -135,41 +135,47 @@ fn print_json<T: serde::Serialize>(v: &T) {
     println!("{}", serde_json::to_string_pretty(v).unwrap());
 }
 
-fn fmt_millis(ms: i64) -> String {
-    crate::fmt_millis(Some(ms))
+fn webhook_state(w: &Webhook) -> String {
+    match w.disabled_at {
+        Some(t) => format!(
+            "{} {}",
+            ui::fmt::status("disabled"),
+            ui::theme::out::dim(&ui::fmt::datetime(t))
+        ),
+        None => ui::fmt::status("active"),
+    }
 }
 
-fn webhook_line(w: &Webhook) -> String {
-    let state = if w.disabled_at.is_some() {
-        "disabled"
-    } else {
-        "active"
-    };
-    format!(
-        "{}  {:<8}  {}  [{}]  project:{}  {}",
-        w.id,
-        state,
-        w.url,
-        w.events.join(","),
-        w.project_id.as_deref().unwrap_or("all"),
-        fmt_millis(w.created_at)
-    )
+fn webhook_kv(w: &Webhook) {
+    ui::print_kv(&[
+        ("ID", w.id.clone()),
+        ("URL", w.url.clone()),
+        ("Events", w.events.join(", ")),
+        (
+            "Project",
+            w.project_id
+                .clone()
+                .unwrap_or_else(|| "all projects".into()),
+        ),
+        ("Status", webhook_state(w)),
+        ("Created", ui::fmt::datetime(w.created_at)),
+    ]);
 }
 
-fn delivery_line(d: &WebhookDelivery) -> String {
-    let code = d.response_status.map_or("-".to_string(), |c| c.to_string());
-    let retry = d
-        .next_attempt_at
-        .map_or(String::new(), |t| format!("  retry:{}", fmt_millis(t)));
-    format!(
-        "{}  {:<8}  {:<20}  http:{:<4}  attempt:{}  {}{retry}",
-        d.id,
-        d.status,
-        d.event,
-        code,
-        d.attempt,
-        fmt_millis(d.created_at)
-    )
+fn deliveries_table(items: &[WebhookDelivery]) {
+    let mut t = ui::Table::new(&["Age", "ID", "Event", "Status", "HTTP", "Attempt", "Retry"]);
+    for d in items {
+        t.row(vec![
+            ui::fmt::ago(d.created_at),
+            d.id.clone(),
+            d.event.clone(),
+            ui::fmt::status(&d.status),
+            d.response_status.map_or(String::new(), |c| c.to_string()),
+            d.attempt.to_string(),
+            d.next_attempt_at.map_or(String::new(), ui::fmt::datetime),
+        ]);
+    }
+    t.print();
 }
 
 fn confirm_delete(id: &str, url: &str) -> bool {
@@ -211,7 +217,7 @@ pub fn run(args: WebhooksArgs, json: bool) {
         } else if let Err(e) = &result {
             error(e);
         } else {
-            success("signature is valid");
+            success("Signature is valid");
         }
         if result.is_err() {
             std::process::exit(1);
@@ -227,23 +233,36 @@ pub fn run(args: WebhooksArgs, json: bool) {
                 limit,
                 cursor: next,
             };
+            let fetch = ui::fetching("webhooks");
             let page = provider
                 .list_webhooks(&ctx, &query)
                 .unwrap_or_else(|e| fail(e));
             if json {
                 return print_json(&page);
             }
-            intro("appz webhooks");
+            fetch.done(&format!(
+                "{} found",
+                ui::fmt::plural(page.items.len(), "webhook")
+            ));
             if page.items.is_empty() {
-                info(
-                    "no webhooks found\nrun `appz webhooks add <https-url> --event deployment.ready`",
+                return ui::empty(
+                    "webhooks",
+                    Some("Run `appz webhooks add <https-url> --event deployment.ready`"),
                 );
-            } else {
-                let lines: Vec<String> = page.items.iter().map(webhook_line).collect();
-                info(&lines.join("\n"));
-                crate::print_next_hint(&page.next, "appz webhooks ls");
             }
-            outro("done");
+            let mut t = ui::Table::new(&["ID", "Status", "Events", "Project", "Age", "URL"]);
+            for w in &page.items {
+                t.row(vec![
+                    w.id.clone(),
+                    webhook_state(w),
+                    w.events.join(","),
+                    w.project_id.clone().unwrap_or_else(|| "all".into()),
+                    ui::fmt::ago(w.created_at),
+                    w.url.clone(),
+                ]);
+            }
+            t.print();
+            crate::print_next_hint(&page.next, "appz webhooks ls");
         }
         WebhooksCmd::Add {
             url,
@@ -256,39 +275,24 @@ pub fn run(args: WebhooksArgs, json: bool) {
             if json {
                 return print_json(&hook);
             }
-            intro("appz webhooks add");
-            success(&format!("registered webhook {}", hook.id));
-            info(&webhook_line(&hook));
+            success(&format!("Registered webhook {}", hook.id));
+            webhook_kv(&hook);
             if let Some(secret) = &hook.secret {
                 warning("Signing secret: store it now, it won't be shown again.");
                 println!("{secret}");
             }
-            outro("done");
         }
         WebhooksCmd::Inspect { id } => {
             let hook = provider.get_webhook(&ctx, &id).unwrap_or_else(|e| fail(e));
             if json {
                 return print_json(&hook);
             }
-            intro("appz webhooks inspect");
-            info(&format!(
-                "id:         {}\nurl:        {}\nevents:     {}\nproject:    {}\nstatus:     {}\ncreated:    {}",
-                hook.id,
-                hook.url,
-                hook.events.join(", "),
-                hook.project_id.as_deref().unwrap_or("all projects"),
-                hook.disabled_at.map_or("active".to_string(), |t| format!(
-                    "disabled {}",
-                    fmt_millis(t)
-                )),
-                fmt_millis(hook.created_at)
-            ));
-            outro("done");
+            webhook_kv(&hook);
         }
         WebhooksCmd::Rm { id } => {
             let hook = provider.get_webhook(&ctx, &id).unwrap_or_else(|e| fail(e));
             if !confirm_delete(&id, &hook.url) {
-                error("cancelled");
+                error("Cancelled");
             }
             provider
                 .remove_webhook(&ctx, &id)
@@ -296,9 +300,7 @@ pub fn run(args: WebhooksArgs, json: bool) {
             if json {
                 print_json(&serde_json::json!({ "status": "removed", "webhook": id }));
             } else {
-                intro("appz webhooks rm");
-                success(&format!("removed webhook {id}"));
-                outro("done");
+                success(&format!("Removed webhook {id}"));
             }
         }
         WebhooksCmd::Deliveries { id, limit, next } => {
@@ -312,29 +314,23 @@ pub fn run(args: WebhooksArgs, json: bool) {
             if json {
                 return print_json(&page);
             }
-            intro("appz webhooks deliveries");
             if page.items.is_empty() {
-                info("no deliveries in the last 7 days");
-            } else {
-                let lines: Vec<String> = page.items.iter().map(delivery_line).collect();
-                info(&lines.join("\n"));
-                crate::print_next_hint(&page.next, &format!("appz webhooks deliveries {id}"));
+                return ui::empty("deliveries", Some("Only the last 7 days are kept"));
             }
-            outro("done");
+            deliveries_table(&page.items);
+            crate::print_next_hint(&page.next, &format!("appz webhooks deliveries {id}"));
         }
         WebhooksCmd::Test { id } => {
             let d = provider.test_webhook(&ctx, &id).unwrap_or_else(|e| fail(e));
             if json {
                 print_json(&d);
             } else {
-                intro("appz webhooks test");
-                info(&delivery_line(&d));
                 if d.status == "ok" {
-                    success("endpoint accepted the test event");
+                    success("Endpoint accepted the test event");
                 } else {
-                    warning("endpoint did not accept the test event (no automatic retry)");
+                    warning("Endpoint did not accept the test event (no automatic retry)");
                 }
-                outro("done");
+                deliveries_table(std::slice::from_ref(&d));
             }
             if d.status != "ok" {
                 std::process::exit(1);

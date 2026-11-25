@@ -20,7 +20,7 @@ const VERIFY_TIMEOUT: Duration = Duration::from_secs(15);
 pub fn run(release: bool, dry_run: bool) {
     crate::intro("appz dev-install");
     crate::step(&format!(
-        "building appz ({})...",
+        "Building appz ({})",
         if release { "release" } else { "debug" }
     ));
     let built = match build_and_locate(release) {
@@ -53,24 +53,24 @@ pub fn run(release: bool, dry_run: bool) {
 
     if dry_run {
         crate::info(&format!(
-            "dry-run: would install {} -> {}",
+            "Dry run: would install {} -> {}",
             built.display(),
             target.display()
         ));
-        crate::outro("dry-run complete");
+        crate::outro("Dry run complete");
         return;
     }
 
     crate::step(&format!(
-        "installing {} -> {}",
+        "Installing {} -> {}",
         built.display(),
         target.display()
     ));
     if let Err(e) = replace_binary(&built, &target) {
         crate::error(&format!("error installing binary: {e}"));
     }
-    crate::success(&format!("installed to {}", target.display()));
-    crate::outro("dev-install complete (run `appz --version` to confirm)");
+    crate::success(&format!("Installed to {}", target.display()));
+    crate::outro("Run `appz --version` to confirm");
 }
 
 /// Build the `appz` binary from the current source tree and return the path

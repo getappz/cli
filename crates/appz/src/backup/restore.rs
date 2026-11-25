@@ -49,15 +49,20 @@ pub fn run(args: RestoreArgs, json: bool) -> Result<()> {
     if json {
         println!("{}", serde_json::to_string(&report)?);
     } else {
-        println!("Restored to {}", report.dir.display());
+        crate::success(&format!("Restored to {}", report.dir.display()));
         if let Some(path) = &report.recovery_dir {
-            println!("Pre-restore files and index saved in {}", path.display());
+            crate::ui::hint(&format!(
+                "Pre-restore files and index saved in {}",
+                path.display()
+            ));
         }
         if !report.fingerprint_ok {
             crate::warning("Restored source fingerprint differs from the snapshot");
         }
         for name in &report.missing_env {
-            println!("Missing environment variable {name}. Run appz env set {name}");
+            crate::warning(&format!(
+                "Missing environment variable {name}. Run appz env set {name}"
+            ));
         }
     }
     Ok(())

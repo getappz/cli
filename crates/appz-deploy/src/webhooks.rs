@@ -77,7 +77,7 @@ struct RawPage<T> {
 }
 
 fn fail(reason: impl Into<String>) -> DeployError {
-    DeployError::DeployFailed {
+    DeployError::Api {
         provider: "AppzDev",
         reason: reason.into(),
     }

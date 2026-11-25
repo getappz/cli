@@ -257,6 +257,21 @@ fn run_hook(ctx: &DeployContext, name: &str, argv: &[String]) -> Result<(), Stri
     })
 }
 
+/// Where a finished static build lives in appz's own namespace (written by
+/// e.g. designflare's optimizer), like `.vercel/output/static` for Vercel.
+const APPZ_STATIC_OUTPUT: &str = ".appz/output/static";
+
+/// `--prebuilt` output: `.appz/output/static` when it holds a site, else the
+/// toolchain's output directory. Plain HTML resolves to `.`, which would
+/// upload the unoptimized sources instead of the build.
+fn prebuilt_output_dir(project_dir: &Path, toolchains: &[appz_core::DetectedToolchain]) -> String {
+    if appz_core::has_index_html(&project_dir.join(APPZ_STATIC_OUTPUT)) {
+        APPZ_STATIC_OUTPUT.to_string()
+    } else {
+        appz_core::primary_output_directory(toolchains).to_string()
+    }
+}
+
 /// `--prebuilt`: the build output must already exist. Vercel's own
 /// `.vercel/output` (from `vercel build`) counts too.
 fn check_prebuilt_output(slug: &str, project_dir: &Path, output_dir: &str) -> Result<(), String> {
@@ -378,6 +393,12 @@ fn prepare_target(project_dir: &Path, req: DeployRequest) -> Result<PreparedTarg
         .map(|f| f.name.to_string())
         .collect();
     let framework = frameworks.first().cloned();
+    let explicit_output = prebuilt_output.is_some();
+    let output_dir = match prebuilt_output {
+        Some(dir) => dir,
+        None if req.prebuilt => prebuilt_output_dir(project_dir, &toolchains),
+        None => appz_core::primary_output_directory(&toolchains).to_string(),
+    };
 
     // `--prebuilt` fails before any CLI is installed or credential is used.
     if req.prebuilt {
@@ -387,10 +408,12 @@ fn prepare_target(project_dir: &Path, req: DeployRequest) -> Result<PreparedTarg
                 provider.name()
             ));
         }
-        let dir = prebuilt_output
-            .clone()
-            .unwrap_or_else(|| appz_core::primary_output_directory(&toolchains).to_string());
-        check_prebuilt_output(&slug, project_dir, &dir)?;
+        check_prebuilt_output(&slug, project_dir, &output_dir)?;
+        if output_dir == APPZ_STATIC_OUTPUT && !req.json {
+            crate::ui::hint(&format!(
+                "Deploying prebuilt output from {APPZ_STATIC_OUTPUT}"
+            ));
+        }
     }
 
     // mise-installed CLIs (global config or this project's mise.toml) are
@@ -418,10 +441,9 @@ fn prepare_target(project_dir: &Path, req: DeployRequest) -> Result<PreparedTarg
         crate::ui::hint("Vault is locked; run `appz env unlock` to use stored credentials");
     }
 
-    ctx.prebuilt = prebuilt_output.is_some() || req.prebuilt;
+    ctx.prebuilt = explicit_output || req.prebuilt;
     ctx.use_existing_output = req.prebuilt;
-    ctx.output_dir = prebuilt_output
-        .unwrap_or_else(|| appz_core::primary_output_directory(&toolchains).to_string());
+    ctx.output_dir = output_dir;
     ctx.is_preview = !req.prod;
     ctx.dry_run = req.dry_run;
     ctx.json_output = req.json;
@@ -1707,6 +1729,27 @@ mod tests {
             let err = run(dir.path(), request).err().unwrap();
             assert!(err.contains("builds this project itself"), "{slug}: {err}");
         }
+    }
+
+    #[test]
+    fn prebuilt_prefers_appz_static_output_over_site_root() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("index.html"), "<h1>src</h1>").unwrap();
+        let toolchains = appz_core::detect_toolchains(dir.path()).unwrap();
+        assert_eq!(prebuilt_output_dir(dir.path(), &toolchains), ".");
+
+        let out = dir.path().join(APPZ_STATIC_OUTPUT);
+        std::fs::create_dir_all(&out).unwrap();
+        assert_eq!(
+            prebuilt_output_dir(dir.path(), &toolchains),
+            ".",
+            "no index.html yet"
+        );
+        std::fs::write(out.join("index.html"), "<h1>built</h1>").unwrap();
+        assert_eq!(
+            prebuilt_output_dir(dir.path(), &toolchains),
+            APPZ_STATIC_OUTPUT
+        );
     }
 
     #[test]

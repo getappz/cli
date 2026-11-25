@@ -2369,7 +2369,10 @@ fn run_deploy(args: DeployArgs, json: bool) {
                                     deploy_kind(o).to_lowercase()
                                 ));
                                 match &o.url {
-                                    Some(url) => ui::print_kv(&[(r.target.as_str(), url.clone())]),
+                                    Some(url) => ui::print_kv(&[(
+                                        r.target.as_str(),
+                                        ui::theme::out::link(url),
+                                    )]),
                                     None => warning(&format!(
                                         "{}: live URL could not be confirmed",
                                         r.target
@@ -2410,7 +2413,7 @@ fn run_deploy(args: DeployArgs, json: bool) {
                         output.provider
                     ));
                     if let Some(url) = &output.url {
-                        ui::print_kv(&[(deploy_kind(&output), url.clone())]);
+                        ui::print_kv(&[(deploy_kind(&output), ui::theme::out::link(url))]);
                     }
                     ui::hint("Pass --force to deploy anyway");
                     outro("Done");
@@ -2422,7 +2425,7 @@ fn run_deploy(args: DeployArgs, json: bool) {
                 let took = ui::fmt::duration_ms(started.elapsed().as_millis() as u64);
                 success(&format!("Deployed to {} [{took}]", output.provider));
                 match &output.url {
-                    Some(url) => ui::print_kv(&[(deploy_kind(&output), url.clone())]),
+                    Some(url) => ui::print_kv(&[(deploy_kind(&output), ui::theme::out::link(url))]),
                     None => warning(
                         "Deploy succeeded but the live URL could not be confirmed from CLI output",
                     ),
@@ -2650,7 +2653,7 @@ fn run_alias_set(dir: &Path, target: Option<String>, domain: &str, json: bool) {
                 println!("{}", serde_json::json!({ "status": "aliased", "url": url }));
             } else {
                 success(&format!("Assigned alias {domain}"));
-                println!("{url}");
+                println!("{}", ui::theme::out::link(&url));
             }
         }
         Err(e) => error(&e),
@@ -2787,7 +2790,7 @@ fn run_alias_ls(dir: &Path, target: Option<String>, json: bool) {
             let mut t = ui::Table::new(&["Host", "Deployment", "Age", "Production"]);
             for a in &aliases {
                 t.row(vec![
-                    a.host.clone(),
+                    ui::theme::out::link(&a.host),
                     a.deployment_id.clone(),
                     ui::fmt::age(a.created_at, now),
                     if a.is_production {
@@ -2892,7 +2895,10 @@ fn run_list_legacy(dir: &Path, target: Option<String>, json: bool) {
                         .unwrap_or_default(),
                     d.id.clone(),
                     deployment_status(&format!("{:?}", d.status), d.is_current),
-                    d.url.clone().unwrap_or_default(),
+                    d.url
+                        .as_deref()
+                        .map(ui::theme::out::link)
+                        .unwrap_or_default(),
                 ]);
             }
             t.print();
@@ -3053,7 +3059,12 @@ fn run_list(args: ListArgs, json: bool) {
                     d.status.as_deref().unwrap_or("unknown"),
                     d.is_current,
                 ));
-                row.push(d.url.clone().unwrap_or_default());
+                row.push(
+                    d.url
+                        .as_deref()
+                        .map(ui::theme::out::link)
+                        .unwrap_or_default(),
+                );
                 t.row(row);
             }
             t.print();
@@ -3098,7 +3109,7 @@ fn run_open(mut args: OpenArgs, json: bool) {
                     println!("{}", t.url);
                 }
             } else {
-                ui::hint(&format!("Opening {}", t.url));
+                ui::hint(&format!("Opening {}", ui::theme::err::link(&t.url)));
                 open_in_browser(&t.url);
             }
         }
@@ -3191,7 +3202,22 @@ fn run_inspect(args: InspectArgs, json: bool) {
         ("Version", insp.version_id.clone()),
         ("Status", ui::fmt::status(&format!("{:?}", insp.status))),
         ("Target", insp.target.to_string()),
+        (
+            "Current",
+            if insp.is_current == Some(true) {
+                "yes".into()
+            } else {
+                String::new()
+            },
+        ),
         ("Created", created.unwrap_or_default()),
+        (
+            "Production URL",
+            insp.production_url
+                .as_deref()
+                .map(ui::theme::out::link)
+                .unwrap_or_default(),
+        ),
     ]);
     if !insp.hosts.is_empty() {
         ui::heading("Hosts");
@@ -3199,7 +3225,7 @@ fn run_inspect(args: InspectArgs, json: bool) {
             let clean = h
                 .trim_start_matches("https://")
                 .trim_start_matches("http://");
-            println!("  {}", ui::theme::out::cyan(&format!("https://{clean}")));
+            println!("  {}", ui::theme::out::link(&format!("https://{clean}")));
         }
     }
     ui::heading("Edge storage");
@@ -3239,8 +3265,9 @@ fn run_inspect(args: InspectArgs, json: bool) {
             ]);
         }
         t.print();
-    } else if !args.files && insp.file_count > 0 {
-        ui::hint("Pass --files to list manifest files");
+    } else if args.files && insp.file_count > 0 {
+        // GET /v0/deployments/{id} returns only fileCount/totalBytes.
+        warning("The API does not list per-file manifest entries for this deployment");
     }
 }
 
@@ -3577,13 +3604,18 @@ fn run_projects(args: ProjectsArgs, json: bool) {
                         );
                         return;
                     }
-                    let mut t = ui::Table::new(&["Name", "ID", "Framework", "Updated"]);
+                    // The API returns neither framework nor an update time
+                    // (only createdAt and productionUrl).
+                    let mut t = ui::Table::new(&["Name", "ID", "Production URL", "Created"]);
                     for p in &projects {
                         t.row(vec![
                             p.name.clone(),
                             p.id.clone(),
-                            p.framework.clone().unwrap_or_default(),
-                            p.updated_at.map(ui::fmt::ago).unwrap_or_default(),
+                            p.production_url
+                                .as_deref()
+                                .map(ui::theme::out::link)
+                                .unwrap_or_default(),
+                            p.created_at.map(ui::fmt::ago).unwrap_or_default(),
                         ]);
                     }
                     t.print();
@@ -3613,12 +3645,15 @@ fn run_projects(args: ProjectsArgs, json: bool) {
                             ("ID", p.id.clone()),
                             ("Slug", p.slug.clone()),
                             (
-                                "Organization",
-                                p.organization_id.clone().unwrap_or_default(),
+                                "Production URL",
+                                p.production_url
+                                    .as_deref()
+                                    .map(ui::theme::out::link)
+                                    .unwrap_or_default(),
                             ),
                             (
-                                "Production URL",
-                                p.production_url.clone().unwrap_or_default(),
+                                "Created",
+                                p.created_at.map(ui::fmt::ago).unwrap_or_default(),
                             ),
                         ]);
                     }
@@ -3766,7 +3801,10 @@ fn run_login(args: LoginArgs, json: bool) {
             "1. Confirm code in browser:  {}",
             code_resp.user_code
         ));
-        info(&format!("2. Open URL:                  {}", verify_url));
+        info(&format!(
+            "2. Open URL:                  {}",
+            ui::theme::out::link(verify_url)
+        ));
 
         if !args.no_browser {
             open_in_browser(verify_url);

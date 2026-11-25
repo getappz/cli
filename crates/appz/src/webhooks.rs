@@ -149,7 +149,7 @@ fn webhook_state(w: &Webhook) -> String {
 fn webhook_kv(w: &Webhook) {
     ui::print_kv(&[
         ("ID", w.id.clone()),
-        ("URL", w.url.clone()),
+        ("URL", ui::theme::out::link(&w.url)),
         ("Events", w.events.join(", ")),
         (
             "Project",
@@ -267,7 +267,7 @@ pub fn run(args: WebhooksArgs, json: bool) {
                     w.events.join(","),
                     w.project_id.clone().unwrap_or_else(|| "all".into()),
                     ui::fmt::ago(w.created_at),
-                    w.url.clone(),
+                    ui::theme::out::link(&w.url),
                 ]);
             }
             t.print();

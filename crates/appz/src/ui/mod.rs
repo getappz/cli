@@ -95,6 +95,15 @@ pub(crate) fn with_spinner<T>(start: &str, done: &str, f: impl FnOnce() -> T) ->
     r
 }
 
+/// Section title for detail views (stdout): blank line, then bold title.
+pub(crate) fn heading(title: &str) {
+    println!(
+        "
+{}",
+        theme::out::bold(title)
+    );
+}
+
 // ── Messages (stderr) ───────────────────────────────────────────
 
 pub(crate) fn render_error(msg: &str) -> String {

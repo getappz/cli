@@ -2353,9 +2353,11 @@ fn run_deploy(args: DeployArgs, json: bool) {
             deploy::Consent::Ask
         },
     };
+    let started = Instant::now();
     if !json {
         intro("appz deploy");
     }
+
     if all {
         match deploy::run_all(&canonical, req) {
             Ok(results) => {
@@ -2408,73 +2410,93 @@ fn run_deploy(args: DeployArgs, json: bool) {
                 println!("{}", serde_json::to_string_pretty(&output).unwrap());
             } else if args.dry_run {
                 print_deploy_dry_run(&output);
-                outro("nothing was deployed");
+                outro("Nothing was deployed");
             } else {
                 if output.unchanged {
                     success(&format!(
-                        "unchanged since the last deploy to {}; nothing was redeployed (--force to deploy anyway)",
+                        "Unchanged since the last deploy to {}; nothing was redeployed",
                         output.provider
                     ));
                     if let Some(url) = &output.url {
-                        info(url);
+                        ui::print_kv(&[(deploy_kind(&output), url.clone())]);
                     }
-                    outro("done");
+                    ui::hint("Pass --force to deploy anyway");
+                    outro("Done");
                     return;
                 }
                 for f in &output.setup_files {
-                    info(&format!("created {f} (the project had none)"));
+                    ui::hint(&format!("Created {f} (the project had none)"));
                 }
-                success(&format!("deployed to {}", output.provider));
-                if let Some(url) = &output.url {
-                    info(url);
-                } else {
-                    warning(
-                        "deploy succeeded but the live URL could not be confirmed from CLI output",
-                    );
+                let took = ui::fmt::duration_ms(started.elapsed().as_millis() as u64);
+                success(&format!("Deployed to {} [{took}]", output.provider));
+                match &output.url {
+                    Some(url) => ui::print_kv(&[(deploy_kind(&output), url.clone())]),
+                    None => warning(
+                        "Deploy succeeded but the live URL could not be confirmed from CLI output",
+                    ),
                 }
                 if let Some(id) = output.backup.as_ref().and_then(|b| b.snapshot.as_deref()) {
-                    info(&format!("source snapshot saved ({id})"));
+                    ui::hint(&format!("Source snapshot saved ({id})"));
                 }
-                outro("deploy complete");
+                outro("Deploy complete");
             }
         }
         Err(e) => error(&e),
     }
 }
 
+fn deploy_kind(output: &appz_deploy::DeployOutput) -> &'static str {
+    if output.is_preview {
+        "Preview"
+    } else {
+        "Production"
+    }
+}
+
 fn print_deploy_dry_run(output: &appz_deploy::DeployOutput) {
     success(&format!(
-        "dry run: would deploy to {} ({})",
+        "Dry run: would deploy to {} ({})",
         output.provider,
-        if output.is_preview {
-            "preview"
-        } else {
-            "production"
-        }
+        deploy_kind(output).to_lowercase()
     ));
-    if output.unchanged {
-        info(
-            "unchanged since the last deploy: nothing would be redeployed (--force to deploy anyway)",
-        );
+    let auth = output.auth.as_ref().map(|a| match a {
+        appz_deploy::AuthState::Authenticated => "signed in",
+        appz_deploy::AuthState::NotAuthenticated => {
+            "not signed in (a real deploy would offer to log in)"
+        }
+        appz_deploy::AuthState::Unknown => "could not be checked",
+    });
+    let mut rows = vec![
+        (
+            "Changes",
+            if output.unchanged {
+                "none since the last deploy (--force to deploy anyway)".to_string()
+            } else {
+                "would be deployed".to_string()
+            },
+        ),
+        (
+            "CLI",
+            if output.cli_missing {
+                "not installed (a real deploy installs it with mise)".into()
+            } else {
+                "installed".into()
+            },
+        ),
+        (
+            "Project",
+            if output.link_needed {
+                "not linked (a real deploy asks to create/link one)".into()
+            } else {
+                "linked".into()
+            },
+        ),
+        ("Auth", auth.unwrap_or("").to_string()),
+    ];
+    if !output.setup_files.is_empty() {
+        rows.push(("Would create", output.setup_files.join(", ")));
     }
-    if output.cli_missing {
-        info("cli: not installed (a real deploy installs it with mise)");
-    }
-    if output.link_needed {
-        info("project: not linked (a real deploy asks to create/link one)");
-    }
-    for f in &output.setup_files {
-        info(&format!("would create {f} (the project has none)"));
-    }
-    if let Some(auth) = &output.auth {
-        info(match auth {
-            appz_deploy::AuthState::Authenticated => "auth: signed in",
-            appz_deploy::AuthState::NotAuthenticated => {
-                "auth: not signed in (a real deploy would offer to log in)"
-            }
-            appz_deploy::AuthState::Unknown => "auth: could not be checked",
-        });
-    }
+    ui::print_kv(&rows);
 }
 
 fn run_rollback(args: RollbackArgs, json: bool) {
@@ -2484,9 +2506,7 @@ fn run_rollback(args: RollbackArgs, json: bool) {
         (v, d) => (v, d.unwrap_or_else(|| PathBuf::from("."))),
     };
     let canonical = resolve_root(&dir);
-    if !json {
-        intro("appz rollback");
-    }
+
     let resolved = match &version {
         Some(v) => deploy::resolve_version(&canonical, args.target.clone(), v).map(|id| (id, None)),
         None => deploy::plan_rollback(&canonical, args.target.clone()).map(|plan| {
@@ -2515,7 +2535,7 @@ fn run_rollback(args: RollbackArgs, json: bool) {
             .as_ref()
             .map(label)
             .unwrap_or_else(|| "-".into());
-        let msg = format!("roll back production: {from} -> {}", label(&plan.target));
+        let msg = format!("Roll back production: {from} -> {}", label(&plan.target));
         if json {
             // Non-interactive consumers must opt in with --yes.
             if !assume_yes() {
@@ -2526,7 +2546,7 @@ fn run_rollback(args: RollbackArgs, json: bool) {
                 error("pass --yes to roll back to the previous production deployment");
             }
         } else {
-            info(&msg);
+            ui::hint(&msg);
             let ok = assume_yes()
                 || is_tty()
                     && cliclack::confirm("Roll back?")
@@ -2534,23 +2554,23 @@ fn run_rollback(args: RollbackArgs, json: bool) {
                         .interact()
                         .unwrap_or(false);
             if !ok {
-                return outro("rollback cancelled");
+                return warning("Rollback cancelled");
             }
         }
     }
+
     match deploy::rollback(&canonical, args.target, &version_id) {
         Ok(output) => {
             if json {
                 println!("{}", serde_json::to_string_pretty(&output).unwrap());
             } else {
                 success(&format!(
-                    "rolled back {} to version {}",
+                    "Rolled back {} to version {}",
                     output.provider, version_id
                 ));
                 if let Some(url) = &output.url {
-                    info(url);
+                    println!("{url}");
                 }
-                outro("rollback complete");
             }
         }
         Err(e) => error(&e),
@@ -2562,9 +2582,7 @@ fn run_promote(args: PromoteArgs, json: bool) {
     if !assume_yes() && (json || !is_tty()) {
         error("confirmation required — pass --yes to promote without prompting");
     }
-    if !json {
-        intro("appz promote");
-    }
+
     let confirm = |d: &appz_deploy::DeploymentInspect| {
         if assume_yes() {
             return true;
@@ -2589,21 +2607,17 @@ fn run_promote(args: PromoteArgs, json: bool) {
                 "deployment_id": r.deployment_id, "version_id": r.version_id, "url": r.url })
         ),
         Ok(Some(r)) => {
-            success(&format!("promoted {} to production", r.deployment_id));
-            info(&r.url);
-            outro("promote complete");
+            success(&format!("Promoted {} to production", r.deployment_id));
+            println!("{}", r.url);
         }
         Ok(None) if json => println!("{}", serde_json::json!({ "status": "canceled" })),
-        Ok(None) => outro("canceled"),
+        Ok(None) => warning("Canceled"),
         Err(e) => error(&e),
     }
 }
 
 fn run_link(args: LinkArgs, json: bool) {
     let canonical = resolve_root(&args.dir);
-    if !json {
-        intro("appz link");
-    }
     match deploy::link(&canonical, args.target, args.project) {
         Ok(provider_name) => {
             if json {
@@ -2612,8 +2626,7 @@ fn run_link(args: LinkArgs, json: bool) {
                     serde_json::json!({ "status": "linked", "provider": provider_name })
                 );
             } else {
-                success(&format!("linked project to {provider_name}"));
-                outro("link complete");
+                success(&format!("Linked project to {provider_name}"));
             }
         }
         Err(e) => error(&e),
@@ -2638,17 +2651,13 @@ fn run_alias(args: AliasArgs, json: bool) {
 
 fn run_alias_set(dir: &Path, target: Option<String>, domain: &str, json: bool) {
     let canonical = resolve_root(dir);
-    if !json {
-        intro("appz alias");
-    }
     match deploy::alias(&canonical, target, domain) {
         Ok(url) => {
             if json {
                 println!("{}", serde_json::json!({ "status": "aliased", "url": url }));
             } else {
-                success(&format!("assigned alias {domain}"));
-                info(&url);
-                outro("alias complete");
+                success(&format!("Assigned alias {domain}"));
+                println!("{url}");
             }
         }
         Err(e) => error(&e),
@@ -2765,41 +2774,38 @@ fn run_usage(args: UsageArgs, json: bool) {
 }
 
 fn alias_created(ms: i64) -> String {
-    chrono::DateTime::from_timestamp_millis(ms)
-        .map(|t| t.format("%Y-%m-%d %H:%M UTC").to_string())
-        .unwrap_or_else(|| "-".into())
+    ui::fmt::datetime(ms)
 }
 
 fn run_alias_ls(dir: &Path, target: Option<String>, json: bool) {
     let canonical = resolve_root(dir);
+    let fetch = ui::fetching("aliases");
     match deploy::list_aliases(&canonical, target) {
         Ok(aliases) if json => println!("{}", serde_json::to_string_pretty(&aliases).unwrap()),
         Ok(aliases) => {
-            intro("appz alias ls");
+            fetch.done(&format!(
+                "{} found",
+                ui::fmt::plural(aliases.len(), "alias")
+            ));
             if aliases.is_empty() {
-                info("no aliases found\nrun `appz alias set <domain>` to add one");
-            } else {
-                let lines: Vec<String> = aliases
-                    .iter()
-                    .map(|a| {
-                        format!(
-                            "{:<36}  {:<18}  {:<22}  {}",
-                            a.host,
-                            a.deployment_id,
-                            alias_created(a.created_at),
-                            if a.is_production { "production" } else { "" }
-                        )
-                    })
-                    .collect();
-                info(&format!(
-                    "{:<36}  {:<18}  {:<22}\n{}",
-                    "HOST",
-                    "DEPLOYMENT",
-                    "CREATED",
-                    lines.join("\n")
-                ));
+                ui::empty("aliases", Some("Run `appz alias set <domain>` to add one"));
+                return;
             }
-            outro("done");
+            let now = ui::fmt::now_ms();
+            let mut t = ui::Table::new(&["Host", "Deployment", "Age", "Production"]);
+            for a in &aliases {
+                t.row(vec![
+                    a.host.clone(),
+                    a.deployment_id.clone(),
+                    ui::fmt::age(a.created_at, now),
+                    if a.is_production {
+                        "✓".into()
+                    } else {
+                        String::new()
+                    },
+                ]);
+            }
+            t.print();
         }
         Err(e) => error(&e),
     }
@@ -2836,17 +2842,18 @@ fn run_alias_rm(dir: &Path, target: Option<String>, host: &str, json: bool) {
         match cliclack::confirm(prompt).initial_value(false).interact() {
             Ok(true) => {}
             _ => {
-                info("canceled");
+                warning("Canceled");
                 return;
             }
         }
     }
+
     match deploy::remove_alias(&canonical, target, &host) {
         Ok(()) if json => println!(
             "{}",
             serde_json::json!({ "status": "removed", "host": host })
         ),
-        Ok(()) => success(&format!("removed alias {host}")),
+        Ok(()) => success(&format!("Removed alias {host}")),
         Err(e) => error(&e),
     }
 }
@@ -2858,43 +2865,49 @@ fn print_next_hint(next: &Option<String>, cmd: &str) {
 }
 
 fn fmt_millis(ms: Option<i64>) -> String {
-    ms.and_then(chrono::DateTime::from_timestamp_millis)
-        .map(|t| t.format("%Y-%m-%d %H:%M UTC").to_string())
-        .unwrap_or_else(|| "-".to_string())
+    ms.map_or_else(|| "-".to_string(), ui::fmt::datetime)
+}
+
+/// `● Ready (current)` for the deployment production points at.
+fn deployment_status(status: &str, is_current: bool) -> String {
+    let s = ui::fmt::status(status);
+    if is_current {
+        format!("{s} {}", ui::theme::out::dim("(current)"))
+    } else {
+        s
+    }
 }
 
 /// The pre-team-wide listing, still used for providers other than appz.dev.
 fn run_list_legacy(dir: &Path, target: Option<String>, json: bool) {
+    let fetch = ui::fetching("deployments");
     match deploy::list(dir, target) {
         Ok(deployments) => {
             if json {
                 println!("{}", serde_json::to_string_pretty(&deployments).unwrap());
-            } else {
-                intro("appz list");
-                if deployments.is_empty() {
-                    info("no deployments found for this project");
-                } else {
-                    let lines: Vec<String> = deployments
-                        .iter()
-                        .map(|d| {
-                            let current_marker = if d.is_current { " (current)" } else { "" };
-                            let version = d.version_id.as_deref().unwrap_or("-");
-                            let url = d.url.as_deref().unwrap_or("-");
-                            let age = d
-                                .created_at
-                                .map(|t| format!("{}", t.format("%Y-%m-%d %H:%M UTC")))
-                                .unwrap_or_else(|| "-".to_string());
-                            let status = format!("{:?}", d.status).to_lowercase();
-                            format!(
-                                "{:<16}  {:<14}  {:<32}  {} [{status}{current_marker}]",
-                                d.id, version, url, age
-                            )
-                        })
-                        .collect();
-                    info(&lines.join("\n"));
-                }
-                outro("done");
+                return;
             }
+            fetch.done(&format!(
+                "{} found",
+                ui::fmt::plural(deployments.len(), "deployment")
+            ));
+            if deployments.is_empty() {
+                ui::empty("deployments for this project", None);
+                return;
+            }
+            let now = ui::fmt::now_ms();
+            let mut t = ui::Table::new(&["Age", "ID", "Status", "URL"]);
+            for d in &deployments {
+                t.row(vec![
+                    d.created_at
+                        .map(|c| ui::fmt::age(c.timestamp_millis(), now))
+                        .unwrap_or_default(),
+                    d.id.clone(),
+                    deployment_status(&format!("{:?}", d.status), d.is_current),
+                    d.url.clone().unwrap_or_default(),
+                ]);
+            }
+            t.print();
         }
         Err(e) => error(&e),
     }
@@ -3004,55 +3017,59 @@ fn run_list(args: ListArgs, json: bool) {
         Ok(q) => q,
         Err(e) => error(&e),
     };
+    let fetch = ui::fetching("deployments");
     match deploy::list_page(&canonical, args.target, &query) {
         Ok(page) => {
             if json {
                 let mut out = serde_json::to_value(&page).unwrap();
                 out["filters"] = list_filters_json(&query);
                 println!("{}", serde_json::to_string_pretty(&out).unwrap());
-            } else {
-                intro("appz list");
-                if page.items.is_empty() {
-                    info(if team_wide {
-                        "no deployments found for this team"
-                    } else {
-                        "no deployments found for this project"
-                    });
-                } else {
-                    let lines: Vec<String> = page
-                        .items
-                        .iter()
-                        .map(|d| {
-                            let current_marker = if d.is_current { " (current)" } else { "" };
-                            let version = d.version_id.as_deref().unwrap_or("-");
-                            let url = d.url.as_deref().unwrap_or("-");
-                            let status = d.status.as_deref().unwrap_or("unknown");
-                            let project_col = if team_wide {
-                                format!(
-                                    "{:<20}  ",
-                                    d.project_slug
-                                        .as_deref()
-                                        .or(d.project_name.as_deref())
-                                        .or(d.project_id.as_deref())
-                                        .unwrap_or("-")
-                                )
-                            } else {
-                                String::new()
-                            };
-                            format!(
-                                "{project_col}{:<16}  {:<14}  {:<32}  {} [{status}{current_marker}]",
-                                d.id,
-                                version,
-                                url,
-                                fmt_millis(d.created_at)
-                            )
-                        })
-                        .collect();
-                    info(&lines.join("\n"));
-                    print_next_hint(&page.next, "appz ls");
-                }
-                outro("done");
+                return;
             }
+            let scope = query
+                .project
+                .as_deref()
+                .map_or_else(|| "this team".to_string(), |p| p.to_string());
+            fetch.done(&format!(
+                "{} found for {scope}",
+                ui::fmt::plural(page.items.len(), "deployment")
+            ));
+            if page.items.is_empty() {
+                ui::empty("deployments", Some("Run `appz deploy` to create one"));
+                return;
+            }
+            let now = ui::fmt::now_ms();
+            let mut headers = vec!["Age"];
+            if team_wide {
+                headers.push("Project");
+            }
+            headers.extend(["ID", "Status", "URL"]);
+            let mut t = ui::Table::new(&headers);
+            for d in &page.items {
+                let mut row = vec![
+                    d.created_at
+                        .map(|c| ui::fmt::age(c, now))
+                        .unwrap_or_default(),
+                ];
+                if team_wide {
+                    row.push(
+                        d.project_slug
+                            .clone()
+                            .or_else(|| d.project_name.clone())
+                            .or_else(|| d.project_id.clone())
+                            .unwrap_or_default(),
+                    );
+                }
+                row.push(d.id.clone());
+                row.push(deployment_status(
+                    d.status.as_deref().unwrap_or("unknown"),
+                    d.is_current,
+                ));
+                row.push(d.url.clone().unwrap_or_default());
+                t.row(row);
+            }
+            t.print();
+            print_next_hint(&page.next, "appz ls");
         }
         Err(e) => error(&e),
     }
@@ -3093,10 +3110,8 @@ fn run_open(mut args: OpenArgs, json: bool) {
                     println!("{}", t.url);
                 }
             } else {
-                intro("appz open");
-                info(&format!("opening {}", t.url));
+                ui::hint(&format!("Opening {}", t.url));
                 open_in_browser(&t.url);
-                outro("done");
             }
         }
         Err(e) => error(&e),
@@ -3112,9 +3127,9 @@ fn run_remove(args: RemoveArgs, json: bool) {
         }
     }
     if !json {
-        intro("appz remove");
-        info(&format!("Deployments to delete:\n  {}", refs.join("\n  ")));
+        ui::hint(&format!("Deployments to delete: {}", refs.join(", ")));
     }
+
     if !assume_yes() {
         if json || !is_interactive_tty() {
             error("confirmation required — pass --yes to delete without prompting");
@@ -3125,7 +3140,8 @@ fn run_remove(args: RemoveArgs, json: bool) {
             .interact()
             .unwrap_or(false);
         if !ok {
-            warning("cancelled, nothing deleted");
+            warning("Cancelled, nothing deleted");
+
             return;
         }
     }
@@ -3146,15 +3162,18 @@ fn run_remove(args: RemoveArgs, json: bool) {
     } else {
         for (r, res) in &results {
             match res {
-                Ok(id) => success(&format!("removed {id}")),
+                Ok(id) => success(&format!("Removed {id}")),
                 Err(e) => warning(&format!("{r}: {e}")),
             }
         }
-        outro(&format!(
-            "{} removed, {failed} failed",
-            results.len() - failed
-        ));
+        if results.len() > 1 {
+            ui::hint(&format!(
+                "{} removed, {failed} failed",
+                results.len() - failed
+            ));
+        }
     }
+
     if failed > 0 {
         std::process::exit(1);
     }
@@ -3162,99 +3181,79 @@ fn run_remove(args: RemoveArgs, json: bool) {
 
 fn run_inspect(args: InspectArgs, json: bool) {
     let canonical = resolve_root(&args.dir);
-    match deploy::inspect(&canonical, args.target, &args.id_or_url) {
-        Ok(insp) => {
-            if json {
-                println!("{}", serde_json::to_string_pretty(&insp).unwrap());
-            } else {
-                intro("appz inspect");
-                step("deployment");
-                let mut dep_info = vec![
-                    format!("id:          {}", insp.id),
-                    format!("project:     {}", insp.project_id),
-                    format!("version:     {}", insp.version_id),
-                    format!(
-                        "status:      {}",
-                        format!("{:?}", insp.status).to_lowercase()
-                    ),
-                    format!("target:      {}", insp.target),
-                ];
-                if let Some(created) = insp.created_at {
-                    dep_info.push(format!(
-                        "created:     {}",
-                        created.format("%Y-%m-%d %H:%M:%S UTC")
-                    ));
-                }
-                info(&dep_info.join("\n"));
-
-                if !insp.hosts.is_empty() {
-                    step("hosts");
-                    let host_lines: Vec<String> = insp
-                        .hosts
-                        .iter()
-                        .map(|h| {
-                            let clean = h
-                                .trim_start_matches("https://")
-                                .trim_start_matches("http://");
-                            format!("https://{clean}")
-                        })
-                        .collect();
-                    info(&host_lines.join("\n"));
-                }
-
-                step("edge storage & cas");
-                let mut cas_info = vec![
-                    format!("files:       {}", insp.file_count),
-                    format!("size:        {}", appz_core::format_size(insp.total_bytes)),
-                ];
-                if let Some(mkey) = &insp.manifest_key {
-                    cas_info.push(format!("manifest:    {mkey}"));
-                }
-                info(&cas_info.join("\n"));
-
-                if !insp.redirects.is_empty() || !insp.headers.is_empty() {
-                    step("routing rules");
-                    let mut rules = Vec::new();
-                    for r in &insp.redirects {
-                        rules.push(format!("redirect:    {r}"));
-                    }
-                    for h in &insp.headers {
-                        rules.push(format!("header:      {h}"));
-                    }
-                    info(&rules.join("\n"));
-                }
-
-                let files_to_show = if args.files {
-                    insp.files.as_deref().unwrap_or_default()
-                } else {
-                    &[]
-                };
-                if !files_to_show.is_empty() {
-                    step("manifest files");
-                    let manifest_lines: Vec<String> = files_to_show
-                        .iter()
-                        .map(|f| {
-                            let ct = f.content_type.as_deref().unwrap_or("-");
-                            let hash_short = if f.hash.len() > 12 {
-                                &f.hash[..12]
-                            } else {
-                                &f.hash
-                            };
-                            format!(
-                                "{:<36}  {:>8}  {:<24}  hash:{}...",
-                                f.path,
-                                appz_core::format_size(f.size),
-                                ct,
-                                hash_short
-                            )
-                        })
-                        .collect();
-                    info(&manifest_lines.join("\n"));
-                }
-                outro("inspection complete");
-            }
-        }
+    let insp = match deploy::inspect(&canonical, args.target, &args.id_or_url) {
+        Ok(i) => i,
         Err(e) => error(&e),
+    };
+    if json {
+        println!("{}", serde_json::to_string_pretty(&insp).unwrap());
+        return;
+    }
+    let created = insp.created_at.map(|c| {
+        let ms = c.timestamp_millis();
+        format!(
+            "{} ({} ago)",
+            ui::fmt::datetime(ms),
+            ui::fmt::age(ms, ui::fmt::now_ms())
+        )
+    });
+    ui::heading("Deployment");
+    ui::print_kv(&[
+        ("ID", insp.id.clone()),
+        ("Project", insp.project_id.clone()),
+        ("Version", insp.version_id.clone()),
+        ("Status", ui::fmt::status(&format!("{:?}", insp.status))),
+        ("Target", insp.target.to_string()),
+        ("Created", created.unwrap_or_default()),
+    ]);
+    if !insp.hosts.is_empty() {
+        ui::heading("Hosts");
+        for h in &insp.hosts {
+            let clean = h
+                .trim_start_matches("https://")
+                .trim_start_matches("http://");
+            println!("  https://{clean}");
+        }
+    }
+    ui::heading("Edge storage");
+    let mut storage = vec![
+        ("Files", insp.file_count.to_string()),
+        ("Size", appz_core::format_size(insp.total_bytes)),
+    ];
+    if let Some(mkey) = &insp.manifest_key {
+        storage.push(("Manifest", mkey.clone()));
+    }
+    ui::print_kv(&storage);
+    if !insp.redirects.is_empty() || !insp.headers.is_empty() {
+        ui::heading("Routing rules");
+        let mut t = ui::Table::new(&["Type", "Rule"]);
+        for r in &insp.redirects {
+            t.row(vec!["redirect".into(), r.to_string()]);
+        }
+        for h in &insp.headers {
+            t.row(vec!["header".into(), h.to_string()]);
+        }
+        t.print();
+    }
+    let files = if args.files {
+        insp.files.as_deref().unwrap_or_default()
+    } else {
+        &[]
+    };
+    if !files.is_empty() {
+        ui::heading("Manifest files");
+        let mut t = ui::Table::new(&["Path", "Size", "Type", "Hash"]);
+        for f in files {
+            t.row(vec![
+                f.path.clone(),
+                appz_core::format_size(f.size),
+                f.content_type.clone().unwrap_or_default(),
+                f.hash.chars().take(12).collect(),
+            ]);
+        }
+        t.print();
+    } else if !args.files && insp.file_count > 0 {
+        ui::hint("Pass --files to list manifest files");
     }
 }
 
@@ -3977,6 +3976,13 @@ mod tests {
             limit,
             detail: detail.into(),
         }
+    }
+
+    #[test]
+    fn deployment_status_marks_current() {
+        console::set_colors_enabled(false);
+        assert_eq!(deployment_status("READY", true), "● Ready (current)");
+        assert_eq!(deployment_status("error", false), "● Error");
     }
 
     #[test]

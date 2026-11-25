@@ -9,8 +9,8 @@ use appz_deploy::redirects::{
 use serde_json::json;
 
 use crate::{
-    RedirectsArgs, RedirectsCmd, assume_yes, deploy, error, info, intro, is_interactive_tty, outro,
-    success, warning,
+    RedirectsArgs, RedirectsCmd, assume_yes, deploy, error, is_interactive_tty, success, ui,
+    warning,
 };
 
 pub(crate) fn run(args: RedirectsArgs, json: bool) {
@@ -76,12 +76,13 @@ impl Ctx<'_> {
             .interact()
             .unwrap_or(false);
         if !ok {
-            info("cancelled, nothing changed");
+            warning("Cancelled, nothing changed");
             std::process::exit(0);
         }
     }
 
     fn ls(&self, version: Option<u64>, search: Option<&str>) {
+        let fetch = ui::fetching("redirects");
         let mut list = self
             .op(|p, c| p.list_redirects(c, version))
             .unwrap_or_else(|e| error(&e));
@@ -99,23 +100,23 @@ impl Ctx<'_> {
             println!("{}", serde_json::to_string_pretty(&out).unwrap());
             return;
         }
-        intro("appz redirects ls");
         let label = match (list.version, &versions) {
             (None, _) => "no redirect versions yet".to_string(),
-            (Some(n), Some(v)) => format!("version {n} ({})", version_tag(v, n)),
+            (Some(n), Some(v)) => format!("version {n}, {}", version_tag(v, n)),
             (Some(n), None) => format!("version {n}"),
         };
+        fetch.done(&format!(
+            "{} found ({label})",
+            ui::fmt::plural(list.rules.len(), "redirect")
+        ));
         if list.rules.is_empty() {
-            info(&format!(
-                "{label}: no redirects\nrun `appz redirects add <source> <destination>`"
-            ));
+            ui::hint("Run `appz redirects add <source> <destination>`");
         } else {
-            info(&format!("{label}\n{}", rules_table(&list.rules)));
+            rules_table(&list.rules).print();
         }
         if let Some(v) = &versions {
             print_state(v);
         }
-        outro("done");
     }
 
     fn add(&self, rule: RedirectInput) {
@@ -126,9 +127,8 @@ impl Ctx<'_> {
             .op(|p, c| p.add_redirect(c, &rule))
             .unwrap_or_else(|e| error(&e));
         self.report_staged(
-            "appz redirects add",
             &format!(
-                "added {} -> {} ({})",
+                "Added {} -> {} ({})",
                 rule.source, rule.destination, rule.status
             ),
             &list,
@@ -159,8 +159,7 @@ impl Ctx<'_> {
             .op(|p, c| p.remove_redirect(c, &rule.id))
             .unwrap_or_else(|e| error(&e));
         self.report_staged(
-            "appz redirects rm",
-            &format!("removed {} -> {}", rule.source, rule.destination),
+            &format!("Removed {} -> {}", rule.source, rule.destination),
             &list,
             json!({ "removed": rule }),
         );
@@ -212,8 +211,7 @@ impl Ctx<'_> {
             .op(|p, c| p.import_redirects(c, &rules))
             .unwrap_or_else(|e| error(&e));
         self.report_staged(
-            "appz redirects import",
-            &format!("imported {} redirect(s)", rules.len()),
+            &format!("Imported {}", ui::fmt::plural(rules.len(), "redirect")),
             &list,
             json!({ "imported": rules.len() }),
         );
@@ -225,23 +223,20 @@ impl Ctx<'_> {
             println!("{}", serde_json::to_string_pretty(&v).unwrap());
             return;
         }
-        intro("appz redirects versions");
         if v.versions.is_empty() {
-            info("no redirect versions yet");
+            ui::empty("redirect versions", None);
         } else {
-            let mut rows = vec![format!("{:<8}  {:<18}  {}", "VERSION", "CREATED", "STATE")];
+            let mut t = ui::Table::new(&["Version", "State", "Created"]);
             for ver in &v.versions {
-                rows.push(format!(
-                    "{:<8}  {:<18}  {}",
-                    ver.version,
+                t.row(vec![
+                    ver.version.to_string(),
+                    ui::fmt::status(version_tag(&v, ver.version)),
                     format_time(ver.created_at),
-                    version_tag(&v, ver.version)
-                ));
+                ]);
             }
-            info(&rows.join("\n"));
+            t.print();
         }
         print_state(&v);
-        outro("done");
     }
 
     /// `promote` or `restore`: both change what is served, so confirm first.
@@ -293,10 +288,8 @@ impl Ctx<'_> {
             println!("{}", serde_json::to_string_pretty(&out).unwrap());
             return;
         }
-        intro(&format!("appz redirects {action}"));
-        success(&format!("{past} redirect version {version}"));
+        success(&format!("Redirect version {version} {past}"));
         print_state(&after);
-        outro("done");
     }
 
     /// "+2 -1" summary of `version` against the live version, if both load.
@@ -314,13 +307,7 @@ impl Ctx<'_> {
     }
 
     /// Output shared by every command that stages a new version.
-    fn report_staged(
-        &self,
-        title: &str,
-        what: &str,
-        list: &RedirectList,
-        extra: serde_json::Value,
-    ) {
+    fn report_staged(&self, what: &str, list: &RedirectList, extra: serde_json::Value) {
         let state = self.op(|p, c| p.list_redirect_versions(c)).ok();
         if self.json {
             let mut out = json!({
@@ -339,19 +326,17 @@ impl Ctx<'_> {
             println!("{}", serde_json::to_string_pretty(&out).unwrap());
             return;
         }
-        intro(title);
         success(what);
         match &state {
             Some(v) => print_state(v),
             None => {
                 if let Some(n) = list.version {
                     warning(&format!(
-                        "staged v{n} (not live yet), run `appz redirects promote {n}`"
+                        "Staged v{n} (not live yet), run `appz redirects promote {n}`"
                     ));
                 }
             }
         }
-        outro("done");
     }
 }
 
@@ -368,10 +353,10 @@ fn print_state(v: &RedirectVersions) {
         .map_or("live: none".to_string(), |n| format!("live v{n}"));
     match promote_command(v) {
         Some(cmd) => warning(&format!(
-            "staged v{} (not live yet), {live}; run `{cmd}`",
+            "Staged v{} (not live yet), {live}; run `{cmd}`",
             v.staged_version.unwrap_or_default()
         )),
-        None => info(&format!("{live}; no staged changes")),
+        None => ui::hint(&format!("{}; no staged changes", capitalize_first(&live))),
     }
 }
 
@@ -383,33 +368,28 @@ fn version_tag(v: &RedirectVersions, n: u64) -> &'static str {
     }
 }
 
-fn rules_table(rules: &[RedirectRule]) -> String {
-    let w =
-        |f: fn(&RedirectRule) -> usize, min: usize| rules.iter().map(f).max().unwrap_or(0).max(min);
-    let (iw, sw, dw) = (
-        w(|r| r.id.len(), 2),
-        w(|r| r.source.len(), 6),
-        w(|r| r.destination.len(), 11),
-    );
-    let mut out = vec![format!(
-        "{:<iw$}  {:<sw$}  {:<dw$}  STATUS",
-        "ID", "SOURCE", "DESTINATION"
-    )];
-    out.extend(rules.iter().map(|r| {
-        format!(
-            "{:<iw$}  {:<sw$}  {:<dw$}  {}",
-            r.id, r.source, r.destination, r.status
-        )
-    }));
-    out.join("\n")
+fn capitalize_first(s: &str) -> String {
+    let mut c = s.chars();
+    c.next()
+        .map_or_else(String::new, |f| f.to_uppercase().chain(c).collect())
+}
+
+fn rules_table(rules: &[RedirectRule]) -> ui::Table {
+    let mut t = ui::Table::new(&["ID", "Source", "Destination", "Status"]);
+    for r in rules {
+        t.row(vec![
+            r.id.clone(),
+            r.source.clone(),
+            r.destination.clone(),
+            r.status.to_string(),
+        ]);
+    }
+    t
 }
 
 /// The API may send seconds or milliseconds.
 fn format_time(ts: i64) -> String {
-    let secs = if ts > 100_000_000_000 { ts / 1000 } else { ts };
-    chrono::DateTime::from_timestamp(secs, 0)
-        .map(|d| d.format("%Y-%m-%d %H:%M UTC").to_string())
-        .unwrap_or_else(|| ts.to_string())
+    ui::fmt::datetime(ts)
 }
 
 #[cfg(test)]

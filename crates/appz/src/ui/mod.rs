@@ -139,9 +139,16 @@ pub(crate) fn hint(msg: &str) {
     eprintln!("{}", render_hint(msg));
 }
 
-/// `> No {what} found.` plus an optional next-step hint.
+/// Set once a fetch line (`> 0 webhooks found [T]`) has reported the count,
+/// so the empty state doesn't repeat it.
+static FETCH_REPORTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// `> No {what} found.` (unless a fetch line already said so) plus an
+/// optional next-step hint.
 pub(crate) fn empty(what: &str, next: Option<&str>) {
-    eprintln!("> No {what} found.");
+    if !FETCH_REPORTED.load(std::sync::atomic::Ordering::Relaxed) {
+        eprintln!("> No {what} found.");
+    }
     if let Some(n) = next {
         hint(n);
     }
@@ -172,6 +179,7 @@ impl Fetch {
         }
         let took = fmt::duration_ms(self.started.elapsed().as_millis() as u64);
         eprintln!("> {summary} {}", err::dim(&format!("[{took}]")));
+        FETCH_REPORTED.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 }
 

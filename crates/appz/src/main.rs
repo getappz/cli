@@ -29,8 +29,7 @@ mod update;
 mod webhooks;
 
 pub(crate) use ui::{
-    error, info, intro, is_interactive_tty, is_stdout_tty, is_tty, outro, step, success, warning,
-    with_spinner,
+    error, info, intro, is_interactive_tty, is_tty, outro, step, success, warning, with_spinner,
 };
 
 // ── CLI ─────────────────────────────────────────────────────────
@@ -1001,12 +1000,6 @@ struct PreviewArgs {
 
 /// Shown once, at `appz init` — a clean, subtle header.
 /// Skipped outside a real terminal so it never lands in piped/CI output.
-fn print_brand() {
-    if is_stdout_tty() {
-        println!("\n  appz • universal toolchain & deployment\n");
-    }
-}
-
 // ── Core logic ──────────────────────────────────────────────────
 
 fn resolve_root(dir: &Path) -> PathBuf {
@@ -1030,12 +1023,12 @@ fn json_out(toolchains: &[appz_core::DetectedToolchain], status: &str) {
 
 fn do_make_claude(root: &Path) {
     if root.join("CLAUDE.md").exists() {
-        warning("CLAUDE.md exists — use `appz init --claude --force` to overwrite");
+        warning("CLAUDE.md exists; use `appz init --claude --force` to overwrite");
         return;
     }
     let report = run_doctor(root);
     let content = generate_claude_md(&report, root);
-    with_spinner("generating CLAUDE.md...", "CLAUDE.md written", || {
+    with_spinner("Generating CLAUDE.md…", "CLAUDE.md written", || {
         let _ = std::fs::write(root.join("CLAUDE.md"), content);
     });
 }
@@ -1072,7 +1065,7 @@ fn run_cmd(program: &str, args: &[&str], dir: &std::path::Path) -> bool {
 }
 
 fn do_detect_and_write(root: &Path) -> Vec<appz_core::DetectedToolchain> {
-    let toolchains = with_spinner("detecting toolchains...", "toolchains detected", || {
+    let toolchains = with_spinner("Detecting toolchains…", "Toolchains detected", || {
         let tc =
             detect_toolchains(root).unwrap_or_else(|e| error(&format!("detection failed: {e}")));
         if tc.is_empty() {
@@ -1081,7 +1074,7 @@ fn do_detect_and_write(root: &Path) -> Vec<appz_core::DetectedToolchain> {
         tc
     });
 
-    if let Err(e) = with_spinner("writing project state...", "state written", || {
+    if let Err(e) = with_spinner("Writing project state…", "Project state written", || {
         appz_core::write_state(root, &toolchains)
     }) {
         error(&format!("cannot write project state: {e}"));
@@ -1094,7 +1087,8 @@ fn do_detect_and_write(root: &Path) -> Vec<appz_core::DetectedToolchain> {
             let names: Vec<&str> = tc.frameworks.iter().map(|f| f.name).collect();
             format!(" — {}", names.join(", "))
         };
-        info(&format!(
+        // stderr (via `step`): this runs in `--json` mode too, where stdout is JSON only.
+        step(&format!(
             "{} ({} @ {}){}",
             tc.name, tc.mise_plugin, tc.version, fw
         ));
@@ -1112,7 +1106,7 @@ fn do_mise_install(root: &Path) -> bool {
         warning(&format!("mise trust: {e}"));
     }
 
-    with_spinner("installing mise tools...", "mise tools ready", || {
+    with_spinner("Installing mise tools…", "mise tools ready", || {
         run_cmd("mise", &["install"], root)
     })
 }
@@ -1208,7 +1202,6 @@ fn run_init(args: InitArgs, json: bool) {
         json_out(&toolchains, "ok");
         return;
     }
-    print_brand();
     intro("appz init");
     let resolved = init_source::resolve(&args.source, args.force).unwrap_or_else(|e| error(&e));
     let canonical = resolve_root(&resolved);
@@ -1223,7 +1216,7 @@ fn run_init(args: InitArgs, json: bool) {
     if !args.skip_pm {
         do_pm_install(&canonical, &toolchains);
     }
-    outro("project ready");
+    outro("Project ready");
 }
 
 fn run_install(args: InstallArgs, json: bool) {
@@ -1243,8 +1236,8 @@ fn run_install(args: InstallArgs, json: bool) {
     let canonical = resolve_root(&args.dir);
 
     if !args.skip_mise && appz_core::inputs_unchanged(&canonical) && args.skip_pm {
-        success("inputs unchanged, tools already up to date");
-        outro("nothing to install");
+        success("Inputs unchanged, tools already up to date");
+        outro("Nothing to install");
         return;
     }
 
@@ -1255,7 +1248,7 @@ fn run_install(args: InstallArgs, json: bool) {
     if !args.skip_pm {
         do_pm_install(&canonical, &toolchains);
     }
-    outro("dependencies ready");
+    outro("Dependencies ready");
 }
 
 fn run_build(args: BuildArgs, json: bool) {
@@ -1269,6 +1262,7 @@ fn run_build(args: BuildArgs, json: bool) {
         return;
     }
     intro("appz build");
+    let started = Instant::now();
     let canonical = resolve_root(&args.dir);
 
     // Detect + write mise.toml ([tools] + [tasks] with sources/outputs) so
@@ -1282,7 +1276,7 @@ fn run_build(args: BuildArgs, json: bool) {
 
     match args.command {
         Some(cmd) => {
-            step("building...");
+            step("Building…");
             let parts: Vec<&str> = cmd.split(' ').collect();
             let (prog, cmd_args) = parts.split_first().unwrap_or((&"npm", &[]));
             if !run_cmd(prog, cmd_args, &canonical) {
@@ -1296,8 +1290,8 @@ fn run_build(args: BuildArgs, json: bool) {
             {
                 match appz_core::static_prebuild_ready(&canonical, &toolchains) {
                     Ok(Some(())) => {
-                        success("static HTML — output already on disk (no build step)");
-                        outro("build complete");
+                        success("Static HTML: output already on disk (no build step)");
+                        outro("Build complete");
                         return;
                     }
                     Ok(None) => {}
@@ -1305,15 +1299,18 @@ fn run_build(args: BuildArgs, json: bool) {
                 }
             }
             if !toolchains.iter().any(|tc| tc.build_command.is_some()) {
-                error("no build command detected — use --command to specify one");
+                error("no build command detected; use --command to specify one");
             }
-            step("building (mise run build)...");
+            step("Building (mise run build)…");
             if !run_cmd("mise", &["run", "build"], &canonical) {
                 std::process::exit(1);
             }
         }
     }
-    outro("build complete");
+    outro(&format!(
+        "Build complete [{}]",
+        ui::fmt::duration_ms(started.elapsed().as_millis() as u64)
+    ));
 }
 
 fn run_dev(args: DevArgs, json: bool) {
@@ -1340,7 +1337,7 @@ fn run_dev(args: DevArgs, json: bool) {
                 }
             }
             if cmds.is_empty() {
-                error("no dev command detected — use --command to specify one");
+                error("no dev command detected; use --command to specify one");
             }
             cmds
         }
@@ -1351,7 +1348,7 @@ fn run_dev(args: DevArgs, json: bool) {
         .flat_map(|t| t.frameworks.iter().map(|f| f.name))
         .collect();
     let sharing = start_dev_share(&args, &canonical, &frameworks, &cmds);
-    step("starting dev server...");
+    step("Starting dev server…");
     run_dev_commands(
         &cmds,
         &canonical,
@@ -1390,9 +1387,9 @@ fn start_dev_share(
     shield.pin = args.pin.as_deref().map(share::resolve_pin);
     shield.basic_auth = args.auth.clone();
     if let Some(pin) = &shield.pin {
-        info(&format!("shield mode: PIN {pin}"));
+        ui::hint(&format!("Shield mode: PIN {pin}"));
     }
-    step(&format!("share: waiting for the dev server on port {port}"));
+    step(&format!("Share: waiting for the dev server on port {port}"));
     Some(share::DevShare::start(backend, shield, args.inspect))
 }
 
@@ -1429,14 +1426,14 @@ fn run_dev_commands(
     if !ok {
         std::process::exit(1);
     }
-    outro("dev server stopped");
+    outro("Dev server stopped");
 }
 
 fn run_preview_build(project: &std::path::Path, toolchains: &[appz_core::DetectedToolchain]) {
     if !toolchains.iter().any(|tc| tc.build_command.is_some()) {
         return;
     }
-    step("building (mise run build)...");
+    step("Building (mise run build)…");
     if !run_cmd("mise", &["run", "build"], project) {
         std::process::exit(1);
     }
@@ -1463,18 +1460,18 @@ fn run_preview(args: PreviewArgs, json: bool) {
 
     intro("appz preview");
     if !args.skip_build {
-        step("preparing production-like output...");
+        step("Preparing production-like output…");
         run_preview_build(&canonical, &toolchains);
     }
     let serve_root =
         appz_core::resolve_preview_root(&canonical, &toolchains, args.serve_dir.as_deref())
             .unwrap_or_else(|e| error(&e));
-    success(&format!("serving built output {}", serve_root.display()));
-    step("starting preview server (no hot reload)...");
+    success(&format!("Serving built output {}", serve_root.display()));
+    step("Starting preview server (no hot reload)…");
     if static_serve::run_preview_server(&serve_root, args.port, args.spa).is_err() {
         std::process::exit(1);
     }
-    outro("preview server stopped");
+    outro("Preview server stopped");
 }
 
 fn run_share(args: share::ShareArgs, json: bool) {
@@ -1508,7 +1505,7 @@ fn run_share(args: share::ShareArgs, json: bool) {
             let port = share::parse_target_port(Some(raw)).unwrap_or_else(|e| error(&e));
             if !appz_core::is_port_listening(port, 200) {
                 warning(&format!(
-                    "nothing is listening on port {port} yet; visitors get a 502 until it is"
+                    "Nothing is listening on port {port} yet; visitors get a 502 until it is"
                 ));
             }
             port
@@ -1555,7 +1552,7 @@ fn run_share(args: share::ShareArgs, json: bool) {
                     false,
                 );
             }
-            step(&format!("detected dev server on port {port}"));
+            step(&format!("Detected dev server on port {port}"));
             port
         }
     };
@@ -1578,8 +1575,14 @@ macro_rules! lifecycle_fn {
             }
 
             intro(concat!("appz ", $label));
-
-            let canonical = resolve_root(&args.dir);
+            let started = Instant::now();
+            let done = || {
+                outro(&format!(
+                    "{} complete [{}]",
+                    capitalize($label),
+                    ui::fmt::duration_ms(started.elapsed().as_millis() as u64)
+                ))
+            };
 
             // Cache hit
             if !args.command.is_some()
@@ -1593,7 +1596,7 @@ macro_rules! lifecycle_fn {
                         .filter_map(|t| t.$field.clone())
                         .collect();
                     if !cmds.is_empty() {
-                        success("inputs unchanged — running cached command");
+                        success("Inputs unchanged; running cached command");
                         for cmd in &cmds {
                             let parts: Vec<&str> = cmd.split(' ').collect();
                             let (prog, args) = parts.split_first().unwrap_or((&"npm", &[]));
@@ -1601,7 +1604,7 @@ macro_rules! lifecycle_fn {
                                 std::process::exit(1);
                             }
                         }
-                        outro(concat!($label, " complete"));
+                        done();
                         return;
                     }
                 }
@@ -1627,7 +1630,7 @@ macro_rules! lifecycle_fn {
                     }
                     if cmds.is_empty() {
                         error(&format!(
-                            "no {} command detected — use --command to specify one",
+                            "no {} command detected; use --command to specify one",
                             $label
                         ));
                     }
@@ -1635,7 +1638,7 @@ macro_rules! lifecycle_fn {
                 }
             };
 
-            step(concat!("running ", $label, "..."));
+            step(&format!("Running {}…", $label));
             for cmd in &cmds {
                 let parts: Vec<&str> = cmd.split(' ').collect();
                 let (prog, args) = parts.split_first().unwrap_or((&"npm", &[]));
@@ -1643,9 +1646,15 @@ macro_rules! lifecycle_fn {
                     std::process::exit(1);
                 }
             }
-            outro(concat!($label, " complete"));
+            done();
         }
     };
+}
+
+fn capitalize(s: &str) -> String {
+    let mut c = s.chars();
+    c.next()
+        .map_or_else(String::new, |f| f.to_uppercase().chain(c).collect())
 }
 
 lifecycle_fn!(run_test, TestArgs, test_command, "test");
@@ -1661,59 +1670,42 @@ fn run_doctor_cmd(args: DoctorArgs, json: bool) {
         return;
     }
 
-    intro("appz doctor");
-
-    // cliclack's log::info/step each end their own block with a trailing
-    // blank line — one call per field (the old shape) meant one blank line
-    // per field. Batching a section into a single multi-line call keeps one
-    // bullet + continuation bars for the whole section, with only one
-    // trailing blank at the end of it.
-    step("toolchains");
-    let toolchain_lines: Vec<String> = report
-        .toolchains
-        .iter()
-        .map(|tc| {
-            let fw: Vec<&str> = tc.frameworks.iter().map(|f| f.name).collect();
-            let fw_str = if fw.is_empty() {
-                String::new()
-            } else {
-                format!(" [{}]", fw.join(", "))
-            };
-            let ver = if tc.version.is_empty() {
-                String::new()
-            } else {
-                format!(" @{}", tc.version)
-            };
-            let build = tc.build_command.as_deref().unwrap_or("-");
-            let dev = tc.dev_command.as_deref().unwrap_or("-");
-            format!(
-                "{}: {}{}{}  build: {}  dev: {}",
-                tc.name, tc.slug, ver, fw_str, build, dev
-            )
-        })
-        .collect();
-    info(&if toolchain_lines.is_empty() {
-        "(none detected)".to_string()
+    ui::heading("Toolchains");
+    if report.toolchains.is_empty() {
+        println!("  {}", ui::theme::out::dim("none detected"));
     } else {
-        toolchain_lines.join("\n")
-    });
+        let mut t = ui::Table::new(&["Toolchain", "Version", "Frameworks", "Build", "Dev"]);
+        for tc in &report.toolchains {
+            let fw: Vec<&str> = tc.frameworks.iter().map(|f| f.name).collect();
+            t.row(vec![
+                tc.name.to_string(),
+                format!("{} {}", tc.slug, tc.version).trim().to_string(),
+                fw.join(", "),
+                tc.build_command.clone().unwrap_or_default(),
+                tc.dev_command.clone().unwrap_or_default(),
+            ]);
+        }
+        t.print();
+    }
 
-    step("environment");
-    let mut env_lines = vec![match &report.package_manager {
-        Some(pm) => format!("package manager: {pm}"),
-        None => "package manager: (none detected)".to_string(),
-    }];
+    ui::heading("Environment");
+    let mut env = vec![(
+        "Package manager",
+        report
+            .package_manager
+            .clone()
+            .unwrap_or_else(|| "none detected".into()),
+    )];
     if let Some(ref mgr) = report.monorepo.manager {
-        env_lines.push(format!(
-            "monorepo: {} ({} paths)",
-            mgr,
-            report.monorepo.package_paths.len()
+        env.push((
+            "Monorepo",
+            format!("{mgr} ({} paths)", report.monorepo.package_paths.len()),
         ));
     }
-    info(&env_lines.join("\n"));
+    ui::print_kv(&env);
 
-    step("config");
-    let config_line = [
+    ui::heading("Config");
+    let checks = [
         ("appz.jsonc", report.has_appz_jsonc),
         ("CLAUDE.md", report.has_claude_md),
         ("AGENTS.md", report.has_agents_md),
@@ -1721,22 +1713,24 @@ fn run_doctor_cmd(args: DoctorArgs, json: bool) {
         ("state (JSONL)", report.has_state),
     ]
     .iter()
-    .map(|(label, exists)| format!("{} {label}", if *exists { "✓" } else { "✗" }))
+    .map(|(label, exists)| {
+        let mark = if *exists {
+            ui::theme::out::green("✓")
+        } else {
+            ui::theme::out::red("✗")
+        };
+        format!("{mark} {label}")
+    })
     .collect::<Vec<_>>()
     .join("   ");
-    info(&config_line);
+    println!("  {checks}");
 
     if !report.suggestions.is_empty() {
-        step("suggestions");
-        let suggestion_lines: Vec<String> = report
-            .suggestions
-            .iter()
-            .map(|s| format!("→ {s}"))
-            .collect();
-        info(&suggestion_lines.join("\n"));
+        ui::heading("Suggestions");
+        for s in &report.suggestions {
+            println!("  {} {s}", ui::theme::out::cyan("→"));
+        }
     }
-
-    outro("diagnosis complete");
 }
 
 fn run_clean(args: CleanArgs, json: bool) {
@@ -1748,28 +1742,22 @@ fn run_clean(args: CleanArgs, json: bool) {
             println!("{}", serde_json::to_string_pretty(&targets).unwrap());
             return;
         }
-        intro("appz clean");
         if targets.is_empty() {
-            success("nothing to clean");
-            outro("done");
+            success("Nothing to clean");
             return;
         }
-        step("would remove");
-        let lines: Vec<String> = targets
-            .iter()
-            .map(|t| {
-                format!(
-                    "{:>8}  {}  ({})",
-                    appz_core::format_size(t.size_bytes),
-                    t.path.display(),
-                    t.toolchain
-                )
-            })
-            .collect();
-        info(&lines.join("\n"));
+        let mut t = ui::Table::new(&["Size", "Toolchain", "Path"]);
+        for x in &targets {
+            t.row(vec![
+                appz_core::format_size(x.size_bytes),
+                x.toolchain.to_string(),
+                x.path.display().to_string(),
+            ]);
+        }
+        t.print();
         let total: u64 = targets.iter().map(|t| t.size_bytes).sum();
-        outro(&format!(
-            "{} to free — re-run with --force to delete",
+        ui::hint(&format!(
+            "{} to free; re-run with --force to delete",
             appz_core::format_size(total)
         ));
         return;
@@ -1785,25 +1773,23 @@ fn run_clean(args: CleanArgs, json: bool) {
         return;
     }
 
-    intro("appz clean");
     if report.deleted.is_empty() && report.failed.is_empty() {
-        success("nothing to clean");
-        outro("done");
+        success("Nothing to clean");
         return;
     }
     for t in &report.deleted {
         success(&format!(
-            "removed {} ({})",
+            "Removed {} ({})",
             t.path.display(),
             appz_core::format_size(t.size_bytes)
         ));
     }
     for (path, err) in &report.failed {
-        warning(&format!("failed to remove {}: {err}", path.display()));
+        warning(&format!("Failed to remove {}: {err}", path.display()));
     }
     if report.failed.is_empty() {
-        outro(&format!(
-            "freed {}",
+        success(&format!(
+            "Freed {}",
             appz_core::format_size(report.freed_bytes)
         ));
     } else {
@@ -1876,7 +1862,7 @@ fn main() {
 fn run_toolchain(args: ToolchainArgs) {
     match args.command {
         ToolchainCmd::Refresh => match appz_core::refresh_registry_cache() {
-            Ok(count) => success(&format!("toolchain registry refreshed ({count} entries)")),
+            Ok(count) => success(&format!("Toolchain registry refreshed ({count} entries)")),
             Err(e) => error(&format!("refresh failed: {e}")),
         },
     }
@@ -2064,10 +2050,9 @@ fn run_vault_cmd(cmd: VaultCmd, json: bool) {
                     let names: Vec<_> = rows.into_iter().map(|r| r.name).collect();
                     println!("{}", serde_json::to_string(&names).unwrap());
                 }
-                Ok(rows) if rows.is_empty() => ui::empty(
-                    "secrets",
-                    Some("Run `appz env set <NAME>` to store one"),
-                ),
+                Ok(rows) if rows.is_empty() => {
+                    ui::empty("secrets", Some("Run `appz env set <NAME>` to store one"))
+                }
                 Ok(rows) => {
                     let mut t = ui::Table::new(&["Name", "Expires", "Status"]);
                     for r in &rows {

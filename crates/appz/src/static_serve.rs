@@ -33,12 +33,19 @@ pub fn run_static_server(
     };
 
     if port != preferred_port {
-        eprintln!("Port {preferred_port} in use, serving on http://127.0.0.1:{port}");
+        crate::warning(&format!(
+            "Port {preferred_port} in use, serving on http://127.0.0.1:{port}"
+        ));
     } else {
-        eprintln!("Serving http://127.0.0.1:{port} from {}", root.display());
+        crate::success(&format!(
+            "Serving http://127.0.0.1:{port} from {}",
+            root.display()
+        ));
     }
     if hot_reload {
-        eprintln!("Hot reload: connect to ws://127.0.0.1:{port}/__hot_reload");
+        crate::ui::hint(&format!(
+            "Hot reload: connect to ws://127.0.0.1:{port}/__hot_reload"
+        ));
     }
 
     appz_serve::run_blocking(config).map_err(|e| e.to_string())?;

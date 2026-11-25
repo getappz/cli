@@ -22,6 +22,7 @@ mod share;
 mod shield;
 mod skills;
 mod static_serve;
+mod teams;
 mod ui;
 mod update;
 mod webhooks;
@@ -42,6 +43,9 @@ struct AppzCli {
     /// secrets, starting the dev server)
     #[arg(short = 'y', long, global = true)]
     yes: bool,
+    /// Team slug or id to act as (default: the `appz switch` choice, then the account's active team)
+    #[arg(short = 'S', long, global = true, value_name = "TEAM")]
+    scope: Option<String>,
     #[command(subcommand)]
     command: AppzCmd,
 }
@@ -119,6 +123,11 @@ enum AppzCmd {
     /// Manage projects on the edge hosting platform
     #[command(alias = "project")]
     Projects(ProjectsArgs),
+    /// Manage teams: list, create, switch, invite, members
+    #[command(alias = "team")]
+    Teams(teams::TeamsArgs),
+    /// Switch the active team (same as `teams switch`)
+    Switch(teams::SwitchArgs),
     /// Inspect, accept or cancel project transfers between organizations
     Transfers(TransfersArgs),
     /// Log in to Appz via browser device flow
@@ -1797,6 +1806,7 @@ fn main() {
     let json = cli.json;
     ui::init(json);
     ASSUME_YES.store(cli.yes, std::sync::atomic::Ordering::Relaxed);
+    appz_deploy::team::set_scope(cli.scope);
     match cli.command {
         AppzCmd::Init(a) => run_init(a, json),
         AppzCmd::Install(a) => run_install(a, json),
@@ -1837,6 +1847,8 @@ fn main() {
         AppzCmd::Domains(a) => run_domains(a, json),
         AppzCmd::Webhooks(a) => webhooks::run(a, json),
         AppzCmd::Redirects(a) => redirects::run(a, json),
+        AppzCmd::Teams(a) => teams::run(a, json),
+        AppzCmd::Switch(a) => teams::switch(a, json),
         AppzCmd::Projects(a) => run_projects(a, json),
         AppzCmd::Transfers(a) => run_transfers(a, json),
         AppzCmd::Login(a) => run_login(a, json),

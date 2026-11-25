@@ -176,7 +176,11 @@ pub fn resolve_auth_token(ctx: Option<&DeployContext>) -> Option<String> {
             ctx.and_then(|c| c.run_env.get("APPZ_TOKEN").cloned())
                 .filter(|t| !t.is_empty())
         })
-        .or_else(|| load_stored_auth().map(|a| a.token))
+        .or_else(|| {
+            load_stored_auth()
+                .map(|a| a.token)
+                .filter(|t| !t.is_empty())
+        })
 }
 
 /// POST the promote request, retrying transport/5xx failures with one
@@ -193,7 +197,7 @@ fn post_promote(
     let mut attempt = 0;
     loop {
         attempt += 1;
-        let mut req = ureq::post(url).set("Idempotency-Key", &key);
+        let mut req = crate::team::post(url).set("Idempotency-Key", &key);
         if let Some(token) = token {
             req = req.set("Authorization", &format!("Bearer {token}"));
         }
@@ -305,7 +309,7 @@ pub struct DeviceCodeResponse {
 
 pub fn request_device_code(api_base: &str) -> DeployResult<DeviceCodeResponse> {
     let url = format!("{api_base}/api/auth/device/code");
-    let resp: serde_json::Value = ureq::post(&url)
+    let resp: serde_json::Value = crate::team::post(&url)
         .send_json(serde_json::json!({ "client_id": "appz-cli" }))
         .map_err(|e| parse_api_error(e, "AppzDev", "Request device code"))?
         .into_json()
@@ -336,7 +340,7 @@ pub enum DevicePollResult {
 
 pub fn poll_device_token(api_base: &str, device_code: &str) -> DevicePollResult {
     let url = format!("{api_base}/api/auth/device/token");
-    let res = ureq::post(&url).send_json(serde_json::json!({
+    let res = crate::team::post(&url).send_json(serde_json::json!({
         "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
         "device_code": device_code,
         "client_id": "appz-cli",
@@ -582,7 +586,7 @@ fn get_env_array<T: serde::de::DeserializeOwned>(
     token: Option<&str>,
     operation: &str,
 ) -> DeployResult<Vec<T>> {
-    let mut req = ureq::get(url);
+    let mut req = crate::team::get(url);
     if let Some(tok) = token {
         req = req.set("Authorization", &format!("Bearer {tok}"));
     }
@@ -647,7 +651,7 @@ pub fn add_project_environment(
         });
     }
     let url = project_env_url(api_base, project_id, "/environments", None);
-    let mut req = ureq::post(&url);
+    let mut req = crate::team::post(&url);
     if let Some(tok) = token {
         req = req.set("Authorization", &format!("Bearer {tok}"));
     }
@@ -673,7 +677,7 @@ pub fn remove_project_environment(
         });
     }
     let url = project_env_url(api_base, project_id, &format!("/environments/{slug}"), None);
-    let mut req = ureq::delete(&url);
+    let mut req = crate::team::delete(&url);
     if let Some(tok) = token {
         req = req.set("Authorization", &format!("Bearer {tok}"));
     }
@@ -711,7 +715,7 @@ pub fn push_cloud_env(
     vars: &[CloudEnvVar],
 ) -> DeployResult<usize> {
     let url = format!("{api_base}/v0/projects/{project_id}/env");
-    let mut req = ureq::post(&url);
+    let mut req = crate::team::post(&url);
     if let Some(tok) = token {
         req = req.set("Authorization", &format!("Bearer {tok}"));
     }
@@ -751,7 +755,7 @@ pub fn delete_cloud_env_var(
     use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
     let key = utf8_percent_encode(key, NON_ALPHANUMERIC);
     let url = project_env_url(api_base, project_id, &format!("/env/{key}"), None);
-    let mut req = ureq::delete(&url);
+    let mut req = crate::team::delete(&url);
     if let Some(tok) = token {
         req = req.set("Authorization", &format!("Bearer {tok}"));
     }
@@ -795,7 +799,7 @@ pub fn add_project_domain(
     let domain = normalize_domain(domain)?;
     let domain = domain.as_str();
     let url = format!("{api_base}/v0/projects/{project_id}/domains");
-    let mut req = ureq::post(&url);
+    let mut req = crate::team::post(&url);
     if let Some(tok) = token {
         req = req.set("Authorization", &format!("Bearer {tok}"));
     }
@@ -820,7 +824,7 @@ pub fn list_project_domains(
     token: Option<&str>,
 ) -> DeployResult<Vec<ProjectDomain>> {
     let url = format!("{api_base}/v0/projects/{project_id}/domains");
-    let mut req = ureq::get(&url);
+    let mut req = crate::team::get(&url);
     if let Some(tok) = token {
         req = req.set("Authorization", &format!("Bearer {tok}"));
     }
@@ -858,7 +862,7 @@ fn get_page<T: serde::de::DeserializeOwned>(
     params: &[(&str, String)],
     operation: &str,
 ) -> DeployResult<Page<T>> {
-    let mut req = ureq::get(&format!("{api_base}{path}"));
+    let mut req = crate::team::get(&format!("{api_base}{path}"));
     for (k, v) in params {
         req = req.query(k, v);
     }
@@ -938,7 +942,7 @@ pub fn list_activity(
     limit: Option<u32>,
     cursor: Option<&str>,
 ) -> DeployResult<ActivityPage> {
-    let mut req = ureq::get(&format!("{api_base}/v0/activity"));
+    let mut req = crate::team::get(&format!("{api_base}/v0/activity"));
     if let Some(l) = limit {
         req = req.query("limit", &l.to_string());
     }
@@ -971,7 +975,7 @@ pub fn get_usage_report(api_base: &str, token: Option<&str>) -> DeployResult<Usa
         token: Option<&str>,
         operation: &str,
     ) -> DeployResult<T> {
-        let mut req = ureq::get(&format!("{api_base}{path}"));
+        let mut req = crate::team::get(&format!("{api_base}{path}"));
         if let Some(tok) = token {
             req = req.set("Authorization", &format!("Bearer {tok}"));
         }
@@ -1073,7 +1077,7 @@ pub fn move_project_domain(
         if attempt > 0 {
             std::thread::sleep(Duration::from_millis(if cfg!(test) { 10 } else { 1500 }));
         }
-        let mut req = ureq::post(&url).set("Idempotency-Key", &key);
+        let mut req = crate::team::post(&url).set("Idempotency-Key", &key);
         if let Some(tok) = token {
             req = req.set("Authorization", &format!("Bearer {tok}"));
         }
@@ -1113,7 +1117,7 @@ pub fn verify_project_domain(
     let domain = normalize_domain(domain)?;
     let domain = domain.as_str();
     let url = format!("{api_base}/v0/projects/{project_id}/domains/{domain}/verify");
-    let mut req = ureq::post(&url);
+    let mut req = crate::team::post(&url);
     if let Some(tok) = token {
         req = req.set("Authorization", &format!("Bearer {tok}"));
     }
@@ -1141,7 +1145,7 @@ pub fn remove_project_domain(
     let domain = normalize_domain(domain)?;
     let domain = domain.as_str();
     let url = format!("{api_base}/v0/projects/{project_id}/domains/{domain}");
-    let mut req = ureq::delete(&url);
+    let mut req = crate::team::delete(&url);
     if let Some(tok) = token {
         req = req.set("Authorization", &format!("Bearer {tok}"));
     }
@@ -1183,7 +1187,7 @@ pub fn list_project_redirects(
     token: Option<&str>,
     version: Option<u64>,
 ) -> DeployResult<RedirectList> {
-    let mut req = ureq::get(&redirects_url(api_base, project, "")?);
+    let mut req = crate::team::get(&redirects_url(api_base, project, "")?);
     if let Some(v) = version {
         req = req.query("version", &v.to_string());
     }
@@ -1196,7 +1200,7 @@ pub fn add_project_redirect(
     token: Option<&str>,
     rule: &RedirectInput,
 ) -> DeployResult<RedirectList> {
-    let req = ureq::post(&redirects_url(api_base, project, "")?);
+    let req = crate::team::post(&redirects_url(api_base, project, "")?);
     redirect_call(req, token, Some(serde_json::json!(rule)), "Add redirect")
 }
 
@@ -1216,7 +1220,7 @@ pub fn remove_project_redirect(
             reason: "Expected a redirect ID".into(),
         });
     }
-    let req = ureq::delete(&redirects_url(api_base, project, &format!("/{id}"))?);
+    let req = crate::team::delete(&redirects_url(api_base, project, &format!("/{id}"))?);
     redirect_call(req, token, None, "Remove redirect")
 }
 
@@ -1226,7 +1230,7 @@ pub fn import_project_redirects(
     token: Option<&str>,
     rules: &[RedirectInput],
 ) -> DeployResult<RedirectList> {
-    let req = ureq::post(&redirects_url(api_base, project, "/import")?);
+    let req = crate::team::post(&redirects_url(api_base, project, "/import")?);
     redirect_call(
         req,
         token,
@@ -1240,7 +1244,7 @@ pub fn list_project_redirect_versions(
     project: &str,
     token: Option<&str>,
 ) -> DeployResult<RedirectVersions> {
-    let req = ureq::get(&redirects_url(api_base, project, "/versions")?);
+    let req = crate::team::get(&redirects_url(api_base, project, "/versions")?);
     redirect_call(req, token, None, "List redirect versions")
 }
 
@@ -1256,7 +1260,7 @@ pub fn update_project_redirect_version(
     } else {
         ("promote", "Promote redirect version")
     };
-    let req = ureq::post(&redirects_url(
+    let req = crate::team::post(&redirects_url(
         api_base,
         project,
         &format!("/versions/{version}/{action}"),
@@ -1270,7 +1274,7 @@ pub fn list_project_aliases(
     token: Option<&str>,
 ) -> DeployResult<Vec<crate::AliasInfo>> {
     validate_project_ref(project_id)?;
-    let mut req = ureq::get(&format!("{api_base}/v0/projects/{project_id}/aliases"));
+    let mut req = crate::team::get(&format!("{api_base}/v0/projects/{project_id}/aliases"));
     if let Some(tok) = token {
         req = req.set("Authorization", &format!("Bearer {tok}"));
     }
@@ -1291,7 +1295,7 @@ pub fn remove_project_alias(
 ) -> DeployResult<()> {
     validate_project_ref(project_id)?;
     let host = normalize_domain(host)?;
-    let mut req = ureq::delete(&format!(
+    let mut req = crate::team::delete(&format!(
         "{api_base}/v0/projects/{project_id}/aliases/{host}"
     ));
     if let Some(tok) = token {
@@ -1317,7 +1321,7 @@ pub fn remove_project_alias(
 
 pub fn list_projects(api_base: &str, token: Option<&str>) -> DeployResult<Vec<ProjectInfo>> {
     let url = format!("{api_base}/v0/projects");
-    let mut req = ureq::get(&url);
+    let mut req = crate::team::get(&url);
     if let Some(tok) = token {
         req = req.set("Authorization", &format!("Bearer {tok}"));
     }
@@ -1350,7 +1354,7 @@ pub fn list_projects(api_base: &str, token: Option<&str>) -> DeployResult<Vec<Pr
 pub fn add_project(api_base: &str, token: Option<&str>, name: &str) -> DeployResult<ProjectInfo> {
     let url = format!("{api_base}/v0/projects");
     let slug = slugify_project_id(name);
-    let mut req = ureq::post(&url);
+    let mut req = crate::team::post(&url);
     if let Some(tok) = token {
         req = req.set("Authorization", &format!("Bearer {tok}"));
     }
@@ -1410,7 +1414,7 @@ pub fn remove_deployment(
     id_or_url: &str,
 ) -> DeployResult<String> {
     let id = deployment_id_from_ref(id_or_url)?;
-    let mut req = ureq::delete(&format!("{api_base}/v0/deployments/{id}"));
+    let mut req = crate::team::delete(&format!("{api_base}/v0/deployments/{id}"));
     if let Some(tok) = token {
         req = req.set("Authorization", &format!("Bearer {tok}"));
     }
@@ -1450,7 +1454,7 @@ fn validate_project_ref(id_or_slug: &str) -> DeployResult<()> {
 pub fn remove_project(api_base: &str, token: Option<&str>, id_or_slug: &str) -> DeployResult<bool> {
     validate_project_ref(id_or_slug)?;
     let url = format!("{api_base}/v0/projects/{id_or_slug}");
-    let mut req = ureq::delete(&url);
+    let mut req = crate::team::delete(&url);
     if let Some(tok) = token {
         req = req.set("Authorization", &format!("Bearer {tok}"));
     }
@@ -1467,7 +1471,7 @@ pub fn get_project(
     id_or_slug: &str,
 ) -> DeployResult<ProjectInfo> {
     let url = format!("{api_base}/v0/projects/{id_or_slug}");
-    let mut req = ureq::get(&url);
+    let mut req = crate::team::get(&url);
     if let Some(tok) = token {
         req = req.set("Authorization", &format!("Bearer {tok}"));
     }
@@ -1506,7 +1510,7 @@ pub fn rename_project(
         });
     }
     let url = format!("{api_base}/v0/projects/{id_or_slug}");
-    let mut req = ureq::patch(&url);
+    let mut req = crate::team::patch(&url);
     if let Some(tok) = token {
         req = req.set("Authorization", &format!("Bearer {tok}"));
     }
@@ -1618,7 +1622,7 @@ impl AppzdevProvider {
 
         // Step 1: POST /v0/deployments - Handshake & missing blob diff
         let create_url = format!("{}/v0/deployments", api_base);
-        let mut req = ureq::post(&create_url).set("User-Agent", DEPLOY_USER_AGENT);
+        let mut req = crate::team::post(&create_url).set("User-Agent", DEPLOY_USER_AGENT);
         if let Some(token) = &token_opt {
             req = req.set("Authorization", &format!("Bearer {token}"));
         }
@@ -1715,6 +1719,7 @@ impl AppzdevProvider {
             let next_idx = AtomicUsize::new(0);
             let upload_error = Mutex::new(None::<String>);
             let agent = ureq::builder()
+                .middleware(crate::team::middleware)
                 .user_agent(DEPLOY_USER_AGENT)
                 .timeout_read(Duration::from_secs(30))
                 .timeout_write(Duration::from_secs(30))
@@ -1853,7 +1858,8 @@ impl AppzdevProvider {
         let final_url = if !missing.is_empty() || inline_publish_failed {
             interrupt::check_interrupted();
             let commit_url = format!("{}/v0/deployments/{}/commit", api_base, deployment_id);
-            let mut commit_req = ureq::post(&commit_url).set("User-Agent", DEPLOY_USER_AGENT);
+            let mut commit_req =
+                crate::team::post(&commit_url).set("User-Agent", DEPLOY_USER_AGENT);
             if let Some(token) = &token_opt {
                 commit_req = commit_req.set("Authorization", &format!("Bearer {token}"));
             }
@@ -2046,7 +2052,7 @@ impl DeployProvider for AppzdevProvider {
         let rollback_url = format!("{}/v0/projects/{}/rollback", api_base, project_id);
         let token_opt = resolve_auth_token(Some(ctx));
 
-        let mut req = ureq::post(&rollback_url);
+        let mut req = crate::team::post(&rollback_url);
         if let Some(token) = &token_opt {
             req = req.set("Authorization", &format!("Bearer {token}"));
         }
@@ -2085,7 +2091,7 @@ impl DeployProvider for AppzdevProvider {
         let alias_url = format!("{}/v0/projects/{}/alias", api_base, project_id);
         let token_opt = resolve_auth_token(Some(ctx));
 
-        let mut req = ureq::post(&alias_url);
+        let mut req = crate::team::post(&alias_url);
         if let Some(token) = &token_opt {
             req = req.set("Authorization", &format!("Bearer {token}"));
         }
@@ -2121,7 +2127,7 @@ impl DeployProvider for AppzdevProvider {
         let list_url = format!("{}/v0/projects/{}/deployments", api_base, project_id);
         let token_opt = resolve_auth_token(Some(ctx));
 
-        let mut req = ureq::get(&list_url);
+        let mut req = crate::team::get(&list_url);
         if let Some(token) = &token_opt {
             req = req.set("Authorization", &format!("Bearer {token}"));
         }
@@ -2245,7 +2251,7 @@ impl DeployProvider for AppzdevProvider {
         let inspect_url = format!("{}/v0/deployments/{}", api_base, dpl_id);
         let token_opt = resolve_auth_token(Some(ctx));
 
-        let mut req = ureq::get(&inspect_url);
+        let mut req = crate::team::get(&inspect_url);
         if let Some(token) = &token_opt {
             req = req.set("Authorization", &format!("Bearer {token}"));
         }
@@ -2509,7 +2515,7 @@ impl DeployProvider for AppzdevProvider {
     fn restore_project(&self, ctx: &DeployContext, id_or_slug: &str) -> DeployResult<ProjectInfo> {
         let base = self.api_base(ctx);
         validate_project_ref(id_or_slug)?;
-        let mut req = ureq::post(&format!("{base}/v0/projects/{id_or_slug}/restore"));
+        let mut req = crate::team::post(&format!("{base}/v0/projects/{id_or_slug}/restore"));
         if let Some(token) = resolve_auth_token(Some(ctx)) {
             req = req.set("Authorization", &format!("Bearer {token}"));
         }

@@ -8,6 +8,7 @@ mod provider;
 mod providers;
 pub mod redirects;
 pub mod static_cas;
+pub mod team;
 pub mod tunnel;
 pub mod webhooks;
 

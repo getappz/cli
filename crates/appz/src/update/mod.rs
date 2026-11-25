@@ -32,11 +32,9 @@ pub fn run(version: Option<String>, check_only: bool, quiet: bool) {
             Err(e) => crate::error(&format!("error downloading: {e}")),
         }
     } else {
-        match crate::with_spinner(
-            &format!("downloading {asset}..."),
-            "download complete",
-            || github::download_asset(&target_version, &asset),
-        ) {
+        match crate::with_spinner(&format!("Downloading {asset}"), "Downloaded", || {
+            github::download_asset(&target_version, &asset)
+        }) {
             Ok(d) => d,
             Err(e) => crate::error(&format!("error downloading: {e}")),
         }
@@ -53,8 +51,8 @@ pub fn run(version: Option<String>, check_only: bool, quiet: bool) {
         }
     } else {
         match crate::with_spinner(
-            "verifying checksum...",
-            "checksum verified",
+            "Verifying checksum",
+            "Checksum verified",
             || -> Result<(), String> {
                 let expected = github::expected_checksum(&target_version, &asset)?;
                 github::verify_checksum(&data, &expected)
@@ -76,16 +74,16 @@ pub fn run(version: Option<String>, check_only: bool, quiet: bool) {
     };
 
     if !quiet {
-        crate::step(&format!("replacing {}...", current.display()));
+        crate::step(&format!("Replacing {}", current.display()));
     }
     if let Err(e) = swap::replace_binary(&new_binary, &current) {
         crate::error(&format!("error replacing binary: {e}"));
     }
 
     if !quiet {
-        crate::success(&format!("updated to {target_version}"));
+        crate::success(&format!("Updated to {target_version}"));
         report_other_instances();
-        crate::outro("update complete");
+        crate::outro("Update complete");
     }
 }
 
@@ -104,7 +102,7 @@ fn resolve_target_version(
                 format!("v{v}")
             };
             if !quiet && !check_only {
-                crate::step(&format!("updating to {v}..."));
+                crate::step(&format!("Updating to {v}"));
             }
             Some(v)
         }
@@ -121,7 +119,7 @@ fn resolve_target_version(
                             env!("CARGO_PKG_VERSION")
                         ));
                         if check_only {
-                            crate::outro("nothing to update");
+                            crate::outro("Nothing to update");
                         }
                     }
                     return None;
@@ -132,15 +130,15 @@ fn resolve_target_version(
                 if !quiet {
                     crate::intro("appz update --check");
                     crate::info(&format!(
-                        "new version available: {latest} (current: v{})",
+                        "New version available: {latest} (current: v{})",
                         env!("CARGO_PKG_VERSION")
                     ));
-                    crate::outro("run `appz update` to upgrade");
+                    crate::outro("Run `appz update` to upgrade");
                 }
                 return None;
             }
             if !quiet {
-                crate::step(&format!("latest version: {latest}"));
+                crate::step(&format!("Latest version: {latest}"));
             }
             Some(latest)
         }
@@ -190,9 +188,9 @@ fn report_other_instances() {
             .collect::<Vec<_>>()
             .join(", ");
         crate::warning(&format!(
-            "{} other appz process(es) still running the old binary (pid {list}); \
+            "{} still running the old binary (pid {list}); \
              restart them to pick up this update",
-            others.len()
+            crate::ui::fmt::plural(others.len(), "other appz process")
         ));
     }
 }

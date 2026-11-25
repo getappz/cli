@@ -571,21 +571,24 @@ pub fn run_session(args: &ShareArgs, dir: &Path, port: u16, ttl: Duration) {
         (None, None) => "none (anyone with the URL can open it)".to_string(),
     };
 
-    let mut session = crate::with_spinner("opening tunnel...", "tunnel started", || {
+    let mut session = crate::with_spinner("Opening tunnel", "Tunnel started", || {
         open(&backend, shield)
     })
     .unwrap_or_else(|e| crate::error(&e));
     let url = session.public_url.clone();
-    crate::info(&format!(
-        "local:    http://localhost:{port}\npublic:   {url}\nsecurity: {security}\nttl:      {}\nvia:      {}",
-        args.ttl, session.provider
-    ));
+    crate::ui::print_kv(&[
+        ("Local", format!("http://localhost:{port}")),
+        ("Public URL", url.clone()),
+        ("Security", security.clone()),
+        ("TTL", args.ttl.to_string()),
+        ("Via", session.provider.to_string()),
+    ]);
 
     // Ctrl+C has to end the loop, not the process, so the tunnel is closed.
     let _ = ctrlc::set_handler(|| INTERRUPTED.store(true, Ordering::SeqCst));
     let keys = crate::is_tty().then(spawn_key_reader);
     if keys.is_none() {
-        crate::info("press Ctrl+C to stop");
+        crate::ui::hint("Press Ctrl+C to stop");
     }
     let mut shortcuts = vec![('c', "copy url"), ('p', "deploy"), ('q', "stop")];
     if args.inspect {
@@ -673,11 +676,11 @@ pub fn run_session(args: &ShareArgs, dir: &Path, port: u16, ttl: Duration) {
     screen.close();
     drop(session);
     match end {
-        End::Quit => crate::outro("share session closed"),
-        End::Expired => crate::outro(&format!("share session expired after {}", args.ttl)),
+        End::Quit => crate::outro("Share session closed"),
+        End::Expired => crate::outro(&format!("Share session expired after {}", args.ttl)),
         End::TunnelClosed => crate::error("the tunnel process exited; run `appz share` again"),
         End::Promote => {
-            crate::outro("share closed, deploying");
+            crate::outro("Share closed, deploying");
             let status = std::env::current_exe()
                 .and_then(|exe| Command::new(exe).arg("deploy").arg(dir).status());
             match status {
@@ -724,13 +727,13 @@ impl DevShare {
                     // Checked under the lock: after `stop` nobody would close it.
                     if !stop.load(Ordering::SeqCst) {
                         crate::success(&format!(
-                            "sharing http://localhost:{port} at {} (via {})",
+                            "Sharing http://localhost:{port} at {} (via {})",
                             s.public_url, s.provider
                         ));
                         *slot = Some(s);
                     }
                 }
-                Err(e) => crate::warning(&format!("share: {e}")),
+                Err(e) => crate::warning(&format!("Share: {e}")),
             }
             // Ends when the gateway (which holds the sender) is closed.
             for r in requests.into_iter().flatten() {

@@ -178,7 +178,10 @@ pub(super) fn apply(root: &Path, prepared: &Path, m: &Manifest, before: &Head) -
         include_str!("recovery.txt"),
     )?;
     let path = recovery.keep();
-    eprintln!("In-place restore recovery directory: {}", path.display());
+    crate::ui::hint(&format!(
+        "In-place restore recovery directory: {}",
+        path.display()
+    ));
     let publish = || -> Result<()> {
         for rel in &moved {
             ensure_parents(&saved, rel)?;

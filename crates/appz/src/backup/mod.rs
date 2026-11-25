@@ -46,7 +46,7 @@ pub fn after_deploy(root: &Path, req: &AfterDeploy<'_>) -> Option<BackupSummary>
             let res = repo::open_repo_noting(root, cfg, req.interactive, |msg| {
                 skip_note = Some(msg.to_string());
                 if !req.json {
-                    eprintln!("{msg}");
+                    crate::ui::hint(msg);
                 }
             });
             match res {
@@ -59,7 +59,7 @@ pub fn after_deploy(root: &Path, req: &AfterDeploy<'_>) -> Option<BackupSummary>
         },
         |msg| {
             if !req.json {
-                eprintln!("{msg}");
+                crate::ui::hint(msg);
             }
         },
     )
@@ -329,7 +329,7 @@ pub fn manual_create(
             Ok(report) => Some(report),
             Err(err) => {
                 if !quiet {
-                    eprintln!("backup retention skipped: {err}");
+                    crate::warning(&format!("Backup retention skipped: {err}"));
                 }
                 None
             }
@@ -412,13 +412,13 @@ pub fn run(args: BackupArgs, json_output: bool) -> Result<()> {
             } else if let Some(id) = &summary.snapshot {
                 crate::success(&format!(
                     "Snapshot {id} created ({} added)",
-                    format_bytes(summary.added_bytes)
+                    crate::ui::fmt::bytes(summary.added_bytes)
                 ));
                 if retention_report.is_some_and(|r| r.over_cap) {
                     crate::warning("Repository still exceeds the configured size limit");
                 }
             } else if summary.skipped.as_deref() == Some("no changes") {
-                crate::info("Nothing new to back up (no changes)");
+                crate::ui::hint("Nothing new to back up (no changes)");
             } else if let Some(reason) = &summary.skipped {
                 crate::warning(&format!("Backup skipped: {reason}"));
             }
@@ -475,61 +475,63 @@ pub fn run(args: BackupArgs, json_output: bool) -> Result<()> {
     Ok(())
 }
 
-fn format_bytes(bytes: u64) -> String {
-    const KIB: u64 = 1024;
-    const MIB: u64 = 1024 * KIB;
-    const GIB: u64 = 1024 * MIB;
-    if bytes >= GIB {
-        format!("{:.2} GiB", bytes as f64 / GIB as f64)
-    } else if bytes >= MIB {
-        format!("{:.2} MiB", bytes as f64 / MIB as f64)
-    } else if bytes >= KIB {
-        format!("{:.1} KiB", bytes as f64 / KIB as f64)
-    } else {
-        format!("{bytes} B")
-    }
-}
-
-fn print_list_human(out: &ListOutput) {
+/// Repository summary plus, when there are snapshots, the snapshot table.
+fn list_view(out: &ListOutput, now_ms: i64) -> String {
     let location_kind = if out.off_machine {
         "off-machine"
     } else {
         "local"
     };
-    println!("Repository: {} ({location_kind})", out.repository);
-    if !out.off_machine {
-        println!(
-            "Note: local repository protects against git clean, bad edits, and deleted folders, not against losing the machine."
-        );
-    }
-    if out.max_size > 0 {
-        println!(
-            "Size: {} / {}",
-            format_bytes(out.size),
-            format_bytes(out.max_size)
-        );
+    let size = if out.max_size > 0 {
+        format!(
+            "{} / {}",
+            crate::ui::fmt::bytes(out.size),
+            crate::ui::fmt::bytes(out.max_size)
+        )
     } else {
-        println!("Size: {}", format_bytes(out.size));
-    }
+        crate::ui::fmt::bytes(out.size)
+    };
+    let mut view = crate::ui::table::kv(&[
+        (
+            "Repository",
+            format!("{} ({location_kind})", out.repository),
+        ),
+        ("Size", size),
+    ]);
     if out.snapshots.is_empty() {
-        println!("No snapshots.");
-        return;
+        return view;
     }
-    println!();
+    let mut table = crate::ui::Table::new(&["Snapshot", "Age", "Size", "Target", "Commit"]);
     for row in &out.snapshots {
-        let target = row.target.as_deref().unwrap_or("-");
-        let env = row.environment.as_deref().unwrap_or("-");
+        let age = chrono::DateTime::parse_from_rfc3339(&row.time)
+            .map(|t| crate::ui::fmt::age(t.timestamp_millis(), now_ms))
+            .unwrap_or_default();
         let commit = row
             .commit
             .as_deref()
-            .map(|s| &s[..s.len().min(7)])
-            .unwrap_or("-");
-        let url = row.url.as_deref().unwrap_or("-");
-        println!(
-            "{}  {}  {target}  {env}  {commit}  {url}  +{}",
-            row.id,
-            row.time,
-            format_bytes(row.added_bytes)
+            .map(|s| s[..s.len().min(7)].to_string())
+            .unwrap_or_default();
+        table.row(vec![
+            row.id.clone(),
+            age,
+            crate::ui::fmt::bytes(row.added_bytes),
+            row.target.clone().unwrap_or_default(),
+            commit,
+        ]);
+    }
+    view.push_str("\n");
+    view.push_str(&table.render(None));
+    view
+}
+
+fn print_list_human(out: &ListOutput) {
+    print!("{}", list_view(out, crate::ui::fmt::now_ms()));
+    if out.snapshots.is_empty() {
+        crate::ui::empty("snapshots", Some("Run `appz backup` to create one"));
+    }
+    if !out.off_machine {
+        crate::ui::hint(
+            "Local repository protects against git clean, bad edits, and deleted folders, not against losing the machine",
         );
     }
 }
@@ -845,6 +847,51 @@ fn fingerprint_tree(root: &Path, dir: &Path, hash: &mut Sha256) -> Result<u64> {
 mod tests {
     use super::*;
     use engine::{EngineError, RunOut};
+
+    fn list_fixture(off_machine: bool, max_size: u64, snapshots: Vec<SnapshotRow>) -> ListOutput {
+        ListOutput {
+            repository: "local:.appz/backup".into(),
+            off_machine,
+            size: 4096,
+            max_size,
+            snapshots,
+        }
+    }
+
+    #[test]
+    fn list_view_renders_header_and_snapshot_table() {
+        console::set_colors_enabled(false);
+        let now = chrono::DateTime::parse_from_rfc3339("2026-11-20T15:00:00Z")
+            .unwrap()
+            .timestamp_millis();
+        let out = list_fixture(
+            false,
+            1_048_576,
+            vec![SnapshotRow {
+                id: "abc12345".into(),
+                time: "2026-11-20T12:00:00Z".into(),
+                target: Some("vercel".into()),
+                environment: None,
+                commit: Some("0123456789".into()),
+                url: None,
+                added_bytes: 2048,
+            }],
+        );
+        assert_eq!(
+            list_view(&out, now),
+            "  Repository  local:.appz/backup (local)\n  Size        4.0 KB / 1.0 MB\n\n  Snapshot   Age   Size     Target   Commit\n  abc12345   3h    2.0 KB   vercel   0123456\n"
+        );
+    }
+
+    #[test]
+    fn list_view_without_snapshots_is_header_only() {
+        console::set_colors_enabled(false);
+        let out = list_fixture(true, 0, vec![]);
+        assert_eq!(
+            list_view(&out, 0),
+            "  Repository  local:.appz/backup (off-machine)\n  Size        4.0 KB\n"
+        );
+    }
 
     #[derive(Default)]
     struct SnapshotFixture(std::cell::Cell<u32>, bool);

@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use skill::manager::SkillManager;
+use skill::types::AgentId;
 
 pub struct AgentCommand {
     pub kind: AgentSubcommand,
@@ -31,14 +32,40 @@ fn block_on<F: std::future::Future>(f: F) -> F::Output {
         .block_on(f)
 }
 
-/// Runs `f` bare in JSON mode (no interleaved spinner text), or wrapped in a
-/// spinner for human output.
-fn run_task<T>(json: bool, start: &str, done: &str, f: impl FnOnce() -> T) -> T {
+/// Detects installed agents: silent in JSON mode, otherwise under a timed
+/// fetch line (`> 1 agent detected [12ms]`, stderr).
+fn detect(json: bool, mgr: &SkillManager) -> Vec<AgentId> {
     if json {
-        f()
-    } else {
-        super::with_spinner(start, done, f)
+        return block_on(mgr.detect_installed_agents());
     }
+    let fetch = crate::ui::fetching("agents");
+    let found = block_on(mgr.detect_installed_agents());
+    fetch.done(&format!(
+        "{} detected",
+        crate::ui::fmt::plural(found.len(), "agent")
+    ));
+    found
+}
+
+/// One `agents list` table row: Agent, ID, Skills dir, Installed.
+fn list_row(display: &str, id: &str, skills_dir: &str, installed: bool) -> Vec<String> {
+    let mark = if installed { "✓" } else { "" };
+    vec![display.into(), id.into(), skills_dir.into(), mark.into()]
+}
+
+/// One `agents doctor` table row: Agent, ID, Detected, Skills.
+fn doctor_row(e: &DoctorAgentEntry) -> Vec<String> {
+    vec![
+        e.display_name.clone(),
+        e.id.clone(),
+        if e.detected { "✓" } else { "" }.into(),
+        e.skills_installed.to_string(),
+    ]
+}
+
+/// Project-file presence for the doctor key/value block.
+fn presence(found: bool) -> String {
+    if found { "Found" } else { "Missing" }.into()
 }
 
 pub fn run(cmd: &AgentCommand) {
@@ -67,12 +94,7 @@ struct ListReport {
 fn run_list(root: &Path, json: bool) {
     let mgr = manager(root);
 
-    if !json {
-        super::intro("appz agents list");
-    }
-    let installed = run_task(json, "detecting agents...", "detection complete", || {
-        block_on(mgr.detect_installed_agents())
-    });
+    let installed = detect(json, &mgr);
     let registry = mgr.agents();
     let all_ids = registry.all_ids();
 
@@ -97,49 +119,18 @@ fn run_list(root: &Path, json: bool) {
         return;
     }
 
-    super::intro("appz agents list");
-
-    if installed.is_empty() {
-        super::info("no agents detected on this system");
-    } else {
-        super::step("installed agents:");
-        let installed_lines: Vec<String> = installed
-            .iter()
-            .map(|id| {
-                let display = registry
-                    .get(id)
-                    .map(|c| c.display_name.as_str())
-                    .unwrap_or(id.as_str());
-                format!("  {display} ({id})")
-            })
-            .collect();
-        super::info(&installed_lines.join("\n"));
+    let mut table = crate::ui::Table::new(&["Agent", "ID", "Skills dir", "Installed"]);
+    for id in &all_ids {
+        if let Some(c) = registry.get(id) {
+            table.row(list_row(
+                &c.display_name,
+                id.as_str(),
+                &c.skills_dir,
+                installed.contains(id),
+            ));
+        }
     }
-
-    super::step("known agents:");
-    let known_lines: Vec<String> = all_ids
-        .iter()
-        .filter_map(|id| {
-            let mark = if installed.contains(id) {
-                " (detected)"
-            } else {
-                ""
-            };
-            registry.get(id).map(|config| {
-                format!(
-                    "  {} ({}) — {} skills dir{mark}",
-                    config.display_name, id, config.skills_dir
-                )
-            })
-        })
-        .collect();
-    super::info(&known_lines.join("\n"));
-
-    super::outro(&format!(
-        "{} installed, {} known",
-        installed.len(),
-        registry.len()
-    ));
+    table.print();
 }
 
 #[derive(Serialize)]
@@ -161,23 +152,13 @@ struct DoctorReport {
 fn run_doctor(root: &Path, json: bool) {
     let mgr = manager(root);
     let registry = mgr.agents();
-    if !json {
-        super::intro("appz agents doctor");
-    }
-    let installed = run_task(json, "probing agents...", "probing done", || {
-        block_on(mgr.detect_installed_agents())
-    });
+    let installed = detect(json, &mgr);
 
     let mut issues: Vec<String> = Vec::new();
     let mut entries: Vec<DoctorAgentEntry> = Vec::new();
     for id in registry.all_ids() {
         let config = registry.get(&id).unwrap();
         let detected = installed.contains(&id);
-        if !json {
-            let marker = if detected { "✓" } else { "✗" };
-            super::step(&format!("{marker} {} ({})", config.display_name, id));
-        }
-
         for path in &config.detect_paths {
             let exists = path.exists();
             if detected && !exists {
@@ -191,15 +172,7 @@ fn run_doctor(root: &Path, json: bool) {
 
         let agent_skills_dir = root.join(&config.skills_dir);
         let skills_installed = if agent_skills_dir.exists() {
-            let count = block_on(count_skills(&agent_skills_dir));
-            if !json {
-                super::info(&format!(
-                    "  skills: {} installed at {}",
-                    count,
-                    agent_skills_dir.display()
-                ));
-            }
-            count
+            block_on(count_skills(&agent_skills_dir))
         } else {
             if detected {
                 issues.push(format!(
@@ -233,22 +206,24 @@ fn run_doctor(root: &Path, json: bool) {
         return;
     }
 
-    super::intro("appz agents doctor");
+    let mut table = crate::ui::Table::new(&["Agent", "ID", "Detected", "Skills"]);
+    for e in &entries {
+        table.row(doctor_row(e));
+    }
+    table.print();
 
-    super::step("project files");
-    super::info(&format!(
-        "{} AGENTS.md   {} appz.jsonc",
-        if has_agents_md { "✓" } else { "✗" },
-        if has_appz_jsonc { "✓" } else { "✗" }
-    ));
+    crate::ui::heading("Project files");
+    crate::ui::print_kv(&[
+        ("AGENTS.md", presence(has_agents_md)),
+        ("appz.jsonc", presence(has_appz_jsonc)),
+    ]);
 
     if issues.is_empty() {
-        super::outro("all good");
+        crate::success("No issues found");
     } else {
         for issue in &issues {
-            super::warning(issue);
+            crate::warning(issue);
         }
-        super::outro(&format!("{} issue(s) found", issues.len()));
     }
 }
 
@@ -260,4 +235,31 @@ async fn count_skills(dir: &Path) -> usize {
         }
     }
     count
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn list_row_marks_installed() {
+        assert_eq!(
+            list_row("Claude Code", "claude-code", ".claude/skills", true),
+            vec!["Claude Code", "claude-code", ".claude/skills", "✓"]
+        );
+        assert_eq!(list_row("Amp", "amp", ".agents/skills", false)[3], "");
+    }
+
+    #[test]
+    fn doctor_row_and_presence() {
+        let e = DoctorAgentEntry {
+            id: "amp".into(),
+            display_name: "Amp".into(),
+            detected: true,
+            skills_installed: 3,
+        };
+        assert_eq!(doctor_row(&e), vec!["Amp", "amp", "✓", "3"]);
+        assert_eq!(presence(true), "Found");
+        assert_eq!(presence(false), "Missing");
+    }
 }

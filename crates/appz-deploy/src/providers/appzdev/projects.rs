@@ -82,7 +82,7 @@ pub struct Transfer {
 }
 
 fn failed(reason: String) -> DeployError {
-    DeployError::DeployFailed {
+    DeployError::Api {
         provider: PROVIDER,
         reason,
     }

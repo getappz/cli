@@ -27,7 +27,7 @@ pub fn run(ctx: &DeployContext) -> Result<bool, String> {
     appz_core::write_state(&root, &toolchains)?;
     appz_core::ensure_mise(&root)?;
     if let Err(e) = appz_core::trust(&root) {
-        eprintln!("warning: mise trust: {e}");
+        crate::warning(&format!("mise trust: {e}"));
     }
 
     // A context for the build steps only: build env and node bins on top of the

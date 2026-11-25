@@ -1,5 +1,4 @@
 use clap::{Args, Parser, Subcommand};
-use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -23,8 +22,13 @@ mod share;
 mod shield;
 mod skills;
 mod static_serve;
+mod ui;
 mod update;
 mod webhooks;
+
+pub(crate) use ui::{
+    error, info, intro, is_interactive_tty, is_tty, outro, step, success, warning, with_spinner,
+};
 
 // ── CLI ─────────────────────────────────────────────────────────
 
@@ -992,102 +996,6 @@ struct PreviewArgs {
 
 // ── UI helpers ──────────────────────────────────────────────────
 
-pub(crate) fn is_stdout_tty() -> bool {
-    if std::env::var_os("NO_COLOR").is_some() || std::env::var("TERM").as_deref() == Ok("dumb") {
-        return false;
-    }
-    std::io::stdout().is_terminal()
-}
-
-pub(crate) fn is_interactive_tty() -> bool {
-    is_stdout_tty() && std::io::stdin().is_terminal()
-}
-
-pub(crate) fn is_tty() -> bool {
-    is_interactive_tty()
-}
-
-/// Shown once, at `appz init` — a clean, subtle header.
-/// Skipped outside a real terminal so it never lands in piped/CI output.
-fn print_brand() {
-    if is_stdout_tty() {
-        println!("\n  appz • universal toolchain & deployment\n");
-    }
-}
-
-pub(crate) fn intro(msg: &str) {
-    if is_stdout_tty() {
-        let _ = cliclack::intro(msg);
-    } else {
-        println!("> {msg}");
-    }
-}
-
-pub(crate) fn outro(msg: &str) {
-    if is_stdout_tty() {
-        let _ = cliclack::outro(msg);
-    } else {
-        println!("✓ {msg}");
-    }
-}
-
-pub(crate) fn success(msg: &str) {
-    if is_stdout_tty() {
-        let _ = cliclack::log::success(msg);
-    } else {
-        println!("ok  {msg}");
-    }
-}
-
-pub(crate) fn info(msg: &str) {
-    if is_stdout_tty() {
-        let _ = cliclack::log::info(msg);
-    } else {
-        for line in msg.lines() {
-            println!("    {line}");
-        }
-    }
-}
-
-pub(crate) fn step(msg: &str) {
-    if is_stdout_tty() {
-        let _ = cliclack::log::step(msg);
-    } else {
-        println!("  • {msg}");
-    }
-}
-
-pub(crate) fn warning(msg: &str) {
-    if is_stdout_tty() {
-        let _ = cliclack::log::warning(msg);
-    } else {
-        eprintln!("warn {msg}");
-    }
-}
-
-pub(crate) fn error(msg: &str) -> ! {
-    if is_stdout_tty() {
-        let _ = cliclack::log::error(msg);
-    } else {
-        eprintln!("fail {msg}");
-    }
-    std::process::exit(1);
-}
-
-pub(crate) fn with_spinner<T>(start: &str, done: &str, f: impl FnOnce() -> T) -> T {
-    if !is_stdout_tty() {
-        println!("  {start}");
-        let r = f();
-        println!("  {done}");
-        return r;
-    }
-    let sp = cliclack::spinner();
-    sp.start(start);
-    let r = f();
-    sp.stop(done);
-    r
-}
-
 // ── Core logic ──────────────────────────────────────────────────
 
 fn resolve_root(dir: &Path) -> PathBuf {
@@ -1111,12 +1019,12 @@ fn json_out(toolchains: &[appz_core::DetectedToolchain], status: &str) {
 
 fn do_make_claude(root: &Path) {
     if root.join("CLAUDE.md").exists() {
-        warning("CLAUDE.md exists — use `appz init --claude --force` to overwrite");
+        warning("CLAUDE.md exists; use `appz init --claude --force` to overwrite");
         return;
     }
     let report = run_doctor(root);
     let content = generate_claude_md(&report, root);
-    with_spinner("generating CLAUDE.md...", "CLAUDE.md written", || {
+    with_spinner("Generating CLAUDE.md…", "CLAUDE.md written", || {
         let _ = std::fs::write(root.join("CLAUDE.md"), content);
     });
 }
@@ -1153,7 +1061,7 @@ fn run_cmd(program: &str, args: &[&str], dir: &std::path::Path) -> bool {
 }
 
 fn do_detect_and_write(root: &Path) -> Vec<appz_core::DetectedToolchain> {
-    let toolchains = with_spinner("detecting toolchains...", "toolchains detected", || {
+    let toolchains = with_spinner("Detecting toolchains…", "Toolchains detected", || {
         let tc =
             detect_toolchains(root).unwrap_or_else(|e| error(&format!("detection failed: {e}")));
         if tc.is_empty() {
@@ -1162,7 +1070,7 @@ fn do_detect_and_write(root: &Path) -> Vec<appz_core::DetectedToolchain> {
         tc
     });
 
-    if let Err(e) = with_spinner("writing project state...", "state written", || {
+    if let Err(e) = with_spinner("Writing project state…", "Project state written", || {
         appz_core::write_state(root, &toolchains)
     }) {
         error(&format!("cannot write project state: {e}"));
@@ -1175,7 +1083,8 @@ fn do_detect_and_write(root: &Path) -> Vec<appz_core::DetectedToolchain> {
             let names: Vec<&str> = tc.frameworks.iter().map(|f| f.name).collect();
             format!(" — {}", names.join(", "))
         };
-        info(&format!(
+        // stderr (via `step`): this runs in `--json` mode too, where stdout is JSON only.
+        step(&format!(
             "{} ({} @ {}){}",
             tc.name, tc.mise_plugin, tc.version, fw
         ));
@@ -1193,7 +1102,7 @@ fn do_mise_install(root: &Path) -> bool {
         warning(&format!("mise trust: {e}"));
     }
 
-    with_spinner("installing mise tools...", "mise tools ready", || {
+    with_spinner("Installing mise tools…", "mise tools ready", || {
         run_cmd("mise", &["install"], root)
     })
 }
@@ -1289,7 +1198,6 @@ fn run_init(args: InitArgs, json: bool) {
         json_out(&toolchains, "ok");
         return;
     }
-    print_brand();
     intro("appz init");
     let resolved = init_source::resolve(&args.source, args.force).unwrap_or_else(|e| error(&e));
     let canonical = resolve_root(&resolved);
@@ -1304,7 +1212,7 @@ fn run_init(args: InitArgs, json: bool) {
     if !args.skip_pm {
         do_pm_install(&canonical, &toolchains);
     }
-    outro("project ready");
+    outro("Project ready");
 }
 
 fn run_install(args: InstallArgs, json: bool) {
@@ -1324,8 +1232,8 @@ fn run_install(args: InstallArgs, json: bool) {
     let canonical = resolve_root(&args.dir);
 
     if !args.skip_mise && appz_core::inputs_unchanged(&canonical) && args.skip_pm {
-        success("inputs unchanged, tools already up to date");
-        outro("nothing to install");
+        success("Inputs unchanged, tools already up to date");
+        outro("Nothing to install");
         return;
     }
 
@@ -1336,7 +1244,7 @@ fn run_install(args: InstallArgs, json: bool) {
     if !args.skip_pm {
         do_pm_install(&canonical, &toolchains);
     }
-    outro("dependencies ready");
+    outro("Dependencies ready");
 }
 
 fn run_build(args: BuildArgs, json: bool) {
@@ -1350,6 +1258,7 @@ fn run_build(args: BuildArgs, json: bool) {
         return;
     }
     intro("appz build");
+    let started = Instant::now();
     let canonical = resolve_root(&args.dir);
 
     // Detect + write mise.toml ([tools] + [tasks] with sources/outputs) so
@@ -1363,7 +1272,7 @@ fn run_build(args: BuildArgs, json: bool) {
 
     match args.command {
         Some(cmd) => {
-            step("building...");
+            step("Building…");
             let parts: Vec<&str> = cmd.split(' ').collect();
             let (prog, cmd_args) = parts.split_first().unwrap_or((&"npm", &[]));
             if !run_cmd(prog, cmd_args, &canonical) {
@@ -1377,8 +1286,8 @@ fn run_build(args: BuildArgs, json: bool) {
             {
                 match appz_core::static_prebuild_ready(&canonical, &toolchains) {
                     Ok(Some(())) => {
-                        success("static HTML — output already on disk (no build step)");
-                        outro("build complete");
+                        success("Static HTML: output already on disk (no build step)");
+                        outro("Build complete");
                         return;
                     }
                     Ok(None) => {}
@@ -1386,15 +1295,18 @@ fn run_build(args: BuildArgs, json: bool) {
                 }
             }
             if !toolchains.iter().any(|tc| tc.build_command.is_some()) {
-                error("no build command detected — use --command to specify one");
+                error("no build command detected; use --command to specify one");
             }
-            step("building (mise run build)...");
+            step("Building (mise run build)…");
             if !run_cmd("mise", &["run", "build"], &canonical) {
                 std::process::exit(1);
             }
         }
     }
-    outro("build complete");
+    outro(&format!(
+        "Build complete [{}]",
+        ui::fmt::duration_ms(started.elapsed().as_millis() as u64)
+    ));
 }
 
 fn run_dev(args: DevArgs, json: bool) {
@@ -1421,7 +1333,7 @@ fn run_dev(args: DevArgs, json: bool) {
                 }
             }
             if cmds.is_empty() {
-                error("no dev command detected — use --command to specify one");
+                error("no dev command detected; use --command to specify one");
             }
             cmds
         }
@@ -1432,7 +1344,7 @@ fn run_dev(args: DevArgs, json: bool) {
         .flat_map(|t| t.frameworks.iter().map(|f| f.name))
         .collect();
     let sharing = start_dev_share(&args, &canonical, &frameworks, &cmds);
-    step("starting dev server...");
+    step("Starting dev server…");
     run_dev_commands(
         &cmds,
         &canonical,
@@ -1471,9 +1383,9 @@ fn start_dev_share(
     shield.pin = args.pin.as_deref().map(share::resolve_pin);
     shield.basic_auth = args.auth.clone();
     if let Some(pin) = &shield.pin {
-        info(&format!("shield mode: PIN {pin}"));
+        ui::hint(&format!("Shield mode: PIN {pin}"));
     }
-    step(&format!("share: waiting for the dev server on port {port}"));
+    step(&format!("Share: waiting for the dev server on port {port}"));
     Some(share::DevShare::start(backend, shield, args.inspect))
 }
 
@@ -1510,14 +1422,14 @@ fn run_dev_commands(
     if !ok {
         std::process::exit(1);
     }
-    outro("dev server stopped");
+    outro("Dev server stopped");
 }
 
 fn run_preview_build(project: &std::path::Path, toolchains: &[appz_core::DetectedToolchain]) {
     if !toolchains.iter().any(|tc| tc.build_command.is_some()) {
         return;
     }
-    step("building (mise run build)...");
+    step("Building (mise run build)…");
     if !run_cmd("mise", &["run", "build"], project) {
         std::process::exit(1);
     }
@@ -1544,18 +1456,18 @@ fn run_preview(args: PreviewArgs, json: bool) {
 
     intro("appz preview");
     if !args.skip_build {
-        step("preparing production-like output...");
+        step("Preparing production-like output…");
         run_preview_build(&canonical, &toolchains);
     }
     let serve_root =
         appz_core::resolve_preview_root(&canonical, &toolchains, args.serve_dir.as_deref())
             .unwrap_or_else(|e| error(&e));
-    success(&format!("serving built output {}", serve_root.display()));
-    step("starting preview server (no hot reload)...");
+    success(&format!("Serving built output {}", serve_root.display()));
+    step("Starting preview server (no hot reload)…");
     if static_serve::run_preview_server(&serve_root, args.port, args.spa).is_err() {
         std::process::exit(1);
     }
-    outro("preview server stopped");
+    outro("Preview server stopped");
 }
 
 fn run_share(args: share::ShareArgs, json: bool) {
@@ -1589,7 +1501,7 @@ fn run_share(args: share::ShareArgs, json: bool) {
             let port = share::parse_target_port(Some(raw)).unwrap_or_else(|e| error(&e));
             if !appz_core::is_port_listening(port, 200) {
                 warning(&format!(
-                    "nothing is listening on port {port} yet; visitors get a 502 until it is"
+                    "Nothing is listening on port {port} yet; visitors get a 502 until it is"
                 ));
             }
             port
@@ -1636,7 +1548,7 @@ fn run_share(args: share::ShareArgs, json: bool) {
                     false,
                 );
             }
-            step(&format!("detected dev server on port {port}"));
+            step(&format!("Detected dev server on port {port}"));
             port
         }
     };
@@ -1659,8 +1571,14 @@ macro_rules! lifecycle_fn {
             }
 
             intro(concat!("appz ", $label));
-
-            let canonical = resolve_root(&args.dir);
+            let started = Instant::now();
+            let done = || {
+                outro(&format!(
+                    "{} complete [{}]",
+                    ui::fmt::capitalize($label),
+                    ui::fmt::duration_ms(started.elapsed().as_millis() as u64)
+                ))
+            };
 
             // Cache hit
             if !args.command.is_some()
@@ -1674,7 +1592,7 @@ macro_rules! lifecycle_fn {
                         .filter_map(|t| t.$field.clone())
                         .collect();
                     if !cmds.is_empty() {
-                        success("inputs unchanged — running cached command");
+                        success("Inputs unchanged; running cached command");
                         for cmd in &cmds {
                             let parts: Vec<&str> = cmd.split(' ').collect();
                             let (prog, args) = parts.split_first().unwrap_or((&"npm", &[]));
@@ -1682,7 +1600,7 @@ macro_rules! lifecycle_fn {
                                 std::process::exit(1);
                             }
                         }
-                        outro(concat!($label, " complete"));
+                        done();
                         return;
                     }
                 }
@@ -1708,7 +1626,7 @@ macro_rules! lifecycle_fn {
                     }
                     if cmds.is_empty() {
                         error(&format!(
-                            "no {} command detected — use --command to specify one",
+                            "no {} command detected; use --command to specify one",
                             $label
                         ));
                     }
@@ -1716,7 +1634,7 @@ macro_rules! lifecycle_fn {
                 }
             };
 
-            step(concat!("running ", $label, "..."));
+            step(&format!("Running {}…", $label));
             for cmd in &cmds {
                 let parts: Vec<&str> = cmd.split(' ').collect();
                 let (prog, args) = parts.split_first().unwrap_or((&"npm", &[]));
@@ -1724,7 +1642,7 @@ macro_rules! lifecycle_fn {
                     std::process::exit(1);
                 }
             }
-            outro(concat!($label, " complete"));
+            done();
         }
     };
 }
@@ -1742,59 +1660,42 @@ fn run_doctor_cmd(args: DoctorArgs, json: bool) {
         return;
     }
 
-    intro("appz doctor");
-
-    // cliclack's log::info/step each end their own block with a trailing
-    // blank line — one call per field (the old shape) meant one blank line
-    // per field. Batching a section into a single multi-line call keeps one
-    // bullet + continuation bars for the whole section, with only one
-    // trailing blank at the end of it.
-    step("toolchains");
-    let toolchain_lines: Vec<String> = report
-        .toolchains
-        .iter()
-        .map(|tc| {
-            let fw: Vec<&str> = tc.frameworks.iter().map(|f| f.name).collect();
-            let fw_str = if fw.is_empty() {
-                String::new()
-            } else {
-                format!(" [{}]", fw.join(", "))
-            };
-            let ver = if tc.version.is_empty() {
-                String::new()
-            } else {
-                format!(" @{}", tc.version)
-            };
-            let build = tc.build_command.as_deref().unwrap_or("-");
-            let dev = tc.dev_command.as_deref().unwrap_or("-");
-            format!(
-                "{}: {}{}{}  build: {}  dev: {}",
-                tc.name, tc.slug, ver, fw_str, build, dev
-            )
-        })
-        .collect();
-    info(&if toolchain_lines.is_empty() {
-        "(none detected)".to_string()
+    ui::heading("Toolchains");
+    if report.toolchains.is_empty() {
+        println!("  {}", ui::theme::out::dim("none detected"));
     } else {
-        toolchain_lines.join("\n")
-    });
+        let mut t = ui::Table::new(&["Toolchain", "Version", "Frameworks", "Build", "Dev"]);
+        for tc in &report.toolchains {
+            let fw: Vec<&str> = tc.frameworks.iter().map(|f| f.name).collect();
+            t.row(vec![
+                tc.name.to_string(),
+                format!("{} {}", tc.slug, tc.version).trim().to_string(),
+                fw.join(", "),
+                tc.build_command.clone().unwrap_or_default(),
+                tc.dev_command.clone().unwrap_or_default(),
+            ]);
+        }
+        t.print();
+    }
 
-    step("environment");
-    let mut env_lines = vec![match &report.package_manager {
-        Some(pm) => format!("package manager: {pm}"),
-        None => "package manager: (none detected)".to_string(),
-    }];
+    ui::heading("Environment");
+    let mut env = vec![(
+        "Package manager",
+        report
+            .package_manager
+            .clone()
+            .unwrap_or_else(|| "none detected".into()),
+    )];
     if let Some(ref mgr) = report.monorepo.manager {
-        env_lines.push(format!(
-            "monorepo: {} ({} paths)",
-            mgr,
-            report.monorepo.package_paths.len()
+        env.push((
+            "Monorepo",
+            format!("{mgr} ({} paths)", report.monorepo.package_paths.len()),
         ));
     }
-    info(&env_lines.join("\n"));
+    ui::print_kv(&env);
 
-    step("config");
-    let config_line = [
+    ui::heading("Config");
+    let checks = [
         ("appz.jsonc", report.has_appz_jsonc),
         ("CLAUDE.md", report.has_claude_md),
         ("AGENTS.md", report.has_agents_md),
@@ -1802,22 +1703,24 @@ fn run_doctor_cmd(args: DoctorArgs, json: bool) {
         ("state (JSONL)", report.has_state),
     ]
     .iter()
-    .map(|(label, exists)| format!("{} {label}", if *exists { "✓" } else { "✗" }))
+    .map(|(label, exists)| {
+        let mark = if *exists {
+            ui::theme::out::green("✓")
+        } else {
+            ui::theme::out::red("✗")
+        };
+        format!("{mark} {label}")
+    })
     .collect::<Vec<_>>()
     .join("   ");
-    info(&config_line);
+    println!("  {checks}");
 
     if !report.suggestions.is_empty() {
-        step("suggestions");
-        let suggestion_lines: Vec<String> = report
-            .suggestions
-            .iter()
-            .map(|s| format!("→ {s}"))
-            .collect();
-        info(&suggestion_lines.join("\n"));
+        ui::heading("Suggestions");
+        for s in &report.suggestions {
+            println!("  {} {s}", ui::theme::out::cyan("→"));
+        }
     }
-
-    outro("diagnosis complete");
 }
 
 fn run_clean(args: CleanArgs, json: bool) {
@@ -1829,28 +1732,22 @@ fn run_clean(args: CleanArgs, json: bool) {
             println!("{}", serde_json::to_string_pretty(&targets).unwrap());
             return;
         }
-        intro("appz clean");
         if targets.is_empty() {
-            success("nothing to clean");
-            outro("done");
+            success("Nothing to clean");
             return;
         }
-        step("would remove");
-        let lines: Vec<String> = targets
-            .iter()
-            .map(|t| {
-                format!(
-                    "{:>8}  {}  ({})",
-                    appz_core::format_size(t.size_bytes),
-                    t.path.display(),
-                    t.toolchain
-                )
-            })
-            .collect();
-        info(&lines.join("\n"));
+        let mut t = ui::Table::new(&["Size", "Toolchain", "Path"]);
+        for x in &targets {
+            t.row(vec![
+                appz_core::format_size(x.size_bytes),
+                x.toolchain.to_string(),
+                x.path.display().to_string(),
+            ]);
+        }
+        t.print();
         let total: u64 = targets.iter().map(|t| t.size_bytes).sum();
-        outro(&format!(
-            "{} to free — re-run with --force to delete",
+        ui::hint(&format!(
+            "{} to free; re-run with --force to delete",
             appz_core::format_size(total)
         ));
         return;
@@ -1866,25 +1763,23 @@ fn run_clean(args: CleanArgs, json: bool) {
         return;
     }
 
-    intro("appz clean");
     if report.deleted.is_empty() && report.failed.is_empty() {
-        success("nothing to clean");
-        outro("done");
+        success("Nothing to clean");
         return;
     }
     for t in &report.deleted {
         success(&format!(
-            "removed {} ({})",
+            "Removed {} ({})",
             t.path.display(),
             appz_core::format_size(t.size_bytes)
         ));
     }
     for (path, err) in &report.failed {
-        warning(&format!("failed to remove {}: {err}", path.display()));
+        warning(&format!("Failed to remove {}: {err}", path.display()));
     }
     if report.failed.is_empty() {
-        outro(&format!(
-            "freed {}",
+        success(&format!(
+            "Freed {}",
             appz_core::format_size(report.freed_bytes)
         ));
     } else {
@@ -1895,6 +1790,7 @@ fn run_clean(args: CleanArgs, json: bool) {
 fn main() {
     let cli = AppzCli::parse();
     let json = cli.json;
+    ui::init(json);
     ASSUME_YES.store(cli.yes, std::sync::atomic::Ordering::Relaxed);
     match cli.command {
         AppzCmd::Init(a) => run_init(a, json),
@@ -1956,7 +1852,7 @@ fn main() {
 fn run_toolchain(args: ToolchainArgs) {
     match args.command {
         ToolchainCmd::Refresh => match appz_core::refresh_registry_cache() {
-            Ok(count) => success(&format!("toolchain registry refreshed ({count} entries)")),
+            Ok(count) => success(&format!("Toolchain registry refreshed ({count} entries)")),
             Err(e) => error(&format!("refresh failed: {e}")),
         },
     }
@@ -2020,50 +1916,40 @@ fn run_skills(args: SkillsArgs, json: bool) {
     }
 
     intro("appz skills");
-    info(&report.context);
+    ui::hint(&report.context);
 
     if !report.excluded_large_sources.is_empty() {
         warning(&format!(
-            "skipped {} large source repo(s) (slow full-repo download): {} — pass --include-large to include them",
+            "Skipped {} large source repo(s) (slow full-repo download): {}. Pass --include-large to include them",
             report.excluded_large_sources.len(),
             report.excluded_large_sources.join(", ")
         ));
     }
 
     if report.hits.is_empty() {
-        outro("no matching skills found — try `appz skills <query>`");
+        outro("No matching skills found, try `appz skills <query>`");
         return;
     }
 
-    step("matching skills");
-    let skill_lines: Vec<String> = report
-        .hits
-        .iter()
-        .map(|hit| {
-            let mark = if hit.installed { " (installed)" } else { "" };
-            format!(
-                "{}  {} installs  {}{mark}",
-                hit.name,
-                skills::format_installs(hit.installs),
-                hit.source
-            )
-        })
-        .collect();
-    info(&skill_lines.join("\n"));
+    let mut table = ui::Table::new(&["Skill", "Installs", "Source"]);
+    for hit in &report.hits {
+        table.row(skills::hit_row(hit));
+    }
+    table.print();
 
     let installable: Vec<skills::SkillHit> =
         report.hits.into_iter().filter(|h| !h.installed).collect();
     if installable.is_empty() {
-        outro("all recommended skills are already installed");
+        outro("All recommended skills are already installed");
         return;
     }
 
     let selected: Vec<skills::SkillHit> = if assume_yes() {
         installable
     } else if !is_interactive_tty() {
-        error("confirmation required — pass --yes to install without prompting");
+        error("confirmation required, pass --yes to install without prompting");
     } else {
-        let mut ms = cliclack::multiselect("select skills to install");
+        let mut ms = cliclack::multiselect("Select skills to install");
         for hit in &installable {
             ms = ms.item(hit.skill_id.clone(), hit.name.clone(), hit.source.clone());
         }
@@ -2073,30 +1959,30 @@ fn run_skills(args: SkillsArgs, json: bool) {
                 .filter(|h| ids.contains(&h.skill_id))
                 .collect(),
             Err(_) => {
-                warning("selection cancelled");
+                warning("Selection cancelled");
                 return;
             }
         }
     };
 
     if selected.is_empty() {
-        outro("no skills selected");
+        outro("No skills selected");
         return;
     }
 
-    let summary = with_spinner("installing skills...", "installation complete", || {
+    let summary = with_spinner("Installing skills…", "Skills installed", || {
         skills::install(&root, &selected)
     });
 
     match summary {
         Ok(s) => {
             for name in &s.installed {
-                success(&format!("installed {name}"));
+                success(&format!("Installed {name}"));
             }
             for name in &s.failed {
-                warning(&format!("failed to install {name}"));
+                warning(&format!("Failed to install {name}"));
             }
-            outro("done — review skills before use; they run with full agent permissions");
+            outro("Review skills before use, they run with full agent permissions");
         }
         Err(e) => error(&e),
     }
@@ -2106,20 +1992,19 @@ fn vault_path_for(global: bool) -> PathBuf {
     secrets::vault_path(Path::new("."), global).unwrap_or_else(|e| error(&e))
 }
 
-/// One `ls`/`check` line: the name, plus its recorded expiry when there is one.
-fn vault_row(row: &appz_vault::SecretExpiry) -> String {
+/// `[Name, Expires, Status]` for `vault ls`/`check`.
+fn vault_cells(row: &appz_vault::SecretExpiry) -> Vec<String> {
     use appz_vault::ExpiryStatus::*;
-    let (name, at, status) = (&row.name, &row.expires_at, row.status);
-    let Some(at) = at else {
-        return name.clone();
+    let Some(at) = &row.expires_at else {
+        return vec![row.name.clone(), String::new(), String::new()];
     };
     let days = (*at - chrono::Utc::now()).num_days();
-    let note = match status {
-        Expired => format!("EXPIRED {}", at.format("%Y-%m-%d")),
-        Expiring => format!("expires in {days}d ({})", at.format("%Y-%m-%d")),
-        _ => format!("expires {} (in {days}d)", at.format("%Y-%m-%d")),
+    let status = match row.status {
+        Expired => ui::fmt::status("expired"),
+        Expiring => format!("{} in {days}d", ui::fmt::status("expiring")),
+        _ => format!("{} {days}d left", ui::fmt::status("active")),
     };
-    format!("{name}  {note}")
+    vec![row.name.clone(), at.format("%Y-%m-%d").to_string(), status]
 }
 
 fn run_vault_cmd(cmd: VaultCmd, json: bool) {
@@ -2135,7 +2020,7 @@ fn run_vault_cmd(cmd: VaultCmd, json: bool) {
                 secrets::parse_expiry(expires.as_deref(), ttl.as_deref(), chrono::Utc::now())
                     .unwrap_or_else(|e| error(&e));
             match secrets::set(&vault_path_for(global), &name, value, expires_at) {
-                Ok(()) => success(&format!("stored {name}")),
+                Ok(()) => success(&format!("Stored {name}")),
                 Err(e) => error(&e),
             }
         }
@@ -2145,11 +2030,16 @@ fn run_vault_cmd(cmd: VaultCmd, json: bool) {
                     let names: Vec<_> = rows.into_iter().map(|r| r.name).collect();
                     println!("{}", serde_json::to_string(&names).unwrap());
                 }
-                Ok(rows) if rows.is_empty() => info("no secrets stored"),
-                Ok(rows) => info(&rows.iter().map(vault_row).collect::<Vec<_>>().join(
-                    "
-",
-                )),
+                Ok(rows) if rows.is_empty() => {
+                    ui::empty("secrets", Some("Run `appz env set <NAME>` to store one"))
+                }
+                Ok(rows) => {
+                    let mut t = ui::Table::new(&["Name", "Expires", "Status"]);
+                    for r in &rows {
+                        t.row(vault_cells(r));
+                    }
+                    t.print();
+                }
                 Err(e) => error(&e),
             }
         }
@@ -2166,7 +2056,7 @@ fn run_vault_cmd(cmd: VaultCmd, json: bool) {
                 error("give --expires YYYY-MM-DD or --ttl 90d");
             }
             match secrets::set_expiry(&vault_path_for(global), &name, expires_at) {
-                Ok(()) => success(&format!("recorded expiry for {name}")),
+                Ok(()) => success(&format!("Recorded expiry for {name}")),
                 Err(e) => error(&e),
             }
         }
@@ -2189,28 +2079,28 @@ fn run_vault_cmd(cmd: VaultCmd, json: bool) {
                     std::process::exit(1);
                 }
             } else if due.is_empty() {
-                success("no secrets expired or expiring soon");
+                success("No secrets expired or expiring soon");
             } else {
-                let lines: Vec<_> = due.into_iter().map(vault_row).collect();
+                let mut t = ui::Table::new(&["Name", "Expires", "Status"]);
+                for r in &due {
+                    t.row(vault_cells(r));
+                }
+                t.print();
                 error(&format!(
-                    "rotate these:
-{}",
-                    lines.join(
-                        "
-"
-                    )
+                    "{} to rotate",
+                    ui::fmt::plural(due.len(), "secret")
                 ));
             }
         }
         VaultCmd::Rm { name, global } => match secrets::remove(&vault_path_for(global), &name) {
-            Ok(true) => success(&format!("removed {name}")),
+            Ok(true) => success(&format!("Removed {name}")),
             Ok(false) => error(&format!("{name} is not stored")),
             Err(e) => error(&e),
         },
         VaultCmd::Unlock { global } => match secrets::unlock(&vault_path_for(global)) {
-            Ok((_, true)) => success("vault unlocked"),
+            Ok((_, true)) => success("Vault unlocked"),
             Ok((_, false)) => warning(concat!(
-                "vault unlocked for this command only: the OS keyring is unavailable, ",
+                "Vault unlocked for this command only: the OS keyring is unavailable, ",
                 "so it will ask again. Set APPZ_VAULT_PASSPHRASE, or pass the platform ",
                 "token as an environment variable instead"
             )),
@@ -2218,7 +2108,7 @@ fn run_vault_cmd(cmd: VaultCmd, json: bool) {
         },
         VaultCmd::Lock { global } => {
             secrets::lock(&vault_path_for(global));
-            success("vault locked");
+            success("Vault locked");
         }
     }
 }
@@ -2290,8 +2180,8 @@ fn run_env(args: EnvArgs, json: bool) {
                 if json {
                     println!("{}", serde_json::json!({ "pushed": 0 }));
                 } else {
-                    info("no environment variables found in file");
-                    outro("nothing to push");
+                    ui::empty("environment variables", None);
+                    outro("Nothing to push");
                 }
                 return;
             }
@@ -2323,10 +2213,10 @@ fn run_env(args: EnvArgs, json: bool) {
                         );
                     } else {
                         success(&format!(
-                            "uploaded {} environment variables to project '{}'",
-                            count, project_id
+                            "Uploaded {} to project '{project_id}'",
+                            ui::fmt::plural(count, "environment variable")
                         ));
-                        outro("done");
+                        outro("Done");
                     }
                 }
                 Err(e) => error(&e.to_string()),
@@ -2372,27 +2262,28 @@ fn run_ci(args: CiArgs, json: bool) {
     }
 
     intro("appz ci");
-    success(&format!("wrote {}", report.workflow));
-    info(&format!(
-        "repo: {}\ntarget: {}\nbranch: {}",
-        report.repo, report.target, report.branch
-    ));
+    success(&format!("Wrote {}", report.workflow));
+    ui::print_kv(&[
+        ("Repo", report.repo.to_string()),
+        ("Target", report.target.to_string()),
+        ("Branch", report.branch.to_string()),
+    ]);
     for secret in &report.secrets {
         match secret.status {
-            "set" => success(&format!("set repository secret {}", secret.name)),
+            "set" => success(&format!("Set repository secret {}", secret.name)),
             "failed" => warning(&format!(
-                "could not set {}: {}",
+                "Could not set {}: {}",
                 secret.name,
                 secret.detail.as_deref().unwrap_or("unknown error")
             )),
-            _ => info(&format!(
-                "secret {} not set: {}",
+            _ => ui::hint(&format!(
+                "Secret {} not set: {}",
                 secret.name,
                 secret.detail.as_deref().unwrap_or("no value")
             )),
         }
     }
-    outro("commit the workflow to turn on deploy-on-push");
+    outro("Commit the workflow to turn on deploy-on-push");
 }
 
 fn run_deploy(args: DeployArgs, json: bool) {
@@ -2433,9 +2324,11 @@ fn run_deploy(args: DeployArgs, json: bool) {
             deploy::Consent::Ask
         },
     };
+    let started = Instant::now();
     if !json {
         intro("appz deploy");
     }
+
     if all {
         match deploy::run_all(&canonical, req) {
             Ok(results) => {
@@ -2445,33 +2338,37 @@ fn run_deploy(args: DeployArgs, json: bool) {
                 } else {
                     for r in &results {
                         if let (Some(_), Some(e)) = (&r.output, &r.error) {
-                            eprintln!("{}: deployed, but a hook failed: {e}", r.target);
+                            warning(&format!("{}: deployed, but a hook failed: {e}", r.target));
                         }
                         match (&r.output, &r.error) {
                             (Some(o), _) if args.dry_run => print_deploy_dry_run(o),
                             (Some(o), _) if o.unchanged => {
-                                info(&format!("{}: unchanged, skipped", r.target))
+                                ui::hint(&format!("{}: unchanged, skipped", r.target))
                             }
-                            (Some(o), _) => success(&format!(
-                                "{} ({}): {}",
-                                r.target,
-                                if o.is_preview {
-                                    "preview"
-                                } else {
-                                    "production"
-                                },
-                                o.url.as_deref().unwrap_or("deployed (url unknown)")
-                            )),
-                            (_, Some(e)) => eprintln!("{}: failed: {e}", r.target),
+                            (Some(o), _) => {
+                                success(&format!(
+                                    "{} deployed ({})",
+                                    r.target,
+                                    deploy_kind(o).to_lowercase()
+                                ));
+                                match &o.url {
+                                    Some(url) => ui::print_kv(&[(r.target.as_str(), url.clone())]),
+                                    None => warning(&format!(
+                                        "{}: live URL could not be confirmed",
+                                        r.target
+                                    )),
+                                }
+                            }
+                            (_, Some(e)) => warning(&format!("{}: failed: {e}", r.target)),
                             _ => {}
                         }
                     }
                     outro(if args.dry_run {
-                        "nothing was deployed"
+                        "Nothing was deployed"
                     } else if failed == 0 {
-                        "deploy complete"
+                        "Deploy complete"
                     } else {
-                        "deploy finished with failures"
+                        "Deploy finished with failures"
                     });
                 }
                 if failed > 0 {
@@ -2488,73 +2385,93 @@ fn run_deploy(args: DeployArgs, json: bool) {
                 println!("{}", serde_json::to_string_pretty(&output).unwrap());
             } else if args.dry_run {
                 print_deploy_dry_run(&output);
-                outro("nothing was deployed");
+                outro("Nothing was deployed");
             } else {
                 if output.unchanged {
                     success(&format!(
-                        "unchanged since the last deploy to {}; nothing was redeployed (--force to deploy anyway)",
+                        "Unchanged since the last deploy to {}; nothing was redeployed",
                         output.provider
                     ));
                     if let Some(url) = &output.url {
-                        info(url);
+                        ui::print_kv(&[(deploy_kind(&output), url.clone())]);
                     }
-                    outro("done");
+                    ui::hint("Pass --force to deploy anyway");
+                    outro("Done");
                     return;
                 }
                 for f in &output.setup_files {
-                    info(&format!("created {f} (the project had none)"));
+                    ui::hint(&format!("Created {f} (the project had none)"));
                 }
-                success(&format!("deployed to {}", output.provider));
-                if let Some(url) = &output.url {
-                    info(url);
-                } else {
-                    warning(
-                        "deploy succeeded but the live URL could not be confirmed from CLI output",
-                    );
+                let took = ui::fmt::duration_ms(started.elapsed().as_millis() as u64);
+                success(&format!("Deployed to {} [{took}]", output.provider));
+                match &output.url {
+                    Some(url) => ui::print_kv(&[(deploy_kind(&output), url.clone())]),
+                    None => warning(
+                        "Deploy succeeded but the live URL could not be confirmed from CLI output",
+                    ),
                 }
                 if let Some(id) = output.backup.as_ref().and_then(|b| b.snapshot.as_deref()) {
-                    info(&format!("source snapshot saved ({id})"));
+                    ui::print_kv(&[("Snapshot", id.to_string())]);
                 }
-                outro("deploy complete");
+                outro("Deploy complete");
             }
         }
         Err(e) => error(&e),
     }
 }
 
+fn deploy_kind(output: &appz_deploy::DeployOutput) -> &'static str {
+    if output.is_preview {
+        "Preview"
+    } else {
+        "Production"
+    }
+}
+
 fn print_deploy_dry_run(output: &appz_deploy::DeployOutput) {
     success(&format!(
-        "dry run: would deploy to {} ({})",
+        "Dry run: would deploy to {} ({})",
         output.provider,
-        if output.is_preview {
-            "preview"
-        } else {
-            "production"
-        }
+        deploy_kind(output).to_lowercase()
     ));
-    if output.unchanged {
-        info(
-            "unchanged since the last deploy: nothing would be redeployed (--force to deploy anyway)",
-        );
+    let auth = output.auth.as_ref().map(|a| match a {
+        appz_deploy::AuthState::Authenticated => "signed in",
+        appz_deploy::AuthState::NotAuthenticated => {
+            "not signed in (a real deploy would offer to log in)"
+        }
+        appz_deploy::AuthState::Unknown => "could not be checked",
+    });
+    let mut rows = vec![
+        (
+            "Changes",
+            if output.unchanged {
+                "none since the last deploy (--force to deploy anyway)".to_string()
+            } else {
+                "would be deployed".to_string()
+            },
+        ),
+        (
+            "CLI",
+            if output.cli_missing {
+                "not installed (a real deploy installs it with mise)".into()
+            } else {
+                "installed".into()
+            },
+        ),
+        (
+            "Project",
+            if output.link_needed {
+                "not linked (a real deploy asks to create/link one)".into()
+            } else {
+                "linked".into()
+            },
+        ),
+        ("Auth", auth.unwrap_or("").to_string()),
+    ];
+    if !output.setup_files.is_empty() {
+        rows.push(("Would create", output.setup_files.join(", ")));
     }
-    if output.cli_missing {
-        info("cli: not installed (a real deploy installs it with mise)");
-    }
-    if output.link_needed {
-        info("project: not linked (a real deploy asks to create/link one)");
-    }
-    for f in &output.setup_files {
-        info(&format!("would create {f} (the project has none)"));
-    }
-    if let Some(auth) = &output.auth {
-        info(match auth {
-            appz_deploy::AuthState::Authenticated => "auth: signed in",
-            appz_deploy::AuthState::NotAuthenticated => {
-                "auth: not signed in (a real deploy would offer to log in)"
-            }
-            appz_deploy::AuthState::Unknown => "auth: could not be checked",
-        });
-    }
+    ui::print_kv(&rows);
 }
 
 fn run_rollback(args: RollbackArgs, json: bool) {
@@ -2564,9 +2481,7 @@ fn run_rollback(args: RollbackArgs, json: bool) {
         (v, d) => (v, d.unwrap_or_else(|| PathBuf::from("."))),
     };
     let canonical = resolve_root(&dir);
-    if !json {
-        intro("appz rollback");
-    }
+
     let resolved = match &version {
         Some(v) => deploy::resolve_version(&canonical, args.target.clone(), v).map(|id| (id, None)),
         None => deploy::plan_rollback(&canonical, args.target.clone()).map(|plan| {
@@ -2595,7 +2510,7 @@ fn run_rollback(args: RollbackArgs, json: bool) {
             .as_ref()
             .map(label)
             .unwrap_or_else(|| "-".into());
-        let msg = format!("roll back production: {from} -> {}", label(&plan.target));
+        let msg = format!("Roll back production: {from} -> {}", label(&plan.target));
         if json {
             // Non-interactive consumers must opt in with --yes.
             if !assume_yes() {
@@ -2606,7 +2521,7 @@ fn run_rollback(args: RollbackArgs, json: bool) {
                 error("pass --yes to roll back to the previous production deployment");
             }
         } else {
-            info(&msg);
+            ui::hint(&msg);
             let ok = assume_yes()
                 || is_tty()
                     && cliclack::confirm("Roll back?")
@@ -2614,23 +2529,21 @@ fn run_rollback(args: RollbackArgs, json: bool) {
                         .interact()
                         .unwrap_or(false);
             if !ok {
-                return outro("rollback cancelled");
+                return warning("Rollback cancelled");
             }
         }
     }
+
     match deploy::rollback(&canonical, args.target, &version_id) {
         Ok(output) => {
             if json {
                 println!("{}", serde_json::to_string_pretty(&output).unwrap());
             } else {
-                success(&format!(
-                    "rolled back {} to version {}",
-                    output.provider, version_id
-                ));
-                if let Some(url) = &output.url {
-                    info(url);
-                }
-                outro("rollback complete");
+                success(&format!("Rolled back {}", output.provider));
+                ui::print_kv(&[
+                    ("Version", version_id.clone()),
+                    ("URL", output.url.clone().unwrap_or_default()),
+                ]);
             }
         }
         Err(e) => error(&e),
@@ -2642,9 +2555,7 @@ fn run_promote(args: PromoteArgs, json: bool) {
     if !assume_yes() && (json || !is_tty()) {
         error("confirmation required — pass --yes to promote without prompting");
     }
-    if !json {
-        intro("appz promote");
-    }
+
     let confirm = |d: &appz_deploy::DeploymentInspect| {
         if assume_yes() {
             return true;
@@ -2669,21 +2580,20 @@ fn run_promote(args: PromoteArgs, json: bool) {
                 "deployment_id": r.deployment_id, "version_id": r.version_id, "url": r.url })
         ),
         Ok(Some(r)) => {
-            success(&format!("promoted {} to production", r.deployment_id));
-            info(&r.url);
-            outro("promote complete");
+            success("Promoted to production");
+            ui::print_kv(&[
+                ("Deployment", r.deployment_id.clone()),
+                ("URL", r.url.clone()),
+            ]);
         }
         Ok(None) if json => println!("{}", serde_json::json!({ "status": "canceled" })),
-        Ok(None) => outro("canceled"),
+        Ok(None) => warning("Canceled"),
         Err(e) => error(&e),
     }
 }
 
 fn run_link(args: LinkArgs, json: bool) {
     let canonical = resolve_root(&args.dir);
-    if !json {
-        intro("appz link");
-    }
     match deploy::link(&canonical, args.target, args.project) {
         Ok(provider_name) => {
             if json {
@@ -2692,8 +2602,7 @@ fn run_link(args: LinkArgs, json: bool) {
                     serde_json::json!({ "status": "linked", "provider": provider_name })
                 );
             } else {
-                success(&format!("linked project to {provider_name}"));
-                outro("link complete");
+                success(&format!("Linked project to {provider_name}"));
             }
         }
         Err(e) => error(&e),
@@ -2718,30 +2627,26 @@ fn run_alias(args: AliasArgs, json: bool) {
 
 fn run_alias_set(dir: &Path, target: Option<String>, domain: &str, json: bool) {
     let canonical = resolve_root(dir);
-    if !json {
-        intro("appz alias");
-    }
     match deploy::alias(&canonical, target, domain) {
         Ok(url) => {
             if json {
                 println!("{}", serde_json::json!({ "status": "aliased", "url": url }));
             } else {
-                success(&format!("assigned alias {domain}"));
-                info(&url);
-                outro("alias complete");
+                success(&format!("Assigned alias {domain}"));
+                println!("{url}");
             }
         }
         Err(e) => error(&e),
     }
 }
 
-fn fmt_event_time(t: Option<f64>) -> String {
+fn event_ms(t: Option<f64>) -> Option<i64> {
     // The API does not document the unit; treat small values as seconds.
     t.map(|t| if t < 1e11 { t * 1000.0 } else { t } as i64)
-        .map_or_else(|| "-".to_string(), |ms| fmt_millis(Some(ms)))
 }
 
 fn run_activity(args: ActivityArgs, json: bool) {
+    let fetch = ui::fetching("activity");
     let page = match deploy::list_activity(
         Path::new("."),
         args.target,
@@ -2761,48 +2666,63 @@ fn run_activity(args: ActivityArgs, json: bool) {
         println!("{}", serde_json::to_string_pretty(&out).unwrap());
         return;
     }
-    intro("appz activity");
+    fetch.done(&format!("{} found", ui::fmt::plural(items.len(), "event")));
     if items.is_empty() {
-        info("no activity events found");
+        ui::empty("activity events", None);
     } else {
-        let lines: Vec<String> = items
-            .iter()
-            .map(|e| {
-                let actor = e
-                    .actor_user_id
-                    .as_deref()
-                    .or(e.actor_key_id.as_deref())
-                    .or(e.actor_type.as_deref())
-                    .unwrap_or("-");
-                let target = match (e.resource_type.as_deref(), e.resource_id.as_deref()) {
-                    (Some(t), Some(id)) => format!("{t}:{id}"),
-                    (Some(t), None) => t.to_string(),
-                    _ => "-".to_string(),
-                };
-                format!(
-                    "{:<20}  {:<14}  {:<26}  {:<32}  {}",
-                    fmt_event_time(e.created_at),
-                    actor,
-                    e.action,
-                    target,
-                    e.ip.as_deref().unwrap_or("-")
-                )
-            })
-            .collect();
-        info(&lines.join(
-            "
-",
-        ));
+        let now = ui::fmt::now_ms();
+        let mut t = ui::Table::new(&["Age", "Actor", "Action", "Target", "IP"]);
+        for e in &items {
+            let actor = e
+                .actor_user_id
+                .as_deref()
+                .or(e.actor_key_id.as_deref())
+                .or(e.actor_type.as_deref())
+                .unwrap_or("");
+            let target = match (e.resource_type.as_deref(), e.resource_id.as_deref()) {
+                (Some(t), Some(id)) => format!("{t}:{id}"),
+                (Some(t), None) => t.to_string(),
+                _ => String::new(),
+            };
+            let age = event_ms(e.created_at).map_or_else(String::new, |ms| ui::fmt::age(ms, now));
+            t.row(vec![
+                age,
+                actor.to_string(),
+                e.action.clone(),
+                target,
+                e.ip.clone().unwrap_or_default(),
+            ]);
+        }
+        t.print();
     }
     print_next_hint(&page.next_cursor, "appz activity");
-    outro("done");
 }
 
 fn usage_percent(used: f64, limit: f64) -> Option<f64> {
     (limit > 0.0).then(|| used / limit * 100.0)
 }
 
+/// One usage row: `[label, "20 of 100", "20%"]`; near or over the limit the
+/// percent is colored and says so in text, which survives `NO_COLOR`/pipes.
+fn usage_row(u: &appz_deploy::UsageEntry) -> Vec<String> {
+    let amount = if !u.detail.trim().is_empty() {
+        u.detail.clone()
+    } else if u.limit > 0.0 {
+        format!("{} of {}", u.used, u.limit)
+    } else {
+        format!("{} (unlimited)", u.used)
+    };
+    let pct = match usage_percent(u.used, u.limit) {
+        Some(p) if p >= 100.0 => ui::theme::out::red(&format!("{p:.0}% over limit")),
+        Some(p) if p >= 80.0 => ui::theme::out::yellow(&format!("{p:.0}% near limit")),
+        Some(p) => format!("{p:.0}%"),
+        None => String::new(),
+    };
+    vec![u.label.clone(), amount, pct]
+}
+
 fn run_usage(args: UsageArgs, json: bool) {
+    let fetch = ui::fetching("usage");
     let report = match deploy::usage_report(Path::new("."), args.target) {
         Ok(r) => r,
         Err(e) => error(&e),
@@ -2811,81 +2731,56 @@ fn run_usage(args: UsageArgs, json: bool) {
         println!("{}", serde_json::to_string_pretty(&report).unwrap());
         return;
     }
-    intro("appz usage");
-    let mut lines: Vec<String> = report
-        .usage
-        .iter()
-        .map(|u| {
-            let (pct, flag) = match usage_percent(u.used, u.limit) {
-                Some(p) => (
-                    format!("{p:.0}%"),
-                    if p >= 80.0 { "  !! near limit" } else { "" },
-                ),
-                None => ("-".to_string(), ""),
-            };
-            let limit = if u.limit > 0.0 {
-                u.limit.to_string()
-            } else {
-                "unlimited".into()
-            };
-            format!(
-                "{:<24}  {} / {}  ({}){}  {}",
-                u.label, u.used, limit, pct, flag, u.detail
-            )
-        })
-        .collect();
-    if lines.is_empty() {
-        lines.push("no usage reported".into());
-    }
-    info(&lines.join(
-        "
-",
+    fetch.done(&format!(
+        "Usage against plan limits ({})",
+        ui::fmt::plural(report.usage.len(), "resource")
     ));
+    if report.usage.is_empty() {
+        ui::empty("usage", None);
+    } else {
+        let mut t = ui::Table::new(&["Resource", "Usage", "%"]);
+        for u in &report.usage {
+            t.row(usage_row(u));
+        }
+        t.print();
+    }
     let features = if report.entitlements.is_empty() {
         "none".to_string()
     } else {
         report.entitlements.join(", ")
     };
-    info(&format!("Plan features: {features}"));
-    outro("done");
-}
-
-fn alias_created(ms: i64) -> String {
-    chrono::DateTime::from_timestamp_millis(ms)
-        .map(|t| t.format("%Y-%m-%d %H:%M UTC").to_string())
-        .unwrap_or_else(|| "-".into())
+    ui::hint(&format!("Plan features: {features}"));
 }
 
 fn run_alias_ls(dir: &Path, target: Option<String>, json: bool) {
     let canonical = resolve_root(dir);
+    let fetch = ui::fetching("aliases");
     match deploy::list_aliases(&canonical, target) {
         Ok(aliases) if json => println!("{}", serde_json::to_string_pretty(&aliases).unwrap()),
         Ok(aliases) => {
-            intro("appz alias ls");
+            fetch.done(&format!(
+                "{} found",
+                ui::fmt::plural(aliases.len(), "alias")
+            ));
             if aliases.is_empty() {
-                info("no aliases found\nrun `appz alias set <domain>` to add one");
-            } else {
-                let lines: Vec<String> = aliases
-                    .iter()
-                    .map(|a| {
-                        format!(
-                            "{:<36}  {:<18}  {:<22}  {}",
-                            a.host,
-                            a.deployment_id,
-                            alias_created(a.created_at),
-                            if a.is_production { "production" } else { "" }
-                        )
-                    })
-                    .collect();
-                info(&format!(
-                    "{:<36}  {:<18}  {:<22}\n{}",
-                    "HOST",
-                    "DEPLOYMENT",
-                    "CREATED",
-                    lines.join("\n")
-                ));
+                ui::empty("aliases", Some("Run `appz alias set <domain>` to add one"));
+                return;
             }
-            outro("done");
+            let now = ui::fmt::now_ms();
+            let mut t = ui::Table::new(&["Host", "Deployment", "Age", "Production"]);
+            for a in &aliases {
+                t.row(vec![
+                    a.host.clone(),
+                    a.deployment_id.clone(),
+                    ui::fmt::age(a.created_at, now),
+                    if a.is_production {
+                        "✓".into()
+                    } else {
+                        String::new()
+                    },
+                ]);
+            }
+            t.print();
         }
         Err(e) => error(&e),
     }
@@ -2917,70 +2812,73 @@ fn run_alias_rm(dir: &Path, target: Option<String>, host: &str, json: bool) {
         let prompt = format!(
             "Remove alias {host} (deployment {}, created {})?",
             alias.deployment_id,
-            alias_created(alias.created_at)
+            ui::fmt::datetime(alias.created_at)
         );
         match cliclack::confirm(prompt).initial_value(false).interact() {
             Ok(true) => {}
             _ => {
-                info("canceled");
+                warning("Canceled");
                 return;
             }
         }
     }
+
     match deploy::remove_alias(&canonical, target, &host) {
         Ok(()) if json => println!(
             "{}",
             serde_json::json!({ "status": "removed", "host": host })
         ),
-        Ok(()) => success(&format!("removed alias {host}")),
+        Ok(()) => success(&format!("Removed alias {host}")),
         Err(e) => error(&e),
     }
 }
 
 fn print_next_hint(next: &Option<String>, cmd: &str) {
     if let Some(cursor) = next {
-        info(&format!("more results: {cmd} --next {cursor}"));
+        ui::hint(&format!("Next page: {cmd} --next {cursor}"));
     }
 }
 
-fn fmt_millis(ms: Option<i64>) -> String {
-    ms.and_then(chrono::DateTime::from_timestamp_millis)
-        .map(|t| t.format("%Y-%m-%d %H:%M UTC").to_string())
-        .unwrap_or_else(|| "-".to_string())
+/// `● Ready (current)` for the deployment production points at.
+fn deployment_status(status: &str, is_current: bool) -> String {
+    let s = ui::fmt::status(status);
+    if is_current {
+        format!("{s} {}", ui::theme::out::dim("(current)"))
+    } else {
+        s
+    }
 }
 
 /// The pre-team-wide listing, still used for providers other than appz.dev.
 fn run_list_legacy(dir: &Path, target: Option<String>, json: bool) {
+    let fetch = ui::fetching("deployments");
     match deploy::list(dir, target) {
         Ok(deployments) => {
             if json {
                 println!("{}", serde_json::to_string_pretty(&deployments).unwrap());
-            } else {
-                intro("appz list");
-                if deployments.is_empty() {
-                    info("no deployments found for this project");
-                } else {
-                    let lines: Vec<String> = deployments
-                        .iter()
-                        .map(|d| {
-                            let current_marker = if d.is_current { " (current)" } else { "" };
-                            let version = d.version_id.as_deref().unwrap_or("-");
-                            let url = d.url.as_deref().unwrap_or("-");
-                            let age = d
-                                .created_at
-                                .map(|t| format!("{}", t.format("%Y-%m-%d %H:%M UTC")))
-                                .unwrap_or_else(|| "-".to_string());
-                            let status = format!("{:?}", d.status).to_lowercase();
-                            format!(
-                                "{:<16}  {:<14}  {:<32}  {} [{status}{current_marker}]",
-                                d.id, version, url, age
-                            )
-                        })
-                        .collect();
-                    info(&lines.join("\n"));
-                }
-                outro("done");
+                return;
             }
+            fetch.done(&format!(
+                "{} found",
+                ui::fmt::plural(deployments.len(), "deployment")
+            ));
+            if deployments.is_empty() {
+                ui::empty("deployments", None);
+                return;
+            }
+            let now = ui::fmt::now_ms();
+            let mut t = ui::Table::new(&["Age", "ID", "Status", "URL"]);
+            for d in &deployments {
+                t.row(vec![
+                    d.created_at
+                        .map(|c| ui::fmt::age(c.timestamp_millis(), now))
+                        .unwrap_or_default(),
+                    d.id.clone(),
+                    deployment_status(&format!("{:?}", d.status), d.is_current),
+                    d.url.clone().unwrap_or_default(),
+                ]);
+            }
+            t.print();
         }
         Err(e) => error(&e),
     }
@@ -3090,55 +2988,59 @@ fn run_list(args: ListArgs, json: bool) {
         Ok(q) => q,
         Err(e) => error(&e),
     };
+    let fetch = ui::fetching("deployments");
     match deploy::list_page(&canonical, args.target, &query) {
         Ok(page) => {
             if json {
                 let mut out = serde_json::to_value(&page).unwrap();
                 out["filters"] = list_filters_json(&query);
                 println!("{}", serde_json::to_string_pretty(&out).unwrap());
-            } else {
-                intro("appz list");
-                if page.items.is_empty() {
-                    info(if team_wide {
-                        "no deployments found for this team"
-                    } else {
-                        "no deployments found for this project"
-                    });
-                } else {
-                    let lines: Vec<String> = page
-                        .items
-                        .iter()
-                        .map(|d| {
-                            let current_marker = if d.is_current { " (current)" } else { "" };
-                            let version = d.version_id.as_deref().unwrap_or("-");
-                            let url = d.url.as_deref().unwrap_or("-");
-                            let status = d.status.as_deref().unwrap_or("unknown");
-                            let project_col = if team_wide {
-                                format!(
-                                    "{:<20}  ",
-                                    d.project_slug
-                                        .as_deref()
-                                        .or(d.project_name.as_deref())
-                                        .or(d.project_id.as_deref())
-                                        .unwrap_or("-")
-                                )
-                            } else {
-                                String::new()
-                            };
-                            format!(
-                                "{project_col}{:<16}  {:<14}  {:<32}  {} [{status}{current_marker}]",
-                                d.id,
-                                version,
-                                url,
-                                fmt_millis(d.created_at)
-                            )
-                        })
-                        .collect();
-                    info(&lines.join("\n"));
-                    print_next_hint(&page.next, "appz ls");
-                }
-                outro("done");
+                return;
             }
+            let scope = query
+                .project
+                .as_deref()
+                .map_or_else(|| "this team".to_string(), |p| p.to_string());
+            fetch.done(&format!(
+                "{} found for {scope}",
+                ui::fmt::plural(page.items.len(), "deployment")
+            ));
+            if page.items.is_empty() {
+                ui::empty("deployments", Some("Run `appz deploy` to create one"));
+                return;
+            }
+            let now = ui::fmt::now_ms();
+            let mut headers = vec!["Age"];
+            if team_wide {
+                headers.push("Project");
+            }
+            headers.extend(["ID", "Status", "URL"]);
+            let mut t = ui::Table::new(&headers);
+            for d in &page.items {
+                let mut row = vec![
+                    d.created_at
+                        .map(|c| ui::fmt::age(c, now))
+                        .unwrap_or_default(),
+                ];
+                if team_wide {
+                    row.push(
+                        d.project_slug
+                            .clone()
+                            .or_else(|| d.project_name.clone())
+                            .or_else(|| d.project_id.clone())
+                            .unwrap_or_default(),
+                    );
+                }
+                row.push(d.id.clone());
+                row.push(deployment_status(
+                    d.status.as_deref().unwrap_or("unknown"),
+                    d.is_current,
+                ));
+                row.push(d.url.clone().unwrap_or_default());
+                t.row(row);
+            }
+            t.print();
+            print_next_hint(&page.next, "appz ls");
         }
         Err(e) => error(&e),
     }
@@ -3179,10 +3081,8 @@ fn run_open(mut args: OpenArgs, json: bool) {
                     println!("{}", t.url);
                 }
             } else {
-                intro("appz open");
-                info(&format!("opening {}", t.url));
+                ui::hint(&format!("Opening {}", t.url));
                 open_in_browser(&t.url);
-                outro("done");
             }
         }
         Err(e) => error(&e),
@@ -3198,9 +3098,9 @@ fn run_remove(args: RemoveArgs, json: bool) {
         }
     }
     if !json {
-        intro("appz remove");
-        info(&format!("Deployments to delete:\n  {}", refs.join("\n  ")));
+        ui::hint(&format!("Deployments to delete: {}", refs.join(", ")));
     }
+
     if !assume_yes() {
         if json || !is_interactive_tty() {
             error("confirmation required — pass --yes to delete without prompting");
@@ -3211,7 +3111,8 @@ fn run_remove(args: RemoveArgs, json: bool) {
             .interact()
             .unwrap_or(false);
         if !ok {
-            warning("cancelled, nothing deleted");
+            warning("Cancelled, nothing deleted");
+
             return;
         }
     }
@@ -3232,15 +3133,18 @@ fn run_remove(args: RemoveArgs, json: bool) {
     } else {
         for (r, res) in &results {
             match res {
-                Ok(id) => success(&format!("removed {id}")),
+                Ok(id) => success(&format!("Removed {id}")),
                 Err(e) => warning(&format!("{r}: {e}")),
             }
         }
-        outro(&format!(
-            "{} removed, {failed} failed",
-            results.len() - failed
-        ));
+        if results.len() > 1 {
+            ui::hint(&format!(
+                "{} removed, {failed} failed",
+                results.len() - failed
+            ));
+        }
     }
+
     if failed > 0 {
         std::process::exit(1);
     }
@@ -3248,100 +3152,164 @@ fn run_remove(args: RemoveArgs, json: bool) {
 
 fn run_inspect(args: InspectArgs, json: bool) {
     let canonical = resolve_root(&args.dir);
-    match deploy::inspect(&canonical, args.target, &args.id_or_url) {
-        Ok(insp) => {
-            if json {
-                println!("{}", serde_json::to_string_pretty(&insp).unwrap());
-            } else {
-                intro("appz inspect");
-                step("deployment");
-                let mut dep_info = vec![
-                    format!("id:          {}", insp.id),
-                    format!("project:     {}", insp.project_id),
-                    format!("version:     {}", insp.version_id),
-                    format!(
-                        "status:      {}",
-                        format!("{:?}", insp.status).to_lowercase()
-                    ),
-                    format!("target:      {}", insp.target),
-                ];
-                if let Some(created) = insp.created_at {
-                    dep_info.push(format!(
-                        "created:     {}",
-                        created.format("%Y-%m-%d %H:%M:%S UTC")
-                    ));
-                }
-                info(&dep_info.join("\n"));
+    let insp = match deploy::inspect(&canonical, args.target, &args.id_or_url) {
+        Ok(i) => i,
+        Err(e) => error(&e),
+    };
+    if json {
+        println!("{}", serde_json::to_string_pretty(&insp).unwrap());
+        return;
+    }
+    let created = insp.created_at.map(|c| {
+        let ms = c.timestamp_millis();
+        match ui::fmt::relative(ms, ui::fmt::now_ms()) {
+            Some(rel) => format!("{} ({rel})", ui::fmt::datetime(ms)),
+            None => ui::fmt::datetime(ms),
+        }
+    });
+    ui::heading("Deployment");
+    ui::print_kv(&[
+        ("ID", insp.id.clone()),
+        ("Project", insp.project_id.clone()),
+        ("Version", insp.version_id.clone()),
+        ("Status", ui::fmt::status(&format!("{:?}", insp.status))),
+        ("Target", insp.target.to_string()),
+        ("Created", created.unwrap_or_default()),
+    ]);
+    if !insp.hosts.is_empty() {
+        ui::heading("Hosts");
+        for h in &insp.hosts {
+            let clean = h
+                .trim_start_matches("https://")
+                .trim_start_matches("http://");
+            println!("  https://{clean}");
+        }
+    }
+    ui::heading("Edge storage");
+    let mut storage = vec![
+        ("Files", insp.file_count.to_string()),
+        ("Size", appz_core::format_size(insp.total_bytes)),
+    ];
+    if let Some(mkey) = &insp.manifest_key {
+        storage.push(("Manifest", mkey.clone()));
+    }
+    ui::print_kv(&storage);
+    if !insp.redirects.is_empty() || !insp.headers.is_empty() {
+        ui::heading("Routing rules");
+        let mut t = ui::Table::new(&["Type", "Rule"]);
+        for r in &insp.redirects {
+            t.row(vec!["redirect".into(), r.to_string()]);
+        }
+        for h in &insp.headers {
+            t.row(vec!["header".into(), h.to_string()]);
+        }
+        t.print();
+    }
+    let files = if args.files {
+        insp.files.as_deref().unwrap_or_default()
+    } else {
+        &[]
+    };
+    if !files.is_empty() {
+        ui::heading("Manifest files");
+        let mut t = ui::Table::new(&["Path", "Size", "Type", "Hash"]);
+        for f in files {
+            t.row(vec![
+                f.path.clone(),
+                appz_core::format_size(f.size),
+                f.content_type.clone().unwrap_or_default(),
+                f.hash.chars().take(12).collect(),
+            ]);
+        }
+        t.print();
+    } else if !args.files && insp.file_count > 0 {
+        ui::hint("Pass --files to list manifest files");
+    }
+}
 
-                if !insp.hosts.is_empty() {
-                    step("hosts");
-                    let host_lines: Vec<String> = insp
-                        .hosts
-                        .iter()
-                        .map(|h| {
-                            let clean = h
-                                .trim_start_matches("https://")
-                                .trim_start_matches("http://");
-                            format!("https://{clean}")
-                        })
-                        .collect();
-                    info(&host_lines.join("\n"));
-                }
-
-                step("edge storage & cas");
-                let mut cas_info = vec![
-                    format!("files:       {}", insp.file_count),
-                    format!("size:        {}", appz_core::format_size(insp.total_bytes)),
-                ];
-                if let Some(mkey) = &insp.manifest_key {
-                    cas_info.push(format!("manifest:    {mkey}"));
-                }
-                info(&cas_info.join("\n"));
-
-                if !insp.redirects.is_empty() || !insp.headers.is_empty() {
-                    step("routing rules");
-                    let mut rules = Vec::new();
-                    for r in &insp.redirects {
-                        rules.push(format!("redirect:    {r}"));
-                    }
-                    for h in &insp.headers {
-                        rules.push(format!("header:      {h}"));
-                    }
-                    info(&rules.join("\n"));
-                }
-
-                let files_to_show = if args.files {
-                    insp.files.as_deref().unwrap_or_default()
-                } else {
-                    &[]
-                };
-                if !files_to_show.is_empty() {
-                    step("manifest files");
-                    let manifest_lines: Vec<String> = files_to_show
-                        .iter()
-                        .map(|f| {
-                            let ct = f.content_type.as_deref().unwrap_or("-");
-                            let hash_short = if f.hash.len() > 12 {
-                                &f.hash[..12]
-                            } else {
-                                &f.hash
-                            };
-                            format!(
-                                "{:<36}  {:>8}  {:<24}  hash:{}...",
-                                f.path,
-                                appz_core::format_size(f.size),
-                                ct,
-                                hash_short
-                            )
-                        })
-                        .collect();
-                    info(&manifest_lines.join("\n"));
-                }
-                outro("inspection complete");
+/// DNS records a domain still needs, as `[Purpose, Type, Name, Value]` rows.
+/// Works for every domain record shape the API returns (add/verify/inspect).
+macro_rules! dns_rows {
+    ($d:expr) => {
+        dns_rows!($d, false)
+    };
+    // `all_verification`: list verification records even when a routing
+    // target exists (verify/inspect show every record the domain still needs).
+    ($d:expr, $all_verification:expr) => {{
+        let d = $d;
+        let mut rows: Vec<Vec<String>> = Vec::new();
+        if !d.verified {
+            if let Some(ch) = &d.challenge {
+                rows.push(vec![
+                    "Ownership".into(),
+                    ch.r#type.to_string(),
+                    ch.name.to_string(),
+                    ch.value.to_string(),
+                ]);
             }
         }
-        Err(e) => error(&e),
+        if let Some(c) = &d.cname {
+            rows.push(vec![
+                "Routing".into(),
+                "CNAME".into(),
+                c.name.to_string(),
+                c.target.to_string(),
+            ]);
+        }
+        if let Some(a) = &d.apex {
+            rows.push(vec![
+                "Routing".into(),
+                "A".into(),
+                a.name.to_string(),
+                a.ip.to_string(),
+            ]);
+        }
+        if $all_verification || (d.cname.is_none() && d.apex.is_none()) {
+            for v in &d.verification {
+                rows.push(vec![
+                    "Verify".into(),
+                    v.r#type.to_uppercase(),
+                    v.domain.to_string(),
+                    v.value.to_string(),
+                ]);
+            }
+        }
+        rows
+    }};
+}
+
+/// Why each verification record is needed, when the API says.
+fn dns_reasons(records: &[appz_deploy::DomainVerificationRecord]) {
+    for v in records {
+        if let Some(reason) = v.reason.as_deref().filter(|r| !r.trim().is_empty()) {
+            ui::hint(&format!(
+                "{} {}: {reason}",
+                v.r#type.to_uppercase(),
+                v.domain
+            ));
+        }
     }
+}
+
+fn print_dns_rows(rows: Vec<Vec<String>>) {
+    if rows.is_empty() {
+        return;
+    }
+    ui::heading("DNS records");
+    let mut t = ui::Table::new(&["Purpose", "Type", "Name", "Value"]);
+    for r in rows {
+        t.row(r);
+    }
+    // Never truncate: users copy these values into their DNS provider.
+    print!("{}", t.render(None));
+}
+
+fn domain_project(t: &appz_deploy::TeamDomain) -> String {
+    t.project_slug
+        .clone()
+        .or_else(|| t.project_name.clone())
+        .or_else(|| t.project_id.clone())
+        .unwrap_or_default()
 }
 
 fn run_domains(args: DomainsArgs, json: bool) {
@@ -3351,66 +3319,26 @@ fn run_domains(args: DomainsArgs, json: bool) {
             Ok(dom) => {
                 if json {
                     println!("{}", serde_json::to_string_pretty(&dom).unwrap());
-                } else {
-                    intro("appz domains add");
-                    let mut details = vec![
-                        format!("domain:      {}", dom.domain),
-                        format!("status:      {}", dom.display_status()),
-                    ];
-                    if let Some(ssl) = &dom.ssl_status {
-                        details.push(format!("ssl:         {ssl}"));
-                    }
-                    info(&details.join("\n"));
-
-                    if let Some(ch) = &dom.challenge
-                        && !dom.verified
-                    {
-                        step("1. Ownership verification (required once):");
-                        info(&format!("{:<8}  {:<36}  {}", ch.r#type, ch.name, ch.value));
-                    }
-                    if dom.cname.is_some() || dom.apex.is_some() {
-                        step("2. DNS routing target:");
-                        let mut dns_targets = Vec::new();
-                        if let Some(cname) = &dom.cname {
-                            dns_targets.push(format!(
-                                "{:<8}  {:<36}  {}",
-                                "CNAME", cname.name, cname.target
-                            ));
-                        }
-                        if let Some(apex) = &dom.apex {
-                            dns_targets.push(format!("{:<8}  {:<36}  {}", "A", apex.name, apex.ip));
-                        }
-                        info(&dns_targets.join("\n"));
-                    } else if !dom.verification.is_empty() {
-                        step("dns configuration records");
-                        let recs: Vec<String> = dom
-                            .verification
-                            .iter()
-                            .map(|v| {
-                                let reason = v.reason.as_deref().unwrap_or("-");
-                                format!(
-                                    "{:<8}  {:<32}  {}  ({})",
-                                    v.r#type.to_uppercase(),
-                                    v.domain,
-                                    v.value,
-                                    reason
-                                )
-                            })
-                            .collect();
-                        info(&recs.join("\n"));
-                    }
-                    if let Some(hint) = dom.dns_setup_hint() {
-                        step("DNS routing at your provider");
-                        info(&hint);
-                    }
-                    step("next steps");
-                    info(&format!(
-                        "1. Configure the DNS records above\n\
-                         2. Run `appz domains verify {}` once configured",
-                        dom.domain
-                    ));
-                    outro("domain added");
+                    return;
                 }
+                success(&format!("Added {}", dom.domain));
+                ui::print_kv(&[
+                    ("Domain", dom.domain.clone()),
+                    ("Status", ui::fmt::status(dom.display_status())),
+                    (
+                        "SSL",
+                        ui::fmt::status(dom.ssl_status.as_deref().unwrap_or("")),
+                    ),
+                ]);
+                print_dns_rows(dns_rows!(&dom));
+                dns_reasons(&dom.verification);
+                if let Some(hint) = dom.dns_setup_hint() {
+                    ui::hint(&hint);
+                }
+                ui::hint(&format!(
+                    "Configure the DNS records above, then run `appz domains verify {}`",
+                    dom.domain
+                ));
             }
             Err(e) => error(&e),
         },
@@ -3420,46 +3348,41 @@ fn run_domains(args: DomainsArgs, json: bool) {
                 limit: None,
                 cursor: next,
             };
+            let fetch = ui::fetching("domains");
             match deploy::list_domains_page(&canonical, args.target, &query) {
                 Ok(page) => {
                     if json {
                         println!("{}", serde_json::to_string_pretty(&page).unwrap());
-                    } else {
-                        intro("appz domains");
-                        if page.items.is_empty() {
-                            info(
-                                "no custom domains found\nrun `appz domains add <domain>` to connect a custom domain",
-                            );
-                        } else {
-                            let lines: Vec<String> = page
-                                .items
-                                .iter()
-                                .map(|t| {
-                                    let d = &t.domain;
-                                    let ssl = d.ssl_status.as_deref().unwrap_or("-");
-                                    let verified_str =
-                                        if d.verified { "verified" } else { "pending" };
-                                    let project = t
-                                        .project_slug
-                                        .as_deref()
-                                        .or(t.project_name.as_deref())
-                                        .or(t.project_id.as_deref())
-                                        .unwrap_or("-");
-                                    format!(
-                                        "{:<30}  {:<20}  status:{:<12}  ssl:{:<10}  {}",
-                                        d.domain,
-                                        project,
-                                        d.display_status(),
-                                        ssl,
-                                        verified_str
-                                    )
-                                })
-                                .collect();
-                            info(&lines.join("\n"));
-                            print_next_hint(&page.next, "appz domains ls");
-                        }
-                        outro("done");
+                        return;
                     }
+                    fetch.done(&format!(
+                        "{} found",
+                        ui::fmt::plural(page.items.len(), "domain")
+                    ));
+                    if page.items.is_empty() {
+                        ui::empty(
+                            "custom domains",
+                            Some("Run `appz domains add <domain>` to connect one"),
+                        );
+                        return;
+                    }
+                    let mut t = ui::Table::new(&["Domain", "Project", "Status", "SSL", "Verified"]);
+                    for item in &page.items {
+                        let d = &item.domain;
+                        t.row(vec![
+                            d.domain.clone(),
+                            domain_project(item),
+                            ui::fmt::status(d.display_status()),
+                            ui::fmt::status(d.ssl_status.as_deref().unwrap_or("")),
+                            if d.verified {
+                                "✓".into()
+                            } else {
+                                String::new()
+                            },
+                        ]);
+                    }
+                    t.print();
+                    print_next_hint(&page.next, "appz domains ls");
                 }
                 Err(e) => error(&e),
             }
@@ -3469,60 +3392,24 @@ fn run_domains(args: DomainsArgs, json: bool) {
                 Ok(res) => {
                     if json {
                         println!("{}", serde_json::to_string_pretty(&res).unwrap());
+                        return;
+                    }
+                    if res.verified {
+                        success(&format!("{} is verified and active", res.domain));
                     } else {
-                        intro("appz domains verify");
-                        let mut details = vec![
-                            format!("domain:      {}", res.domain),
-                            format!("status:      {}", res.display_status()),
-                        ];
-                        if let Some(ssl) = &res.ssl_status {
-                            details.push(format!("ssl:         {ssl}"));
-                        }
-                        info(&details.join("\n"));
-
-                        if res.verified {
-                            success(&format!("{} is verified and active!", res.domain));
-                        } else {
-                            warning("verification still pending");
-                            if let Some(ch) = &res.challenge {
-                                step("required ownership challenge");
-                                info(&format!("{:<8}  {:<36}  {}", ch.r#type, ch.name, ch.value));
-                            }
-                            if res.cname.is_some() || res.apex.is_some() {
-                                step("routing target");
-                                let mut targets = Vec::new();
-                                if let Some(cname) = &res.cname {
-                                    targets.push(format!(
-                                        "{:<8}  {:<36}  {}",
-                                        "CNAME", cname.name, cname.target
-                                    ));
-                                }
-                                if let Some(apex) = &res.apex {
-                                    targets.push(format!(
-                                        "{:<8}  {:<36}  {}",
-                                        "A", apex.name, apex.ip
-                                    ));
-                                }
-                                info(&targets.join("\n"));
-                            }
-                            if !res.verification.is_empty() {
-                                step("required dns records");
-                                let dns_lines: Vec<String> = res
-                                    .verification
-                                    .iter()
-                                    .map(|v| {
-                                        format!(
-                                            "{:<8}  {:<32}  {}",
-                                            v.r#type.to_uppercase(),
-                                            v.domain,
-                                            v.value
-                                        )
-                                    })
-                                    .collect();
-                                info(&dns_lines.join("\n"));
-                            }
-                        }
-                        outro("done");
+                        warning(&format!("{}: verification still pending", res.domain));
+                    }
+                    ui::print_kv(&[
+                        ("Domain", res.domain.clone()),
+                        ("Status", ui::fmt::status(res.display_status())),
+                        (
+                            "SSL",
+                            ui::fmt::status(res.ssl_status.as_deref().unwrap_or("")),
+                        ),
+                    ]);
+                    if !res.verified {
+                        print_dns_rows(dns_rows!(&res, true));
+                        dns_reasons(&res.verification);
                     }
                 }
                 Err(e) => error(&e),
@@ -3533,68 +3420,42 @@ fn run_domains(args: DomainsArgs, json: bool) {
                 Ok(Some(t)) => {
                     if json {
                         println!("{}", serde_json::to_string_pretty(&t).unwrap());
-                    } else {
-                        intro("appz domains inspect");
-                        let d = &t.domain;
-                        let project = t
-                            .project_slug
-                            .as_deref()
-                            .or(t.project_name.as_deref())
-                            .or(t.project_id.as_deref())
-                            .unwrap_or("-");
-                        let mut details = vec![
-                            format!("domain:      {}", d.domain),
-                            format!("project:     {project}"),
-                            format!("status:      {}", d.display_status()),
-                            format!("serving:     {}", d.serving_status()),
-                        ];
-                        if let Some(ssl) = &d.ssl_status {
-                            details.push(format!("ssl:         {ssl}"));
-                        }
-                        if let Some(ts) = d
-                            .created_at
-                            .and_then(chrono::DateTime::from_timestamp_millis)
-                        {
-                            details
-                                .push(format!("added:       {}", ts.format("%Y-%m-%d %H:%M UTC")));
-                        }
-                        if let Some(l) = &d.lapsed_at {
-                            details.push(format!("lapsed at:   {l}"));
-                        }
-                        if let Some(r) = &d.removes_at {
-                            details.push(format!("removes at:  {r}"));
-                        }
-                        info(&details.join("\n"));
-                        if !d.verified {
-                            if let Some(ch) = &d.challenge {
-                                step("required ownership challenge");
-                                info(&format!("{:<8}  {:<36}  {}", ch.r#type, ch.name, ch.value));
-                            }
-                            if d.cname.is_some() || d.apex.is_some() {
-                                step("routing target");
-                                let mut targets = Vec::new();
-                                if let Some(c) = &d.cname {
-                                    targets.push(format!(
-                                        "{:<8}  {:<36}  {}",
-                                        "CNAME", c.name, c.target
-                                    ));
-                                }
-                                if let Some(a) = &d.apex {
-                                    targets.push(format!("{:<8}  {:<36}  {}", "A", a.name, a.ip));
-                                }
-                                info(&targets.join("\n"));
-                            }
-                            warning("domain is not verified");
-                            info(&format!(
-                                "Configure the DNS records above, then run `appz domains verify {}`",
-                                d.domain
-                            ));
-                        }
-                        info(
-                            "nameservers and registrar details are not shown: appz.dev is not a domain registrar",
-                        );
-                        outro("done");
+                        return;
                     }
+                    let d = &t.domain;
+                    let mut rows = vec![
+                        ("Domain", d.domain.clone()),
+                        ("Project", domain_project(&t)),
+                        ("Status", ui::fmt::status(d.display_status())),
+                        ("Serving", d.serving_status().to_string()),
+                        (
+                            "SSL",
+                            ui::fmt::status(d.ssl_status.as_deref().unwrap_or("")),
+                        ),
+                        (
+                            "Added",
+                            d.created_at.map(ui::fmt::datetime).unwrap_or_default(),
+                        ),
+                    ];
+                    if let Some(l) = &d.lapsed_at {
+                        rows.push(("Lapsed at", l.to_string()));
+                    }
+                    if let Some(r) = &d.removes_at {
+                        rows.push(("Removes at", r.to_string()));
+                    }
+                    ui::print_kv(&rows);
+                    if !d.verified {
+                        print_dns_rows(dns_rows!(d, true));
+                        dns_reasons(&d.verification);
+                        warning("Domain is not verified");
+                        ui::hint(&format!(
+                            "Configure the DNS records above, then run `appz domains verify {}`",
+                            d.domain
+                        ));
+                    }
+                    ui::hint(
+                        "Nameservers and registrar details are not shown: appz.dev is not a domain registrar",
+                    );
                 }
                 Ok(None) => error(&format!(
                     "{domain} is not attached to any project. Run `appz domains add {domain}` to add it"
@@ -3618,27 +3479,23 @@ fn run_domains(args: DomainsArgs, json: bool) {
                 .interact()
                 .unwrap_or(false);
                 if !go {
-                    error("cancelled");
+                    error("Cancelled");
                 }
             }
             match deploy::move_domain(&canonical, args.target, &domain, &to, &project) {
                 Ok(res) => {
                     if json {
                         println!("{}", serde_json::to_string_pretty(&res).unwrap());
+                    } else if res.status == "pending" {
+                        warning(&format!(
+                            "{} moved to {}, but routing is still reconciling; re-run the same command to finish",
+                            res.domain, res.organization_id
+                        ));
                     } else {
-                        intro("appz domains move");
-                        if res.status == "pending" {
-                            warning(&format!(
-                                "{} moved to {}, but routing is still reconciling; re-run the same command to finish",
-                                res.domain, res.organization_id
-                            ));
-                        } else {
-                            success(&format!(
-                                "moved {} to organization {} (project {})",
-                                res.domain, res.organization_id, res.project_id
-                            ));
-                        }
-                        outro("done");
+                        success(&format!(
+                            "Moved {} to organization {} (project {})",
+                            res.domain, res.organization_id, res.project_id
+                        ));
                     }
                 }
                 Err(e) => error(&e),
@@ -3653,9 +3510,7 @@ fn run_domains(args: DomainsArgs, json: bool) {
                             serde_json::json!({ "status": "removed", "domain": domain })
                         );
                     } else {
-                        intro("appz domains remove");
-                        success(&format!("removed domain {domain} from project"));
-                        outro("done");
+                        success(&format!("Removed domain {domain} from project"));
                     }
                 }
                 Err(e) => error(&e),
@@ -3686,40 +3541,46 @@ fn project_restore_command(dir: &Path, name: &str) -> String {
 fn run_projects(args: ProjectsArgs, json: bool) {
     let canonical = resolve_root(&args.dir);
     match args.command {
-        ProjectsCmd::List => match deploy::list_projects(&canonical, args.target) {
-            Ok(projects) => {
-                if json {
-                    println!("{}", serde_json::to_string_pretty(&projects).unwrap());
-                } else {
-                    intro("appz projects");
-                    if projects.is_empty() {
-                        info(
-                            "no projects found in active organization\nrun `appz projects add <name>` to create a project",
-                        );
-                    } else {
-                        let lines: Vec<String> = projects
-                            .iter()
-                            .map(|p| {
-                                let fw = p.framework.as_deref().unwrap_or("-");
-                                format!("{:<30}  id:{:<24}  framework:{:<12}", p.name, p.id, fw)
-                            })
-                            .collect();
-                        info(&lines.join("\n"));
+        ProjectsCmd::List => {
+            let fetch = ui::fetching("projects");
+            match deploy::list_projects(&canonical, args.target) {
+                Ok(projects) => {
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&projects).unwrap());
+                        return;
                     }
-                    outro("done");
+                    fetch.done(&format!(
+                        "{} found",
+                        ui::fmt::plural(projects.len(), "project")
+                    ));
+                    if projects.is_empty() {
+                        ui::empty(
+                            "projects",
+                            Some("Run `appz projects add <name>` to create one"),
+                        );
+                        return;
+                    }
+                    let mut t = ui::Table::new(&["Name", "ID", "Framework", "Updated"]);
+                    for p in &projects {
+                        t.row(vec![
+                            p.name.clone(),
+                            p.id.clone(),
+                            p.framework.clone().unwrap_or_default(),
+                            p.updated_at.map(ui::fmt::ago).unwrap_or_default(),
+                        ]);
+                    }
+                    t.print();
                 }
+                Err(e) => error(&e),
             }
-            Err(e) => error(&e),
-        },
+        }
         ProjectsCmd::Add { name } => match deploy::add_project(&canonical, args.target, &name) {
             Ok(p) => {
                 if json {
                     println!("{}", serde_json::to_string_pretty(&p).unwrap());
                 } else {
-                    intro("appz projects add");
-                    success(&format!("created project {}", p.name));
-                    info(&format!("id:   {}\nslug: {}", p.id, p.slug));
-                    outro("done");
+                    success(&format!("Created project {}", p.name));
+                    ui::print_kv(&[("ID", p.id.clone()), ("Slug", p.slug.clone())]);
                 }
             }
             Err(e) => error(&e),
@@ -3730,20 +3591,19 @@ fn run_projects(args: ProjectsArgs, json: bool) {
                     if json {
                         println!("{}", serde_json::to_string_pretty(&p).unwrap());
                     } else {
-                        intro("appz projects inspect");
-                        let mut lines = vec![
-                            format!("name:            {}", p.name),
-                            format!("id:              {}", p.id),
-                            format!("slug:            {}", p.slug),
-                        ];
-                        if let Some(org) = &p.organization_id {
-                            lines.push(format!("organization:    {}", org));
-                        }
-                        if let Some(url) = &p.production_url {
-                            lines.push(format!("production url:  {}", url));
-                        }
-                        info(&lines.join("\n"));
-                        outro("done");
+                        ui::print_kv(&[
+                            ("Name", p.name.clone()),
+                            ("ID", p.id.clone()),
+                            ("Slug", p.slug.clone()),
+                            (
+                                "Organization",
+                                p.organization_id.clone().unwrap_or_default(),
+                            ),
+                            (
+                                "Production URL",
+                                p.production_url.clone().unwrap_or_default(),
+                            ),
+                        ]);
                     }
                 }
                 Err(e) => error(&e),
@@ -3755,10 +3615,8 @@ fn run_projects(args: ProjectsArgs, json: bool) {
                     if json {
                         println!("{}", serde_json::to_string_pretty(&p).unwrap());
                     } else {
-                        intro("appz projects rename");
-                        success(&format!("renamed project to {}", p.name));
-                        info(&format!("id:   {}\nslug: {}", p.id, p.slug));
-                        outro("done");
+                        success(&format!("Renamed project to {}", p.name));
+                        ui::print_kv(&[("ID", p.id.clone()), ("Slug", p.slug.clone())]);
                     }
                 }
                 Err(e) => error(&e),
@@ -3770,12 +3628,13 @@ fn run_projects(args: ProjectsArgs, json: bool) {
                     println!("{}", serde_json::to_string_pretty(&project).unwrap())
                 }
                 Ok(project) => success(&format!(
-                    "restored project {} ({})",
+                    "Restored project {} ({})",
                     project.slug, project.id
                 )),
                 Err(e) => error(&e),
             }
         }
+
         ProjectsCmd::Pause { name } => project_ops::lifecycle(
             &canonical,
             args.target,
@@ -3828,14 +3687,13 @@ fn run_projects(args: ProjectsArgs, json: bool) {
                                 "estimated_restore_deadline": deadline, "restore_command": command })
                         );
                     } else {
-                        intro("appz projects remove");
-                        success(&format!("removed project {name}"));
-                        info(&format!(
-                            "Recover within 30 days (approximately {deadline}). Restore before deploying to the same slug again.\nRun: {command}"
+                        success(&format!("Removed project {name}"));
+                        ui::hint(&format!(
+                            "Recover within 30 days (approximately {deadline}). Restore before deploying to the same slug again: {command}"
                         ));
-                        outro("done");
                     }
                 }
+
                 Err(e) => error(&e),
             }
         }
@@ -3962,7 +3820,7 @@ fn run_login(args: LoginArgs, json: bool) {
                     println!("{}", serde_json::to_string_pretty(&stored).unwrap());
                 } else {
                     success(&format!(
-                        "successfully logged in as {}{}",
+                        "Logged in as {}{}",
                         email.unwrap_or_else(|| "authorized user".to_string()),
                         organization_id
                             .map(|o| format!(" (org: {o})"))
@@ -3985,73 +3843,56 @@ fn run_login(args: LoginArgs, json: bool) {
 
 fn run_whoami(json: bool) {
     let token = appz_deploy::resolve_auth_token(None);
-    match token {
-        None => {
-            if json {
-                println!("{}", serde_json::json!({ "authenticated": false }));
-            } else {
-                info("not logged in. Run `appz login` or set APPZ_TOKEN");
-            }
+    let Some(t) = token else {
+        if json {
+            println!("{}", serde_json::json!({ "authenticated": false }));
+        } else {
+            ui::hint("Not logged in. Run `appz login` or set APPZ_TOKEN");
         }
-        Some(t) => {
-            let stored = appz_deploy::load_stored_auth();
-            let api_base = std::env::var("APPZ_API_URL")
-                .unwrap_or_else(|_| "https://api.appz.dev".to_string());
-            let session_url = format!("{api_base}/api/auth/get-session");
-            let session_res = ureq::get(&session_url)
-                .set("Authorization", &format!("Bearer {t}"))
-                .call();
-
-            let (email, org) = if let Ok(resp) = session_res {
-                if let Ok(v) = resp.into_json::<serde_json::Value>() {
-                    let email = v
-                        .get("user")
-                        .and_then(|u| u.get("email"))
-                        .and_then(|s| s.as_str())
-                        .map(String::from);
-                    let org = v
-                        .get("session")
-                        .and_then(|s| s.get("activeOrganizationId"))
-                        .and_then(|s| s.as_str())
-                        .map(String::from);
-                    (email, org)
-                } else {
-                    (
-                        stored.as_ref().and_then(|s| s.email.clone()),
-                        stored.as_ref().and_then(|s| s.organization_id.clone()),
-                    )
-                }
-            } else {
-                (
-                    stored.as_ref().and_then(|s| s.email.clone()),
-                    stored.as_ref().and_then(|s| s.organization_id.clone()),
-                )
-            };
-
-            if json {
-                println!(
-                    "{}",
-                    serde_json::json!({
-                        "authenticated": true,
-                        "email": email,
-                        "organizationId": org,
-                    })
-                );
-            } else {
-                intro("appz whoami");
-                let mut lines = Vec::new();
-                if let Some(e) = email {
-                    lines.push(format!("user:         {e}"));
-                } else {
-                    lines.push("user:         authenticated via token".to_string());
-                }
-                if let Some(o) = org {
-                    lines.push(format!("organization: {o}"));
-                }
-                info(&lines.join("\n"));
-                outro("done");
-            }
-        }
+        return;
+    };
+    let stored = appz_deploy::load_stored_auth();
+    let api_base =
+        std::env::var("APPZ_API_URL").unwrap_or_else(|_| "https://api.appz.dev".to_string());
+    let session_url = format!("{api_base}/api/auth/get-session");
+    let session = ureq::get(&session_url)
+        .set("Authorization", &format!("Bearer {t}"))
+        .call()
+        .ok()
+        .and_then(|r| r.into_json::<serde_json::Value>().ok());
+    let (email, org) = match session {
+        Some(v) => (
+            v.get("user")
+                .and_then(|u| u.get("email"))
+                .and_then(|s| s.as_str())
+                .map(String::from),
+            v.get("session")
+                .and_then(|s| s.get("activeOrganizationId"))
+                .and_then(|s| s.as_str())
+                .map(String::from),
+        ),
+        None => (
+            stored.as_ref().and_then(|s| s.email.clone()),
+            stored.as_ref().and_then(|s| s.organization_id.clone()),
+        ),
+    };
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "authenticated": true,
+                "email": email,
+                "organizationId": org,
+            })
+        );
+    } else {
+        ui::print_kv(&[
+            (
+                "User",
+                email.unwrap_or_else(|| "authenticated via token".into()),
+            ),
+            ("Organization", org.unwrap_or_default()),
+        ]);
     }
 }
 
@@ -4061,9 +3902,7 @@ fn run_logout(json: bool) {
             if json {
                 println!("{}", serde_json::json!({ "status": "logged_out" }));
             } else {
-                intro("appz logout");
-                success("logged out successfully");
-                outro("done");
+                success("Logged out");
             }
         }
         Err(e) => error(&format!("failed to clear session token: {e}")),
@@ -4074,6 +3913,44 @@ fn run_logout(json: bool) {
 mod tests {
     use super::*;
     use clap::CommandFactory;
+
+    fn usage(label: &str, used: f64, limit: f64, detail: &str) -> appz_deploy::UsageEntry {
+        appz_deploy::UsageEntry {
+            label: label.into(),
+            used,
+            limit,
+            detail: detail.into(),
+        }
+    }
+
+    #[test]
+    fn deployment_status_marks_current() {
+        console::set_colors_enabled(false);
+        assert_eq!(deployment_status("READY", true), "● Ready (current)");
+        assert_eq!(deployment_status("error", false), "● Error");
+    }
+
+    #[test]
+    fn usage_row_prefers_api_detail_and_shows_percent() {
+        console::set_colors_enabled(false);
+        assert_eq!(
+            usage_row(&usage(
+                "Stored bytes",
+                335005295.0,
+                5368709120.0,
+                "0.31 GB of 5.00 GB"
+            )),
+            vec!["Stored bytes", "0.31 GB of 5.00 GB", "6%"]
+        );
+        assert_eq!(
+            usage_row(&usage("Projects", 20.0, 100.0, "")),
+            vec!["Projects", "20 of 100", "20%"]
+        );
+        assert_eq!(
+            usage_row(&usage("Seats", 3.0, 0.0, "")),
+            vec!["Seats", "3 (unlimited)", ""]
+        );
+    }
 
     #[test]
     fn project_lifecycle_and_transfer_commands_parse() {

@@ -64,7 +64,7 @@ pub fn open_repo(
     cfg: &BackupConfig,
     mode: Interactive,
 ) -> Result<Option<RusticCli>, String> {
-    open_repo_noting(root, cfg, mode, |msg| eprintln!("{msg}"))
+    open_repo_noting(root, cfg, mode, crate::ui::hint)
 }
 
 pub(super) fn open_repo_noting(

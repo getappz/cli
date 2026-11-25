@@ -2344,12 +2344,12 @@ fn run_deploy(args: DeployArgs, json: bool) {
                 } else {
                     for r in &results {
                         if let (Some(_), Some(e)) = (&r.output, &r.error) {
-                            eprintln!("{}: deployed, but a hook failed: {e}", r.target);
+                            warning(&format!("{}: deployed, but a hook failed: {e}", r.target));
                         }
                         match (&r.output, &r.error) {
                             (Some(o), _) if args.dry_run => print_deploy_dry_run(o),
                             (Some(o), _) if o.unchanged => {
-                                info(&format!("{}: unchanged, skipped", r.target))
+                                ui::hint(&format!("{}: unchanged, skipped", r.target))
                             }
                             (Some(o), _) => success(&format!(
                                 "{} ({}): {}",
@@ -2361,16 +2361,16 @@ fn run_deploy(args: DeployArgs, json: bool) {
                                 },
                                 o.url.as_deref().unwrap_or("deployed (url unknown)")
                             )),
-                            (_, Some(e)) => eprintln!("{}: failed: {e}", r.target),
+                            (_, Some(e)) => warning(&format!("{}: failed: {e}", r.target)),
                             _ => {}
                         }
                     }
                     outro(if args.dry_run {
-                        "nothing was deployed"
+                        "Nothing was deployed"
                     } else if failed == 0 {
-                        "deploy complete"
+                        "Deploy complete"
                     } else {
-                        "deploy finished with failures"
+                        "Deploy finished with failures"
                     });
                 }
                 if failed > 0 {

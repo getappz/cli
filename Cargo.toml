@@ -4,7 +4,7 @@ resolver = "2"
 
 [workspace.package]
 # Single version source. Bump with `mise run version-set <x.y.z[-rc.N]>`.
-version = "0.3.3"
+version = "0.4.0"
 
 [profile.release]
 opt-level = 3

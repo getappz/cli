@@ -22,6 +22,7 @@ mod share;
 mod shield;
 mod skills;
 mod static_serve;
+mod teams;
 mod ui;
 mod update;
 mod webhooks;
@@ -119,6 +120,11 @@ enum AppzCmd {
     /// Manage projects on the edge hosting platform
     #[command(alias = "project")]
     Projects(ProjectsArgs),
+    /// Manage teams: list, create, switch, invite, members
+    #[command(alias = "team")]
+    Teams(teams::TeamsArgs),
+    /// Switch the active team (same as `teams switch`)
+    Switch(teams::SwitchArgs),
     /// Inspect, accept or cancel project transfers between organizations
     Transfers(TransfersArgs),
     /// Log in to Appz via browser device flow
@@ -1837,6 +1843,8 @@ fn main() {
         AppzCmd::Domains(a) => run_domains(a, json),
         AppzCmd::Webhooks(a) => webhooks::run(a, json),
         AppzCmd::Redirects(a) => redirects::run(a, json),
+        AppzCmd::Teams(a) => teams::run(a, json),
+        AppzCmd::Switch(a) => teams::switch(a, json),
         AppzCmd::Projects(a) => run_projects(a, json),
         AppzCmd::Transfers(a) => run_transfers(a, json),
         AppzCmd::Login(a) => run_login(a, json),

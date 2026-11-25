@@ -411,9 +411,10 @@ pub fn run(args: BackupArgs, json_output: bool) -> Result<()> {
                 println!("{}", serde_json::to_string(&summary)?);
             } else if let Some(id) = &summary.snapshot {
                 crate::success(&format!(
-                    "Snapshot {id} created ({} added)",
+                    "Snapshot created ({} added)",
                     crate::ui::fmt::bytes(summary.added_bytes)
                 ));
+                crate::ui::print_kv(&[("Snapshot", id.clone())]);
                 if retention_report.is_some_and(|r| r.over_cap) {
                     crate::warning("Repository still exceeds the configured size limit");
                 }

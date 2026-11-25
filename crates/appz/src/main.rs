@@ -1794,9 +1794,9 @@ fn run_clean(args: CleanArgs, json: bool) {
 }
 
 fn main() {
-    ui::init();
     let cli = AppzCli::parse();
     let json = cli.json;
+    ui::init(json);
     ASSUME_YES.store(cli.yes, std::sync::atomic::Ordering::Relaxed);
     match cli.command {
         AppzCmd::Init(a) => run_init(a, json),
@@ -2351,16 +2351,20 @@ fn run_deploy(args: DeployArgs, json: bool) {
                             (Some(o), _) if o.unchanged => {
                                 ui::hint(&format!("{}: unchanged, skipped", r.target))
                             }
-                            (Some(o), _) => success(&format!(
-                                "{} ({}): {}",
-                                r.target,
-                                if o.is_preview {
-                                    "preview"
-                                } else {
-                                    "production"
-                                },
-                                o.url.as_deref().unwrap_or("deployed (url unknown)")
-                            )),
+                            (Some(o), _) => {
+                                success(&format!(
+                                    "{} deployed ({})",
+                                    r.target,
+                                    deploy_kind(o).to_lowercase()
+                                ));
+                                match &o.url {
+                                    Some(url) => ui::print_kv(&[(r.target.as_str(), url.clone())]),
+                                    None => warning(&format!(
+                                        "{}: live URL could not be confirmed",
+                                        r.target
+                                    )),
+                                }
+                            }
                             (_, Some(e)) => warning(&format!("{}: failed: {e}", r.target)),
                             _ => {}
                         }
@@ -2413,7 +2417,7 @@ fn run_deploy(args: DeployArgs, json: bool) {
                     ),
                 }
                 if let Some(id) = output.backup.as_ref().and_then(|b| b.snapshot.as_deref()) {
-                    ui::hint(&format!("Source snapshot saved ({id})"));
+                    ui::print_kv(&[("Snapshot", id.to_string())]);
                 }
                 outro("Deploy complete");
             }
@@ -2541,13 +2545,11 @@ fn run_rollback(args: RollbackArgs, json: bool) {
             if json {
                 println!("{}", serde_json::to_string_pretty(&output).unwrap());
             } else {
-                success(&format!(
-                    "Rolled back {} to version {}",
-                    output.provider, version_id
-                ));
-                if let Some(url) = &output.url {
-                    println!("{url}");
-                }
+                success(&format!("Rolled back {}", output.provider));
+                ui::print_kv(&[
+                    ("Version", version_id.clone()),
+                    ("URL", output.url.clone().unwrap_or_default()),
+                ]);
             }
         }
         Err(e) => error(&e),
@@ -2584,8 +2586,11 @@ fn run_promote(args: PromoteArgs, json: bool) {
                 "deployment_id": r.deployment_id, "version_id": r.version_id, "url": r.url })
         ),
         Ok(Some(r)) => {
-            success(&format!("Promoted {} to production", r.deployment_id));
-            println!("{}", r.url);
+            success("Promoted to production");
+            ui::print_kv(&[
+                ("Deployment", r.deployment_id.clone()),
+                ("URL", r.url.clone()),
+            ]);
         }
         Ok(None) if json => println!("{}", serde_json::json!({ "status": "canceled" })),
         Ok(None) => warning("Canceled"),
@@ -2732,7 +2737,10 @@ fn run_usage(args: UsageArgs, json: bool) {
         println!("{}", serde_json::to_string_pretty(&report).unwrap());
         return;
     }
-    fetch.done("Usage against plan limits");
+    fetch.done(&format!(
+        "Usage against plan limits ({})",
+        ui::fmt::plural(report.usage.len(), "resource")
+    ));
     if report.usage.is_empty() {
         ui::empty("usage", None);
     } else {
@@ -3168,11 +3176,10 @@ fn run_inspect(args: InspectArgs, json: bool) {
     }
     let created = insp.created_at.map(|c| {
         let ms = c.timestamp_millis();
-        format!(
-            "{} ({} ago)",
-            ui::fmt::datetime(ms),
-            ui::fmt::age(ms, ui::fmt::now_ms())
-        )
+        match ui::fmt::relative(ms, ui::fmt::now_ms()) {
+            Some(rel) => format!("{} ({rel})", ui::fmt::datetime(ms)),
+            None => ui::fmt::datetime(ms),
+        }
     });
     ui::heading("Deployment");
     ui::print_kv(&[
@@ -3237,7 +3244,12 @@ fn run_inspect(args: InspectArgs, json: bool) {
 /// DNS records a domain still needs, as `[Purpose, Type, Name, Value]` rows.
 /// Works for every domain record shape the API returns (add/verify/inspect).
 macro_rules! dns_rows {
-    ($d:expr) => {{
+    ($d:expr) => {
+        dns_rows!($d, false)
+    };
+    // `all_verification`: list verification records even when a routing
+    // target exists (verify/inspect show every record the domain still needs).
+    ($d:expr, $all_verification:expr) => {{
         let d = $d;
         let mut rows: Vec<Vec<String>> = Vec::new();
         if !d.verified {
@@ -3266,7 +3278,7 @@ macro_rules! dns_rows {
                 a.ip.to_string(),
             ]);
         }
-        if d.cname.is_none() && d.apex.is_none() {
+        if $all_verification || (d.cname.is_none() && d.apex.is_none()) {
             for v in &d.verification {
                 rows.push(vec![
                     "Verify".into(),
@@ -3278,6 +3290,19 @@ macro_rules! dns_rows {
         }
         rows
     }};
+}
+
+/// Why each verification record is needed, when the API says.
+fn dns_reasons(records: &[appz_deploy::DomainVerificationRecord]) {
+    for v in records {
+        if let Some(reason) = v.reason.as_deref().filter(|r| !r.trim().is_empty()) {
+            ui::hint(&format!(
+                "{} {}: {reason}",
+                v.r#type.to_uppercase(),
+                v.domain
+            ));
+        }
+    }
 }
 
 fn print_dns_rows(rows: Vec<Vec<String>>) {
@@ -3319,6 +3344,7 @@ fn run_domains(args: DomainsArgs, json: bool) {
                     ),
                 ]);
                 print_dns_rows(dns_rows!(&dom));
+                dns_reasons(&dom.verification);
                 if let Some(hint) = dom.dns_setup_hint() {
                     ui::hint(&hint);
                 }
@@ -3395,7 +3421,8 @@ fn run_domains(args: DomainsArgs, json: bool) {
                         ),
                     ]);
                     if !res.verified {
-                        print_dns_rows(dns_rows!(&res));
+                        print_dns_rows(dns_rows!(&res, true));
+                        dns_reasons(&res.verification);
                     }
                 }
                 Err(e) => error(&e),
@@ -3431,7 +3458,8 @@ fn run_domains(args: DomainsArgs, json: bool) {
                     }
                     ui::print_kv(&rows);
                     if !d.verified {
-                        print_dns_rows(dns_rows!(d));
+                        print_dns_rows(dns_rows!(d, true));
+                        dns_reasons(&d.verification);
                         warning("Domain is not verified");
                         ui::hint(&format!(
                             "Configure the DNS records above, then run `appz domains verify {}`",

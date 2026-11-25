@@ -9,12 +9,10 @@ pub(crate) fn now_ms() -> i64 {
 /// Absolute UTC time for detail views: `2026-11-25 03:19 UTC`.
 /// Accepts seconds or milliseconds since the epoch.
 pub(crate) fn datetime(ts: i64) -> String {
-    let ms = if ts.abs() < 100_000_000_000 {
-        ts * 1000
-    } else {
-        ts
-    };
-    chrono::DateTime::from_timestamp_millis(ms)
+    if ts <= 0 {
+        return "-".into();
+    }
+    chrono::DateTime::from_timestamp_millis(to_ms(ts))
         .map(|d| d.format("%Y-%m-%d %H:%M UTC").to_string())
         .unwrap_or_else(|| "-".into())
 }
@@ -30,7 +28,20 @@ pub(crate) fn to_ms(ts: i64) -> i64 {
 
 /// `age` against now, for a timestamp in seconds or milliseconds.
 pub(crate) fn ago(ts: i64) -> String {
+    if ts <= 0 {
+        return String::new();
+    }
     age(to_ms(ts), now_ms())
+}
+
+/// `just now` / `5m ago` for detail views next to an absolute time; `None`
+/// once `age` would fall back to a date (the absolute time already says it).
+pub(crate) fn relative(ts_ms: i64, now_ms: i64) -> Option<String> {
+    match age(ts_ms, now_ms) {
+        a if a == "just now" => Some(a),
+        a if a.ends_with(['m', 'h', 'd']) => Some(format!("{a} ago")),
+        _ => None,
+    }
 }
 
 /// Compact relative age for tables: `just now`, `5m`, `3h`, `5d`, then a date.
@@ -84,12 +95,11 @@ pub(crate) fn status(s: &str) -> String {
         label.push_str(chars.as_str());
     }
     let dot = match lower.split(' ').next().unwrap_or("") {
-        "ready" | "active" | "live" | "succeeded" | "success" | "verified" | "current" => {
-            out::green("●")
-        }
+        "ready" | "active" | "live" | "succeeded" | "success" | "verified" | "current" | "ok"
+        | "delivered" => out::green("●"),
         "error" | "failed" | "canceled" | "cancelled" | "expired" | "blocked" => out::red("●"),
         "building" | "queued" | "pending" | "initializing" | "deploying" | "uploading"
-        | "staged" | "paused" => out::yellow("●"),
+        | "staged" | "paused" | "expiring" | "retrying" => out::yellow("●"),
         _ => out::dim("●"),
     };
     format!("{dot} {label}")
@@ -99,10 +109,15 @@ pub(crate) fn plural(n: usize, noun: &str) -> String {
     if n == 1 {
         return format!("1 {noun}");
     }
-    match noun.strip_suffix('y') {
-        Some(stem) if !stem.ends_with(['a', 'e', 'i', 'o', 'u']) => format!("{n} {stem}ies"),
-        _ => format!("{n} {noun}s"),
+    if let Some(stem) = noun.strip_suffix('y')
+        && !stem.ends_with(['a', 'e', 'i', 'o', 'u'])
+    {
+        return format!("{n} {stem}ies");
     }
+    if noun.ends_with(['s', 'x', 'z']) || noun.ends_with("sh") || noun.ends_with("ch") {
+        return format!("{n} {noun}es");
+    }
+    format!("{n} {noun}s")
 }
 
 #[cfg(test)]
@@ -180,6 +195,34 @@ mod tests {
         assert_eq!(status("READY"), "● Ready");
         assert_eq!(status("pending_validation"), "● Pending validation");
         assert_eq!(status(""), "-");
+    }
+
+    #[test]
+    fn relative_phrase_for_detail_views() {
+        let now = 1_795_000_000_000;
+        assert_eq!(relative(now - 10_000, now).as_deref(), Some("just now"));
+        assert_eq!(relative(now - 5 * MIN, now).as_deref(), Some("5m ago"));
+        assert_eq!(relative(now - 40 * DAY, now), None);
+    }
+
+    #[test]
+    fn plurals_of_sibilant_nouns() {
+        assert_eq!(plural(2, "alias"), "2 aliases");
+        assert_eq!(plural(3, "process"), "3 processes");
+        assert_eq!(plural(2, "box"), "2 boxes");
+    }
+
+    #[test]
+    fn status_colors_ok_and_expiring() {
+        console::set_colors_enabled(true);
+        assert_ne!(status("ok"), status("unknown-state"));
+        assert_ne!(status("expiring"), status("unknown-state"));
+        console::set_colors_enabled(false);
+    }
+
+    #[test]
+    fn missing_epoch_timestamps_render_dash() {
+        assert_eq!(datetime(0), "-");
     }
 
     #[test]

@@ -1551,7 +1551,13 @@ impl AppzdevProvider {
             .unwrap_or_else(|| resolve_project_id_from_dir(&ctx.project_dir))
     }
 
+    /// Errors from the deploy flow read `AppzDev: deploy failed: …`; the
+    /// shared API helpers it calls produce `Api` errors.
     fn deploy_internal(&self, ctx: &DeployContext, is_preview: bool) -> DeployResult<DeployOutput> {
+        self.deploy_flow(ctx, is_preview).map_err(as_deploy_failure)
+    }
+
+    fn deploy_flow(&self, ctx: &DeployContext, is_preview: bool) -> DeployResult<DeployOutput> {
         let start = Instant::now();
         if ctx.dry_run {
             return Ok(DeployOutput::dry_run(self.slug(), is_preview));
@@ -1887,6 +1893,13 @@ impl AppzdevProvider {
             unchanged: false,
             backup: None,
         })
+    }
+}
+
+fn as_deploy_failure(e: DeployError) -> DeployError {
+    match e {
+        DeployError::Api { provider, reason } => DeployError::DeployFailed { provider, reason },
+        other => other,
     }
 }
 
@@ -2621,6 +2634,20 @@ impl DeployProvider for AppzdevProvider {
 #[allow(unsafe_code)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deploy_flow_errors_are_reported_as_deploy_failures() {
+        let e = as_deploy_failure(DeployError::Api {
+            provider: "AppzDev",
+            reason: "Initiate deployment failed (500): boom".into(),
+        });
+        assert_eq!(
+            e.to_string(),
+            "AppzDev: deploy failed: Initiate deployment failed (500): boom"
+        );
+        let other = as_deploy_failure(DeployError::Tunnel("x".into()));
+        assert!(matches!(other, DeployError::Tunnel(_)));
+    }
 
     /// The tests below point `APPZ_VAULT_HOME_OVERRIDE` (process-wide) at
     /// their own temp dir; they must not run at the same time.

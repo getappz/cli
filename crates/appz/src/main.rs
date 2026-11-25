@@ -1,5 +1,4 @@
 use clap::{Args, Parser, Subcommand};
-use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -23,8 +22,16 @@ mod share;
 mod shield;
 mod skills;
 mod static_serve;
+// Some ui primitives land before every command adopts them.
+#[allow(dead_code)]
+mod ui;
 mod update;
 mod webhooks;
+
+pub(crate) use ui::{
+    error, info, intro, is_interactive_tty, is_stdout_tty, is_tty, outro, step, success, warning,
+    with_spinner,
+};
 
 // ── CLI ─────────────────────────────────────────────────────────
 
@@ -992,100 +999,12 @@ struct PreviewArgs {
 
 // ── UI helpers ──────────────────────────────────────────────────
 
-pub(crate) fn is_stdout_tty() -> bool {
-    if std::env::var_os("NO_COLOR").is_some() || std::env::var("TERM").as_deref() == Ok("dumb") {
-        return false;
-    }
-    std::io::stdout().is_terminal()
-}
-
-pub(crate) fn is_interactive_tty() -> bool {
-    is_stdout_tty() && std::io::stdin().is_terminal()
-}
-
-pub(crate) fn is_tty() -> bool {
-    is_interactive_tty()
-}
-
 /// Shown once, at `appz init` — a clean, subtle header.
 /// Skipped outside a real terminal so it never lands in piped/CI output.
 fn print_brand() {
     if is_stdout_tty() {
         println!("\n  appz • universal toolchain & deployment\n");
     }
-}
-
-pub(crate) fn intro(msg: &str) {
-    if is_stdout_tty() {
-        let _ = cliclack::intro(msg);
-    } else {
-        println!("> {msg}");
-    }
-}
-
-pub(crate) fn outro(msg: &str) {
-    if is_stdout_tty() {
-        let _ = cliclack::outro(msg);
-    } else {
-        println!("✓ {msg}");
-    }
-}
-
-pub(crate) fn success(msg: &str) {
-    if is_stdout_tty() {
-        let _ = cliclack::log::success(msg);
-    } else {
-        println!("ok  {msg}");
-    }
-}
-
-pub(crate) fn info(msg: &str) {
-    if is_stdout_tty() {
-        let _ = cliclack::log::info(msg);
-    } else {
-        for line in msg.lines() {
-            println!("    {line}");
-        }
-    }
-}
-
-pub(crate) fn step(msg: &str) {
-    if is_stdout_tty() {
-        let _ = cliclack::log::step(msg);
-    } else {
-        println!("  • {msg}");
-    }
-}
-
-pub(crate) fn warning(msg: &str) {
-    if is_stdout_tty() {
-        let _ = cliclack::log::warning(msg);
-    } else {
-        eprintln!("warn {msg}");
-    }
-}
-
-pub(crate) fn error(msg: &str) -> ! {
-    if is_stdout_tty() {
-        let _ = cliclack::log::error(msg);
-    } else {
-        eprintln!("fail {msg}");
-    }
-    std::process::exit(1);
-}
-
-pub(crate) fn with_spinner<T>(start: &str, done: &str, f: impl FnOnce() -> T) -> T {
-    if !is_stdout_tty() {
-        println!("  {start}");
-        let r = f();
-        println!("  {done}");
-        return r;
-    }
-    let sp = cliclack::spinner();
-    sp.start(start);
-    let r = f();
-    sp.stop(done);
-    r
 }
 
 // ── Core logic ──────────────────────────────────────────────────
@@ -1893,6 +1812,7 @@ fn run_clean(args: CleanArgs, json: bool) {
 }
 
 fn main() {
+    ui::init();
     let cli = AppzCli::parse();
     let json = cli.json;
     ASSUME_YES.store(cli.yes, std::sync::atomic::Ordering::Relaxed);

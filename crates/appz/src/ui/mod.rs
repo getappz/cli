@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 pub(crate) mod fmt;
+pub(crate) mod link;
 pub(crate) mod table;
 pub(crate) mod theme;
 

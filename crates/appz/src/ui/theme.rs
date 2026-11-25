@@ -8,6 +8,19 @@ macro_rules! palette {
             $(pub(crate) fn $name(s: &str) -> String {
                 console::style(s).$method().to_string()
             })*
+
+            /// `url` (or a bare host) as a cyan hyperlink to itself.
+            #[allow(dead_code)]
+            pub(crate) fn link(url: &str) -> String {
+                link_text(url, url)
+            }
+
+            /// `text` as a cyan OSC 8 hyperlink to `url` (a bare host gets
+            /// `https://`). Plain text when this stream has colors off
+            /// (non-TTY, `NO_COLOR`, `TERM=dumb`).
+            pub(crate) fn link_text(url: &str, text: &str) -> String {
+                crate::ui::link::linked(console::colors_enabled(), url, text, cyan)
+            }
         }
         /// Styles for text printed to stderr (chrome). Mirrors `out`, so
         /// some colors may go unused on this stream.
@@ -16,6 +29,16 @@ macro_rules! palette {
             $(pub(crate) fn $name(s: &str) -> String {
                 console::style(s).for_stderr().$method().to_string()
             })*
+
+            /// `url` (or a bare host) as a cyan hyperlink to itself.
+            pub(crate) fn link(url: &str) -> String {
+                link_text(url, url)
+            }
+
+            /// Like `out::link_text`, gated on stderr's color support.
+            pub(crate) fn link_text(url: &str, text: &str) -> String {
+                crate::ui::link::linked(console::colors_enabled_stderr(), url, text, cyan)
+            }
         }
     };
 }

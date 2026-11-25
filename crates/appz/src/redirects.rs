@@ -231,7 +231,7 @@ impl Ctx<'_> {
                 t.row(vec![
                     ver.version.to_string(),
                     ui::fmt::status(version_tag(&v, ver.version)),
-                    format_time(ver.created_at),
+                    ui::fmt::datetime(ver.created_at),
                 ]);
             }
             t.print();
@@ -356,7 +356,10 @@ fn print_state(v: &RedirectVersions) {
             "Staged v{} (not live yet), {live}; run `{cmd}`",
             v.staged_version.unwrap_or_default()
         )),
-        None => ui::hint(&format!("{}; no staged changes", capitalize_first(&live))),
+        None => ui::hint(&format!(
+            "{}; no staged changes",
+            ui::fmt::capitalize(&live)
+        )),
     }
 }
 
@@ -366,12 +369,6 @@ fn version_tag(v: &RedirectVersions, n: u64) -> &'static str {
         (_, true) => "staged",
         _ => "previous",
     }
-}
-
-fn capitalize_first(s: &str) -> String {
-    let mut c = s.chars();
-    c.next()
-        .map_or_else(String::new, |f| f.to_uppercase().chain(c).collect())
 }
 
 fn rules_table(rules: &[RedirectRule]) -> ui::Table {
@@ -385,11 +382,6 @@ fn rules_table(rules: &[RedirectRule]) -> ui::Table {
         ]);
     }
     t
-}
-
-/// The API may send seconds or milliseconds.
-fn format_time(ts: i64) -> String {
-    ui::fmt::datetime(ts)
 }
 
 #[cfg(test)]
@@ -418,7 +410,10 @@ mod tests {
 
     #[test]
     fn formats_seconds_and_milliseconds_alike() {
-        assert_eq!(format_time(1762732800), format_time(1762732800000));
+        assert_eq!(
+            ui::fmt::datetime(1762732800),
+            ui::fmt::datetime(1762732800000)
+        );
     }
 
     #[test]

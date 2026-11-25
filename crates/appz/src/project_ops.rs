@@ -22,10 +22,6 @@ fn confirm(prompt: &str, json: bool) -> bool {
         .unwrap_or(false)
 }
 
-fn fmt_ms(ms: i64) -> String {
-    ui::fmt::datetime(ms)
-}
-
 fn print_json<T: serde::Serialize>(v: &T) {
     println!("{}", serde_json::to_string_pretty(v).unwrap());
 }
@@ -33,8 +29,8 @@ fn print_json<T: serde::Serialize>(v: &T) {
 fn print_project(p: &ProjectState) {
     let paused = ui::fmt::status("paused");
     let state = match (p.paused_at, p.pause_reason.as_deref()) {
-        (Some(at), Some(why)) => format!("{paused} since {} ({why})", fmt_ms(at)),
-        (Some(at), None) => format!("{paused} since {}", fmt_ms(at)),
+        (Some(at), Some(why)) => format!("{paused} since {} ({why})", ui::fmt::datetime(at)),
+        (Some(at), None) => format!("{paused} since {}", ui::fmt::datetime(at)),
         _ => ui::fmt::status("live"),
     };
     let mut rows = vec![
@@ -43,7 +39,7 @@ fn print_project(p: &ProjectState) {
         ("State", state),
     ];
     if let Some(at) = p.expires_at {
-        rows.push(("Expires", fmt_ms(at)));
+        rows.push(("Expires", ui::fmt::datetime(at)));
     }
     ui::print_kv(&rows);
     if p.expires_at.is_some() {
@@ -80,7 +76,7 @@ pub fn lifecycle(dir: &Path, target: Option<String>, name: &str, action: Lifecyc
     match res {
         Ok(p) if json => print_json(&p),
         Ok(p) => {
-            success(&format!("{} {}", capitalize(done), p.slug));
+            success(&format!("{} {}", ui::fmt::capitalize(done), p.slug));
             print_project(&p);
         }
         Err(e) => error(&e),
@@ -168,12 +164,6 @@ pub fn update(
     }
 }
 
-fn capitalize(s: &str) -> String {
-    let mut c = s.chars();
-    c.next()
-        .map_or_else(String::new, |f| f.to_uppercase().chain(c).collect())
-}
-
 fn print_transfer(t: &Transfer) {
     let mut rows = vec![
         ("Transfer", t.id.clone()),
@@ -181,7 +171,7 @@ fn print_transfer(t: &Transfer) {
         ("From", t.source_organization_id.clone()),
         ("To", t.target_organization_id.clone()),
         ("Status", ui::fmt::status(&t.status)),
-        ("Expires", fmt_ms(t.expires_at)),
+        ("Expires", ui::fmt::datetime(t.expires_at)),
     ];
     if let Some(p) = &t.preview {
         rows.push((
@@ -258,7 +248,7 @@ pub fn transfers_list(dir: &Path, target: Option<String>, json: bool) {
                     x.source_organization_id.clone(),
                     x.target_organization_id.clone(),
                     ui::fmt::status(&x.status),
-                    fmt_ms(x.expires_at),
+                    ui::fmt::datetime(x.expires_at),
                 ]);
             }
             t.print();

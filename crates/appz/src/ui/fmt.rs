@@ -58,18 +58,14 @@ pub(crate) fn age(ts_ms: i64, now_ms: i64) -> String {
     }
 }
 
-pub(crate) fn bytes(n: u64) -> String {
-    const UNITS: [&str; 5] = ["KB", "MB", "GB", "TB", "PB"];
-    if n < 1024 {
-        return format!("{n} B");
-    }
-    let mut v = n as f64 / 1024.0;
-    let mut unit = 0;
-    while v >= 1024.0 && unit < UNITS.len() - 1 {
-        v /= 1024.0;
-        unit += 1;
-    }
-    format!("{v:.1} {}", UNITS[unit])
+/// `319.5 MB`. Same formatter `appz clean` has always used.
+pub(crate) use appz_core::format_size as bytes;
+
+/// Uppercase the first character: `kept permanently` → `Kept permanently`.
+pub(crate) fn capitalize(s: &str) -> String {
+    let mut c = s.chars();
+    c.next()
+        .map_or_else(String::new, |f| f.to_uppercase().chain(c).collect())
 }
 
 pub(crate) fn duration_ms(ms: u64) -> String {
@@ -88,12 +84,7 @@ pub(crate) fn status(s: &str) -> String {
         return "-".into();
     }
     let lower = s.trim().to_lowercase().replace(['_', '-'], " ");
-    let mut label = String::with_capacity(lower.len() + 2);
-    let mut chars = lower.chars();
-    if let Some(c) = chars.next() {
-        label.extend(c.to_uppercase());
-        label.push_str(chars.as_str());
-    }
+    let label = capitalize(&lower);
     let dot = match lower.split(' ').next().unwrap_or("") {
         "ready" | "active" | "live" | "succeeded" | "success" | "verified" | "current" | "ok"
         | "delivered" => out::green("●"),
@@ -203,6 +194,13 @@ mod tests {
         assert_eq!(relative(now - 10_000, now).as_deref(), Some("just now"));
         assert_eq!(relative(now - 5 * MIN, now).as_deref(), Some("5m ago"));
         assert_eq!(relative(now - 40 * DAY, now), None);
+    }
+
+    #[test]
+    fn capitalize_first_letter_only() {
+        assert_eq!(capitalize("kept permanently"), "Kept permanently");
+        assert_eq!(capitalize(""), "");
+        assert_eq!(capitalize("éclair"), "Éclair");
     }
 
     #[test]

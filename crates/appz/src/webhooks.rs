@@ -139,16 +139,12 @@ fn print_json<T: serde::Serialize>(v: &T) {
     println!("{}", serde_json::to_string_pretty(v).unwrap());
 }
 
-fn fmt_millis(ms: i64) -> String {
-    crate::fmt_millis(Some(ms))
-}
-
 fn webhook_state(w: &Webhook) -> String {
     match w.disabled_at {
         Some(t) => format!(
             "{} {}",
             ui::fmt::status("disabled"),
-            ui::theme::out::dim(&fmt_millis(t))
+            ui::theme::out::dim(&ui::fmt::datetime(t))
         ),
         None => ui::fmt::status("active"),
     }
@@ -166,7 +162,7 @@ fn webhook_kv(w: &Webhook) {
                 .unwrap_or_else(|| "all projects".into()),
         ),
         ("Status", webhook_state(w)),
-        ("Created", fmt_millis(w.created_at)),
+        ("Created", ui::fmt::datetime(w.created_at)),
     ]);
 }
 
@@ -180,7 +176,7 @@ fn deliveries_table(items: &[WebhookDelivery]) {
             ui::fmt::status(&d.status),
             d.response_status.map_or(String::new(), |c| c.to_string()),
             d.attempt.to_string(),
-            d.next_attempt_at.map_or(String::new(), fmt_millis),
+            d.next_attempt_at.map_or(String::new(), ui::fmt::datetime),
         ]);
     }
     t.print();

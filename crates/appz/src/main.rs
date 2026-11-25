@@ -1575,7 +1575,7 @@ macro_rules! lifecycle_fn {
             let done = || {
                 outro(&format!(
                     "{} complete [{}]",
-                    capitalize($label),
+                    ui::fmt::capitalize($label),
                     ui::fmt::duration_ms(started.elapsed().as_millis() as u64)
                 ))
             };
@@ -1645,12 +1645,6 @@ macro_rules! lifecycle_fn {
             done();
         }
     };
-}
-
-fn capitalize(s: &str) -> String {
-    let mut c = s.chars();
-    c.next()
-        .map_or_else(String::new, |f| f.to_uppercase().chain(c).collect())
 }
 
 lifecycle_fn!(run_test, TestArgs, test_command, "test");
@@ -2758,10 +2752,6 @@ fn run_usage(args: UsageArgs, json: bool) {
     ui::hint(&format!("Plan features: {features}"));
 }
 
-fn alias_created(ms: i64) -> String {
-    ui::fmt::datetime(ms)
-}
-
 fn run_alias_ls(dir: &Path, target: Option<String>, json: bool) {
     let canonical = resolve_root(dir);
     let fetch = ui::fetching("aliases");
@@ -2822,7 +2812,7 @@ fn run_alias_rm(dir: &Path, target: Option<String>, host: &str, json: bool) {
         let prompt = format!(
             "Remove alias {host} (deployment {}, created {})?",
             alias.deployment_id,
-            alias_created(alias.created_at)
+            ui::fmt::datetime(alias.created_at)
         );
         match cliclack::confirm(prompt).initial_value(false).interact() {
             Ok(true) => {}
@@ -2847,10 +2837,6 @@ fn print_next_hint(next: &Option<String>, cmd: &str) {
     if let Some(cursor) = next {
         ui::hint(&format!("Next page: {cmd} --next {cursor}"));
     }
-}
-
-fn fmt_millis(ms: Option<i64>) -> String {
-    ms.map_or_else(|| "-".to_string(), ui::fmt::datetime)
 }
 
 /// `● Ready (current)` for the deployment production points at.

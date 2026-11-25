@@ -228,7 +228,7 @@ pub fn parse_api_error(
                     let reason = json.get("error").and_then(|e| e.as_str()).unwrap_or(
                         "two-factor verification required; finish verification in your browser",
                     );
-                    return DeployError::DeployFailed {
+                    return DeployError::Api {
                         provider: provider_name,
                         reason: reason.to_string(),
                     };
@@ -240,19 +240,19 @@ pub fn parse_api_error(
                 };
             }
             if code == 409 && operation.contains("Verify") {
-                return DeployError::DeployFailed {
+                return DeployError::Api {
                     provider: provider_name,
                     reason: "DNS ownership TXT record not propagated yet. Please ensure the DNS challenge TXT record is configured and wait a few minutes before re-checking.".into(),
                 };
             }
             if code == 503 && operation.contains("domain") {
-                return DeployError::DeployFailed {
+                return DeployError::Api {
                     provider: provider_name,
                     reason: "Custom domains are not configured on the server.".into(),
                 };
             }
             if code == 502 && operation.contains("domain") {
-                return DeployError::DeployFailed {
+                return DeployError::Api {
                     provider: provider_name,
                     reason: "Cloudflare upstream failure; verification was recorded, please retry shortly.".into(),
                 };
@@ -276,18 +276,18 @@ pub fn parse_api_error(
                 if let Some(missing) = json.get("missing").and_then(|m| m.as_array()) {
                     msg.push_str(&format!(" (missing {} blobs)", missing.len()));
                 }
-                DeployError::DeployFailed {
+                DeployError::Api {
                     provider: provider_name,
                     reason: format!("{operation} failed ({code}): {msg}"),
                 }
             } else {
-                DeployError::DeployFailed {
+                DeployError::Api {
                     provider: provider_name,
                     reason: format!("{operation} failed with HTTP status {code}"),
                 }
             }
         }
-        ureq::Error::Transport(e) => DeployError::DeployFailed {
+        ureq::Error::Transport(e) => DeployError::Api {
             provider: provider_name,
             reason: format!("{operation} network error: {e}"),
         },
@@ -309,7 +309,7 @@ pub fn request_device_code(api_base: &str) -> DeployResult<DeviceCodeResponse> {
         .send_json(serde_json::json!({ "client_id": "appz-cli" }))
         .map_err(|e| parse_api_error(e, "AppzDev", "Request device code"))?
         .into_json()
-        .map_err(|e| DeployError::DeployFailed {
+        .map_err(|e| DeployError::Api {
             provider: "AppzDev",
             reason: format!("Invalid device code response: {e}"),
         })?;
@@ -590,7 +590,7 @@ fn get_env_array<T: serde::de::DeserializeOwned>(
         .call()
         .map_err(|e| parse_api_error(e, "AppzDev", operation))?
         .into_json()
-        .map_err(|e| DeployError::DeployFailed {
+        .map_err(|e| DeployError::Api {
             provider: "AppzDev",
             reason: format!("Invalid JSON response from {operation}: {e}"),
         })?;
@@ -599,16 +599,14 @@ fn get_env_array<T: serde::de::DeserializeOwned>(
     } else if let Some(arr) = resp["env"].as_array() {
         arr
     } else {
-        return Err(DeployError::DeployFailed {
+        return Err(DeployError::Api {
             provider: "AppzDev",
             reason: "Expected array in response".into(),
         });
     };
-    serde_json::from_value(serde_json::Value::Array(items.clone())).map_err(|e| {
-        DeployError::DeployFailed {
-            provider: "AppzDev",
-            reason: format!("Failed to parse response: {e}"),
-        }
+    serde_json::from_value(serde_json::Value::Array(items.clone())).map_err(|e| DeployError::Api {
+        provider: "AppzDev",
+        reason: format!("Failed to parse response: {e}"),
     })
 }
 
@@ -641,7 +639,7 @@ pub fn add_project_environment(
     branch_pattern: Option<&str>,
 ) -> DeployResult<ProjectEnvironment> {
     if !is_valid_environment_slug(slug) {
-        return Err(DeployError::DeployFailed {
+        return Err(DeployError::Api {
             provider: "AppzDev",
             reason: format!(
                 "Invalid environment name {slug:?}: use lowercase letters, digits and '-' (max 40)"
@@ -656,7 +654,7 @@ pub fn add_project_environment(
     req.send_json(serde_json::json!({ "slug": slug, "branchPattern": branch_pattern }))
         .map_err(|e| parse_api_error(e, "AppzDev", "Create environment"))?
         .into_json()
-        .map_err(|e| DeployError::DeployFailed {
+        .map_err(|e| DeployError::Api {
             provider: "AppzDev",
             reason: format!("Invalid JSON response from create environment: {e}"),
         })
@@ -669,7 +667,7 @@ pub fn remove_project_environment(
     slug: &str,
 ) -> DeployResult<()> {
     if !is_valid_environment_slug(slug) {
-        return Err(DeployError::DeployFailed {
+        return Err(DeployError::Api {
             provider: "AppzDev",
             reason: format!("Invalid environment name {slug:?}"),
         });
@@ -696,7 +694,7 @@ pub fn pull_cloud_env(
 
     for var in &vars {
         if !is_valid_env_key(&var.key) {
-            return Err(DeployError::DeployFailed {
+            return Err(DeployError::Api {
                 provider: "AppzDev",
                 reason: format!("Invalid environment variable key received: {:?}", var.key),
             });
@@ -730,7 +728,7 @@ pub fn push_cloud_env(
         .send_json(serde_json::json!({ "env": payload_items }))
         .map_err(|e| parse_api_error(e, "AppzDev", "Push environment variables"))?
         .into_json()
-        .map_err(|e| DeployError::DeployFailed {
+        .map_err(|e| DeployError::Api {
             provider: "AppzDev",
             reason: format!("Invalid JSON response from push env: {e}"),
         })?;
@@ -769,7 +767,7 @@ pub fn delete_cloud_env_var(
 fn normalize_domain(domain: &str) -> DeployResult<String> {
     let d = domain.trim().trim_end_matches('.');
     if d.is_empty() {
-        return Err(DeployError::DeployFailed {
+        return Err(DeployError::Api {
             provider: "AppzDev",
             reason: format!("Invalid domain name: {domain:?}"),
         });
@@ -779,7 +777,7 @@ fn normalize_domain(domain: &str) -> DeployResult<String> {
         if c.is_ascii_alphanumeric() || c == '-' || c == '.' || c == '*' {
             out.push(c.to_ascii_lowercase());
         } else {
-            return Err(DeployError::DeployFailed {
+            return Err(DeployError::Api {
                 provider: "AppzDev",
                 reason: format!("Invalid domain name: {domain:?}"),
             });
@@ -805,12 +803,12 @@ pub fn add_project_domain(
         .send_json(serde_json::json!({ "domain": domain }))
         .map_err(|e| parse_api_error(e, "AppzDev", "Add custom domain"))?
         .into_json()
-        .map_err(|e| DeployError::DeployFailed {
+        .map_err(|e| DeployError::Api {
             provider: "AppzDev",
             reason: format!("Invalid JSON response from add domain: {e}"),
         })?;
 
-    serde_json::from_value(resp).map_err(|e| DeployError::DeployFailed {
+    serde_json::from_value(resp).map_err(|e| DeployError::Api {
         provider: "AppzDev",
         reason: format!("Failed to parse added domain record: {e}"),
     })
@@ -830,7 +828,7 @@ pub fn list_project_domains(
         .call()
         .map_err(|e| parse_api_error(e, "AppzDev", "List custom domains"))?
         .into_json()
-        .map_err(|e| DeployError::DeployFailed {
+        .map_err(|e| DeployError::Api {
             provider: "AppzDev",
             reason: format!("Invalid JSON response from list domains: {e}"),
         })?;
@@ -840,13 +838,13 @@ pub fn list_project_domains(
     } else if let Some(arr) = resp.get("domains").filter(|v| v.is_array()) {
         arr.clone()
     } else {
-        return Err(DeployError::DeployFailed {
+        return Err(DeployError::Api {
             provider: "AppzDev",
             reason: "Expected array of domain records".into(),
         });
     };
 
-    serde_json::from_value(items).map_err(|e| DeployError::DeployFailed {
+    serde_json::from_value(items).map_err(|e| DeployError::Api {
         provider: "AppzDev",
         reason: format!("Failed to parse domain list: {e}"),
     })
@@ -870,7 +868,7 @@ fn get_page<T: serde::de::DeserializeOwned>(
     req.call()
         .map_err(|e| parse_api_error(e, "AppzDev", operation))?
         .into_json()
-        .map_err(|e| DeployError::DeployFailed {
+        .map_err(|e| DeployError::Api {
             provider: "AppzDev",
             reason: format!("Invalid response from {operation}: {e}"),
         })
@@ -898,12 +896,10 @@ fn deployment_params(query: &DeploymentQuery) -> DeployResult<Vec<(String, Strin
         params.push(("until".into(), t.to_string()));
     }
     for kv in &query.meta {
-        let (k, v) = kv
-            .split_once('=')
-            .ok_or_else(|| DeployError::DeployFailed {
-                provider: "AppzDev",
-                reason: format!("invalid --meta '{kv}': expected key=value"),
-            })?;
+        let (k, v) = kv.split_once('=').ok_or_else(|| DeployError::Api {
+            provider: "AppzDev",
+            reason: format!("invalid --meta '{kv}': expected key=value"),
+        })?;
         params.push((format!("meta.{k}"), v.to_string()));
     }
     if let Some(l) = query.limit {
@@ -954,14 +950,14 @@ pub fn list_activity(
     }
     req.call()
         .map_err(|e| match e {
-            ureq::Error::Status(403, _) => DeployError::DeployFailed {
+            ureq::Error::Status(403, _) => DeployError::Api {
                 provider: "AppzDev",
                 reason: "Activity needs an organization owner session or an API key with the `activity:read` scope".into(),
             },
             e => parse_api_error(e, "AppzDev", "List activity"),
         })?
         .into_json()
-        .map_err(|e| DeployError::DeployFailed {
+        .map_err(|e| DeployError::Api {
             provider: "AppzDev",
             reason: format!("Invalid response from List activity: {e}"),
         })
@@ -982,7 +978,7 @@ pub fn get_usage_report(api_base: &str, token: Option<&str>) -> DeployResult<Usa
         req.call()
             .map_err(|e| parse_api_error(e, "AppzDev", operation))?
             .into_json()
-            .map_err(|e| DeployError::DeployFailed {
+            .map_err(|e| DeployError::Api {
                 provider: "AppzDev",
                 reason: format!("Invalid response from {operation}: {e}"),
             })
@@ -1084,7 +1080,7 @@ pub fn move_project_domain(
         let resp = match req.send_json(body.clone()) {
             Ok(r) => r,
             Err(ureq::Error::Status(403, _)) => {
-                return Err(DeployError::DeployFailed {
+                return Err(DeployError::Api {
                     provider: "AppzDev",
                     reason: format!(
                         "not allowed to move {domain}: you must be an owner of both the current and the destination organization ({org})"
@@ -1094,7 +1090,7 @@ pub fn move_project_domain(
             Err(e) => return Err(parse_api_error(e, "AppzDev", "Move custom domain")),
         };
         let accepted = resp.status() == 202;
-        let parsed: DomainMove = resp.into_json().map_err(|e| DeployError::DeployFailed {
+        let parsed: DomainMove = resp.into_json().map_err(|e| DeployError::Api {
             provider: "AppzDev",
             reason: format!("Invalid response from move domain: {e}"),
         })?;
@@ -1125,12 +1121,12 @@ pub fn verify_project_domain(
         .send_json(serde_json::json!({}))
         .map_err(|e| parse_api_error(e, "AppzDev", "Verify custom domain"))?
         .into_json()
-        .map_err(|e| DeployError::DeployFailed {
+        .map_err(|e| DeployError::Api {
             provider: "AppzDev",
             reason: format!("Invalid JSON response from verify domain: {e}"),
         })?;
 
-    serde_json::from_value(resp).map_err(|e| DeployError::DeployFailed {
+    serde_json::from_value(resp).map_err(|e| DeployError::Api {
         provider: "AppzDev",
         reason: format!("Failed to parse domain verification result: {e}"),
     })
@@ -1175,7 +1171,7 @@ fn redirect_call<T: serde::de::DeserializeOwned>(
         None => req.call(),
     }
     .map_err(|e| parse_api_error(e, "AppzDev", operation))?;
-    resp.into_json().map_err(|e| DeployError::DeployFailed {
+    resp.into_json().map_err(|e| DeployError::Api {
         provider: "AppzDev",
         reason: format!("Invalid response from {operation}: {e}"),
     })
@@ -1215,7 +1211,7 @@ pub fn remove_project_redirect(
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
     {
-        return Err(DeployError::DeployFailed {
+        return Err(DeployError::Api {
             provider: "AppzDev",
             reason: "Expected a redirect ID".into(),
         });
@@ -1281,7 +1277,7 @@ pub fn list_project_aliases(
     req.call()
         .map_err(|e| parse_api_error(e, "AppzDev", "List aliases"))?
         .into_json()
-        .map_err(|e| DeployError::DeployFailed {
+        .map_err(|e| DeployError::Api {
             provider: "AppzDev",
             reason: format!("Invalid aliases response: {e}"),
         })
@@ -1310,7 +1306,7 @@ pub fn remove_project_alias(
                 .ok()
                 .and_then(|j| j.get("error").and_then(|e| e.as_str().map(String::from)))
                 .unwrap_or_else(|| "conflict".into());
-            Err(DeployError::DeployFailed {
+            Err(DeployError::Api {
                 provider: "AppzDev",
                 reason: format!("{host} cannot be removed: {detail}"),
             })
@@ -1329,7 +1325,7 @@ pub fn list_projects(api_base: &str, token: Option<&str>) -> DeployResult<Vec<Pr
         .call()
         .map_err(|e| parse_api_error(e, "AppzDev", "List projects"))?
         .into_json()
-        .map_err(|e| DeployError::DeployFailed {
+        .map_err(|e| DeployError::Api {
             provider: "AppzDev",
             reason: format!("Invalid JSON response from list projects: {e}"),
         })?;
@@ -1339,13 +1335,13 @@ pub fn list_projects(api_base: &str, token: Option<&str>) -> DeployResult<Vec<Pr
     } else if let Some(arr) = resp.get("projects").filter(|v| v.is_array()) {
         arr.clone()
     } else {
-        return Err(DeployError::DeployFailed {
+        return Err(DeployError::Api {
             provider: "AppzDev",
             reason: "Expected array of projects".into(),
         });
     };
 
-    serde_json::from_value(items).map_err(|e| DeployError::DeployFailed {
+    serde_json::from_value(items).map_err(|e| DeployError::Api {
         provider: "AppzDev",
         reason: format!("Failed to parse project list: {e}"),
     })
@@ -1365,7 +1361,7 @@ pub fn add_project(api_base: &str, token: Option<&str>, name: &str) -> DeployRes
         }))
         .map_err(|e| parse_api_error(e, "AppzDev", "Create project"))?
         .into_json()
-        .map_err(|e| DeployError::DeployFailed {
+        .map_err(|e| DeployError::Api {
             provider: "AppzDev",
             reason: format!("Invalid JSON response from add project: {e}"),
         })?;
@@ -1376,7 +1372,7 @@ pub fn add_project(api_base: &str, token: Option<&str>, name: &str) -> DeployRes
         resp
     };
 
-    serde_json::from_value(val).map_err(|e| DeployError::DeployFailed {
+    serde_json::from_value(val).map_err(|e| DeployError::Api {
         provider: "AppzDev",
         reason: format!("Failed to parse created project: {e}"),
     })
@@ -1398,7 +1394,7 @@ fn deployment_id_from_ref(id_or_url: &str) -> DeployResult<String> {
     if id.starts_with("dpl_") && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
         return Ok(id.to_string());
     }
-    Err(DeployError::DeployFailed {
+    Err(DeployError::Api {
         provider: "AppzDev",
         reason: format!(
             "`{id_or_url}` is not a deployment ID or URL. To delete a project, use `appz projects remove <name>`"
@@ -1426,7 +1422,7 @@ pub fn remove_deployment(
                 .ok()
                 .and_then(|j| j.get("error").and_then(|e| e.as_str()).map(str::to_string))
                 .unwrap_or_else(|| "an alias points at it".to_string());
-            Err(DeployError::DeployFailed {
+            Err(DeployError::Api {
                 provider: "AppzDev",
                 reason: format!(
                     "{id} was not removed: {detail}. Remove the alias first with `appz alias rm <alias>`, then retry"
@@ -1445,7 +1441,7 @@ fn validate_project_ref(id_or_slug: &str) -> DeployResult<()> {
     {
         return Ok(());
     }
-    Err(DeployError::DeployFailed {
+    Err(DeployError::Api {
         provider: "AppzDev",
         reason: "Expected a project slug or ID".into(),
     })
@@ -1479,7 +1475,7 @@ pub fn get_project(
         .call()
         .map_err(|e| parse_api_error(e, "AppzDev", "Get project"))?
         .into_json()
-        .map_err(|e| DeployError::DeployFailed {
+        .map_err(|e| DeployError::Api {
             provider: "AppzDev",
             reason: format!("Invalid JSON response from get project: {e}"),
         })?;
@@ -1490,7 +1486,7 @@ pub fn get_project(
         resp
     };
 
-    serde_json::from_value(val).map_err(|e| DeployError::DeployFailed {
+    serde_json::from_value(val).map_err(|e| DeployError::Api {
         provider: "AppzDev",
         reason: format!("Failed to parse project details: {e}"),
     })
@@ -1504,7 +1500,7 @@ pub fn rename_project(
 ) -> DeployResult<ProjectInfo> {
     let trimmed = new_name.trim();
     if trimmed.is_empty() || trimmed.len() > 100 {
-        return Err(DeployError::DeployFailed {
+        return Err(DeployError::Api {
             provider: "AppzDev",
             reason: "Project name must be between 1 and 100 characters".into(),
         });
@@ -1520,7 +1516,7 @@ pub fn rename_project(
         }))
         .map_err(|e| parse_api_error(e, "AppzDev", "Rename project"))?
         .into_json()
-        .map_err(|e| DeployError::DeployFailed {
+        .map_err(|e| DeployError::Api {
             provider: "AppzDev",
             reason: format!("Invalid JSON response from rename project: {e}"),
         })?;
@@ -1531,7 +1527,7 @@ pub fn rename_project(
         resp
     };
 
-    serde_json::from_value(val).map_err(|e| DeployError::DeployFailed {
+    serde_json::from_value(val).map_err(|e| DeployError::Api {
         provider: "AppzDev",
         reason: format!("Failed to parse renamed project: {e}"),
     })
@@ -1563,13 +1559,13 @@ impl AppzdevProvider {
 
         let output_path = ctx.output_path();
         let (mut scanned, _staged_blobs) =
-            prepare_upload(&output_path).map_err(|e| DeployError::DeployFailed {
+            prepare_upload(&output_path).map_err(|e| DeployError::Api {
                 provider: self.name(),
                 reason: e,
             })?;
 
         if scanned.files.is_empty() {
-            return Err(DeployError::DeployFailed {
+            return Err(DeployError::Api {
                 provider: self.name(),
                 reason: format!(
                     "No static files found in output directory: {}",
@@ -1621,7 +1617,7 @@ impl AppzdevProvider {
             req = req.set("Authorization", &format!("Bearer {token}"));
         }
 
-        let negotiating = interrupt::negotiating().map_err(|e| DeployError::DeployFailed {
+        let negotiating = interrupt::negotiating().map_err(|e| DeployError::Api {
             provider: self.name(),
             reason: format!("could not install deploy interrupt handler: {e}"),
         })?;
@@ -1631,15 +1627,14 @@ impl AppzdevProvider {
         let resp_result = req.send_json(payload);
         let (resp, deployment_id, missing, inline_publish_failed) = match resp_result {
             Ok(r) => {
-                let v: serde_json::Value =
-                    r.into_json().map_err(|e| DeployError::DeployFailed {
-                        provider: self.name(),
-                        reason: format!("Invalid JSON response from {create_url}: {e}"),
-                    })?;
+                let v: serde_json::Value = r.into_json().map_err(|e| DeployError::Api {
+                    provider: self.name(),
+                    reason: format!("Invalid JSON response from {create_url}: {e}"),
+                })?;
                 let dpl_id = v["deploymentId"]
                     .as_str()
                     .or_else(|| v["id"].as_str())
-                    .ok_or_else(|| DeployError::DeployFailed {
+                    .ok_or_else(|| DeployError::Api {
                         provider: self.name(),
                         reason: "Missing deploymentId in response".into(),
                     })?
@@ -1665,13 +1660,13 @@ impl AppzdevProvider {
                     {
                         (body, dpl_id, Vec::new(), true)
                     } else {
-                        return Err(DeployError::DeployFailed {
+                        return Err(DeployError::Api {
                             provider: self.name(),
                             reason: format!("Initiate deployment failed (500): {err_text}"),
                         });
                     }
                 } else {
-                    return Err(DeployError::DeployFailed {
+                    return Err(DeployError::Api {
                         provider: self.name(),
                         reason: format!("Initiate deployment failed (500): {err_text}"),
                     });
@@ -1703,7 +1698,7 @@ impl AppzdevProvider {
                         .blobs_by_hash
                         .get(h)
                         .map(|b| (h.as_str(), b.path.as_path()))
-                        .ok_or_else(|| DeployError::DeployFailed {
+                        .ok_or_else(|| DeployError::Api {
                             provider: self.name(),
                             reason: format!("server asked for unknown file content {h}"),
                         })
@@ -1841,7 +1836,7 @@ impl AppzdevProvider {
             });
 
             if let Some(err) = upload_error.into_inner().unwrap() {
-                return Err(DeployError::DeployFailed {
+                return Err(DeployError::Api {
                     provider: self.name(),
                     reason: err,
                 });
@@ -1860,7 +1855,7 @@ impl AppzdevProvider {
                 .send_json(serde_json::json!({}))
                 .map_err(|e| parse_api_error(e, self.name(), "Commit deployment"))?
                 .into_json()
-                .map_err(|e| DeployError::DeployFailed {
+                .map_err(|e| DeployError::Api {
                     provider: self.name(),
                     reason: format!("Invalid commit response: {e}"),
                 })?;
@@ -1924,11 +1919,10 @@ impl DeployProvider for AppzdevProvider {
         let appz_dir = project_dir.join(".appz");
         let project_json = appz_dir.join("project.json");
         if project_json.is_file() {
-            let content =
-                std::fs::read_to_string(&project_json).map_err(|e| DeployError::DeployFailed {
-                    provider: self.name(),
-                    reason: e.to_string(),
-                })?;
+            let content = std::fs::read_to_string(&project_json).map_err(|e| DeployError::Api {
+                provider: self.name(),
+                reason: e.to_string(),
+            })?;
             let (name, team) = serde_json::from_str::<serde_json::Value>(&content)
                 .ok()
                 .map(|v| {
@@ -1982,7 +1976,7 @@ impl DeployProvider for AppzdevProvider {
 
     fn link(&self, ctx: &DeployContext, _interactive: bool) -> DeployResult<()> {
         let appz_dir = ctx.project_dir.join(".appz");
-        std::fs::create_dir_all(&appz_dir).map_err(|e| DeployError::DeployFailed {
+        std::fs::create_dir_all(&appz_dir).map_err(|e| DeployError::Api {
             provider: self.name(),
             reason: format!("Failed to create .appz directory: {e}"),
         })?;
@@ -2016,7 +2010,7 @@ impl DeployProvider for AppzdevProvider {
             &project_json,
             serde_json::to_string_pretty(&content).unwrap(),
         )
-        .map_err(|e| DeployError::DeployFailed {
+        .map_err(|e| DeployError::Api {
             provider: self.name(),
             reason: format!("Failed to write .appz/project.json: {e}"),
         })?;
@@ -2048,7 +2042,7 @@ impl DeployProvider for AppzdevProvider {
             .send_json(serde_json::json!({ "versionId": version_id }))
             .map_err(|e| parse_api_error(e, self.name(), "Rollback deployment"))?
             .into_json()
-            .map_err(|e| DeployError::DeployFailed {
+            .map_err(|e| DeployError::Api {
                 provider: self.name(),
                 reason: format!("Invalid rollback response: {e}"),
             })?;
@@ -2087,7 +2081,7 @@ impl DeployProvider for AppzdevProvider {
             .send_json(serde_json::json!({ "domain": domain }))
             .map_err(|e| parse_api_error(e, self.name(), "Alias domain"))?
             .into_json()
-            .map_err(|e| DeployError::DeployFailed {
+            .map_err(|e| DeployError::Api {
                 provider: self.name(),
                 reason: format!("Invalid alias response: {e}"),
             })?;
@@ -2123,7 +2117,7 @@ impl DeployProvider for AppzdevProvider {
             .call()
             .map_err(|e| parse_api_error(e, self.name(), "List deployments"))?
             .into_json()
-            .map_err(|e| DeployError::DeployFailed {
+            .map_err(|e| DeployError::Api {
                 provider: self.name(),
                 reason: format!("Invalid JSON from list deployments: {e}"),
             })?;
@@ -2132,7 +2126,7 @@ impl DeployProvider for AppzdevProvider {
         let items = resp
             .as_array()
             .or_else(|| resp.get("items").and_then(|v| v.as_array()))
-            .ok_or_else(|| DeployError::DeployFailed {
+            .ok_or_else(|| DeployError::Api {
                 provider: self.name(),
                 reason: "Expected deployments as `{items}` or a JSON array".into(),
             })?;
@@ -2184,7 +2178,7 @@ impl DeployProvider for AppzdevProvider {
     ) -> DeployResult<Option<PromoteResult>> {
         let deployment = self.inspect_deployment(ctx, id_or_url)?;
         if deployment.status != DeployStatus::Ready {
-            return Err(DeployError::DeployFailed {
+            return Err(DeployError::Api {
                 provider: self.name(),
                 reason: format!(
                     "deployment {} is {:?}; only ready deployments can be promoted",
@@ -2247,13 +2241,13 @@ impl DeployProvider for AppzdevProvider {
             .call()
             .map_err(|e| parse_api_error(e, self.name(), "Inspect deployment"))?
             .into_json()
-            .map_err(|e| DeployError::DeployFailed {
+            .map_err(|e| DeployError::Api {
                 provider: self.name(),
                 reason: format!("Invalid JSON from inspect deployment: {e}"),
             })?;
 
         let mut inspect: DeploymentInspect =
-            serde_json::from_value(resp.clone()).map_err(|e| DeployError::DeployFailed {
+            serde_json::from_value(resp.clone()).map_err(|e| DeployError::Api {
                 provider: self.name(),
                 reason: format!("Failed to parse deployment inspect: {e}"),
             })?;
@@ -2319,7 +2313,7 @@ impl DeployProvider for AppzdevProvider {
         let token = resolve_auth_token(Some(ctx));
         let current =
             inspect_team_domain(&api_base, token.as_deref(), domain)?.ok_or_else(|| {
-                DeployError::DeployFailed {
+                DeployError::Api {
                     provider: "AppzDev",
                     reason: format!("{domain} is not attached to any project"),
                 }
@@ -2509,7 +2503,7 @@ impl DeployProvider for AppzdevProvider {
         req.call()
             .map_err(|e| parse_api_error(e, self.name(), "Restore project"))?
             .into_json()
-            .map_err(|e| DeployError::DeployFailed {
+            .map_err(|e| DeployError::Api {
                 provider: self.name(),
                 reason: format!("Invalid project in restore response: {e}"),
             })
@@ -3752,15 +3746,15 @@ Connection: close
             r#"{"error":"two-factor verification required","code":"MFA_REQUIRED"}"#,
         );
         match parse_api_error(err, "AppzDev", "List projects") {
-            DeployError::DeployFailed { reason, .. } => {
+            DeployError::Api { reason, .. } => {
                 assert_eq!(reason, "two-factor verification required");
             }
-            other => panic!("expected DeployFailed, got {other:?}"),
+            other => panic!("expected Api, got {other:?}"),
         }
         let err = status_error(401, r#"{"code":"MFA_REQUIRED"}"#);
         match parse_api_error(err, "AppzDev", "List projects") {
-            DeployError::DeployFailed { reason, .. } => assert!(reason.contains("browser")),
-            other => panic!("expected DeployFailed, got {other:?}"),
+            DeployError::Api { reason, .. } => assert!(reason.contains("browser")),
+            other => panic!("expected Api, got {other:?}"),
         }
     }
 

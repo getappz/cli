@@ -32,6 +32,13 @@ pub enum DeployError {
         reason: String,
     },
 
+    /// A platform API call (not a deploy) failed; `reason` names the operation.
+    #[error("{reason}")]
+    Api {
+        provider: &'static str,
+        reason: String,
+    },
+
     #[error("{provider}: '{operation}' is not supported")]
     Unsupported {
         provider: &'static str,
@@ -56,4 +63,21 @@ pub enum DeployError {
 
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn api_errors_show_only_the_reason() {
+        let e = DeployError::Api {
+            provider: "AppzDev",
+            reason: "List redirects failed (404): project not found".into(),
+        };
+        assert_eq!(
+            e.to_string(),
+            "List redirects failed (404): project not found"
+        );
+    }
 }

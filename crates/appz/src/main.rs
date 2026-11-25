@@ -1088,6 +1088,11 @@ pub(crate) fn with_spinner<T>(start: &str, done: &str, f: impl FnOnce() -> T) ->
     r
 }
 
+/// Lowercase hex of a byte slice (SHA-256 digests, HMACs).
+pub(crate) fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 // ── Core logic ──────────────────────────────────────────────────
 
 fn resolve_root(dir: &Path) -> PathBuf {

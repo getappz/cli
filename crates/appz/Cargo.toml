@@ -33,7 +33,7 @@ dirs = "6"
 filetime = "0.2"
 flate2 = "1"
 semver = "1"
-sha2 = "0.10"
+sha2 = "0.11"
 rand = "0.8"
 tar = "0.4"
 ureq = { version = "2", features = ["json"] }

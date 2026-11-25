@@ -672,11 +672,11 @@ fn write_snapshot(
     }
     if let Some(bundle) = &selection.bundle {
         let mut hash = Sha256::new();
-        std::io::copy(&mut std::fs::File::open(bundle)?, &mut hash)?;
-        let dir = stage
-            .path()
-            .join("git")
-            .join(format!("{:x}", hash.finalize()));
+        std::io::copy(
+            &mut std::fs::File::open(bundle)?,
+            &mut DigestWriter(&mut hash),
+        )?;
+        let dir = stage.path().join("git").join(crate::hex(&hash.finalize()));
         std::fs::create_dir_all(&dir)?;
         let dest = dir.join("local-commits.bundle");
         std::fs::copy(bundle, &dest)?;
@@ -689,7 +689,7 @@ fn write_snapshot(
     if expected != selected as u64 {
         return Err(format!("staged {expected} files from {selected} selected sources").into());
     }
-    let description = format!("appz-source-v1:{:x}", digest.finalize());
+    let description = format!("appz-source-v1:{}", crate::hex(&digest.finalize()));
     // Fresh staging inodes cannot identify unchanged content. Compare the latest
     // snapshot's byte fingerprint, then force Rustic to read every changed tree.
     match cli.run(&["snapshots", "--json", "latest"]) {
@@ -798,6 +798,23 @@ pub(super) fn stage_file(project: &Dir, rel: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Feeds written bytes into a SHA-256 hasher (`sha2` 0.11 dropped its
+/// `std::io::Write` impl), so `io::copy`/`serde_json::to_writer` can hash.
+#[cfg(test)]
+struct DigestWriter<'a>(&'a mut Sha256);
+
+#[cfg(test)]
+impl std::io::Write for DigestWriter<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.update(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 /// Fingerprint only restored metadata and bytes, independent of temporary names and inodes.
 #[cfg(test)]
 fn fingerprint_tree(root: &Path, dir: &Path, hash: &mut Sha256) -> Result<u64> {
@@ -817,7 +834,7 @@ fn fingerprint_tree(root: &Path, dir: &Path, hash: &mut Sha256) -> Result<u64> {
         let mode = meta.permissions().readonly();
         let modified = filetime::FileTime::from_last_modification_time(&meta);
         serde_json::to_writer(
-            &mut *hash,
+            DigestWriter(&mut *hash),
             &(
                 path.strip_prefix(root)?.as_os_str().as_encoded_bytes(),
                 mode,
@@ -829,11 +846,11 @@ fn fingerprint_tree(root: &Path, dir: &Path, hash: &mut Sha256) -> Result<u64> {
         )?;
         if meta.is_symlink() {
             serde_json::to_writer(
-                &mut *hash,
+                DigestWriter(&mut *hash),
                 std::fs::read_link(&path)?.as_os_str().as_encoded_bytes(),
             )?;
         } else {
-            std::io::copy(&mut std::fs::File::open(&path)?, hash)?;
+            std::io::copy(&mut std::fs::File::open(&path)?, &mut DigestWriter(hash))?;
         }
         count += 1;
     }
@@ -844,6 +861,16 @@ fn fingerprint_tree(root: &Path, dir: &Path, hash: &mut Sha256) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn digest_writer_hashes_like_sha256() {
+        let mut h = Sha256::new();
+        std::io::copy(&mut &b"abc"[..], &mut DigestWriter(&mut h)).unwrap();
+        assert_eq!(
+            crate::hex(&h.finalize()),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
     use engine::{EngineError, RunOut};
 
     #[derive(Default)]

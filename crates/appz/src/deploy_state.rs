@@ -121,7 +121,7 @@ pub fn fingerprint(root: &Path, extra: &str) -> Result<String, String> {
             hasher.update(&buf[..n]);
         }
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(crate::hex(&hasher.finalize()))
 }
 
 fn load(root: &Path) -> BTreeMap<String, LastDeploy> {
